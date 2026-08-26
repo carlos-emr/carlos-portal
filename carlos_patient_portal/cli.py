@@ -343,8 +343,13 @@ def outbox_worker(argv: Sequence[str] | None = None) -> None:
         parser.error("--max-deliveries must not be negative")
 
     settings = get_settings()
-    if settings.outbox_encryption_secret is None:
-        parser.error("PATIENT_PORTAL_OUTBOX_ENCRYPTION_SECRET must be configured")
+    outbox_encryption_keys = settings.resolved_outbox_keyring
+    if not outbox_encryption_keys:
+        parser.error(
+            "PATIENT_PORTAL_OUTBOX_ENCRYPTION_SECRET or "
+            "PATIENT_PORTAL_OUTBOX_ENCRYPTION_KEYRING must be configured"
+        )
+    outbox_encryption_secret = outbox_encryption_keys[settings.outbox_active_key_id]
     database_engine = create_portal_engine(
         settings.database_url,
         pool_size=settings.database_pool_size,
@@ -366,8 +371,8 @@ def outbox_worker(argv: Sequence[str] | None = None) -> None:
                 result = process_one_delivery(
                     session_factory,
                     email_sender=email_sender,
-                    encryption_secret=settings.outbox_encryption_secret.get_secret_value(),
-                    encryption_keys=settings.resolved_outbox_keyring,
+                    encryption_secret=outbox_encryption_secret,
+                    encryption_keys=outbox_encryption_keys,
                     max_attempts=settings.outbox_max_attempts,
                     lease_seconds=settings.outbox_lease_seconds,
                 )

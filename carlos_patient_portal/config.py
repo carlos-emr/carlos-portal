@@ -668,6 +668,7 @@ class Settings(BaseSettings):
                     f"{MIN_PRODUCTION_SECRET_LENGTH} characters when set"
                 )
         resolved_unlock_secret_keyring = self.resolved_unlock_secret_keyring
+        resolved_outbox_keyring = self.resolved_outbox_keyring
 
         session_secret_value = self.secret_value("session_secret")
         if self.session_secret is not None and not session_secret_value:
@@ -688,9 +689,6 @@ class Settings(BaseSettings):
                 "PATIENT_PORTAL_SESSION_SECRET": session_secret_value,
                 "PATIENT_PORTAL_IDENTITY_PROOF_SECRET": self.secret_value("identity_proof_secret"),
                 "PATIENT_PORTAL_AUDIT_HASH_SECRET": self.secret_value("audit_hash_secret"),
-                "PATIENT_PORTAL_OUTBOX_ENCRYPTION_SECRET": self.secret_value(
-                    "outbox_encryption_secret"
-                ),
                 "PATIENT_PORTAL_INTERNAL_HEALTH_TOKEN": self.secret_value("internal_health_token"),
                 "PATIENT_PORTAL_INTERNAL_API_TOKEN": self.secret_value("internal_api_token"),
                 "PATIENT_PORTAL_INTERNAL_API_TOKEN_PREVIOUS": self.secret_value(
@@ -702,6 +700,12 @@ class Settings(BaseSettings):
                 {
                     f"PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_KEYRING[{key_id}]": value
                     for key_id, value in resolved_unlock_secret_keyring.items()
+                }
+            )
+            configured_secrets.update(
+                {
+                    f"PATIENT_PORTAL_OUTBOX_ENCRYPTION_KEYRING[{key_id}]": value
+                    for key_id, value in resolved_outbox_keyring.items()
                 }
             )
             _validate_distinct_secret_values(configured_secrets)
@@ -883,9 +887,10 @@ class Settings(BaseSettings):
             )
         if self.internal_api_token is None:
             raise ValueError("PATIENT_PORTAL_INTERNAL_API_TOKEN must be set outside development")
-        if self.outbox_encryption_secret is None:
+        if not self.resolved_outbox_keyring:
             raise ValueError(
-                "PATIENT_PORTAL_OUTBOX_ENCRYPTION_SECRET must be set outside development"
+                "PATIENT_PORTAL_OUTBOX_ENCRYPTION_SECRET or "
+                "PATIENT_PORTAL_OUTBOX_ENCRYPTION_KEYRING must be set outside development"
             )
 
     def validate_audit_retention_policy(self) -> None:

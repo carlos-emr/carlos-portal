@@ -1,3 +1,4 @@
+import json
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -47,7 +48,13 @@ from tests.support import (
 )
 
 
-def queue_reset(app: object, account_id: int) -> tuple[int, int]:
+def queue_reset(
+    app: object,
+    account_id: int,
+    *,
+    encryption_secret: str = OUTBOX_ENCRYPTION_SECRET,
+    encryption_key_id: str = "primary",
+) -> tuple[int, int]:
     with app.state.session_factory() as session:
         with session.begin():
             reset = PatientPortalPasswordResetToken(
@@ -69,7 +76,8 @@ def queue_reset(app: object, account_id: int) -> tuple[int, int]:
                 ),
                 reset_url="https://portal.example.test/reset#token=raw-reset-token",
                 expires_in_seconds=3600,
-                encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+                encryption_secret=encryption_secret,
+                encryption_key_id=encryption_key_id,
             )
             return delivery.id, reset.id
 
@@ -110,6 +118,39 @@ def test_outbox_encrypts_and_delivers_reset_with_stable_message_id() -> None:
                 PatientPortalAuditEvent.event_type == AUDIT_EVENT_PASSWORD_RESET_DELIVERY
             )
         ) is not None
+
+
+def test_outbox_rotation_retains_the_old_key_for_queued_delivery() -> None:
+    old_secret = "v" * 32
+    active_secret = "n" * 32
+    sender = RecordingPortalEmailSender()
+    app = migrated_development_app(
+        email_sender=sender,
+        outbox_encryption_secret=old_secret,
+    )
+    account_id = activate_seeded_patient_account(app, TestClient(app))
+    delivery_id, _ = queue_reset(
+        app,
+        account_id,
+        encryption_secret=old_secret,
+        encryption_key_id="2026-07",
+    )
+
+    result = process_one_delivery(
+        app.state.session_factory,
+        email_sender=sender,
+        encryption_secret=active_secret,
+        encryption_keys={"2026-07": old_secret, "2026-08": active_secret},
+        max_attempts=3,
+        lease_seconds=60,
+    )
+
+    assert result is not None
+    assert result.status == OUTBOX_STATUS_DELIVERED
+    with app.state.session_factory() as session:
+        assert session.get(PatientPortalOutboundDelivery, delivery_id).status == (
+            OUTBOX_STATUS_DELIVERED
+        )
 
 
 def test_delivery_retries_when_its_audit_row_cannot_be_written(
@@ -547,7 +588,17 @@ def test_password_reset_route_enqueues_through_the_outbox_outside_development() 
     with a fully green suite.
     """
     sender = RecordingPortalEmailSender()
-    app = migrated_staging_app(email_sender=sender)
+    app = migrated_staging_app(
+        email_sender=sender,
+        outbox_encryption_secret=None,
+        outbox_encryption_keyring=json.dumps(
+            {
+                "2026-07": "v" * 32,
+                "2026-08": "n" * 32,
+            }
+        ),
+        outbox_active_key_id="2026-08",
+    )
     # TrustedHostMiddleware allows the configured public base URL, not "testserver".
     client = TestClient(app, base_url="https://portal.example.test")
 

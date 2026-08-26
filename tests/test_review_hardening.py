@@ -93,6 +93,22 @@ def test_non_development_rejects_cross_purpose_secret_reuse() -> None:
         )
 
 
+@pytest.mark.parametrize("reused_secret_prefix", ["s", "i", "a", "u", "h", "c", "m"])
+def test_non_development_checks_outbox_keyring_members_for_secret_reuse(
+    reused_secret_prefix: str,
+) -> None:
+    with pytest.raises(ValidationError, match="must not reuse"):
+        Settings(
+            **production_settings_values(
+                outbox_encryption_secret=None,
+                outbox_encryption_keyring=(
+                    '{"2026-08":"' + reused_secret_prefix * SECRET_LENGTH + '"}'
+                ),
+                outbox_active_key_id="2026-08",
+            )
+        )
+
+
 def test_mail_header_configuration_is_validated_at_startup() -> None:
     with pytest.raises(ValidationError, match="control characters"):
         Settings(**production_settings_values(clinic_name="Clinic A\r\nBcc: attacker@example.test"))

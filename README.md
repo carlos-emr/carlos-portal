@@ -267,6 +267,21 @@ export PATIENT_PORTAL_OUTBOX_ENCRYPTION_SECRET="a separate 32+ character secret"
 carlos-patient-portal-outbox-worker
 ```
 
+The single secret is the compatibility format for a new deployment. To rotate it without making
+already-queued messages unreadable, configure a JSON keyring instead and select the key used for
+new deliveries:
+
+```bash
+export PATIENT_PORTAL_OUTBOX_ENCRYPTION_KEYRING='{"2026-07":"replace-with-old-32+-character-secret","2026-08":"replace-with-new-32+-character-secret"}'
+export PATIENT_PORTAL_OUTBOX_ACTIVE_KEY_ID="2026-08"
+carlos-patient-portal-outbox-worker
+```
+
+Restart the web and worker processes with the same keyring. Retain the old member until no pending
+or processing outbox row carries its key ID; removing it sooner makes those deliveries fail with
+`encryption_key_unavailable`. Once the old rows have drained, remove the old member and restart
+both processes again.
+
 Production SMS uses an authenticated HTTPS JSON webhook configured with
 `PATIENT_PORTAL_SMS_WEBHOOK_URL` and `PATIENT_PORTAL_SMS_WEBHOOK_TOKEN`. The provider adapter receives
 only the normalized destination, code, expiry, sender ID, and message purpose. Production startup
@@ -300,10 +315,10 @@ hyphens, and 20 characters or fewer.
 
 Non-development deployments must set `PATIENT_PORTAL_INTERNAL_HEALTH_TOKEN`,
 `PATIENT_PORTAL_SESSION_SECRET`, `PATIENT_PORTAL_IDENTITY_PROOF_SECRET`,
-`PATIENT_PORTAL_AUDIT_HASH_SECRET`, `PATIENT_PORTAL_INTERNAL_API_TOKEN`, SMTP, SMS, and either
+`PATIENT_PORTAL_AUDIT_HASH_SECRET`, `PATIENT_PORTAL_INTERNAL_API_TOKEN`, SMTP, SMS, either
+`PATIENT_PORTAL_OUTBOX_ENCRYPTION_SECRET` or `PATIENT_PORTAL_OUTBOX_ENCRYPTION_KEYRING`, and either
 `PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_SECRET` or
 `PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_KEYRING`.
-Production must additionally set `PATIENT_PORTAL_OUTBOX_ENCRYPTION_SECRET`.
 The internal readiness endpoint expects the health token as a Bearer token:
 
 ```bash
@@ -506,8 +521,8 @@ the deployment platform. Before a pilot, run and document at least one restore d
 non-production database.
 
 Keep `PATIENT_PORTAL_SESSION_SECRET`, `PATIENT_PORTAL_IDENTITY_PROOF_SECRET`,
-`PATIENT_PORTAL_AUDIT_HASH_SECRET`, and unlock-secret encryption keys as separate random values in
-the deployment secret manager. For rotation, configure
+`PATIENT_PORTAL_AUDIT_HASH_SECRET`, outbox encryption keys, and unlock-secret encryption keys as
+separate random values in the deployment secret manager. For unlock-secret rotation, configure
 `PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_KEYRING` as a JSON object containing the old and new keys,
 set `PATIENT_PORTAL_UNLOCK_SECRET_ACTIVE_KEY_ID` to the new key, and run:
 

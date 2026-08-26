@@ -304,3 +304,30 @@ def test_outbox_worker_survives_a_transient_database_fault(
 
     assert len(calls) == 2
     assert any("Outbox worker iteration failed" in record.message for record in caplog.records)
+
+
+def test_outbox_worker_uses_the_active_key_from_a_keyring(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    old_secret = "v" * 32
+    active_secret = "n" * 32
+    keyring = {"2026-07": old_secret, "2026-08": active_secret}
+    worker_settings = development_settings(
+        database_url=f"sqlite+pysqlite:///{tmp_path / 'keyring-worker.db'}",
+        outbox_encryption_keyring=json.dumps(keyring),
+        outbox_active_key_id="2026-08",
+    )
+    delivery_arguments: dict[str, object] = {}
+
+    def capture_delivery(*args: object, **kwargs: object) -> None:
+        delivery_arguments.update(kwargs)
+
+    monkeypatch.setattr(cli, "get_settings", lambda: worker_settings)
+    monkeypatch.setattr(cli, "build_portal_email_sender", lambda _settings: object())
+    monkeypatch.setattr(cli, "process_one_delivery", capture_delivery)
+
+    cli.outbox_worker(["--once"])
+
+    assert delivery_arguments["encryption_secret"] == active_secret
+    assert delivery_arguments["encryption_keys"] == keyring

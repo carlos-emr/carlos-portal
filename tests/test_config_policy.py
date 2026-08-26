@@ -5,6 +5,7 @@ missing or weak secret has to be pinned individually or a regression silently sh
 that starts without it.
 """
 
+import json
 import os
 import re
 
@@ -667,6 +668,36 @@ def test_staging_fails_closed_without_delivery_services_or_internal_api_token() 
         staging_settings(internal_api_token=None)
     with pytest.raises(ValidationError, match="PATIENT_PORTAL_OUTBOX_ENCRYPTION_SECRET"):
         staging_settings(outbox_encryption_secret=None)
+
+
+@pytest.mark.parametrize("settings_factory", [staging_settings, production_settings])
+def test_non_development_accepts_an_outbox_keyring_without_the_legacy_secret(
+    settings_factory,
+) -> None:
+    keyring = {
+        "2026-07": "v" * 32,
+        "2026-08": "n" * 32,
+    }
+
+    settings = settings_factory(
+        outbox_encryption_secret=None,
+        outbox_encryption_keyring=json.dumps(keyring),
+        outbox_active_key_id="2026-08",
+    )
+
+    assert settings.resolved_outbox_keyring == keyring
+
+
+def test_outbox_keyring_rejects_a_legacy_secret_or_missing_active_key() -> None:
+    keyring = json.dumps({"2026-08": "n" * 32})
+    with pytest.raises(ValidationError, match="configure either"):
+        production_settings(outbox_encryption_keyring=keyring)
+    with pytest.raises(ValidationError, match="ACTIVE_KEY_ID"):
+        production_settings(
+            outbox_encryption_secret=None,
+            outbox_encryption_keyring=keyring,
+            outbox_active_key_id="missing",
+        )
 
 
 def test_production_rejects_remote_postgresql_without_verified_tls() -> None:
