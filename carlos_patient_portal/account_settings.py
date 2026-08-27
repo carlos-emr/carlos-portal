@@ -164,6 +164,10 @@ def change_account_password(
 ) -> str:
     validate_password(new_password)
     account = lock_account_for_settings(session, account.id)
+    validate_password(
+        new_password,
+        context_values=(account.username, account.email, account.clinic_id),
+    )
     if portal_session.account_id != account.id or portal_session.revoked_at is not None:
         raise AccountSettingsStepUpError()
     verify_current_password(

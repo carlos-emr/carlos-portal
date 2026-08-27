@@ -542,19 +542,23 @@ def lock_account(
     *,
     reason: str,
     now: datetime,
+    force_password_reset: bool = True,
+    revoke_sessions: bool = True,
 ) -> None:
     if account.locked_at is None:
         account.locked_at = now
         account.locked_by = AUTH_LOCKED_BY_AUTOMATION
         account.locked_by_id = AUTH_LOCKED_BY_AUTOMATION
-        account.force_password_reset = True
+        if force_password_reset:
+            account.force_password_reset = True
         account.updated_at = now
-        revoke_account_sessions(
-            session,
-            account.id,
-            reason=reason,
-            now=now,
-        )
+        if revoke_sessions:
+            revoke_account_sessions(
+                session,
+                account.id,
+                reason=reason,
+                now=now,
+            )
         cancel_pending_mfa_challenges(session, account.id, now=now)
         revoke_pending_password_reset_tokens(session, account.id)
         record_audit_event(
@@ -779,7 +783,17 @@ def start_login(
         account.updated_at = now
         lockout_reached = account.failed_login_count >= policy.max_failed_password_attempts
         if lockout_reached:
-            lock_account(session, account, reason=AUTH_REASON_PASSWORD_FAILURES, now=now)
+            # An unauthenticated caller can spend the password-attempt budget. Temporarily
+            # throttling the account is appropriate; revoking established sessions or forcing a
+            # recovery ceremony would let those guesses terminate a victim's authenticated use.
+            lock_account(
+                session,
+                account,
+                reason=AUTH_REASON_PASSWORD_FAILURES,
+                now=now,
+                force_password_reset=False,
+                revoke_sessions=False,
+            )
         record_audit_event(
             session,
             event_type=AUDIT_EVENT_LOGIN,
@@ -1600,6 +1614,10 @@ def complete_password_reset(
         )
         raise PasswordResetTokenInvalidError()
 
+    validate_password(
+        new_password,
+        context_values=(account.username, account.email, account.clinic_id),
+    )
     account.password_hash = hash_password(new_password)
     account.password_updated_at = now
     account.failed_login_count = 0
@@ -1663,7 +1681,10 @@ def authenticate_session_token(
     if (
         account is None
         or account.status != ACCOUNT_STATUS_ACTIVE
-        or account.locked_at is not None
+        # Anonymous password guesses create a time-boxed automated lock but deliberately leave
+        # existing sessions alive. Staff locks and MFA-failure locks remain session-killing; the
+        # latter carries force_password_reset=True.
+        or (account.locked_at is not None and lock_is_staff_initiated(account))
         or account.force_password_reset
     ):
         portal_session.revoked_at = now

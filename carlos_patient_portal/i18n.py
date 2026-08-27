@@ -242,8 +242,8 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
         "password_mismatch": "The password confirmation does not match.",
         "password_placeholder": "password",
         "password_requirements": (
-            "Use at least 12 characters with uppercase and lowercase letters, a number, "
-            "and a symbol."
+            "Use at least 12 characters. Avoid common passwords and account, clinic, or personal "
+            "information; several unrelated words are a good choice."
         ),
         "password_reset_complete_error": "The password reset link is invalid or has expired.",
         "password_reset_complete_heading": "Choose a new password",

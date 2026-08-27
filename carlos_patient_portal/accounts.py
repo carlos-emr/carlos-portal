@@ -277,8 +277,17 @@ def activate_patient_account(
         if not normalized_invite_code:
             raise ActivationError()
         normalized_username = validate_username(username)
-        validate_password(password)
         normalized_email = normalize_email(identity_proof.email)
+        validate_password(
+            password,
+            context_values=(
+                normalized_username,
+                normalized_email,
+                identity_proof.date_of_birth.isoformat(),
+                identity_proof.health_card_number,
+                expected_clinic_id,
+            ),
+        )
         normalized_mfa_method = normalize_mfa_delivery_method(preferred_mfa_method)
         normalized_phone_number = normalize_phone_number(phone_number)
         if normalized_mfa_method == MFA_DELIVERY_METHOD_SMS and not sms_delivery_available:

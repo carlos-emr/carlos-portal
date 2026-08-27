@@ -45,6 +45,7 @@ from carlos_patient_portal.models import (
     PatientPortalAuditEvent,
     PatientPortalOutboundDelivery,
     PatientPortalPasswordResetToken,
+    PatientPortalSession,
     utc_now,
 )
 from carlos_patient_portal.token_keys import PortalTokenKeys
@@ -54,9 +55,9 @@ from tests.support import (
     OUTBOX_ENCRYPTION_SECRET,
     SEEDED_INVITE_EMAIL,
     STRONG_PASSWORD,
-    STRONG_RESET_PASSWORD,
     activate_seeded_patient_account,
     alembic_config_for_tests,
+    browser_sign_in_seeded_patient,
     migrated_development_app,
     upgrade_to_head,
 )
@@ -439,38 +440,17 @@ def test_automated_lockout_expires_and_restores_self_service_sign_in(
         json={"username": SEEDED_USERNAME, "password": STRONG_PASSWORD},
     )
 
-    # 423 (locked, staff-only exit) has become 403 password_reset_required, which is recoverable
-    # in-band. force_password_reset is deliberately left set: the lock cannot distinguish "attacker
-    # never had the password" from an MFA-failure lock where they did, so a credential refresh stays
-    # the conservative default. What matters is that the patient can now complete it themselves.
-    assert recovered_response.status_code == 403
-    assert recovered_response.json() == {"status": "password_reset_required"}
-
-    reset_request_response = client.post(
-        "/auth/password-reset/request",
-        json={"username": SEEDED_USERNAME, "email": SEEDED_INVITE_EMAIL},
-    )
-    assert reset_request_response.status_code == 202
-    complete_reset_response = client.post(
-        "/auth/password-reset/complete",
-        json={
-            "reset_token": reset_request_response.json()["development_reset_token"],
-            "new_password": STRONG_RESET_PASSWORD,
-        },
-    )
-    assert complete_reset_response.status_code == 200
-    final_login_response = client.post(
-        "/auth/login",
-        json={"username": SEEDED_USERNAME, "password": STRONG_RESET_PASSWORD},
-    )
-    assert final_login_response.status_code == 200
-    assert final_login_response.json()["status"] == "mfa_required"
+    # A password-only attacker can impose the configured cooling-off period, but cannot force the
+    # victim through account recovery. After expiry the correct password resumes the normal flow.
+    assert recovered_response.status_code == 200
+    assert recovered_response.json()["status"] == "mfa_required"
 
     with app.state.session_factory() as session:
         stored = session.get(PatientPortalAccount, account_id)
         assert stored is not None
         assert stored.locked_at is None
         assert stored.failed_login_count == 0
+        assert stored.force_password_reset is False
         unlock_events = list(
             session.scalars(
                 select(PatientPortalAuditEvent).where(
@@ -479,6 +459,31 @@ def test_automated_lockout_expires_and_restores_self_service_sign_in(
             )
         )
     assert unlock_events, "an expired lockout must leave an audit record of the release"
+
+
+def test_unauthenticated_password_failures_do_not_revoke_an_active_session() -> None:
+    app = migrated_development_app(auth_max_failed_password_attempts=2)
+    victim = TestClient(app)
+    account_id = browser_sign_in_seeded_patient(app, victim)
+    attacker = TestClient(app)
+
+    drive_account_into_lockout(attacker, attempts=2)
+
+    assert victim.get("/portal").status_code == 200
+    with app.state.session_factory() as session:
+        account = session.get(PatientPortalAccount, account_id)
+        active_sessions = list(
+            session.scalars(
+                select(PatientPortalSession).where(
+                    PatientPortalSession.account_id == account_id,
+                    PatientPortalSession.revoked_at.is_(None),
+                )
+            )
+        )
+        assert account is not None
+        assert account.locked_at is not None
+        assert account.force_password_reset is False
+        assert active_sessions
 
 
 def test_staff_initiated_lock_is_never_released_by_the_expiry(

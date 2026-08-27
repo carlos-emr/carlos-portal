@@ -318,7 +318,8 @@ hyphens, and 20 characters or fewer.
 
 Non-development deployments must set `PATIENT_PORTAL_INTERNAL_HEALTH_TOKEN`,
 `PATIENT_PORTAL_SESSION_SECRET`, `PATIENT_PORTAL_IDENTITY_PROOF_SECRET`,
-`PATIENT_PORTAL_AUDIT_HASH_SECRET`, `PATIENT_PORTAL_INTERNAL_API_TOKEN`, SMTP, SMS, either
+`PATIENT_PORTAL_AUDIT_HASH_SECRET`, `PATIENT_PORTAL_INTERNAL_API_TOKEN`,
+`PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY`, SMTP, SMS, either
 `PATIENT_PORTAL_OUTBOX_ENCRYPTION_SECRET` or `PATIENT_PORTAL_OUTBOX_ENCRYPTION_KEYRING`, and either
 `PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_SECRET` or
 `PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_KEYRING`.
@@ -562,24 +563,19 @@ The remaining secrets have deliberately different rotation behavior:
 ## CARLOS Internal API
 
 Set `PATIENT_PORTAL_INTERNAL_API_TOKEN` to enable the production staff/service contract. Requests
-must include its Bearer token and CARLOS-authenticated `X-CARLOS-Provider-ID`,
-`X-CARLOS-Provider-Name`, `X-CARLOS-Clinic-ID`, and `X-CARLOS-Permissions` headers.
+must include its Bearer token and an `X-CARLOS-Staff-Assertion`. Configure
+`PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY` with CARLOS's raw Ed25519 public key encoded as
+unpadded base64url. CARLOS signs a compact `<payload>.<signature>` assertion for the authenticated
+provider. The JSON payload must contain exactly `iss`, `aud`, `iat`, `exp`, `jti`, `provider_id`,
+`provider_name`, `clinic_id`, and `permissions`; use issuer `carlos`, audience
+`carlos-patient-portal-internal-api`, a canonical UUID `jti`, and a lifetime no longer than 120
+seconds. The portal verifies the signature, expiry, clinic, and permission before handling a staff
+request. CARLOS must keep the Ed25519 private key outside the portal deployment.
 
-**Pilot blocker — the trust model here is deployment-enforced, not application-enforced.** The
-service token authenticates *CARLOS as a system*; provider identity, clinic, and the entire
-permission set are then read from plaintext request headers the caller chooses. Anything able to
-present the token can therefore assert any provider and any permission, including reading generated
-email passphrases, and the `actor_id` recorded in the audit trail is only as trustworthy as the
-proxy configuration in front of the portal. Two controls are mandatory before pilot traffic:
-
-- the reverse proxy must strip externally supplied copies of the four `X-CARLOS-*` headers, and
-- the `/internal/carlos/` route family must be reachable only from CARLOS application instances.
-
-The intended replacement is a short-lived signed assertion minted by CARLOS from the authenticated
-provider session (carrying provider id, clinic, and permissions) or mutual TLS, so provider identity
-is cryptographically attributable rather than proxy-attributable. That work is not in this
-iteration; until it lands, treat the proxy configuration as a security control with the same review
-weight as application code.
+The service token still authenticates CARLOS as a workload, while the signed assertion binds the
+specific provider and permissions. Keep `/internal/carlos/` reachable only from CARLOS application
+instances, terminate TLS on that path, and strip patient-supplied `X-CARLOS-*` headers at the edge.
+The reference nginx policy forwards only the signed assertion to the internal route.
 
 Permissions are deliberately narrow:
 

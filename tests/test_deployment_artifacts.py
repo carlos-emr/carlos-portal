@@ -1,6 +1,27 @@
 from pathlib import Path
 
 PACKAGE_ROOT = Path(__file__).parents[1] / "carlos_patient_portal"
+REPOSITORY_ROOT = PACKAGE_ROOT.parent
+
+
+def test_repository_ignores_local_secrets_and_patient_databases() -> None:
+    patterns = set((REPOSITORY_ROOT / ".gitignore").read_text().splitlines())
+
+    assert {
+        ".env",
+        ".env.*",
+        ".envrc",
+        ".direnv/",
+        "*.key",
+        "*.pem",
+        "*.p12",
+        "*.pfx",
+        "*.db",
+        "*.db-wal",
+        "*.db-shm",
+        "*.sqlite",
+        "*.sqlite3",
+    } <= patterns
 
 
 def test_reference_proxy_omits_raw_request_target_and_limits_expensive_routes() -> None:
@@ -30,6 +51,13 @@ def test_reference_proxy_omits_raw_request_target_and_limits_expensive_routes() 
     assert "deny all" in configuration
     assert "proxy_set_header X-Forwarded-Proto $scheme" in configuration
     assert configuration.count('proxy_set_header X-CARLOS-Provider-ID ""') == 1
+    assert configuration.count('proxy_set_header X-CARLOS-Staff-Assertion ""') == 1
+    assert (
+        configuration.count(
+            "proxy_set_header X-CARLOS-Staff-Assertion $http_x_carlos_staff_assertion"
+        )
+        == 1
+    )
     assert configuration.count("proxy_set_header Host $host") == 2
     assert "location ^~ /patient/" in configuration
     assert "proxy_pass http://carlos_patient_portal/;" in configuration
@@ -108,6 +136,9 @@ def test_reference_proxy_terminates_tls_and_bounds_request_resources() -> None:
     assert "TLSv1;" not in configuration
     assert "listen 80;" in configuration
     assert "return 301 https://" in configuration
+    assert "return 301 https://$host" not in configuration
+    assert "listen 80 default_server;" in configuration
+    assert "return 444;" in configuration
 
     # HSTS stays the application's job; duplicating it here is what the review warned against.
     assert "Strict-Transport-Security" not in configuration

@@ -19,6 +19,7 @@
 
 import re
 from threading import BoundedSemaphore
+from unicodedata import normalize
 
 from argon2 import PasswordHasher
 
@@ -27,6 +28,81 @@ from carlos_patient_portal.models import MAX_USERNAME_LENGTH, MIN_USERNAME_LENGT
 MIN_PASSWORD_LENGTH = 12
 MAX_PASSWORD_LENGTH = 256
 USERNAME_PATTERN = re.compile(r"^[a-z0-9._-]+$")
+PASSWORD_SKELETON_PATTERN = re.compile(r"[^a-z0-9]+")
+PASSWORD_LEET_TRANSLATION = str.maketrans(
+    {"0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", "$": "s"}
+)
+
+# Kept in-process so password validation never discloses a candidate to a third-party breach
+# service and never fails open when the network is unavailable. These are common/compromised bases
+# rather than only literal passwords: the skeleton check also catches predictable numeric and
+# punctuation suffixes such as Password1! and Welcome2026!. Site-specific terms are included because
+# NIST calls out service names and other expected choices alongside breached passwords.
+COMMON_PASSWORD_BASES = frozenset(
+    {
+        "abcdef",
+        "admin",
+        "administrator",
+        "access",
+        "andrew",
+        "ashley",
+        "baseball",
+        "basketball",
+        "batman",
+        "charlie",
+        "computer",
+        "carlos",
+        "changeme",
+        "clinic",
+        "daniel",
+        "default",
+        "dragon",
+        "flower",
+        "football",
+        "freedom",
+        "george",
+        "ginger",
+        "harley",
+        "hunter",
+        "iloveyou",
+        "jennifer",
+        "jessica",
+        "jordan",
+        "letmein",
+        "login",
+        "maggie",
+        "master",
+        "michael",
+        "michelle",
+        "monkey",
+        "mustang",
+        "nicole",
+        "password",
+        "patient",
+        "pepper",
+        "pokemon",
+        "princess",
+        "portal",
+        "purple",
+        "qwerty",
+        "ranger",
+        "robert",
+        "secret",
+        "shadow",
+        "soccer",
+        "summer",
+        "starwars",
+        "sunshine",
+        "superman",
+        "taylor",
+        "thomas",
+        "trustnoone",
+        "welcome",
+        "whatever",
+        "winter",
+        "yankees",
+    }
+)
 
 # Defaults sized for a small clinic VM. Peak hashing memory is roughly
 # max_concurrency * memory_cost — 4 * 64 MiB = 256 MiB here — so a deployment with a different
@@ -103,34 +179,44 @@ def validate_username(username: str) -> str:
     return normalized_username
 
 
-def validate_password(password: str) -> str:
-    """Enforce the portal's password policy.
+def _password_compact(value: str) -> str:
+    normalized = normalize("NFKC", value).casefold()
+    return PASSWORD_SKELETON_PATTERN.sub("", normalized)
 
-    The composition rules below (upper, lower, digit, symbol) are kept deliberately, and are worth
-    a note because they run against current guidance: NIST SP 800-63B section 5.1.1.2 recommends
-    *against* composition rules and *for* a length minimum plus a breached-password check, on the
-    evidence that composition rules push users toward `Password1!` shapes.
 
-    They are retained for the pilot because the better replacement is a breached-password check,
-    which the portal does not have yet and which needs a wordlist, a refresh story, and an offline
-    lookup path before it can be relied on. Removing the rules before that lands would weaken the
-    policy rather than modernise it. The stronger half of the guidance is already in place: a
-    12-character minimum, Argon2id, mandatory MFA, and account lockout.
+def _password_skeleton(value: str) -> str:
+    normalized = normalize("NFKC", value).casefold().translate(PASSWORD_LEET_TRANSLATION)
+    return PASSWORD_SKELETON_PATTERN.sub("", normalized)
 
-    Do not "fix" this by deleting the class checks on their own — replace them with the blocklist.
-    """
+
+def validate_password(password: str, *, context_values: tuple[str, ...] = ()) -> str:
+    """Apply NIST-style length and offline blocklist checks without composition rules."""
     if len(password) < MIN_PASSWORD_LENGTH:
         raise ValueError(f"password must be at least {MIN_PASSWORD_LENGTH} characters")
     if len(password) > MAX_PASSWORD_LENGTH:
         raise ValueError(f"password must be {MAX_PASSWORD_LENGTH} characters or fewer")
-    if not any(character.isupper() for character in password):
-        raise ValueError("password must contain an uppercase letter")
-    if not any(character.islower() for character in password):
-        raise ValueError("password must contain a lowercase letter")
-    if not any(character.isdigit() for character in password):
-        raise ValueError("password must contain a number")
-    if not any(
-        not character.isalnum() and not character.isspace() for character in password
-    ):
-        raise ValueError("password must contain a symbol")
+    compact = _password_compact(password)
+    skeleton = _password_skeleton(password)
+    repeated_short_unit = any(
+        len(compact) % unit_length == 0
+        and compact == compact[:unit_length] * (len(compact) // unit_length)
+        for unit_length in range(1, min(4, len(compact)) + 1)
+    )
+    predictable_sequences = (
+        "0123456789" * 4,
+        "9876543210" * 4,
+        "abcdefghijklmnopqrstuvwxyz" * 2,
+        "zyxwvutsrqponmlkjihgfedcba" * 2,
+    )
+    if any(
+        skeleton == common
+        or (skeleton.startswith(common) and len(skeleton) - len(common) <= 8)
+        or (skeleton.endswith(common) and len(skeleton) - len(common) <= 8)
+        for common in COMMON_PASSWORD_BASES
+    ) or repeated_short_unit or any(compact in sequence for sequence in predictable_sequences):
+        raise ValueError("password is too common or easily guessed")
+    for context_value in context_values:
+        context_skeleton = _password_skeleton(context_value)
+        if len(context_skeleton) >= 4 and context_skeleton in skeleton:
+            raise ValueError("password must not contain account or clinic information")
     return password

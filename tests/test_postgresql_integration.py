@@ -42,6 +42,7 @@ from carlos_patient_portal.models import (
     utc_now,
 )
 from carlos_patient_portal.token_keys import PortalTokenKeys
+from tests.support import TEST_STAFF_ASSERTION_PUBLIC_KEY, carlos_staff_headers
 
 POSTGRES_URL = os.getenv("PORTAL_TEST_POSTGRES_URL")
 INTERNAL_TOKEN = "i" * 32
@@ -152,14 +153,14 @@ def clean_postgresql_database() -> None:
         engine.dispose()
 
 
-def staff_headers() -> dict[str, str]:
-    return {
-        "Authorization": f"Bearer {INTERNAL_TOKEN}",
-        "X-CARLOS-Provider-ID": "postgres-provider",
-        "X-CARLOS-Provider-Name": "PostgreSQL Test",
-        "X-CARLOS-Clinic-ID": "postgres-clinic",
-        "X-CARLOS-Permissions": "portal.invite.manage",
-    }
+def staff_headers(*permissions: str) -> dict[str, str]:
+    return carlos_staff_headers(
+        *(permissions or ("portal.invite.manage",)),
+        token=INTERNAL_TOKEN,
+        clinic_id="postgres-clinic",
+        provider_id="postgres-provider",
+        provider_name="PostgreSQL Test",
+    )
 
 
 def postgres_settings(**overrides: object) -> Settings:
@@ -171,6 +172,7 @@ def postgres_settings(**overrides: object) -> Settings:
         "database_url": POSTGRES_URL,
         "session_secret": "s" * 32,
         "internal_api_token": INTERNAL_TOKEN,
+        "internal_staff_assertion_public_key": TEST_STAFF_ASSERTION_PUBLIC_KEY,
         "identity_proof_secret": "p" * 32,
         "audit_hash_secret": "a" * 32,
         "unlock_secret_encryption_secret": "u" * 32,
@@ -608,10 +610,7 @@ def test_postgresql_unlock_idempotency_and_contact_review_replacement() -> None:
     )
     settings = postgres_settings()
     app = create_app(settings)
-    secret_headers = {
-        **staff_headers(),
-        "X-CARLOS-Permissions": "portal.secret.manage",
-    }
+    secret_headers = staff_headers("portal.secret.manage")
     payload = {
         "source_reference": "concurrent-message",
         "secret_type": "email",
@@ -840,7 +839,7 @@ def test_postgresql_staff_revocation_races_in_flight_patient_requests() -> None:
                 app,
                 "POST",
                 "/internal/carlos/patients/7101/portal-account/access",
-                headers={**staff_headers(), "X-CARLOS-Permissions": "portal.account.manage"},
+                headers=staff_headers("portal.account.manage"),
                 json={"enabled": False, "reason": "staff_action"},
             )
 

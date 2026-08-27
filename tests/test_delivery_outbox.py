@@ -43,13 +43,12 @@ from carlos_patient_portal.runtime import (
 )
 from carlos_patient_portal.token_keys import PortalTokenKeys
 from tests.support import (
-    INTERNAL_API_TOKEN,
     OUTBOX_ENCRYPTION_SECRET,
     SEEDED_INVITE_EMAIL,
-    TEST_CLINIC_ID,
     RecordingPortalEmailSender,
     activate_seeded_patient_account,
     activation_request,
+    carlos_staff_headers,
     development_settings,
     migrated_development_app,
     migrated_staging_app,
@@ -824,13 +823,7 @@ def test_password_reset_route_resolves_every_identity_through_the_outbox() -> No
     # deployment would: through the authenticated internal API.
     invite = client.post(
         "/internal/carlos/patients/1234/invites",
-        headers={
-            "Authorization": f"Bearer {INTERNAL_API_TOKEN}",
-            "X-CARLOS-Provider-ID": "provider-42",
-            "X-CARLOS-Provider-Name": "CarlosDoc",
-            "X-CARLOS-Clinic-ID": TEST_CLINIC_ID,
-            "X-CARLOS-Permissions": "portal.invite.manage",
-        },
+        headers=carlos_staff_headers("portal.invite.manage"),
         json=seeded_invite_request(),
     )
     assert invite.status_code == 201, invite.text
@@ -933,13 +926,7 @@ def test_password_reset_hit_and_miss_enqueue_identical_account_neutral_work() ->
     client = TestClient(app, base_url="https://portal.example.test")
     invite = client.post(
         "/internal/carlos/patients/1234/invites",
-        headers={
-            "Authorization": f"Bearer {INTERNAL_API_TOKEN}",
-            "X-CARLOS-Provider-ID": "provider-42",
-            "X-CARLOS-Provider-Name": "CarlosDoc",
-            "X-CARLOS-Clinic-ID": TEST_CLINIC_ID,
-            "X-CARLOS-Permissions": "portal.invite.manage",
-        },
+        headers=carlos_staff_headers("portal.invite.manage"),
         json=seeded_invite_request(),
     )
     assert invite.status_code == 201

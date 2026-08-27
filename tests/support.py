@@ -5,11 +5,16 @@ past the others. Nothing here asserts; it only builds apps, seeds accounts, driv
 flow, and records what the outbound senders were asked to deliver.
 """
 
+import json
 import re
+from base64 import urlsafe_b64encode
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 from alembic import command
 from alembic.config import Config
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 from jinja2 import meta
 from sqlalchemy import Engine, select
@@ -52,6 +57,19 @@ INTERNAL_HEALTH_TOKEN = "h" * MIN_PRODUCTION_SECRET_LENGTH
 
 
 INTERNAL_API_TOKEN = "c" * MIN_PRODUCTION_SECRET_LENGTH
+
+
+TEST_STAFF_ASSERTION_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(bytes(range(1, 33)))
+TEST_STAFF_ASSERTION_PUBLIC_KEY = (
+    urlsafe_b64encode(
+        TEST_STAFF_ASSERTION_PRIVATE_KEY.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+    )
+    .rstrip(b"=")
+    .decode("ascii")
+)
 
 
 WRONG_INTERNAL_HEALTH_TOKEN = "w" * MIN_PRODUCTION_SECRET_LENGTH
@@ -99,6 +117,63 @@ TEST_CLINIC_ID = "test-clinic"
 TEST_CLINIC_NAME = "Test Clinic"
 
 
+def _base64url(value: bytes) -> str:
+    return urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def sign_staff_assertion(
+    *permissions: str,
+    clinic_id: str = TEST_CLINIC_ID,
+    provider_id: str = "provider-42",
+    provider_name: str = "CarlosDoc",
+    issued_at: int | None = None,
+    expires_at: int | None = None,
+    audience: str = "carlos-patient-portal-internal-api",
+    issuer: str = "carlos",
+    claim_overrides: dict[str, object] | None = None,
+) -> str:
+    now = int(datetime.now(UTC).timestamp())
+    issued_at = now if issued_at is None else issued_at
+    expires_at = issued_at + 60 if expires_at is None else expires_at
+    claims: dict[str, object] = {
+        "aud": audience,
+        "clinic_id": clinic_id,
+        "exp": expires_at,
+        "iat": issued_at,
+        "iss": issuer,
+        "jti": str(uuid4()),
+        "permissions": list(permissions),
+        "provider_id": provider_id,
+        "provider_name": provider_name,
+    }
+    claims.update(claim_overrides or {})
+    payload = json.dumps(
+        claims,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    signature = TEST_STAFF_ASSERTION_PRIVATE_KEY.sign(payload)
+    return f"{_base64url(payload)}.{_base64url(signature)}"
+
+
+def carlos_staff_headers(
+    *permissions: str,
+    clinic_id: str = TEST_CLINIC_ID,
+    provider_id: str = "provider-42",
+    provider_name: str = "CarlosDoc",
+    token: str = INTERNAL_API_TOKEN,
+) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {token}",
+        "X-CARLOS-Staff-Assertion": sign_staff_assertion(
+            *permissions,
+            clinic_id=clinic_id,
+            provider_id=provider_id,
+            provider_name=provider_name,
+        ),
+    }
+
+
 def development_settings(**overrides: object) -> Settings:
     values = {"environment": "development", **overrides}
     return Settings(**values)
@@ -132,6 +207,7 @@ def non_development_settings_values(environment: str) -> dict[str, object]:
         "unlock_secret_encryption_secret": UNLOCK_SECRET_ENCRYPTION_SECRET,
         "internal_health_token": INTERNAL_HEALTH_TOKEN,
         "internal_api_token": INTERNAL_API_TOKEN,
+        "internal_staff_assertion_public_key": TEST_STAFF_ASSERTION_PUBLIC_KEY,
         "smtp_host": "mail.internal",
         "smtp_from_address": "portal@example.test",
         "smtp_starttls": True,
@@ -154,6 +230,7 @@ def migrated_development_app(
         "identity_proof_secret": IDENTITY_PROOF_SECRET,
         "audit_hash_secret": AUDIT_HASH_SECRET,
         "unlock_secret_encryption_secret": UNLOCK_SECRET_ENCRYPTION_SECRET,
+        "internal_staff_assertion_public_key": TEST_STAFF_ASSERTION_PUBLIC_KEY,
         **overrides,
     }
     app = main.create_app(

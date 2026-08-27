@@ -33,7 +33,12 @@ from carlos_patient_portal.models import (
     PatientPortalUnlockSecret,
     utc_now,
 )
-from tests.support import upgrade_to_head
+from tests.support import (
+    TEST_STAFF_ASSERTION_PUBLIC_KEY,
+    carlos_staff_headers,
+    sign_staff_assertion,
+    upgrade_to_head,
+)
 
 INTERNAL_API_TOKEN = "c" * MIN_PRODUCTION_SECRET_LENGTH
 IDENTITY_PROOF_SECRET = "i" * MIN_PRODUCTION_SECRET_LENGTH
@@ -96,6 +101,7 @@ def internal_app(**overrides: object):
             clinic_name="Clinic A",
             database_url="sqlite+pysqlite:///:memory:",
             internal_api_token=INTERNAL_API_TOKEN,
+            internal_staff_assertion_public_key=TEST_STAFF_ASSERTION_PUBLIC_KEY,
             identity_proof_secret=IDENTITY_PROOF_SECRET,
             audit_hash_secret=AUDIT_HASH_SECRET,
             unlock_secret_encryption_secret=UNLOCK_SECRET,
@@ -111,13 +117,7 @@ def carlos_headers(
     clinic_id: str = "clinic-a",
     token: str = INTERNAL_API_TOKEN,
 ) -> dict[str, str]:
-    return {
-        "Authorization": f"Bearer {token}",
-        "X-CARLOS-Provider-ID": "provider-42",
-        "X-CARLOS-Provider-Name": "CarlosDoc",
-        "X-CARLOS-Clinic-ID": clinic_id,
-        "X-CARLOS-Permissions": ",".join(permissions),
-    }
+    return carlos_staff_headers(*permissions, clinic_id=clinic_id, token=token)
 
 
 def invite_request(demographic_no: int = 1234) -> dict[str, object]:
@@ -144,10 +144,6 @@ def test_internal_api_rejects_a_non_ascii_bearer_token_without_a_server_error() 
         "/internal/carlos/contact-reviews",
         headers={
             b"Authorization": b"Bearer tok\xe9n",
-            b"X-CARLOS-Provider-ID": b"p1",
-            b"X-CARLOS-Provider-Name": b"P",
-            b"X-CARLOS-Clinic-ID": b"clinic-a",
-            b"X-CARLOS-Permissions": b"portal.contact.review",
         },
     )
 
@@ -188,6 +184,85 @@ def test_internal_api_requires_service_authentication_and_permission() -> None:
             "authentication_failed",
             "authorization_failed",
         ]
+
+
+def test_internal_api_rejects_legacy_unsigned_identity_headers() -> None:
+    client = TestClient(internal_app())
+
+    response = client.get(
+        "/internal/carlos/contact-reviews",
+        headers={
+            "Authorization": f"Bearer {INTERNAL_API_TOKEN}",
+            "X-CARLOS-Provider-ID": "provider-42",
+            "X-CARLOS-Provider-Name": "CarlosDoc",
+            "X-CARLOS-Clinic-ID": "clinic-a",
+            "X-CARLOS-Permissions": "portal.contact.review",
+        },
+    )
+
+    assert response.status_code == 404
+
+
+def test_internal_api_rejects_tampered_expired_and_wrong_audience_assertions() -> None:
+    client = TestClient(internal_app())
+    path = "/internal/carlos/contact-reviews"
+    valid = sign_staff_assertion("portal.contact.review", clinic_id="clinic-a")
+    payload, signature = valid.split(".")
+    tampered_signature = ("A" if signature[0] != "A" else "B") + signature[1:]
+    now = int(utc_now().timestamp())
+
+    for assertion in (
+        f"{payload}.{tampered_signature}",
+        sign_staff_assertion(
+            "portal.contact.review",
+            clinic_id="clinic-a",
+            issued_at=now - 120,
+            expires_at=now - 60,
+        ),
+        sign_staff_assertion(
+            "portal.contact.review",
+            clinic_id="clinic-a",
+            audience="another-service",
+        ),
+        sign_staff_assertion(
+            "portal.contact.review,portal.secret.manage",
+            clinic_id="clinic-a",
+        ),
+        sign_staff_assertion(
+            "portal.contact.review",
+            clinic_id="clinic-a",
+            issued_at=now + 120,
+        ),
+        sign_staff_assertion(
+            "portal.contact.review",
+            clinic_id="clinic-a",
+            issued_at=now,
+            expires_at=now + 121,
+        ),
+        sign_staff_assertion(
+            "portal.contact.review",
+            clinic_id="clinic-a",
+            claim_overrides={"jti": "not-a-uuid"},
+        ),
+        sign_staff_assertion(
+            "portal.contact.review",
+            clinic_id="clinic-a",
+            claim_overrides={"permissions": ["portal.contact.review", "portal.contact.review"]},
+        ),
+        sign_staff_assertion(
+            "portal.contact.review",
+            clinic_id="clinic-a",
+            claim_overrides={"unexpected": "claim"},
+        ),
+    ):
+        response = client.get(
+            path,
+            headers={
+                "Authorization": f"Bearer {INTERNAL_API_TOKEN}",
+                "X-CARLOS-Staff-Assertion": assertion,
+            },
+        )
+        assert response.status_code == 404
 
 
 def test_internal_mutations_reject_unknown_or_blank_fields_and_publish_schemas() -> None:
@@ -1372,4 +1447,5 @@ def test_previous_internal_api_token_must_differ_from_the_active_token() -> None
             database_url="sqlite+pysqlite:///:memory:",
             internal_api_token=INTERNAL_API_TOKEN,
             internal_api_token_previous=INTERNAL_API_TOKEN,
+            internal_staff_assertion_public_key=TEST_STAFF_ASSERTION_PUBLIC_KEY,
         )

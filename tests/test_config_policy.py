@@ -486,14 +486,40 @@ def test_email_local_part_rejects_invalid_dot_placement(email: str) -> None:
         normalize_email(email)
 
 
-def test_password_whitespace_does_not_satisfy_symbol_requirement() -> None:
-    with pytest.raises(ValueError, match="symbol"):
-        credentials.validate_password("Password123 ")
+@pytest.mark.parametrize(
+    "password",
+    [
+        "Password123!",
+        "P@ssw0rd2026!",
+        "Welcome2026!",
+        "Carlos2026!!",
+        "aaaaaaaaaaaa",
+        "123456789012",
+    ],
+)
+def test_password_rejects_common_compromised_and_service_specific_choices(
+    password: str,
+) -> None:
+    with pytest.raises(ValueError, match="common|guessed"):
+        credentials.validate_password(password)
 
 
-def test_password_unicode_alphanumeric_does_not_satisfy_symbol_requirement() -> None:
-    with pytest.raises(ValueError, match="symbol"):
-        credentials.validate_password("Password123é")
+def test_password_does_not_require_character_classes() -> None:
+    assert credentials.validate_password("four random words together") == (
+        "four random words together"
+    )
+
+
+def test_password_rejects_account_context_even_when_not_on_common_list() -> None:
+    with pytest.raises(ValueError, match="account or clinic"):
+        credentials.validate_password(
+            "northwind.patient.8842",
+            context_values=("northwind.patient",),
+        )
+
+
+def test_non_ascii_csrf_input_fails_closed_without_compare_digest_type_error() -> None:
+    assert not web_support.is_valid_csrf_submission("é", "é", "csrf-secret")
 
 
 def test_url_ports_and_unlock_key_ids_fail_during_settings_validation() -> None:
@@ -680,6 +706,16 @@ def test_staging_fails_closed_without_delivery_services_or_internal_api_token() 
         staging_settings(internal_api_token=None)
     with pytest.raises(ValidationError, match="PATIENT_PORTAL_OUTBOX_ENCRYPTION_SECRET"):
         staging_settings(outbox_encryption_secret=None)
+
+
+def test_internal_api_requires_a_canonical_ed25519_staff_assertion_key() -> None:
+    with pytest.raises(ValidationError, match="INTERNAL_STAFF_ASSERTION_PUBLIC_KEY must be set"):
+        development_settings(internal_api_token="c" * 32)
+    with pytest.raises(ValidationError, match="must encode one 32-byte Ed25519 public key"):
+        development_settings(
+            internal_api_token="c" * 32,
+            internal_staff_assertion_public_key="not-a-public-key",
+        )
 
 
 @pytest.mark.parametrize("settings_factory", [staging_settings, production_settings])

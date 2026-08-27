@@ -19,6 +19,8 @@
 
 import json
 import re
+from base64 import urlsafe_b64decode, urlsafe_b64encode
+from binascii import Error as Base64DecodeError
 from email.utils import parseaddr
 from functools import lru_cache
 from ipaddress import ip_address, ip_network
@@ -217,6 +219,9 @@ class Settings(BaseSettings):
     # Without it, rotating the shared service token means restarting both systems in lockstep,
     # which in practice means the token never gets rotated.
     internal_api_token_previous: SecretStr | None = None
+    # Raw Ed25519 public key encoded as unpadded base64url. CARLOS retains the private key and
+    # signs short-lived provider assertions; the portal never receives signing capability.
+    internal_staff_assertion_public_key: str | None = Field(default=None, max_length=64)
     smtp_host: str | None = Field(default=None, max_length=253)
     smtp_port: int = Field(default=25, ge=1, le=65535)
     smtp_from_address: str | None = Field(default=None, max_length=254)
@@ -432,6 +437,7 @@ class Settings(BaseSettings):
         "sms_webhook_url",
         "sms_sender_id",
         "trusted_proxy_cidrs",
+        "internal_staff_assertion_public_key",
         "unlock_secret_active_key_id",
         "service_name",
         "clinic_name",
@@ -451,6 +457,25 @@ class Settings(BaseSettings):
             ord(character) < 32 or ord(character) == 127 for character in value
         ):
             raise ValueError("configuration text must not contain control characters")
+        return value
+
+    @field_validator("internal_staff_assertion_public_key")
+    @classmethod
+    def validate_internal_staff_assertion_public_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            padding = "=" * (-len(value) % 4)
+            decoded = urlsafe_b64decode(value + padding)
+        except (Base64DecodeError, ValueError) as exc:
+            raise ValueError(
+                "PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY must be base64url"
+            ) from exc
+        if len(decoded) != 32 or urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii") != value:
+            raise ValueError(
+                "PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY must encode one "
+                "32-byte Ed25519 public key"
+            )
         return value
 
     @field_validator("smtp_from_address")
@@ -716,6 +741,11 @@ class Settings(BaseSettings):
             _validate_distinct_secret_values(configured_secrets)
 
     def validate_internal_api_rotation_policy(self) -> None:
+        if self.internal_api_token is not None and self.internal_staff_assertion_public_key is None:
+            raise ValueError(
+                "PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY must be set when "
+                "PATIENT_PORTAL_INTERNAL_API_TOKEN is configured"
+            )
         if self.internal_api_token_previous is None:
             return
         if self.internal_api_token is None:

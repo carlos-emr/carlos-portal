@@ -821,7 +821,7 @@ def register_password_reset_routes(
                 reset_token_secret=runtime.token_keys.password_reset,
                 clinic_id=deps.settings.clinic_id,
             )
-        except PasswordResetTokenInvalidError:
+        except (PasswordResetTokenInvalidError, ValueError):
             if is_browser_form:
                 return render_public_auth_template(
                     request,

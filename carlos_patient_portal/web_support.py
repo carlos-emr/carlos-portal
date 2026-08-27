@@ -373,6 +373,14 @@ def sign_csrf_token(message: str, secret: str) -> str:
     ).hexdigest()
 
 
+def constant_time_text_equals(left: str, right: str) -> bool:
+    """Compare header/form text without `compare_digest` rejecting non-ASCII input."""
+    return compare_digest(
+        left.encode("utf-8", "surrogateescape"),
+        right.encode("utf-8", "surrogateescape"),
+    )
+
+
 def is_valid_csrf_token(token: str | None, secret: str) -> bool:
     if token is None:
         return False
@@ -394,7 +402,7 @@ def is_valid_csrf_token(token: str | None, secret: str) -> bool:
         return False
 
     expected_signature = sign_csrf_token(f"{issued_at_value}.{nonce}", secret)
-    return compare_digest(supplied_signature, expected_signature)
+    return constant_time_text_equals(supplied_signature, expected_signature)
 
 
 def is_valid_csrf_submission(
@@ -404,7 +412,7 @@ def is_valid_csrf_submission(
 ) -> bool:
     if form_token is None or cookie_token is None:
         return False
-    if not compare_digest(form_token, cookie_token):
+    if not constant_time_text_equals(form_token, cookie_token):
         return False
     return is_valid_csrf_token(form_token, secret)
 

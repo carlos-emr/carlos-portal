@@ -351,13 +351,10 @@ def register_internal_failure_audit(app: FastAPI, runtime: InternalRuntime) -> N
             principal = authenticate_carlos_staff(
                 runtime.settings,
                 authorization=request.headers.get("Authorization"),
-                provider_id=request.headers.get("X-CARLOS-Provider-ID"),
-                provider_name=request.headers.get("X-CARLOS-Provider-Name"),
-                clinic_id=request.headers.get("X-CARLOS-Clinic-ID"),
-                permissions=request.headers.get("X-CARLOS-Permissions"),
+                staff_assertion=request.headers.get("X-CARLOS-Staff-Assertion"),
             )
         except CarlosServiceAuthenticationError:
-            # Do not trust provider or clinic headers unless service authentication succeeds.
+            # Never attribute a failed request to an unverified assertion.
             principal = None
         reason = (
             "authentication_failed"
@@ -432,19 +429,13 @@ def build_internal_dependencies(runtime: InternalRuntime) -> InternalRouteDepend
 
     def get_staff_principal(
         authorization: Annotated[str | None, Header()] = None,
-        provider_id: Annotated[str | None, Header(alias="X-CARLOS-Provider-ID")] = None,
-        provider_name: Annotated[str | None, Header(alias="X-CARLOS-Provider-Name")] = None,
-        clinic_id: Annotated[str | None, Header(alias="X-CARLOS-Clinic-ID")] = None,
-        permissions: Annotated[str | None, Header(alias="X-CARLOS-Permissions")] = None,
+        staff_assertion: Annotated[str | None, Header(alias="X-CARLOS-Staff-Assertion")] = None,
     ) -> StaffPrincipal:
         try:
             return authenticate_carlos_staff(
                 runtime.settings,
                 authorization=authorization,
-                provider_id=provider_id,
-                provider_name=provider_name,
-                clinic_id=clinic_id,
-                permissions=permissions,
+                staff_assertion=staff_assertion,
             )
         except CarlosServiceAuthenticationError as exc:
             raise HTTPException(status_code=404, detail="not found") from exc

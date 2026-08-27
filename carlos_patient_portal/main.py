@@ -30,7 +30,7 @@ import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
-from secrets import compare_digest, token_urlsafe
+from secrets import token_urlsafe
 from time import monotonic
 from typing import Annotated
 
@@ -116,6 +116,7 @@ from carlos_patient_portal.web_support import (
     SECURITY_HEADERS,
     SERVICE_UNAVAILABLE_DETAIL,
     clear_portal_session_cookie,
+    constant_time_text_equals,
     create_csrf_token,
     fhir_operation_outcome_response,
     first_form_value,
@@ -597,7 +598,9 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
 
         scheme, _, supplied_token = (authorization or "").partition(" ")
         expected_token = settings.internal_health_token.get_secret_value().strip()
-        if scheme.lower() != "bearer" or not compare_digest(supplied_token, expected_token):
+        if scheme.lower() != "bearer" or not constant_time_text_equals(
+            supplied_token, expected_token
+        ):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND_DETAIL)
 
     def require_dev_admin_token(
@@ -608,7 +611,9 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
 
         scheme, _, supplied_token = (authorization or "").partition(" ")
         expected_token = settings.dev_admin_token.get_secret_value().strip()
-        if scheme.lower() != "bearer" or not compare_digest(supplied_token, expected_token):
+        if scheme.lower() != "bearer" or not constant_time_text_equals(
+            supplied_token, expected_token
+        ):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND_DETAIL)
 
     def get_dev_admin_actor(
