@@ -361,12 +361,13 @@ def register_login_routes(
                 headers={"Retry-After": str(exc.retry_after_seconds)},
             )
         if result.mfa_challenge is not None:
-            session.commit()
+            await run_in_threadpool(session.commit)
             try:
                 await run_in_threadpool(send_mfa_challenge, runtime, result.mfa_challenge)
             except (PortalEmailDeliveryError, PortalSmsDeliveryError):
                 runtime.operational_metrics.record_failure("mfa_delivery")
-                record_mfa_delivery_and_commit(
+                await run_in_threadpool(
+                    record_mfa_delivery_and_commit,
                     session,
                     delivery=result.mfa_challenge,
                     outcome=AUDIT_OUTCOME_FAILURE,
@@ -379,7 +380,8 @@ def register_login_routes(
                     browser_message=localized_auth_text(request)["verification_delivery_failed"],
                     json_content={"detail": "verification code could not be sent"},
                 )
-            record_mfa_delivery_and_commit(
+            await run_in_threadpool(
+                record_mfa_delivery_and_commit,
                 session,
                 delivery=result.mfa_challenge,
                 outcome=AUDIT_OUTCOME_SUCCESS,
@@ -431,7 +433,8 @@ def register_mfa_routes(
             )
         except MfaRateLimitedError as exc:
             if is_browser_form:
-                delivery_state = deps.get_browser_mfa_delivery_state(
+                delivery_state = await run_in_threadpool(
+                    deps.get_browser_mfa_delivery_state,
                     session,
                     payload,
                     preferred_delivery_method=payload.mfa_delivery_method,
@@ -484,7 +487,9 @@ def register_mfa_routes(
             )
         except MfaDeliveryUnavailableError:
             if is_browser_form:
-                delivery_state = deps.get_browser_mfa_delivery_state(session, payload)
+                delivery_state = await run_in_threadpool(
+                    deps.get_browser_mfa_delivery_state, session, payload
+                )
                 if delivery_state is not None:
                     return deps.render_mfa_page(
                         request,
@@ -496,18 +501,21 @@ def register_mfa_routes(
                 status_code=400,
                 content={"detail": MFA_DELIVERY_UNAVAILABLE_DETAIL},
             )
-        session.commit()
+        await run_in_threadpool(session.commit)
         try:
             await run_in_threadpool(send_mfa_challenge, runtime, delivery)
         except (PortalEmailDeliveryError, PortalSmsDeliveryError):
             runtime.operational_metrics.record_failure("mfa_delivery")
-            record_mfa_delivery_and_commit(
+            await run_in_threadpool(
+                record_mfa_delivery_and_commit,
                 session,
                 delivery=delivery,
                 outcome=AUDIT_OUTCOME_FAILURE,
             )
             if is_browser_form:
-                delivery_state = deps.get_browser_mfa_delivery_state(session, payload)
+                delivery_state = await run_in_threadpool(
+                    deps.get_browser_mfa_delivery_state, session, payload
+                )
                 if delivery_state is not None:
                     return deps.render_mfa_page(
                         request,
@@ -519,7 +527,8 @@ def register_mfa_routes(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 content={"detail": "verification code could not be sent"},
             )
-        record_mfa_delivery_and_commit(
+        await run_in_threadpool(
+            record_mfa_delivery_and_commit,
             session,
             delivery=delivery,
             outcome=AUDIT_OUTCOME_SUCCESS,
@@ -557,7 +566,9 @@ def register_mfa_routes(
             )
         except InvalidMfaCodeError:
             if is_browser_form:
-                delivery_state = deps.get_browser_mfa_delivery_state(session, payload)
+                delivery_state = await run_in_threadpool(
+                    deps.get_browser_mfa_delivery_state, session, payload
+                )
                 if delivery_state is not None:
                     return deps.render_mfa_page(
                         request,
@@ -701,7 +712,7 @@ def register_password_reset_routes(
             # submitted identity matched, while the committed lease/retry state survives worker
             # loss and terminal failure revokes the undelivered reset token.
             if deps.settings.is_development:
-                session.commit()
+                await run_in_threadpool(session.commit)
                 try:
                     await run_in_threadpool(
                         send_password_reset_email,
@@ -710,12 +721,13 @@ def register_password_reset_routes(
                         reset_url=reset_url,
                     )
                 except PortalEmailDeliveryError as exc:
-                    record_password_reset_delivery_outcome(
+                    await run_in_threadpool(
+                        record_password_reset_delivery_outcome,
                         session,
                         result=result,
                         outcome=AUDIT_OUTCOME_FAILURE,
                     )
-                    session.commit()
+                    await run_in_threadpool(session.commit)
                     # SMTP exceptions may contain recipient data; keep this log PHI-safe. The
                     # message is a fixed literal and the sole interpolation is the exception
                     # class name, so the credential-disclosure rule below has nothing to disclose.
@@ -726,15 +738,17 @@ def register_password_reset_routes(
                     )
                     response_reset_token = None
                 else:
-                    record_password_reset_delivery_outcome(
+                    await run_in_threadpool(
+                        record_password_reset_delivery_outcome,
                         session,
                         result=result,
                         outcome=AUDIT_OUTCOME_SUCCESS,
                     )
-                    session.commit()
+                    await run_in_threadpool(session.commit)
                     development_reset_url = reset_url
             else:
-                delivery = enqueue_password_reset_delivery(
+                delivery = await run_in_threadpool(
+                    enqueue_password_reset_delivery,
                     session,
                     result=result,
                     reset_url=reset_url,
@@ -742,7 +756,7 @@ def register_password_reset_routes(
                     encryption_secret=runtime.outbox_encryption_secret,
                     encryption_key_id=runtime.outbox_active_key_id,
                 )
-                session.commit()
+                await run_in_threadpool(session.commit)
                 background_tasks.add_task(
                     process_one_delivery,
                     runtime.session_factory,
@@ -892,7 +906,7 @@ def register_email_change_routes(
                 error_message=localized_auth_text(request)["email_change_complete_error"],
             )
         if deps.settings.is_development:
-            session.commit()
+            await run_in_threadpool(session.commit)
             for recipient in confirmation.notice_recipients:
                 try:
                     await run_in_threadpool(
@@ -904,17 +918,18 @@ def register_email_change_routes(
                     runtime.operational_metrics.record_failure("contact_change_delivery")
                     logger.error("Contact-change notice delivery failed")
         else:
-            deliveries = [
-                enqueue_contact_change_delivery(
+            deliveries = []
+            for recipient in confirmation.notice_recipients:
+                delivery = await run_in_threadpool(
+                    enqueue_contact_change_delivery,
                     session,
                     account_id=confirmation.review_request.account_id,
                     recipient=recipient,
                     encryption_secret=runtime.outbox_encryption_secret,
                     encryption_key_id=runtime.outbox_active_key_id,
                 )
-                for recipient in confirmation.notice_recipients
-            ]
-            session.commit()
+                deliveries.append(delivery)
+            await run_in_threadpool(session.commit)
             for delivery in deliveries:
                 background_tasks.add_task(
                     process_one_delivery,

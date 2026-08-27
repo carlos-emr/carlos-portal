@@ -106,7 +106,15 @@ def create_portal_engine(
 
 
 def create_session_factory(engine: Engine) -> sessionmaker[Session]:
-    return sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    # Request handlers explicitly control their transaction boundaries and commonly need ids or
+    # immutable delivery metadata after commit. Expiring every ORM instance there can turn a plain
+    # attribute read in an async handler into an implicit synchronous SELECT on the event loop.
+    return sessionmaker(
+        bind=engine,
+        autoflush=False,
+        autocommit=False,
+        expire_on_commit=False,
+    )
 
 
 @contextmanager

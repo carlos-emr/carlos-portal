@@ -251,6 +251,25 @@ def register_portal_routes(
     render_account_change_error = route_dependencies.render_account_change_error
     csrf_secret = runtime.token_keys.csrf
 
+    async def authenticate_browser_session(
+        request: Request,
+        session: Session,
+    ) -> AuthenticatedPortalSession | RedirectResponse:
+        return await run_in_threadpool(get_portal_cookie_session_or_redirect, request, session)
+
+    async def render_async_account_change_error(
+        request: Request,
+        session: Session,
+        *,
+        status_code: int,
+    ) -> Response:
+        return await run_in_threadpool(
+            render_account_change_error,
+            request,
+            session,
+            status_code=status_code,
+        )
+
     @app.get(PORTAL_ROOT_PATH)
     def portal_dashboard(
         request: Request,
@@ -285,7 +304,7 @@ def register_portal_routes(
             request,
             csrf_error_detail="password change could not be completed",
         )
-        authenticated_session = get_portal_cookie_session_or_redirect(request, session)
+        authenticated_session = await authenticate_browser_session(request, session)
         if isinstance(authenticated_session, RedirectResponse):
             return authenticated_session
 
@@ -294,7 +313,7 @@ def register_portal_routes(
             form_values,
             "new_password_confirmation",
         ):
-            return render_account_change_error(
+            return await render_async_account_change_error(
                 request,
                 session,
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -312,13 +331,13 @@ def register_portal_routes(
                 session_token_secret=runtime.token_keys.session,
             )
         except AccountSettingsStepUpError:
-            return render_account_change_error(
+            return await render_async_account_change_error(
                 request,
                 session,
                 status_code=status.HTTP_403_FORBIDDEN,
             )
         except (AccountSettingsValidationError, ValueError):
-            return render_account_change_error(
+            return await render_async_account_change_error(
                 request,
                 session,
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -346,7 +365,7 @@ def register_portal_routes(
             request,
             csrf_error_detail="contact update could not be completed",
         )
-        authenticated_session = get_portal_cookie_session_or_redirect(request, session)
+        authenticated_session = await authenticate_browser_session(request, session)
         if isinstance(authenticated_session, RedirectResponse):
             return authenticated_session
 
@@ -368,13 +387,13 @@ def register_portal_routes(
                 ),
             )
         except AccountSettingsStepUpError:
-            return render_account_change_error(
+            return await render_async_account_change_error(
                 request,
                 session,
                 status_code=status.HTTP_403_FORBIDDEN,
             )
         except (AccountSettingsValidationError, ValueError):
-            return render_account_change_error(
+            return await render_async_account_change_error(
                 request,
                 session,
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -382,7 +401,7 @@ def register_portal_routes(
         if contact_update.outcome == CONTACT_UPDATE_OUTCOME_NO_CHANGE:
             return redirect_to_account_status(request, "no-change")
         if contact_update.outcome == CONTACT_UPDATE_OUTCOME_CONFIRMATION_REQUIRED:
-            session.commit()
+            await run_in_threadpool(session.commit)
             return await deliver_email_change_request(
                 request,
                 session,
@@ -424,17 +443,18 @@ def register_portal_routes(
         unqualified success row.
         """
         if not settings.is_development:
-            deliveries = [
-                enqueue_contact_change_delivery(
+            deliveries = []
+            for recipient in recipients:
+                delivery = await run_in_threadpool(
+                    enqueue_contact_change_delivery,
                     session,
                     account_id=account.id,
                     recipient=recipient,
                     encryption_secret=runtime.outbox_encryption_secret,
                     encryption_key_id=runtime.outbox_active_key_id,
                 )
-                for recipient in recipients
-            ]
-            session.commit()
+                deliveries.append(delivery)
+            await run_in_threadpool(session.commit)
             for delivery in deliveries:
                 background_tasks.add_task(
                     process_one_delivery,
@@ -449,7 +469,7 @@ def register_portal_routes(
                 )
             return redirect_to_account_status(request, success_status_key)
 
-        session.commit()
+        await run_in_threadpool(session.commit)
         notices_delivered = True
         for recipient in recipients:
             try:
@@ -464,14 +484,15 @@ def register_portal_routes(
                 logger.error("Contact-change notice delivery failed")
         if notices_delivered:
             return redirect_to_account_status(request, success_status_key)
-        record_account_settings_audit_event(
+        await run_in_threadpool(
+            record_account_settings_audit_event,
             session,
             account,
             event_type=AUDIT_EVENT_ACCOUNT_CONTACT_UPDATE,
             outcome=AUDIT_OUTCOME_FAILURE,
             reason=ACCOUNT_SETTINGS_REASON_DELIVERY_UNAVAILABLE,
         )
-        session.commit()
+        await run_in_threadpool(session.commit)
         return redirect_to_account_status(request, failure_status_key)
 
     async def deliver_email_change_request(
@@ -514,14 +535,15 @@ def register_portal_routes(
             logger.error("Email-change confirmation delivery failed")
             if contact_update.email_change_request is not None:
                 contact_update.email_change_request.status = EMAIL_CHANGE_STATUS_REVOKED
-            record_account_settings_audit_event(
+            await run_in_threadpool(
+                record_account_settings_audit_event,
                 session,
                 account,
                 event_type=AUDIT_EVENT_ACCOUNT_EMAIL_CHANGE_REQUEST,
                 outcome=AUDIT_OUTCOME_FAILURE,
                 reason=ACCOUNT_SETTINGS_REASON_DELIVERY_UNAVAILABLE,
             )
-            session.commit()
+            await run_in_threadpool(session.commit)
             failure_status = (
                 "phone-confirmation-notice-failed"
                 if contact_update.confirmation_recipient is None
@@ -559,7 +581,7 @@ def register_portal_routes(
             request,
             csrf_error_detail="phone confirmation could not be completed",
         )
-        authenticated_session = get_portal_cookie_session_or_redirect(request, session)
+        authenticated_session = await authenticate_browser_session(request, session)
         if isinstance(authenticated_session, RedirectResponse):
             return authenticated_session
         try:
@@ -573,10 +595,10 @@ def register_portal_routes(
                 code_ttl=timedelta(seconds=settings.phone_change_code_ttl_seconds),
             )
         except (PhoneChangeCodeInvalidError, ValueError):
-            session.commit()
+            await run_in_threadpool(session.commit)
             return redirect_to_account_status(request, "phone-confirmation-invalid")
         if not confirmation.applied:
-            session.commit()
+            await run_in_threadpool(session.commit)
             return redirect_to_account_status(request, "email-confirmation-required")
         return await deliver_contact_change_notices(
             request,
@@ -597,11 +619,12 @@ def register_portal_routes(
             request,
             csrf_error_detail="phone confirmation could not be resent",
         )
-        authenticated_session = get_portal_cookie_session_or_redirect(request, session)
+        authenticated_session = await authenticate_browser_session(request, session)
         if isinstance(authenticated_session, RedirectResponse):
             return authenticated_session
         try:
-            code, recipient = resend_phone_change_code(
+            code, recipient = await run_in_threadpool(
+                resend_phone_change_code,
                 session,
                 authenticated_session.account,
                 token_secret=runtime.token_keys.email_change,
@@ -617,13 +640,13 @@ def register_portal_routes(
                 code=code,
                 expires_in_seconds=settings.phone_change_code_ttl_seconds,
             )
-            session.commit()
+            await run_in_threadpool(session.commit)
         except PhoneChangeRateLimitedError:
-            session.rollback()
+            await run_in_threadpool(session.rollback)
             return redirect_to_account_status(request, "phone-confirmation-rate-limited")
         except (PhoneChangeCodeInvalidError, PortalSmsDeliveryError, ValueError):
             # Preserve the last successfully delivered code when a resend fails.
-            session.rollback()
+            await run_in_threadpool(session.rollback)
             return redirect_to_account_status(request, "phone-confirmation-invalid")
         return redirect_to_account_status(request, "phone-confirmation-required")
 
@@ -636,7 +659,7 @@ def register_portal_routes(
             request,
             csrf_error_detail="MFA update could not be completed",
         )
-        authenticated_session = get_portal_cookie_session_or_redirect(request, session)
+        authenticated_session = await authenticate_browser_session(request, session)
         if isinstance(authenticated_session, RedirectResponse):
             return authenticated_session
 
@@ -653,13 +676,13 @@ def register_portal_routes(
                 max_failed_password_attempts=settings.auth_max_failed_password_attempts,
             )
         except AccountSettingsStepUpError:
-            return render_account_change_error(
+            return await render_async_account_change_error(
                 request,
                 session,
                 status_code=status.HTTP_403_FORBIDDEN,
             )
         except (AccountSettingsValidationError, ValueError):
-            return render_account_change_error(
+            return await render_async_account_change_error(
                 request,
                 session,
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -763,7 +786,7 @@ def register_portal_routes(
             request,
             csrf_error_detail="email password could not be revealed",
         )
-        authenticated_session = get_portal_cookie_session_or_redirect(request, session)
+        authenticated_session = await authenticate_browser_session(request, session)
         if isinstance(authenticated_session, RedirectResponse):
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -772,7 +795,8 @@ def register_portal_routes(
             )
         account = authenticated_session.account
         try:
-            passphrase = read_unlock_secret(
+            passphrase = await run_in_threadpool(
+                read_unlock_secret,
                 session,
                 email_password_id,
                 clinic_id=account.clinic_id,
@@ -792,7 +816,8 @@ def register_portal_routes(
             UnlockSecretRevokedError,
             UnlockSecretNotPublishedError,
         ):
-            record_audit_event(
+            await run_in_threadpool(
+                record_audit_event,
                 session,
                 event_type=AUDIT_EVENT_UNLOCK_SECRET_READ,
                 outcome=AUDIT_OUTCOME_FAILURE,
@@ -844,7 +869,8 @@ def register_portal_routes(
             request.url_for("index").path,
             status_code=status.HTTP_303_SEE_OTHER,
         )
-        logout_browser_session_cookie_token(
+        await run_in_threadpool(
+            logout_browser_session_cookie_token,
             session,
             session_token=request.cookies.get(PORTAL_SESSION_COOKIE_NAME),
             session_token_secret=runtime.token_keys.session,

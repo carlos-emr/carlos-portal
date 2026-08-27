@@ -425,7 +425,10 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
         that reach them are PHI.
         """
         request.app.state.operational_metrics.record_failure("unhandled_exception")
-        logger.exception("Unhandled portal error: %s", type(exc).__name__)
+        # Exception strings and tracebacks from SQLAlchemy can include the SQL statement and its
+        # bound patient values. Keep the application log useful without copying that material into
+        # a sink whose redaction policy is outside this process.
+        logger.error("Unhandled portal error: %s", type(exc).__name__)
         if request.url.path.startswith(FHIR_PATH_PREFIX):
             return fhir_operation_outcome_response(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

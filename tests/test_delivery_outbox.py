@@ -13,6 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from carlos_patient_portal import delivery_outbox
 from carlos_patient_portal.auth import PasswordResetRequestResult
 from carlos_patient_portal.delivery_outbox import (
+    enqueue_contact_change_delivery,
     enqueue_password_reset_delivery,
     process_one_delivery,
 )
@@ -506,6 +507,42 @@ def test_cleanup_bounds_outbox_retention_and_reports_what_it_removes() -> None:
     assert result.total >= 1
     with app.state.session_factory() as session:
         assert session.get(PatientPortalOutboundDelivery, delivery_id) is None
+
+
+@pytest.mark.parametrize("unsettled_status", [OUTBOX_STATUS_PENDING, OUTBOX_STATUS_PROCESSING])
+def test_cleanup_preserves_unsettled_contact_change_notices(unsettled_status: str) -> None:
+    """Retention must not erase a security notice before its delivery reaches an outcome."""
+    app = migrated_development_app(outbox_encryption_secret=OUTBOX_ENCRYPTION_SECRET)
+    account_id = activate_seeded_patient_account(app, TestClient(app))
+    stale = utc_now() - timedelta(days=90)
+
+    with app.state.session_factory() as session:
+        with session.begin():
+            delivery = enqueue_contact_change_delivery(
+                session,
+                account_id=account_id,
+                recipient="previous@example.test",
+                encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+            )
+            delivery.status = unsettled_status
+            delivery.created_at = stale
+            delivery.lease_expires_at = (
+                utc_now() + timedelta(minutes=5)
+                if unsettled_status == OUTBOX_STATUS_PROCESSING
+                else None
+            )
+            session.flush()
+            delivery_id = delivery.id
+
+    with app.state.session_factory() as session:
+        with session.begin():
+            result = cleanup_transient_auth_rows(session, before=utc_now() - timedelta(days=30))
+
+    assert result.outbound_deliveries == 0
+    with app.state.session_factory() as session:
+        retained = session.get(PatientPortalOutboundDelivery, delivery_id)
+        assert retained is not None
+        assert retained.status == unsettled_status
 
 
 def test_rotating_the_outbox_secret_does_not_strand_queued_mail() -> None:

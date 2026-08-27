@@ -189,22 +189,15 @@ def cleanup_transient_auth_rows(
         # its own rowcounts while the database quietly removed more.
         (
             PatientPortalOutboundDelivery,
-            or_(
-                # Settled work, retained for the same window as the rows it delivered.
-                and_(
-                    PatientPortalOutboundDelivery.status.in_(
-                        (OUTBOX_STATUS_DELIVERED, OUTBOX_STATUS_FAILED)
-                    ),
-                    PatientPortalOutboundDelivery.created_at < before,
+            # Never delete pending/processing work. Contact-change rows intentionally have no
+            # reset-token parent, so including reset_token_id IS NULL here used to erase queued
+            # security notices without a delivery outcome or terminal-failure audit. Settled rows
+            # of either kind are retained for the configured window and are then safe to remove.
+            and_(
+                PatientPortalOutboundDelivery.status.in_(
+                    (OUTBOX_STATUS_DELIVERED, OUTBOX_STATUS_FAILED)
                 ),
-                # Contact-change rows carry reset_token_id = NULL, so nothing ever cascaded
-                # them either. Without this the table grew without bound holding encrypted
-                # recipient addresses and reset URLs - a PHI-adjacent retention gap in the one
-                # module whose premise is bounded retention.
-                and_(
-                    PatientPortalOutboundDelivery.reset_token_id.is_(None),
-                    PatientPortalOutboundDelivery.created_at < before,
-                ),
+                PatientPortalOutboundDelivery.created_at < before,
             ),
         ),
         (

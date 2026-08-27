@@ -80,10 +80,11 @@ def upgrade() -> None:
 
     # Repair rather than refuse. Each of these is a half-written state the application could not
     # act on anyway, and an operator cannot reasonably hand-resolve them: a revocation reason
-    # without a timestamp is an unenforced revocation, so completing it is the safe direction.
+    # without a timestamp is an unenforced revocation, so completing it in the fail-closed
+    # direction is the safe choice.
     connection.execute(
         text(
-            "update patient_portal_sessions set revoked_reason = null "
+            "update patient_portal_sessions set revoked_at = CURRENT_TIMESTAMP "
             "where revoked_at is null and revoked_reason is not null"
         )
     )
@@ -99,6 +100,17 @@ def upgrade() -> None:
         text(
             "update patient_portal_outbound_deliveries set lease_expires_at = null "
             "where status != 'processing' and lease_expires_at is not null"
+        )
+    )
+    # 0008 introduced separate ownership-proof timestamps. Its pending-row backfill preserves the
+    # in-flight workflow, but rows completed under 0005-0007 have only the legacy confirmed_at.
+    # Preserve that historical proof contract before enforcing the new structural invariant.
+    connection.execute(
+        text(
+            "update patient_portal_email_change_requests "
+            "set email_confirmed_at = confirmed_at, phone_confirmed_at = confirmed_at "
+            "where status = 'confirmed' and confirmed_at is not null "
+            "and (email_confirmed_at is null or phone_confirmed_at is null)"
         )
     )
 

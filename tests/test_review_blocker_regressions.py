@@ -6,14 +6,18 @@ being the security regressions that review turned up, and keeping them together 
 which behaviour is load-bearing for that review.
 """
 
+import ast
+import logging
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
+from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.pool import StaticPool
 
 from carlos_patient_portal import auth
@@ -108,6 +112,148 @@ def test_every_revision_id_fits_the_alembic_version_column() -> None:
     }
 
     assert over_limit == {}, f"revision ids exceed alembic_version.version_num: {over_limit}"
+
+
+def test_populated_v7_database_upgrades_without_reactivating_sessions(tmp_path: Path) -> None:
+    """Historical contact proofs must migrate while incomplete revocations fail closed."""
+    database_path = tmp_path / "populated-v7.db"
+    config = alembic_config_for_tests()
+    config.set_main_option("sqlalchemy.url", f"sqlite+pysqlite:///{database_path}")
+    command.upgrade(config, "0007_durable_outbound_delivery")
+
+    engine = create_engine(f"sqlite+pysqlite:///{database_path}")
+    now = utc_now()
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "insert into patient_portal_accounts ("
+                "id, clinic_id, demographic_no, username, email, preferred_mfa_method, "
+                "password_hash, status, failed_login_count, force_password_reset, created_at, "
+                "updated_at, password_updated_at, failed_mfa_count"
+                ") values ("
+                "1, 'default', 1234, 'patient.user', 'patient@example.test', 'email', "
+                "'stored-hash', 'active', 0, false, :now, :now, :now, 0"
+                ")"
+            ),
+            {"now": now},
+        )
+        connection.execute(
+            text(
+                "insert into patient_portal_email_change_requests ("
+                "id, account_id, token_hash, status, new_email, created_at, expires_at, "
+                "confirmed_at"
+                ") values (1, 1, :token_hash, 'confirmed', 'new@example.test', "
+                ":created_at, :expires_at, :confirmed_at)"
+            ),
+            {
+                "token_hash": "e" * 64,
+                "created_at": now - timedelta(days=2),
+                "expires_at": now - timedelta(days=1),
+                "confirmed_at": now - timedelta(days=1, hours=12),
+            },
+        )
+        connection.execute(
+            text(
+                "insert into patient_portal_sessions ("
+                "id, account_id, token_hash, created_at, expires_at, revoked_reason"
+                ") values (1, 1, :token_hash, :created_at, :expires_at, 'logout')"
+            ),
+            {
+                "token_hash": "s" * 64,
+                "created_at": now - timedelta(hours=1),
+                "expires_at": now + timedelta(hours=1),
+            },
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(f"sqlite+pysqlite:///{database_path}")
+    try:
+        with engine.connect() as connection:
+            proof_row = connection.execute(
+                text(
+                    "select confirmed_at, email_confirmed_at, phone_confirmed_at "
+                    "from patient_portal_email_change_requests where id = 1"
+                )
+            ).one()
+            revoked_row = connection.execute(
+                text(
+                    "select revoked_at, revoked_reason from patient_portal_sessions where id = 1"
+                )
+            ).one()
+    finally:
+        engine.dispose()
+
+    assert proof_row.email_confirmed_at == proof_row.confirmed_at
+    assert proof_row.phone_confirmed_at == proof_row.confirmed_at
+    assert revoked_row.revoked_at is not None
+    assert revoked_row.revoked_reason == "logout"
+
+
+def test_async_routes_do_not_call_sync_session_io_directly() -> None:
+    """A future async route must not put blocking driver calls back on the event loop."""
+    package_root = Path(__file__).parents[1] / "carlos_patient_portal"
+    route_files = (
+        package_root / "routes" / "activation.py",
+        package_root / "routes" / "auth.py",
+        package_root / "routes" / "portal.py",
+    )
+    blocking_methods = {"commit", "rollback", "execute", "scalar", "scalars", "flush", "get"}
+    violations: list[str] = []
+
+    for route_file in route_files:
+        tree = ast.parse(route_file.read_text(encoding="utf-8"), filename=str(route_file))
+
+        class AsyncSessionCallVisitor(ast.NodeVisitor):
+            def __init__(self, file_name: str) -> None:
+                self.in_async_function = 0
+                self.file_name = file_name
+
+            def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+                self.in_async_function += 1
+                self.generic_visit(node)
+                self.in_async_function -= 1
+
+            def visit_Call(self, node: ast.Call) -> None:
+                if (
+                    self.in_async_function
+                    and isinstance(node.func, ast.Attribute)
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "session"
+                    and node.func.attr in blocking_methods
+                ):
+                    violations.append(
+                        f"{self.file_name}:{node.lineno} session.{node.func.attr}"
+                    )
+                self.generic_visit(node)
+
+        AsyncSessionCallVisitor(route_file.name).visit(tree)
+
+    assert violations == []
+
+
+def test_unhandled_exception_log_omits_exception_details_and_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Unexpected database-style failures must not copy bound patient values into logs."""
+    app = migrated_development_app()
+    secret_patient_value = "patient.email@example.test"
+
+    @app.get("/test/unhandled-error")
+    async def raise_unhandled_error() -> None:
+        raise RuntimeError(secret_patient_value)
+
+    caplog.set_level(logging.ERROR, logger="carlos_patient_portal.main")
+    response = TestClient(app, raise_server_exceptions=False).get("/test/unhandled-error")
+
+    assert response.status_code == 500
+    records = [
+        record for record in caplog.records if record.name == "carlos_patient_portal.main"
+    ]
+    assert records
+    assert all(record.exc_info is None for record in records)
+    assert all(secret_patient_value not in record.getMessage() for record in records)
 
 
 # --------------------------------------------------------------------------------------
