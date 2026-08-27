@@ -81,7 +81,7 @@ python -m uvicorn carlos_patient_portal.main:create_app \
 Open <http://127.0.0.1:8090/> and sign in with:
 
 - Username: `CarlosPatient`
-- Password: `Carlos` + `2026` + `!!` (concatenate the three parts without spaces)
+- Password: `Nectar` + `-Sparrow` + `-Quartz` + `-87!` (concatenate without spaces)
 - MFA: use the development code displayed on the verification page
 
 The seeded account has twelve sample email-password records. Stop the server with `Ctrl+C`. The

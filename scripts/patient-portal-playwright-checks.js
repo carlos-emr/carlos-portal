@@ -22,10 +22,10 @@ const { chromium } = require('playwright');
 
 const baseUrl = validateBaseUrl(process.env.PORTAL_BASE_URL || 'http://127.0.0.1:8090');
 const testUser = process.env.PORTAL_TEST_USER || 'CarlosPatient';
-const testPassword = process.env.PORTAL_TEST_PASSWORD || ['Carlos', '2026', '!!'].join('');
+const testPassword = process.env.PORTAL_TEST_PASSWORD || ['Nectar', 'Sparrow', 'Quartz', '87!'].join('-');
 const expectedUser = process.env.PORTAL_EXPECTED_USER || testUser.toLowerCase();
 const expectedEmail = process.env.PORTAL_EXPECTED_EMAIL || 'example.patient@example.com';
-const changedPassword = ['Carlos', '2027', '!!'].join('');
+const changedPassword = ['Orbit', 'Lantern', 'Meadow', '49!'].join('-');
 const mailCommand = process.env.PORTAL_MAIL_COMMAND || '/scripts/mail';
 const useDevelopmentMfaCode = process.env.PORTAL_USE_DEVELOPMENT_MFA_CODE === 'true';
 const screenshotDir = path.resolve(process.env.PORTAL_SCREENSHOT_DIR || '/tmp');

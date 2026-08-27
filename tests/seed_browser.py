@@ -9,7 +9,7 @@ from carlos_patient_portal.identity import IdentityProof
 from carlos_patient_portal.invites import create_invite
 from carlos_patient_portal.unlock_secrets import create_unlock_secret
 
-DEVELOPMENT_PASSWORD = "".join(("Carlos", "2026", "!!"))
+DEVELOPMENT_PASSWORD = "-".join(("Nectar", "Sparrow", "Quartz", "87!"))
 
 
 def main() -> None:
