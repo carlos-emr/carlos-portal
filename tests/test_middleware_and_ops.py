@@ -625,8 +625,8 @@ def test_packaged_migration_command_upgrades_to_head_by_default(
 
     monkeypatch.setattr(
         cli,
-        "get_settings",
-        lambda: development_settings(database_url="sqlite+pysqlite:///:memory:"),
+        "get_migration_database_url",
+        lambda: "sqlite+pysqlite:///:memory:",
     )
     monkeypatch.setattr(
         cli.command,
