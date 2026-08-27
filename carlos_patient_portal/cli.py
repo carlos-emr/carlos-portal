@@ -32,7 +32,7 @@ from argon2 import PasswordHasher
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
-from carlos_patient_portal.config import get_settings
+from carlos_patient_portal.config import get_migration_database_url, get_settings
 from carlos_patient_portal.database import (
     create_portal_engine,
     create_session_factory,
@@ -58,10 +58,12 @@ logger = logging.getLogger(__name__)
 
 
 def build_alembic_config() -> Config:
-    settings = get_settings()
     config = Config()
     config.set_main_option("script_location", "carlos_patient_portal:migrations")
-    config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
+    config.set_main_option(
+        "sqlalchemy.url",
+        get_migration_database_url().replace("%", "%%"),
+    )
     return config
 
 

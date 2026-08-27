@@ -66,6 +66,7 @@ from carlos_patient_portal.models import (
     EMAIL_CHANGE_STATUS_PENDING,
     EMAIL_CHANGE_STATUS_REVOKED,
     MFA_DELIVERY_METHOD_SMS,
+    SESSION_REVOKED_REASON_CONTACT_CHANGE,
     SESSION_REVOKED_REASON_PASSWORD_CHANGE,
     PatientPortalAccount,
     PatientPortalContactReviewRequest,
@@ -559,6 +560,17 @@ def apply_confirmed_contact_change(
     account.updated_at = now
     request.status = EMAIL_CHANGE_STATUS_CONFIRMED
     request.confirmed_at = now
+    # Email and phone are recovery and MFA destinations. A bearer session issued before they
+    # changed must not continue bypassing the newly established factors, particularly when the
+    # patient is rotating them in response to suspected compromise. The email-confirmation route
+    # is deliberately usable on another device, so requiring a fresh sign-in is the only
+    # consistent replacement-session policy for every completion path.
+    revoke_account_sessions(
+        session,
+        account.id,
+        reason=SESSION_REVOKED_REASON_CONTACT_CHANGE,
+        now=now,
+    )
     cancel_pending_mfa_challenges(session, account.id, now=now)
     revoke_pending_password_reset_tokens(session, account.id)
     review_request = PatientPortalContactReviewRequest(

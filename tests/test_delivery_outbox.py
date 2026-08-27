@@ -20,7 +20,9 @@ from carlos_patient_portal.delivery_outbox import (
 from carlos_patient_portal.email_delivery import PortalEmailDeliveryError
 from carlos_patient_portal.maintenance import cleanup_transient_auth_rows, summarize_outbox
 from carlos_patient_portal.models import (
+    AUDIT_EVENT_ACCOUNT_CONTACT_UPDATE,
     AUDIT_EVENT_PASSWORD_RESET_DELIVERY,
+    AUDIT_OUTCOME_FAILURE,
     OUTBOX_KIND_PASSWORD_RESET,
     OUTBOX_STATUS_DELIVERED,
     OUTBOX_STATUS_FAILED,
@@ -545,6 +547,45 @@ def test_cleanup_preserves_unsettled_contact_change_notices(unsettled_status: st
         assert retained.status == unsettled_status
 
 
+@pytest.mark.parametrize("unsettled_status", [OUTBOX_STATUS_PENDING, OUTBOX_STATUS_PROCESSING])
+def test_cleanup_preserves_expired_reset_parent_with_unsettled_delivery(
+    unsettled_status: str,
+) -> None:
+    """Deleting an expired reset parent must not cascade queued or leased delivery work."""
+    app = migrated_development_app(outbox_encryption_secret=OUTBOX_ENCRYPTION_SECRET)
+    account_id = activate_seeded_patient_account(app, TestClient(app))
+    delivery_id, reset_id = queue_reset(app, account_id)
+    stale = utc_now() - timedelta(days=90)
+
+    with app.state.session_factory() as session:
+        with session.begin():
+            reset = session.get(PatientPortalPasswordResetToken, reset_id)
+            delivery = session.get(PatientPortalOutboundDelivery, delivery_id)
+            assert reset is not None
+            assert delivery is not None
+            reset.created_at = stale - timedelta(hours=1)
+            reset.expires_at = stale
+            delivery.created_at = stale
+            delivery.status = unsettled_status
+            delivery.lease_expires_at = (
+                utc_now() + timedelta(minutes=5)
+                if unsettled_status == OUTBOX_STATUS_PROCESSING
+                else None
+            )
+
+    with app.state.session_factory() as session:
+        with session.begin():
+            result = cleanup_transient_auth_rows(session, before=utc_now() - timedelta(days=30))
+
+    assert result.outbound_deliveries == 0
+    assert result.reset_records == 0
+    with app.state.session_factory() as session:
+        assert session.get(PatientPortalPasswordResetToken, reset_id) is not None
+        retained = session.get(PatientPortalOutboundDelivery, delivery_id)
+        assert retained is not None
+        assert retained.status == unsettled_status
+
+
 def test_rotating_the_outbox_secret_does_not_strand_queued_mail() -> None:
     """A row encrypted under a retired key must stay deliverable across a rotation.
 
@@ -610,10 +651,66 @@ def test_an_absent_outbox_key_fails_terminally_without_revoking_the_token() -> N
         row = session.get(PatientPortalOutboundDelivery, delivery_id)
         assert row.attempt_count == 1, "a missing key must not be retried"
         assert row.last_failure_code == delivery_outbox.OUTBOX_FAILURE_KEY_UNAVAILABLE
-        # The token is untouched: the patient can still complete the reset.
+        # A previous attempt may have sent the message before losing its audit transaction, so
+        # the token remains usable; the terminal configuration failure is still reconstructable.
         assert session.get(PatientPortalPasswordResetToken, reset_id).status == (
             PASSWORD_RESET_STATUS_PENDING
         )
+        failure = session.scalar(
+            select(PatientPortalAuditEvent).where(
+                PatientPortalAuditEvent.event_type == AUDIT_EVENT_PASSWORD_RESET_DELIVERY,
+                PatientPortalAuditEvent.outcome == AUDIT_OUTCOME_FAILURE,
+                PatientPortalAuditEvent.reason
+                == "email:encryption_key_unavailable",
+            )
+        )
+        assert failure is not None
+        assert failure.account_id == account_id
+
+
+def test_an_absent_outbox_key_audits_undelivered_contact_change_notice() -> None:
+    sender = RecordingPortalEmailSender()
+    app = migrated_development_app(
+        email_sender=sender,
+        outbox_encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+    )
+    account_id = activate_seeded_patient_account(app, TestClient(app))
+    with app.state.session_factory() as session:
+        with session.begin():
+            delivery = enqueue_contact_change_delivery(
+                session,
+                account_id=account_id,
+                recipient="previous@example.test",
+                encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+                encryption_key_id="retired",
+            )
+            delivery_id = delivery.id
+
+    result = process_one_delivery(
+        app.state.session_factory,
+        email_sender=sender,
+        encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+        encryption_keys={"primary": OUTBOX_ENCRYPTION_SECRET},
+        max_attempts=3,
+        lease_seconds=60,
+    )
+
+    assert result is not None
+    assert result.status == OUTBOX_STATUS_FAILED
+    assert sender.messages == []
+    with app.state.session_factory() as session:
+        delivery = session.get(PatientPortalOutboundDelivery, delivery_id)
+        assert delivery is not None
+        assert delivery.last_failure_code == delivery_outbox.OUTBOX_FAILURE_KEY_UNAVAILABLE
+        failure = session.scalar(
+            select(PatientPortalAuditEvent).where(
+                PatientPortalAuditEvent.event_type == AUDIT_EVENT_ACCOUNT_CONTACT_UPDATE,
+                PatientPortalAuditEvent.outcome == AUDIT_OUTCOME_FAILURE,
+                PatientPortalAuditEvent.reason == "delivery_unavailable",
+            )
+        )
+        assert failure is not None
+        assert failure.account_id == account_id
 
 
 def test_password_reset_route_enqueues_through_the_outbox_outside_development() -> None:

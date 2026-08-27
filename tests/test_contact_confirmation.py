@@ -14,17 +14,71 @@ from carlos_patient_portal.account_settings import (
 from carlos_patient_portal.models import (
     EMAIL_CHANGE_STATUS_CONFIRMED,
     EMAIL_CHANGE_STATUS_PENDING,
+    SESSION_REVOKED_REASON_CONTACT_CHANGE,
     PatientPortalAccount,
     PatientPortalContactReviewRequest,
     PatientPortalEmailChangeRequest,
+    PatientPortalSession,
 )
 from tests.support import (
     STRONG_PASSWORD,
     activate_seeded_patient_account,
+    bearer_headers,
     migrated_development_app,
+    sign_in_patient_api_session,
 )
 
 CONTACT_TOKEN_SECRET = "contact-confirmation-test-key-0001"
+
+
+def test_confirmed_contact_change_revokes_preexisting_bearer_sessions() -> None:
+    app = migrated_development_app()
+    client = TestClient(app)
+    account_id = activate_seeded_patient_account(app, client)
+    session_token = sign_in_patient_api_session(client)
+
+    with app.state.session_factory() as session:
+        with session.begin():
+            account = session.get(PatientPortalAccount, account_id)
+            assert account is not None
+            result = update_account_contact(
+                session,
+                account,
+                current_password=STRONG_PASSWORD,
+                email="new.patient@example.com",
+                phone_number=account.phone_number,
+                max_failed_password_attempts=10,
+                email_change_token_secret=CONTACT_TOKEN_SECRET,
+                email_change_token_ttl=timedelta(days=1),
+                phone_change_code_ttl=timedelta(minutes=10),
+            )
+            assert result.confirmation_token is not None
+            confirmation = confirm_email_change(
+                session,
+                confirmation_token=result.confirmation_token,
+                token_secret=CONTACT_TOKEN_SECRET,
+                clinic_id=account.clinic_id,
+                token_ttl=timedelta(days=1),
+            )
+            assert confirmation.applied
+
+    rejected = client.get("/auth/session", headers=bearer_headers(session_token))
+
+    assert rejected.status_code == 401
+    with app.state.session_factory() as session:
+        portal_sessions = list(
+            session.scalars(
+                select(PatientPortalSession).where(
+                    PatientPortalSession.account_id == account_id
+                )
+            )
+        )
+        assert portal_sessions
+        assert all(row.revoked_at is not None for row in portal_sessions)
+        assert all(
+            row.revoked_reason == SESSION_REVOKED_REASON_CONTACT_CHANGE
+            for row in portal_sessions
+        )
 
 
 def test_phone_only_change_requires_code_and_budgets_failed_attempts() -> None:

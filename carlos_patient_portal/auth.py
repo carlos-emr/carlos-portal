@@ -1473,6 +1473,8 @@ def record_password_reset_delivery_outcome(
     *,
     result: PasswordResetRequestResult,
     outcome: str,
+    revoke_token_on_failure: bool = True,
+    reason: str = MFA_DELIVERY_METHOD_EMAIL,
 ) -> None:
     if outcome not in {AUDIT_OUTCOME_SUCCESS, AUDIT_OUTCOME_FAILURE}:
         raise ValueError("delivery outcome must be success or failure")
@@ -1492,7 +1494,11 @@ def record_password_reset_delivery_outcome(
     )
     if reset_record is None or account is None or reset_record.account_id != account.id:
         raise PasswordResetTokenInvalidError()
-    if outcome == AUDIT_OUTCOME_FAILURE and reset_record.status == PASSWORD_RESET_STATUS_PENDING:
+    if (
+        outcome == AUDIT_OUTCOME_FAILURE
+        and revoke_token_on_failure
+        and reset_record.status == PASSWORD_RESET_STATUS_PENDING
+    ):
         reset_record.status = PASSWORD_RESET_STATUS_REVOKED
 
     record_audit_event(
@@ -1504,7 +1510,7 @@ def record_password_reset_delivery_outcome(
         clinic_id=account.clinic_id,
         demographic_no=account.demographic_no,
         account_id=account.id,
-        reason=MFA_DELIVERY_METHOD_EMAIL,
+        reason=reason,
     )
 
 

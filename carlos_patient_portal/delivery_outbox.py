@@ -53,6 +53,7 @@ from carlos_patient_portal.models import (
     AUDIT_EVENT_PASSWORD_RESET_DELIVERY,
     AUDIT_OUTCOME_FAILURE,
     AUDIT_OUTCOME_SUCCESS,
+    MFA_DELIVERY_METHOD_EMAIL,
     OUTBOX_KIND_CONTACT_CHANGE,
     OUTBOX_KIND_PASSWORD_RESET,
     OUTBOX_NONCE_LENGTH,
@@ -503,9 +504,30 @@ def _finish_delivery(
     delivery.last_failure_code = (failure_code or "delivery_failed")[:64]
     if failure_code == OUTBOX_FAILURE_KEY_UNAVAILABLE:
         # Retrying cannot help: the key is not in the keyring, and every attempt would spend
-        # budget that ends at _mark_terminal_reset_failure, revoking a live token. Fail now,
-        # visibly, and leave the token alone so the patient can still complete the reset.
+        # budget that ends at _mark_terminal_reset_failure. Fail now and leave the token alone:
+        # a previous worker may have sent the message before losing its audit transaction, so
+        # revocation would invalidate a link already in the patient's mailbox. The failure still
+        # needs a durable audit outcome; if that write fails, this transaction rolls back and the
+        # expired lease makes the row retryable instead of closing it without evidence.
+        # The audit helper flushes, so establish a constraint-valid terminal state before it does;
+        # a processing row is required to retain its lease.
         delivery.status = OUTBOX_STATUS_FAILED
+        if delivery.kind == OUTBOX_KIND_PASSWORD_RESET and delivery.reset_token_id is not None:
+            record_password_reset_delivery_outcome(
+                session,
+                result=PasswordResetRequestResult(
+                    reset_token=None,
+                    recipient=None,
+                    reset_token_id=delivery.reset_token_id,
+                    account_id=delivery.account_id,
+                ),
+                outcome=AUDIT_OUTCOME_FAILURE,
+                revoke_token_on_failure=False,
+                reason=f"{MFA_DELIVERY_METHOD_EMAIL}:{OUTBOX_FAILURE_KEY_UNAVAILABLE}",
+            )
+            session.flush()
+        elif delivery.kind == OUTBOX_KIND_CONTACT_CHANGE:
+            _mark_terminal_contact_change_failure(session, delivery)
         return delivery.status
     if delivery.attempt_count >= max_attempts:
         delivery.status = OUTBOX_STATUS_FAILED

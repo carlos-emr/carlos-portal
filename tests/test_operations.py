@@ -27,15 +27,17 @@ from tests.support import (
 
 
 def test_alembic_config_escapes_percent_interpolation(monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = Settings(
-        environment="development",
-        database_url="sqlite+pysqlite:////tmp/portal%25.db",
-    )
-    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    database_url = "sqlite+pysqlite:////tmp/portal%25.db"
+    monkeypatch.setattr(cli, "get_migration_database_url", lambda: database_url)
+
+    def reject_runtime_settings() -> None:
+        raise AssertionError("the migration entry point must not load runtime settings")
+
+    monkeypatch.setattr(cli, "get_settings", reject_runtime_settings)
 
     config = cli.build_alembic_config()
 
-    assert config.get_main_option("sqlalchemy.url") == settings.database_url
+    assert config.get_main_option("sqlalchemy.url") == database_url
 
 
 def test_sqlite_backup_rejects_prefix_lookalike_backend() -> None:

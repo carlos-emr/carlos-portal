@@ -208,7 +208,29 @@ def cleanup_transient_auth_rows(
             ),
         ),
         (PatientPortalMfaChallenge, PatientPortalMfaChallenge.expires_at < before),
-        (PatientPortalPasswordResetToken, PatientPortalPasswordResetToken.expires_at < before),
+        (
+            PatientPortalPasswordResetToken,
+            and_(
+                PatientPortalPasswordResetToken.expires_at < before,
+                # Removing a reset-token parent cascades every linked outbox row. Old settled
+                # rows are deleted in the first cleanup pass above, but unsettled work and
+                # recently settled history must keep their parent until they independently
+                # become eligible. Express that here as well as in the outbox predicate so the
+                # database cannot quietly delete rows the cleanup report did not count.
+                ~select(PatientPortalOutboundDelivery.id)
+                .where(
+                    PatientPortalOutboundDelivery.reset_token_id
+                    == PatientPortalPasswordResetToken.id,
+                    or_(
+                        ~PatientPortalOutboundDelivery.status.in_(
+                            (OUTBOX_STATUS_DELIVERED, OUTBOX_STATUS_FAILED)
+                        ),
+                        PatientPortalOutboundDelivery.created_at >= before,
+                    ),
+                )
+                .exists(),
+            ),
+        ),
         (PatientPortalEmailChangeRequest, PatientPortalEmailChangeRequest.expires_at < before),
         (
             PatientPortalInvite,
