@@ -23,12 +23,13 @@ import json
 import logging
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from random import SystemRandom
 from secrets import token_bytes
 from threading import Event, Thread
 from typing import Protocol
+from urllib.parse import quote
 from uuid import uuid4
 
 from cryptography.exceptions import InvalidTag
@@ -41,9 +42,11 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from carlos_patient_portal.audit import record_audit_event
 from carlos_patient_portal.auth import (
+    AuthPolicy,
     PasswordResetRequestResult,
     PasswordResetTokenInvalidError,
     record_password_reset_delivery_outcome,
+    request_password_reset,
 )
 from carlos_patient_portal.email_delivery import PortalEmailDeliveryError, PortalEmailSender
 from carlos_patient_portal.models import (
@@ -56,6 +59,7 @@ from carlos_patient_portal.models import (
     MFA_DELIVERY_METHOD_EMAIL,
     OUTBOX_KIND_CONTACT_CHANGE,
     OUTBOX_KIND_PASSWORD_RESET,
+    OUTBOX_KIND_PASSWORD_RESET_REQUEST,
     OUTBOX_NONCE_LENGTH,
     OUTBOX_STATUS_DELIVERED,
     OUTBOX_STATUS_FAILED,
@@ -110,6 +114,18 @@ class OutboxPayloadError(Exception):
 class DeliveryRunResult:
     delivery_id: int
     status: str
+
+
+@dataclass(frozen=True)
+class PasswordResetRequestContext:
+    """Secrets and policy required only when materializing a queued reset request."""
+
+    policy: AuthPolicy
+    reset_token_secret: str = field(repr=False)
+    clinic_id: str
+    public_base_url: str
+    token_ttl_seconds: int
+    outbox_active_key_id: str = OUTBOX_KEY_ID
 
 
 def derive_outbox_key(secret: str) -> bytes:
@@ -171,7 +187,10 @@ def _decrypt_payload(
             delivery.encrypted_payload,
             _associated_data(
                 kind=delivery.kind,
-                account_id=delivery.account_id,
+                # Reset identity resolution is deliberately account-neutral until the worker
+                # processes it. Zero is reserved only for its authenticated associated data; real
+                # account-backed deliveries always carry their positive database identifier.
+                account_id=delivery.account_id or 0,
                 message_id=delivery.message_id,
             ),
         )
@@ -214,6 +233,46 @@ def enqueue_password_reset_delivery(
         account_id=result.account_id,
         reset_token_id=result.reset_token_id,
         kind=OUTBOX_KIND_PASSWORD_RESET,
+        status=OUTBOX_STATUS_PENDING,
+        encrypted_payload=ciphertext,
+        encryption_nonce=nonce,
+        encryption_key_id=encryption_key_id,
+        message_id=message_id,
+        attempt_count=0,
+        available_at=utc_now(),
+        created_at=utc_now(),
+    )
+    session.add(delivery)
+    session.flush()
+    return delivery
+
+
+def enqueue_password_reset_request(
+    session: Session,
+    *,
+    username: str,
+    email: str,
+    client_reference_hash: str,
+    encryption_secret: str,
+    encryption_key_id: str = OUTBOX_KEY_ID,
+) -> PatientPortalOutboundDelivery:
+    """Durably queue identity resolution without revealing whether the identity matched."""
+    message_id = _new_message_id()
+    ciphertext, nonce = _encrypt_payload(
+        {
+            "username": username,
+            "email": email,
+            "client_reference_hash": client_reference_hash,
+        },
+        encryption_secret=encryption_secret,
+        kind=OUTBOX_KIND_PASSWORD_RESET_REQUEST,
+        account_id=0,
+        message_id=message_id,
+    )
+    delivery = PatientPortalOutboundDelivery(
+        account_id=None,
+        reset_token_id=None,
+        kind=OUTBOX_KIND_PASSWORD_RESET_REQUEST,
         status=OUTBOX_STATUS_PENDING,
         encrypted_payload=ciphertext,
         encryption_nonce=nonce,
@@ -623,6 +682,74 @@ def _delivery_lease_heartbeat(
         heartbeat.join(timeout=max(1.0, lease_seconds / 3 + 1))
 
 
+def _materialize_password_reset_request(
+    session_factory: sessionmaker[Session],
+    *,
+    delivery_id: int,
+    expected_attempt_count: int,
+    payload: dict[str, object],
+    context: PasswordResetRequestContext,
+    outbox_encryption_secret: str,
+) -> tuple[str, int | None]:
+    """Resolve one encrypted identity and atomically replace it with a deliverable email."""
+    username = payload.get("username")
+    email = payload.get("email")
+    client_reference_hash = payload.get("client_reference_hash")
+    if not all(
+        isinstance(value, str) and value
+        for value in (username, email, client_reference_hash)
+    ):
+        raise OutboxPayloadError("password reset request payload is invalid")
+
+    with session_factory() as session, session.begin():
+        command = session.scalar(
+            select(PatientPortalOutboundDelivery)
+            .where(PatientPortalOutboundDelivery.id == delivery_id)
+            .with_for_update()
+        )
+        if (
+            command is None
+            or command.kind != OUTBOX_KIND_PASSWORD_RESET_REQUEST
+            or command.status != OUTBOX_STATUS_PROCESSING
+            or command.attempt_count != expected_attempt_count
+        ):
+            return (command.status if command is not None else OUTBOX_STATUS_FAILED), None
+
+        result = request_password_reset(
+            session,
+            username=username,
+            email=email,
+            client_reference_hash=client_reference_hash,
+            policy=context.policy,
+            reset_token_secret=context.reset_token_secret,
+            clinic_id=context.clinic_id,
+        )
+        spawned_delivery_id = None
+        if result.reset_token is not None and result.recipient is not None:
+            encoded_token = quote(result.reset_token, safe="")
+            reset_url = (
+                f"{context.public_base_url.rstrip('/')}"
+                f"/auth/password-reset/complete#token={encoded_token}"
+            )
+            spawned_delivery = enqueue_password_reset_delivery(
+                session,
+                result=result,
+                reset_url=reset_url,
+                expires_in_seconds=context.token_ttl_seconds,
+                encryption_secret=outbox_encryption_secret,
+                encryption_key_id=context.outbox_active_key_id,
+            )
+            spawned_delivery_id = spawned_delivery.id
+        final_status = _finish_delivery(
+            session,
+            delivery_id=delivery_id,
+            succeeded=True,
+            max_attempts=1,
+            expected_attempt_count=expected_attempt_count,
+        )
+        return final_status, spawned_delivery_id
+
+
 def process_one_delivery(
     session_factory: sessionmaker[Session],
     *,
@@ -633,6 +760,7 @@ def process_one_delivery(
     delivery_id: int | None = None,
     operational_metrics: OutboxMetrics | None = None,
     encryption_keys: Mapping[str, str] | None = None,
+    password_reset_request_context: PasswordResetRequestContext | None = None,
 ) -> DeliveryRunResult | None:
     with session_factory() as session:
         with session.begin():
@@ -663,6 +791,8 @@ def process_one_delivery(
 
     failure_code: str | None = None
     succeeded = False
+    materialized_delivery_id: int | None = None
+    materialized_status: str | None = None
     with _delivery_lease_heartbeat(
         session_factory,
         delivery_id=claimed_id,
@@ -673,6 +803,24 @@ def process_one_delivery(
             failure_code = OUTBOX_FAILURE_KEY_UNAVAILABLE
         elif payload is None:
             failure_code = "payload_invalid"
+        elif kind == OUTBOX_KIND_PASSWORD_RESET_REQUEST:
+            if password_reset_request_context is None:
+                failure_code = "reset_request_unconfigured"
+            else:
+                try:
+                    materialized_status, materialized_delivery_id = (
+                        _materialize_password_reset_request(
+                            session_factory,
+                            delivery_id=claimed_id,
+                            expected_attempt_count=claimed_attempt_count,
+                            payload=payload,
+                            context=password_reset_request_context,
+                            outbox_encryption_secret=encryption_secret,
+                        )
+                    )
+                    succeeded = materialized_status == OUTBOX_STATUS_DELIVERED
+                except OutboxPayloadError:
+                    failure_code = "payload_invalid"
         elif email_sender is None:
             failure_code = "email_unconfigured"
         else:
@@ -714,6 +862,25 @@ def process_one_delivery(
                 failure_code = type(exc).__name__
             except OutboxPayloadError:
                 failure_code = "payload_invalid"
+
+    if materialized_status is not None:
+        if materialized_delivery_id is not None:
+            # One wake-up processes the account-neutral command and the email it produced. The
+            # standalone worker would pick the child on its next loop anyway, but this preserves
+            # the web process's existing best-effort immediate delivery without making durability
+            # depend on that process surviving after the public response.
+            process_one_delivery(
+                session_factory,
+                email_sender=email_sender,
+                encryption_secret=encryption_secret,
+                encryption_keys=encryption_keys,
+                max_attempts=max_attempts,
+                lease_seconds=lease_seconds,
+                delivery_id=materialized_delivery_id,
+                operational_metrics=operational_metrics,
+                password_reset_request_context=password_reset_request_context,
+            )
+        return DeliveryRunResult(delivery_id=claimed_id, status=materialized_status)
 
     with session_factory() as session:
         with session.begin():

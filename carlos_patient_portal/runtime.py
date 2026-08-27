@@ -26,6 +26,7 @@ module that composes them, which would be circular. Nothing here registers route
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Generator
 from dataclasses import dataclass, field
+from datetime import timedelta
 from math import ceil
 from threading import Lock
 from time import monotonic
@@ -45,6 +46,35 @@ from carlos_patient_portal.token_keys import PortalTokenKeys
 MAX_PAGE_OFFSET = 100_000
 # Largest value a 64-bit signed integer key can hold; ids beyond this cannot exist in any row.
 MAX_DATABASE_ID = 2**63 - 1
+
+
+def auth_policy_from_settings(settings: Settings) -> AuthPolicy:
+    """Build the shared authentication policy for web and worker entrypoints."""
+    return AuthPolicy(
+        max_failed_password_attempts=settings.auth_max_failed_password_attempts,
+        mfa_max_failed_attempts=settings.mfa_max_failed_attempts,
+        session_ttl=timedelta(seconds=settings.session_ttl_seconds),
+        session_idle_timeout=timedelta(seconds=settings.session_idle_timeout_seconds),
+        mfa_code_ttl=timedelta(seconds=settings.mfa_code_ttl_seconds),
+        mfa_email_resend_cooldown=timedelta(
+            seconds=settings.mfa_email_resend_cooldown_seconds
+        ),
+        mfa_sms_resend_cooldown=timedelta(
+            seconds=settings.mfa_sms_resend_cooldown_seconds
+        ),
+        password_reset_token_ttl=timedelta(
+            seconds=settings.password_reset_token_ttl_seconds
+        ),
+        password_reset_request_cooldown=timedelta(
+            seconds=settings.password_reset_request_cooldown_seconds
+        ),
+        require_mfa=settings.require_mfa,
+        lockout_duration=(
+            timedelta(seconds=settings.auth_lockout_duration_seconds)
+            if settings.auth_lockout_duration_seconds > 0
+            else None
+        ),
+    )
 
 
 

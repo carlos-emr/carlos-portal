@@ -101,6 +101,7 @@ OUTBOX_STATUS_PROCESSING = "processing"
 OUTBOX_STATUS_DELIVERED = "delivered"
 OUTBOX_STATUS_FAILED = "failed"
 OUTBOX_KIND_PASSWORD_RESET = "password_reset"
+OUTBOX_KIND_PASSWORD_RESET_REQUEST = "password_reset_request"
 OUTBOX_KIND_CONTACT_CHANGE = "contact_change"
 CONTACT_REVIEW_STATUS_PENDING = "pending"
 CONTACT_REVIEW_STATUS_REVIEWED = "reviewed"
@@ -683,12 +684,16 @@ class PatientPortalOutboundDelivery(Base):
     __tablename__ = "patient_portal_outbound_deliveries"
     __table_args__ = (
         CheckConstraint(
-            "kind in ('password_reset', 'contact_change')",
+            "kind in ('password_reset_request', 'password_reset', 'contact_change')",
             name="ck_pp_outbound_delivery_kind",
         ),
         CheckConstraint(
-            "(kind = 'password_reset' and reset_token_id is not null) or "
-            "(kind = 'contact_change' and reset_token_id is null)",
+            "(kind = 'password_reset' and account_id is not null and "
+            "reset_token_id is not null) or "
+            "(kind = 'contact_change' and account_id is not null and "
+            "reset_token_id is null) or "
+            "(kind = 'password_reset_request' and account_id is null and "
+            "reset_token_id is null)",
             name="ck_pp_outbound_delivery_reset_token_kind",
         ),
         CheckConstraint(
@@ -739,9 +744,9 @@ class PatientPortalOutboundDelivery(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    account_id: Mapped[int] = mapped_column(
+    account_id: Mapped[int | None] = mapped_column(
         ForeignKey(ACCOUNT_FOREIGN_KEY_TARGET),
-        nullable=False,
+        nullable=True,
     )
     reset_token_id: Mapped[int | None] = mapped_column(
         ForeignKey("patient_portal_password_reset_tokens.id", ondelete="CASCADE"),

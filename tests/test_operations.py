@@ -12,6 +12,7 @@ from carlos_patient_portal import cli
 from carlos_patient_portal.audit import record_audit_event
 from carlos_patient_portal.config import Settings
 from carlos_patient_portal.database import create_portal_engine
+from carlos_patient_portal.delivery_outbox import PasswordResetRequestContext
 from carlos_patient_portal.maintenance import (
     BackupUnavailableError,
     BackupUnsupportedError,
@@ -22,6 +23,7 @@ from carlos_patient_portal.maintenance import (
 from tests.support import (
     OUTBOX_ENCRYPTION_SECRET,
     development_settings,
+    staging_settings,
     upgrade_to_head,
 )
 
@@ -315,8 +317,9 @@ def test_outbox_worker_uses_the_active_key_from_a_keyring(
     old_secret = "v" * 32
     active_secret = "n" * 32
     keyring = {"2026-07": old_secret, "2026-08": active_secret}
-    worker_settings = development_settings(
+    worker_settings = staging_settings(
         database_url=f"sqlite+pysqlite:///{tmp_path / 'keyring-worker.db'}",
+        outbox_encryption_secret=None,
         outbox_encryption_keyring=json.dumps(keyring),
         outbox_active_key_id="2026-08",
     )
@@ -333,3 +336,6 @@ def test_outbox_worker_uses_the_active_key_from_a_keyring(
 
     assert delivery_arguments["encryption_secret"] == active_secret
     assert delivery_arguments["encryption_keys"] == keyring
+    reset_context = delivery_arguments["password_reset_request_context"]
+    assert isinstance(reset_context, PasswordResetRequestContext)
+    assert reset_context.outbox_active_key_id == "2026-08"

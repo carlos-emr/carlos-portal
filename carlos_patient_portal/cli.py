@@ -38,7 +38,10 @@ from carlos_patient_portal.database import (
     create_session_factory,
     session_scope,
 )
-from carlos_patient_portal.delivery_outbox import process_one_delivery
+from carlos_patient_portal.delivery_outbox import (
+    PasswordResetRequestContext,
+    process_one_delivery,
+)
 from carlos_patient_portal.email_delivery import build_portal_email_sender
 from carlos_patient_portal.maintenance import (
     DEFAULT_AUDIT_PRUNE_BATCH_SIZE,
@@ -52,6 +55,8 @@ from carlos_patient_portal.maintenance import (
     restore_sqlite_database,
     summarize_outbox,
 )
+from carlos_patient_portal.runtime import auth_policy_from_settings
+from carlos_patient_portal.token_keys import PortalTokenKeys
 from carlos_patient_portal.unlock_secrets import reencrypt_unlock_secrets
 
 logger = logging.getLogger(__name__)
@@ -352,6 +357,18 @@ def outbox_worker(argv: Sequence[str] | None = None) -> None:
             "PATIENT_PORTAL_OUTBOX_ENCRYPTION_KEYRING must be configured"
         )
     outbox_encryption_secret = outbox_encryption_keys[settings.outbox_active_key_id]
+    reset_request_context = None
+    if settings.session_secret is not None and settings.public_base_url is not None:
+        reset_request_context = PasswordResetRequestContext(
+            policy=auth_policy_from_settings(settings),
+            reset_token_secret=PortalTokenKeys.derive(
+                settings.session_secret.get_secret_value()
+            ).password_reset,
+            clinic_id=settings.clinic_id,
+            public_base_url=settings.public_base_url,
+            token_ttl_seconds=settings.password_reset_token_ttl_seconds,
+            outbox_active_key_id=settings.outbox_active_key_id,
+        )
     database_engine = create_portal_engine(
         settings.database_url,
         pool_size=settings.database_pool_size,
@@ -377,6 +394,7 @@ def outbox_worker(argv: Sequence[str] | None = None) -> None:
                     encryption_keys=outbox_encryption_keys,
                     max_attempts=settings.outbox_max_attempts,
                     lease_seconds=settings.outbox_lease_seconds,
+                    password_reset_request_context=reset_request_context,
                 )
             except SQLAlchemyError as exc:
                 # Only KeyboardInterrupt used to be handled, so a single lock-contention event

@@ -67,7 +67,7 @@ from carlos_patient_portal.auth import (
 from carlos_patient_portal.config import Settings
 from carlos_patient_portal.delivery_outbox import (
     enqueue_contact_change_delivery,
-    enqueue_password_reset_delivery,
+    enqueue_password_reset_request,
     process_one_delivery,
 )
 from carlos_patient_portal.email_delivery import PortalEmailDeliveryError
@@ -661,7 +661,6 @@ def register_password_reset_routes(
     )
     async def request_reset(
         request: Request,
-        background_tasks: BackgroundTasks,
         session: Annotated[
             Session,
             function_scoped_database_dependency(deps.get_app_database_session),
@@ -683,6 +682,37 @@ def register_password_reset_routes(
             "password_reset_client",
             get_request_client_reference(request, deps.settings),
         )
+        if not deps.settings.is_development:
+            public_base_url = deps.settings.public_base_url
+            if public_base_url is None:
+                # Non-development settings reject this at startup. Keep the invariant local too,
+                # because the queued command cannot safely derive a public link from request Host.
+                raise PortalEmailDeliveryError("password reset email delivery is not configured")
+            await run_in_threadpool(
+                enqueue_password_reset_request,
+                session,
+                username=payload.username,
+                email=payload.email,
+                client_reference_hash=client_reference_hash,
+                encryption_secret=runtime.outbox_encryption_secret,
+                encryption_key_id=runtime.outbox_active_key_id,
+            )
+            await run_in_threadpool(session.commit)
+            # Do not resolve the identity in a response-attached background task. Although Starlette
+            # sends the body first, task duration remains observable through connection reuse and
+            # worker saturation. The separately deployed durable worker is the only consumer.
+            if is_browser_form:
+                return deps.render_password_reset_request(
+                    request,
+                    status_code=status.HTTP_202_ACCEPTED,
+                    notice_message=localized_auth_text(request)["password_reset_link_sent"],
+                    form_values={
+                        "username": payload.username,
+                        "email": payload.email,
+                    },
+                )
+            return password_reset_request_response_payload(None, settings=deps.settings)
+
         result = await run_in_threadpool(
             request_password_reset,
             session,
@@ -701,73 +731,44 @@ def register_password_reset_routes(
                 settings=deps.settings,
                 reset_token=result.reset_token,
             )
-            # The two branches defend different invariants, which is why they differ.
-            #
             # Development delivers inline so a developer sees a delivery failure immediately and
             # gets `development_reset_url` back in the response; the timing signal that leaks
-            # doesn't matter on a disposable database.
-            #
-            # Non-development environments commit an encrypted outbox row with the reset token,
-            # then wake a worker after the response. The response time stays uniform whether the
-            # submitted identity matched, while the committed lease/retry state survives worker
-            # loss and terminal failure revokes the undelivered reset token.
-            if deps.settings.is_development:
-                await run_in_threadpool(session.commit)
-                try:
-                    await run_in_threadpool(
-                        send_password_reset_email,
-                        runtime,
-                        recipient=result.recipient,
-                        reset_url=reset_url,
-                    )
-                except PortalEmailDeliveryError as exc:
-                    await run_in_threadpool(
-                        record_password_reset_delivery_outcome,
-                        session,
-                        result=result,
-                        outcome=AUDIT_OUTCOME_FAILURE,
-                    )
-                    await run_in_threadpool(session.commit)
-                    # SMTP exceptions may contain recipient data; keep this log PHI-safe. The
-                    # message is a fixed literal and the sole interpolation is the exception
-                    # class name, so the credential-disclosure rule below has nothing to disclose.
-                    # nosemgrep: python-logger-credential-disclosure -- logs only type(exc).__name__
-                    logger.error(  # NOSONAR
-                        "Password reset email delivery failed: %s",
-                        type(exc).__name__,
-                    )
-                    response_reset_token = None
-                else:
-                    await run_in_threadpool(
-                        record_password_reset_delivery_outcome,
-                        session,
-                        result=result,
-                        outcome=AUDIT_OUTCOME_SUCCESS,
-                    )
-                    await run_in_threadpool(session.commit)
-                    development_reset_url = reset_url
-            else:
-                delivery = await run_in_threadpool(
-                    enqueue_password_reset_delivery,
+            # does not matter on a disposable database. Every non-development submission returns
+            # above after enqueuing the same account-neutral command.
+            await run_in_threadpool(session.commit)
+            try:
+                await run_in_threadpool(
+                    send_password_reset_email,
+                    runtime,
+                    recipient=result.recipient,
+                    reset_url=reset_url,
+                )
+            except PortalEmailDeliveryError as exc:
+                await run_in_threadpool(
+                    record_password_reset_delivery_outcome,
                     session,
                     result=result,
-                    reset_url=reset_url,
-                    expires_in_seconds=deps.settings.password_reset_token_ttl_seconds,
-                    encryption_secret=runtime.outbox_encryption_secret,
-                    encryption_key_id=runtime.outbox_active_key_id,
+                    outcome=AUDIT_OUTCOME_FAILURE,
                 )
                 await run_in_threadpool(session.commit)
-                background_tasks.add_task(
-                    process_one_delivery,
-                    runtime.session_factory,
-                    email_sender=runtime.email_sender,
-                    encryption_secret=runtime.outbox_encryption_secret,
-                    encryption_keys=runtime.outbox_encryption_keys,
-                    max_attempts=deps.settings.outbox_max_attempts,
-                    lease_seconds=deps.settings.outbox_lease_seconds,
-                    delivery_id=delivery.id,
-                    operational_metrics=runtime.operational_metrics,
+                # SMTP exceptions may contain recipient data; keep this log PHI-safe. The
+                # message is a fixed literal and the sole interpolation is the exception
+                # class name, so the credential-disclosure rule below has nothing to disclose.
+                # nosemgrep: python-logger-credential-disclosure -- logs only type(exc).__name__
+                logger.error(  # NOSONAR
+                    "Password reset email delivery failed: %s",
+                    type(exc).__name__,
                 )
+                response_reset_token = None
+            else:
+                await run_in_threadpool(
+                    record_password_reset_delivery_outcome,
+                    session,
+                    result=result,
+                    outcome=AUDIT_OUTCOME_SUCCESS,
+                )
+                await run_in_threadpool(session.commit)
+                development_reset_url = reset_url
         if is_browser_form:
             return deps.render_password_reset_request(
                 request,

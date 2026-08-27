@@ -13,6 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from carlos_patient_portal import delivery_outbox
 from carlos_patient_portal.auth import PasswordResetRequestResult
 from carlos_patient_portal.delivery_outbox import (
+    PasswordResetRequestContext,
     enqueue_contact_change_delivery,
     enqueue_password_reset_delivery,
     process_one_delivery,
@@ -24,6 +25,7 @@ from carlos_patient_portal.models import (
     AUDIT_EVENT_PASSWORD_RESET_DELIVERY,
     AUDIT_OUTCOME_FAILURE,
     OUTBOX_KIND_PASSWORD_RESET,
+    OUTBOX_KIND_PASSWORD_RESET_REQUEST,
     OUTBOX_STATUS_DELIVERED,
     OUTBOX_STATUS_FAILED,
     OUTBOX_STATUS_PENDING,
@@ -35,7 +37,11 @@ from carlos_patient_portal.models import (
     PatientPortalPasswordResetToken,
     utc_now,
 )
-from carlos_patient_portal.runtime import PortalOperationalMetrics
+from carlos_patient_portal.runtime import (
+    PortalOperationalMetrics,
+    auth_policy_from_settings,
+)
+from carlos_patient_portal.token_keys import PortalTokenKeys
 from tests.support import (
     INTERNAL_API_TOKEN,
     OUTBOX_ENCRYPTION_SECRET,
@@ -797,14 +803,8 @@ def test_an_absent_outbox_key_audits_undelivered_contact_change_notice() -> None
         assert failure.account_id == account_id
 
 
-def test_password_reset_route_enqueues_through_the_outbox_outside_development() -> None:
-    """The durable enqueue path had no route-level coverage at all.
-
-    Both routes send inline when `is_development` and enqueue otherwise, and every test helper
-    built a development app - so the branch the outbox exists for was never entered from a
-    route. A wrong keyword argument in that call reached the branch as a runtime TypeError
-    with a fully green suite.
-    """
+def test_password_reset_route_resolves_every_identity_through_the_outbox() -> None:
+    """A matching queued command materializes and delivers the second-stage reset email."""
     sender = RecordingPortalEmailSender()
     app = migrated_staging_app(
         email_sender=sender,
@@ -847,8 +847,126 @@ def test_password_reset_route_enqueues_through_the_outbox_outside_development() 
 
     assert response.status_code == 202
     with app.state.session_factory() as session:
-        queued = session.scalars(select(PatientPortalOutboundDelivery)).all()
-    assert len(queued) == 1
-    assert queued[0].kind == OUTBOX_KIND_PASSWORD_RESET
-    # Stamped with the configured active key, so a later rotation can still read it.
-    assert queued[0].encryption_key_id == app.state.settings.outbox_active_key_id
+        queued_commands = session.scalars(
+            select(PatientPortalOutboundDelivery).order_by(PatientPortalOutboundDelivery.id)
+        ).all()
+        assert session.scalars(select(PatientPortalPasswordResetToken)).all() == []
+    assert [row.kind for row in queued_commands] == [OUTBOX_KIND_PASSWORD_RESET_REQUEST]
+    assert queued_commands[0].account_id is None
+
+    settings = app.state.settings
+    assert settings.session_secret is not None
+    assert settings.public_base_url is not None
+    reset_context = PasswordResetRequestContext(
+        policy=auth_policy_from_settings(settings),
+        reset_token_secret=PortalTokenKeys.derive(
+            settings.session_secret.get_secret_value()
+        ).password_reset,
+        clinic_id=settings.clinic_id,
+        public_base_url=settings.public_base_url,
+        token_ttl_seconds=settings.password_reset_token_ttl_seconds,
+        outbox_active_key_id=settings.outbox_active_key_id,
+    )
+    processed = process_one_delivery(
+        app.state.session_factory,
+        email_sender=sender,
+        encryption_secret=settings.resolved_outbox_keyring[settings.outbox_active_key_id],
+        encryption_keys=settings.resolved_outbox_keyring,
+        max_attempts=settings.outbox_max_attempts,
+        lease_seconds=settings.outbox_lease_seconds,
+        password_reset_request_context=reset_context,
+    )
+    assert processed is not None
+    assert processed.status == OUTBOX_STATUS_DELIVERED
+
+    with app.state.session_factory() as session:
+        valid_rows = session.scalars(
+            select(PatientPortalOutboundDelivery).order_by(PatientPortalOutboundDelivery.id)
+        ).all()
+    assert [row.kind for row in valid_rows] == [
+        OUTBOX_KIND_PASSWORD_RESET_REQUEST,
+        OUTBOX_KIND_PASSWORD_RESET,
+    ]
+    assert valid_rows[0].account_id is None
+    assert all(
+        row.encryption_key_id == app.state.settings.outbox_active_key_id for row in valid_rows
+    )
+
+    invalid_response = client.post(
+        "/auth/password-reset/request",
+        json={"username": "missing.patient", "email": "missing@example.test"},
+    )
+
+    assert invalid_response.status_code == 202
+    processed_invalid = process_one_delivery(
+        app.state.session_factory,
+        email_sender=sender,
+        encryption_secret=settings.resolved_outbox_keyring[settings.outbox_active_key_id],
+        encryption_keys=settings.resolved_outbox_keyring,
+        max_attempts=settings.outbox_max_attempts,
+        lease_seconds=settings.outbox_lease_seconds,
+        password_reset_request_context=reset_context,
+    )
+    assert processed_invalid is not None
+    assert processed_invalid.status == OUTBOX_STATUS_DELIVERED
+    with app.state.session_factory() as session:
+        all_rows = session.scalars(
+            select(PatientPortalOutboundDelivery).order_by(PatientPortalOutboundDelivery.id)
+        ).all()
+    # Both public submissions durably enqueue the same encrypted, account-neutral command. Only
+    # the worker can distinguish them, and only the matching command produces the second-stage
+    # email delivery after the response path is complete.
+    assert [row.kind for row in all_rows] == [
+        OUTBOX_KIND_PASSWORD_RESET_REQUEST,
+        OUTBOX_KIND_PASSWORD_RESET,
+        OUTBOX_KIND_PASSWORD_RESET_REQUEST,
+    ]
+    assert all_rows[-1].account_id is None
+
+
+def test_password_reset_hit_and_miss_enqueue_identical_account_neutral_work() -> None:
+    sender = RecordingPortalEmailSender()
+    app = migrated_staging_app(
+        email_sender=sender,
+        outbox_encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+    )
+    client = TestClient(app, base_url="https://portal.example.test")
+    invite = client.post(
+        "/internal/carlos/patients/1234/invites",
+        headers={
+            "Authorization": f"Bearer {INTERNAL_API_TOKEN}",
+            "X-CARLOS-Provider-ID": "provider-42",
+            "X-CARLOS-Provider-Name": "CarlosDoc",
+            "X-CARLOS-Clinic-ID": TEST_CLINIC_ID,
+            "X-CARLOS-Permissions": "portal.invite.manage",
+        },
+        json=seeded_invite_request(),
+    )
+    assert invite.status_code == 201
+    assert client.post(
+        "/auth/activate",
+        json=activation_request(invite.json()["invite_token"]),
+    ).status_code in {200, 201}
+
+    valid_response = client.post(
+        "/auth/password-reset/request",
+        json={"username": "patient.user", "email": SEEDED_INVITE_EMAIL},
+    )
+    invalid_response = client.post(
+        "/auth/password-reset/request",
+        json={"username": "missing.patient", "email": "missing@example.test"},
+    )
+
+    assert valid_response.status_code == invalid_response.status_code == 202
+    assert valid_response.json() == invalid_response.json()
+    with app.state.session_factory() as session:
+        commands = session.scalars(
+            select(PatientPortalOutboundDelivery).order_by(PatientPortalOutboundDelivery.id)
+        ).all()
+        reset_tokens = session.scalars(select(PatientPortalPasswordResetToken)).all()
+    assert [command.kind for command in commands] == [
+        OUTBOX_KIND_PASSWORD_RESET_REQUEST,
+        OUTBOX_KIND_PASSWORD_RESET_REQUEST,
+    ]
+    assert all(command.account_id is None for command in commands)
+    assert reset_tokens == []

@@ -49,7 +49,6 @@ from carlos_patient_portal.accounts import ActivationRateLimit
 from carlos_patient_portal.audit import hash_sensitive_reference, record_audit_event
 from carlos_patient_portal.auth import (
     AuthenticatedPortalSession,
-    AuthPolicy,
     PasswordHashUnusableError,
     PortalSessionInvalidError,
     authenticate_session_token,
@@ -92,6 +91,7 @@ from carlos_patient_portal.runtime import (
     InMemoryRateLimiter,
     PortalRuntime,
     RouteDependencies,
+    auth_policy_from_settings,
     function_scoped_database_dependency,
 )
 from carlos_patient_portal.sms_delivery import PortalSmsSender, build_portal_sms_sender
@@ -137,28 +137,6 @@ from carlos_patient_portal.web_support import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def auth_policy_from_settings(settings: Settings) -> AuthPolicy:
-    return AuthPolicy(
-        max_failed_password_attempts=settings.auth_max_failed_password_attempts,
-        mfa_max_failed_attempts=settings.mfa_max_failed_attempts,
-        session_ttl=timedelta(seconds=settings.session_ttl_seconds),
-        session_idle_timeout=timedelta(seconds=settings.session_idle_timeout_seconds),
-        mfa_code_ttl=timedelta(seconds=settings.mfa_code_ttl_seconds),
-        mfa_email_resend_cooldown=timedelta(seconds=settings.mfa_email_resend_cooldown_seconds),
-        mfa_sms_resend_cooldown=timedelta(seconds=settings.mfa_sms_resend_cooldown_seconds),
-        password_reset_token_ttl=timedelta(seconds=settings.password_reset_token_ttl_seconds),
-        password_reset_request_cooldown=timedelta(
-            seconds=settings.password_reset_request_cooldown_seconds
-        ),
-        require_mfa=settings.require_mfa,
-        lockout_duration=(
-            timedelta(seconds=settings.auth_lockout_duration_seconds)
-            if settings.auth_lockout_duration_seconds > 0
-            else None
-        ),
-    )
 
 
 def build_portal_runtime(

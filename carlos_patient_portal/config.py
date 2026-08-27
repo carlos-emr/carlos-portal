@@ -77,6 +77,14 @@ ENVIRONMENT_ALIASES = {
 }
 
 
+def normalize_environment_value(value: object) -> object:
+    """Normalize the environment contract shared by every packaged entrypoint."""
+    if isinstance(value, str):
+        normalized_value = value.strip().lower()
+        return ENVIRONMENT_ALIASES.get(normalized_value, normalized_value)
+    return value
+
+
 def _reject_duplicate_keyring_members(
     pairs: list[tuple[str, object]],
 ) -> dict[str, object]:
@@ -407,10 +415,7 @@ class Settings(BaseSettings):
     @field_validator("environment", mode="before")
     @classmethod
     def normalize_environment(cls, value: object) -> object:
-        if isinstance(value, str):
-            normalized_value = value.strip().lower()
-            return ENVIRONMENT_ALIASES.get(normalized_value, normalized_value)
-        return value
+        return normalize_environment_value(value)
 
     @field_validator("trusted_client_ip_header", mode="before")
     @classmethod
@@ -965,6 +970,11 @@ class MigrationDatabaseSettings(BaseSettings):
         env_prefix="PATIENT_PORTAL_",
         extra="ignore",
     )
+
+    @field_validator("environment", mode="before")
+    @classmethod
+    def normalize_environment(cls, value: object) -> object:
+        return normalize_environment_value(value)
 
     @model_validator(mode="after")
     def validate_transport(self) -> "MigrationDatabaseSettings":

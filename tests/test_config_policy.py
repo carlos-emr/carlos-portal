@@ -333,6 +333,18 @@ def test_migration_settings_still_enforce_the_production_transport(
         get_migration_database_url()
 
 
+def test_migration_settings_accept_the_documented_environment_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in list(os.environ):
+        if name.startswith("PATIENT_PORTAL_"):
+            monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PATIENT_PORTAL_ENVIRONMENT", " prod ")
+    monkeypatch.setenv("PATIENT_PORTAL_DATABASE_URL", DEFAULT_DATABASE_URL)
+
+    assert get_migration_database_url() == DEFAULT_DATABASE_URL
+
+
 def test_short_audit_retention_requires_an_explicit_opt_in() -> None:
     """Retention below the regulatory default must be deliberate, not a typo."""
     with pytest.raises(ValidationError, match="ALLOW_SHORT_AUDIT_RETENTION"):

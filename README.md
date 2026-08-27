@@ -257,10 +257,13 @@ in the link fragment so they are not sent in the initial HTTP request or written
 Matched password-reset requests are limited to one email per account per minute by default; tune
 this with `PATIENT_PORTAL_PASSWORD_RESET_REQUEST_COOLDOWN_SECONDS`.
 Production delivery runs after the uniform HTTP response so SMTP latency does not disclose whether
-the submitted identity matched an account. Reset links and post-change security notices are
-encrypted into a transactional outbox in the same commit as their source state. Start at least one
-worker alongside the web service; leases recover work after process loss, retries retain a stable
-SMTP `Message-ID`, and terminal reset-delivery failure revokes the undelivered token:
+the submitted identity matched an account. Every non-development reset submission first writes the
+same encrypted, account-neutral outbox command; only the worker resolves that identity and, on a
+match, mints the token and queues its email. The public request therefore never performs the extra
+token/outbox writes that would otherwise create a timing oracle. Reset links and post-change
+security notices remain encrypted at rest. Start at least one worker alongside the web service;
+leases recover work after process loss, retries retain a stable SMTP `Message-ID`, and terminal
+reset-delivery failure revokes the undelivered token:
 
 ```bash
 export PATIENT_PORTAL_OUTBOX_ENCRYPTION_SECRET="a separate 32+ character secret"
