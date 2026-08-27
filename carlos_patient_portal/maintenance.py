@@ -182,6 +182,31 @@ def cleanup_transient_auth_rows(
     dry_run: bool = False,
 ) -> TransientCleanupResult:
     normalized_batch_size = normalize_prune_batch_size(batch_size)
+    settled_outbox_predicate = and_(
+        PatientPortalOutboundDelivery.status.in_(
+            (OUTBOX_STATUS_DELIVERED, OUTBOX_STATUS_FAILED)
+        ),
+        PatientPortalOutboundDelivery.created_at < before,
+    )
+    outbound_delivery_ids = list(
+        session.scalars(
+            select(PatientPortalOutboundDelivery.id)
+            .where(settled_outbox_predicate)
+            .order_by(PatientPortalOutboundDelivery.id)
+            .limit(normalized_batch_size)
+        )
+    )
+    remaining_linked_delivery = select(PatientPortalOutboundDelivery.id).where(
+        PatientPortalOutboundDelivery.reset_token_id == PatientPortalPasswordResetToken.id
+    )
+    if dry_run and outbound_delivery_ids:
+        # A dry run must model the bounded outbox pass that a live invocation performs first.
+        # Excluding only that exact candidate set makes the reset forecast agree in both directions:
+        # a linked row outside the batch still protects its parent, while a parent whose last linked
+        # row is in the batch is reported as removable in this invocation.
+        remaining_linked_delivery = remaining_linked_delivery.where(
+            PatientPortalOutboundDelivery.id.not_in(outbound_delivery_ids)
+        )
     predicates = (
         # Ordered deliberately: outbound deliveries are removed before reset tokens, because
         # PatientPortalOutboundDelivery.reset_token_id is ON DELETE CASCADE. Deleting reset
@@ -193,12 +218,7 @@ def cleanup_transient_auth_rows(
             # reset-token parent, so including reset_token_id IS NULL here used to erase queued
             # security notices without a delivery outcome or terminal-failure audit. Settled rows
             # of either kind are retained for the configured window and are then safe to remove.
-            and_(
-                PatientPortalOutboundDelivery.status.in_(
-                    (OUTBOX_STATUS_DELIVERED, OUTBOX_STATUS_FAILED)
-                ),
-                PatientPortalOutboundDelivery.created_at < before,
-            ),
+            settled_outbox_predicate,
         ),
         (
             PatientPortalSession,
@@ -212,23 +232,12 @@ def cleanup_transient_auth_rows(
             PatientPortalPasswordResetToken,
             and_(
                 PatientPortalPasswordResetToken.expires_at < before,
-                # Removing a reset-token parent cascades every linked outbox row. Old settled
-                # rows are deleted in the first cleanup pass above, but unsettled work and
-                # recently settled history must keep their parent until they independently
-                # become eligible. Express that here as well as in the outbox predicate so the
-                # database cannot quietly delete rows the cleanup report did not count.
-                ~select(PatientPortalOutboundDelivery.id)
-                .where(
-                    PatientPortalOutboundDelivery.reset_token_id
-                    == PatientPortalPasswordResetToken.id,
-                    or_(
-                        ~PatientPortalOutboundDelivery.status.in_(
-                            (OUTBOX_STATUS_DELIVERED, OUTBOX_STATUS_FAILED)
-                        ),
-                        PatientPortalOutboundDelivery.created_at >= before,
-                    ),
-                )
-                .exists(),
+                # Removing a reset-token parent cascades every linked outbox row. Require every
+                # linked row to be absent after the bounded outbox pass, rather than assuming every
+                # old settled row fit in that independent batch. This keeps physical deletions and
+                # reported counts within the requested limit. In dry-run mode the subquery excludes
+                # precisely the outbox candidate IDs selected above, modelling the same ordering.
+                ~remaining_linked_delivery.exists(),
             ),
         ),
         (PatientPortalEmailChangeRequest, PatientPortalEmailChangeRequest.expires_at < before),
@@ -262,9 +271,13 @@ def cleanup_transient_auth_rows(
         predicates,
         strict=True,
     ):
-        record_ids = list(
-            session.scalars(
-                select(model.id).where(predicate).order_by(model.id).limit(normalized_batch_size)
+        record_ids = (
+            outbound_delivery_ids
+            if field_name == "outbound_deliveries"
+            else list(
+                session.scalars(
+                    select(model.id).where(predicate).order_by(model.id).limit(normalized_batch_size)
+                )
             )
         )
         if dry_run or not record_ids:

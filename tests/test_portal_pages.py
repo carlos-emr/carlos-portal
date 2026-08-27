@@ -351,8 +351,13 @@ def test_account_contact_update_creates_staff_review_request() -> None:
         },
         follow_redirects=False,
     )
-    assert phone_confirmed.status_code == 303
-    assert phone_confirmed.headers["location"] == "/portal/account?status=contact-updated"
+    assert phone_confirmed.status_code == 200
+    assert "Contact information updated" in phone_confirmed.text
+    assert "you have been signed out" in phone_confirmed.text
+    assert "carlos_portal_session=\"\"" in phone_confirmed.headers["set-cookie"]
+    signed_out_account = client.get("/portal/account", follow_redirects=False)
+    assert signed_out_account.status_code == 303
+    assert signed_out_account.headers["location"] == "/"
     with app.state.session_factory() as session:
         account = session.get(PatientPortalAccount, account_id)
         review_request = session.scalar(select(PatientPortalContactReviewRequest))
@@ -996,9 +1001,14 @@ def test_phone_removal_does_not_create_an_unsendable_confirmation_code() -> None
         phone_number="",
     )
 
-    assert response.status_code == 303
-    assert response.headers["location"] == "/portal/account?status=contact-updated"
+    assert response.status_code == 200
+    assert "Contact information updated" in response.text
+    assert "you have been signed out" in response.text
+    assert "carlos_portal_session=\"\"" in response.headers["set-cookie"]
     assert sms_sender.messages == []
+    signed_out_account = client.get("/portal/account", follow_redirects=False)
+    assert signed_out_account.status_code == 303
+    assert signed_out_account.headers["location"] == "/"
     with app.state.session_factory() as session:
         account = session.get(PatientPortalAccount, account_id)
         change = session.scalar(select(PatientPortalEmailChangeRequest))
@@ -1007,6 +1017,50 @@ def test_phone_removal_does_not_create_an_unsendable_confirmation_code() -> None
         assert change is not None
         assert change.phone_code_hash is None
         assert change.phone_confirmed_at is not None
+
+
+def test_completed_contact_change_notice_failure_renders_a_signed_out_warning() -> None:
+    app_holder: dict[str, object] = {}
+    client_holder: dict[str, TestClient] = {}
+
+    def act():
+        app = migrated_development_app()
+        client = TestClient(app)
+        app_holder["app"] = app
+        client_holder["client"] = client
+        account_id = browser_sign_in_seeded_patient(app, client)
+        with app.state.session_factory() as session, session.begin():
+            account = session.get(PatientPortalAccount, account_id)
+            assert account is not None
+            account.phone_number = "+15550105555"
+        return submit_contact_change(
+            app,
+            client,
+            email=SEEDED_INVITE_EMAIL,
+            phone_number="",
+        )
+
+    response = run_with_email_sender(FailingNoticeSender(), act)
+    app = app_holder["app"]
+    client = client_holder["client"]
+
+    assert response.status_code == 200
+    assert "Contact information updated" in response.text
+    assert "security notice could not be sent" in response.text
+    assert "you have been signed out" in response.text
+    assert "Max-Age=0" in response.headers["set-cookie"]
+    signed_out_account = client.get("/portal/account", follow_redirects=False)
+    assert signed_out_account.status_code == 303
+    assert signed_out_account.headers["location"] == "/"
+    with app.state.session_factory() as session:
+        failure = session.scalar(
+            select(PatientPortalAuditEvent).where(
+                PatientPortalAuditEvent.event_type == AUDIT_EVENT_ACCOUNT_CONTACT_UPDATE,
+                PatientPortalAuditEvent.outcome == AUDIT_OUTCOME_FAILURE,
+                PatientPortalAuditEvent.reason == "delivery_unavailable",
+            )
+        )
+    assert failure is not None
 
 
 def test_contact_change_records_a_failure_when_the_security_notice_cannot_be_sent() -> None:

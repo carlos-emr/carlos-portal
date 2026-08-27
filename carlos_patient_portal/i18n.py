@@ -146,6 +146,16 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
             "Contact the clinic if you cannot access your account or verification method."
         ),
         "contact_info": "Contact info",
+        "contact_change_notice_failed": (
+            "Your contact information is updated and you have been signed out, but a security "
+            "notice could not be sent. Contact the clinic if you did not make this change."
+        ),
+        "contact_change_success": (
+            "Your contact information is updated. For security, you have been signed out; sign in "
+            "again with your updated verification method. Clinic staff will review the matching "
+            "CARLOS chart details."
+        ),
+        "contact_change_success_heading": "Contact information updated",
         "contact_the_clinic": "Contact the clinic",
         "copy": "Copy",
         "copy_failed": "Select and copy manually",

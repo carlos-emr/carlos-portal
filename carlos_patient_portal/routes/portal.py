@@ -122,6 +122,7 @@ from carlos_patient_portal.web_support import (
     is_valid_csrf_submission,
     logout_browser_session_cookie_token,
     parse_optional_email_password_date,
+    render_public_auth_template,
     request_locale,
     set_portal_session_cookie,
 )
@@ -414,8 +415,6 @@ def register_portal_routes(
             authenticated_session.account,
             background_tasks=background_tasks,
             recipients=contact_update.notice_recipients,
-            success_status_key="contact-updated",
-            failure_status_key="contact-updated-notice-failed",
         )
 
     def redirect_to_account_status(request: Request, status_key: str) -> RedirectResponse:
@@ -433,8 +432,6 @@ def register_portal_routes(
         *,
         background_tasks: BackgroundTasks,
         recipients: tuple[str, ...],
-        success_status_key: str,
-        failure_status_key: str,
     ) -> Response:
         """Notify every affected address, and make a failed notice durable rather than silent.
 
@@ -467,7 +464,7 @@ def register_portal_routes(
                     delivery_id=delivery.id,
                     operational_metrics=runtime.operational_metrics,
                 )
-            return redirect_to_account_status(request, success_status_key)
+            return render_signed_out_contact_change_result(request, notices_delivered=True)
 
         await run_in_threadpool(session.commit)
         notices_delivered = True
@@ -483,7 +480,7 @@ def register_portal_routes(
                 runtime.operational_metrics.record_failure("contact_change_delivery")
                 logger.error("Contact-change notice delivery failed")
         if notices_delivered:
-            return redirect_to_account_status(request, success_status_key)
+            return render_signed_out_contact_change_result(request, notices_delivered=True)
         await run_in_threadpool(
             record_account_settings_audit_event,
             session,
@@ -493,7 +490,35 @@ def register_portal_routes(
             reason=ACCOUNT_SETTINGS_REASON_DELIVERY_UNAVAILABLE,
         )
         await run_in_threadpool(session.commit)
-        return redirect_to_account_status(request, failure_status_key)
+        return render_signed_out_contact_change_result(request, notices_delivered=False)
+
+    def render_signed_out_contact_change_result(
+        request: Request,
+        *,
+        notices_delivered: bool,
+    ) -> Response:
+        """Finish a contact change on a page that does not require the revoked session.
+
+        Applying a confirmed contact change revokes every bearer session, including the browser
+        session that submitted an immediate phone removal or the final phone proof. Redirecting that
+        browser back to /portal/account therefore discarded the result message on the next request.
+        Render the signed-out result directly and remove the stale cookie from the browser.
+        """
+        text = portal_text(request_locale(request))
+        response = render_public_auth_template(
+            request,
+            settings=settings,
+            csrf_secret=csrf_secret,
+            template_name="auth_result.jinja",
+            result_heading=text["contact_change_success_heading"],
+            result_message=text[
+                "contact_change_success"
+                if notices_delivered
+                else "contact_change_notice_failed"
+            ],
+        )
+        clear_portal_session_cookie(response, settings=settings)
+        return response
 
     async def deliver_email_change_request(
         request: Request,
@@ -606,8 +631,6 @@ def register_portal_routes(
             authenticated_session.account,
             background_tasks=background_tasks,
             recipients=confirmation.notice_recipients,
-            success_status_key="contact-updated",
-            failure_status_key="contact-updated-notice-failed",
         )
 
     @app.post("/portal/account/contact/resend-phone")

@@ -511,6 +511,90 @@ def test_cleanup_bounds_outbox_retention_and_reports_what_it_removes() -> None:
         assert session.get(PatientPortalOutboundDelivery, delivery_id) is None
 
 
+def test_cleanup_does_not_cascade_a_linked_delivery_outside_the_outbox_batch() -> None:
+    """The reset pass must not bypass the independent outbox batch or undercount deletions."""
+    app = migrated_development_app(outbox_encryption_secret=OUTBOX_ENCRYPTION_SECRET)
+    account_id = activate_seeded_patient_account(app, TestClient(app))
+    stale = utc_now() - timedelta(days=90)
+    cutoff = utc_now() - timedelta(days=30)
+
+    # Insert an unrelated delivery first so it consumes the one-row outbox batch before the
+    # reset-linked delivery. The reset parent must remain until that linked row gets its own turn.
+    with app.state.session_factory() as session:
+        with session.begin():
+            unrelated = enqueue_contact_change_delivery(
+                session,
+                account_id=account_id,
+                recipient="previous@example.test",
+                encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+            )
+            unrelated.status = OUTBOX_STATUS_DELIVERED
+            unrelated.created_at = stale
+            unrelated.delivered_at = stale
+            unrelated_id = unrelated.id
+
+    linked_delivery_id, reset_id = queue_reset(app, account_id)
+    with app.state.session_factory() as session:
+        with session.begin():
+            reset = session.get(PatientPortalPasswordResetToken, reset_id)
+            linked = session.get(PatientPortalOutboundDelivery, linked_delivery_id)
+            assert reset is not None
+            assert linked is not None
+            reset.created_at = stale - timedelta(hours=1)
+            reset.expires_at = stale
+            linked.status = OUTBOX_STATUS_DELIVERED
+            linked.created_at = stale
+            linked.delivered_at = stale
+            linked.lease_expires_at = None
+
+    with app.state.session_factory() as session:
+        with session.begin():
+            first_dry_run = cleanup_transient_auth_rows(
+                session,
+                before=cutoff,
+                batch_size=1,
+                dry_run=True,
+            )
+        with session.begin():
+            first_live_run = cleanup_transient_auth_rows(
+                session,
+                before=cutoff,
+                batch_size=1,
+            )
+
+    assert first_dry_run.outbound_deliveries == 1
+    assert first_dry_run.reset_records == 0
+    assert first_live_run.outbound_deliveries == 1
+    assert first_live_run.reset_records == 0
+    with app.state.session_factory() as session:
+        assert session.get(PatientPortalOutboundDelivery, unrelated_id) is None
+        assert session.get(PatientPortalOutboundDelivery, linked_delivery_id) is not None
+        assert session.get(PatientPortalPasswordResetToken, reset_id) is not None
+
+    with app.state.session_factory() as session:
+        with session.begin():
+            second_dry_run = cleanup_transient_auth_rows(
+                session,
+                before=cutoff,
+                batch_size=1,
+                dry_run=True,
+            )
+        with session.begin():
+            second_live_run = cleanup_transient_auth_rows(
+                session,
+                before=cutoff,
+                batch_size=1,
+            )
+
+    assert second_dry_run.outbound_deliveries == 1
+    assert second_dry_run.reset_records == 1
+    assert second_live_run.outbound_deliveries == 1
+    assert second_live_run.reset_records == 1
+    with app.state.session_factory() as session:
+        assert session.get(PatientPortalOutboundDelivery, linked_delivery_id) is None
+        assert session.get(PatientPortalPasswordResetToken, reset_id) is None
+
+
 @pytest.mark.parametrize("unsettled_status", [OUTBOX_STATUS_PENDING, OUTBOX_STATUS_PROCESSING])
 def test_cleanup_preserves_unsettled_contact_change_notices(unsettled_status: str) -> None:
     """Retention must not erase a security notice before its delivery reaches an outcome."""
