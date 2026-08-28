@@ -54,6 +54,7 @@ from tests.support import (
     SEEDED_INVITE_DOB,
     SEEDED_INVITE_EMAIL,
     SEEDED_INVITE_HCN,
+    STRONG_PASSWORD,
     UNLOCK_SECRET_ENCRYPTION_SECRET,
     activate_seeded_patient_account,
     bearer_headers,
@@ -718,8 +719,10 @@ def test_oversized_and_malformed_resource_ids_are_audited_not_five_hundreds() ->
         for resource in ("Patient", "Organization", "Practitioner", "DocumentReference")
     ]
     control_character = client.get("/fhir/Practitioner/%00", headers=bearer_headers(token))
-    huge_numeric = client.get(
-        f"/api/patient/email-passwords/{2**63}", headers=bearer_headers(token)
+    huge_numeric = client.post(
+        f"/api/patient/email-passwords/{2**63}/reveal",
+        json={"current_password": STRONG_PASSWORD},
+        headers=bearer_headers(token),
     )
 
     assert [response.status_code for response in oversized] == [404, 404, 404, 404]

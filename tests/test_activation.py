@@ -2,10 +2,11 @@
 
 from datetime import timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from carlos_patient_portal import web_support
+from carlos_patient_portal import credentials, web_support
 from carlos_patient_portal.audit import hash_sensitive_reference
 from carlos_patient_portal.models import (
     AUDIT_EVENT_ACTIVATION,
@@ -27,11 +28,14 @@ from tests.support import (
     SEEDED_INVITE_EMAIL,
     SEEDED_INVITE_HCN,
     STRONG_PASSWORD,
+    RecordingPortalEmailSender,
     RecordingPortalSmsSender,
     activation_request,
+    carlos_staff_headers,
     csrf_token_from_response,
     dev_admin_headers,
     migrated_development_app,
+    migrated_staging_app,
     seeded_invite_request,
 )
 
@@ -206,6 +210,59 @@ def test_patient_activation_can_enroll_sms_mfa_when_sender_is_configured() -> No
         assert account.phone_number == "+16135550199"
 
 
+def test_non_development_requires_sms_for_activation_and_login_mfa() -> None:
+    sms_sender = RecordingPortalSmsSender()
+    app = migrated_staging_app(
+        email_sender=RecordingPortalEmailSender(),
+        sms_sender=sms_sender,
+        outbox_encryption_secret="o" * 32,
+    )
+    client = TestClient(app, base_url="https://portal.example.test")
+    invite = client.post(
+        "/internal/carlos/patients/1234/invites",
+        headers=carlos_staff_headers("portal.invite.manage"),
+        json=seeded_invite_request(),
+    )
+    assert invite.status_code == 201, invite.text
+    invite_token = invite.json()["invite_token"]
+
+    rejected_email_activation = client.post(
+        "/auth/activate",
+        json=activation_request(invite_token, mfa_delivery_method="email"),
+    )
+    sms_activation = client.post(
+        "/auth/activate",
+        json=activation_request(
+            invite_token,
+            mfa_delivery_method="sms",
+            phone_number="+16135550199",
+        ),
+    )
+
+    assert rejected_email_activation.status_code == 400
+    assert rejected_email_activation.json()["detail"] == "MFA delivery method is unavailable"
+    assert sms_activation.status_code == 201
+
+    rejected_email_login = client.post(
+        "/auth/login",
+        json={
+            "username": "patient.user",
+            "password": STRONG_PASSWORD,
+            "mfa_delivery_method": "email",
+        },
+    )
+    sms_login = client.post(
+        "/auth/login",
+        json={"username": "patient.user", "password": STRONG_PASSWORD},
+    )
+
+    assert rejected_email_login.status_code == 400
+    assert rejected_email_login.json()["detail"] == "MFA delivery method is unavailable"
+    assert sms_login.status_code == 200
+    assert sms_login.json()["mfa_delivery_method"] == "sms"
+    assert sms_sender.messages[-1]["recipient"] == "+16135550199"
+
+
 def test_patient_activation_rejects_sms_when_sender_is_unavailable() -> None:
     app = migrated_development_app()
     client = TestClient(app)
@@ -267,6 +324,25 @@ def test_patient_activation_rejects_identity_mismatch_without_account_leak() -> 
         assert audit_event is not None
         assert audit_event.outcome == AUDIT_OUTCOME_FAILURE
         assert audit_event.reason == "invalid_details"
+
+
+def test_invalid_activation_proof_skips_expensive_password_strength_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = migrated_development_app()
+    client = TestClient(app)
+
+    def fail_if_called(*_args: object, **_kwargs: object) -> dict[str, object]:
+        pytest.fail("password strength analysis ran before invite proof was verified")
+
+    monkeypatch.setattr(credentials, "zxcvbn", fail_if_called)
+    response = client.post(
+        "/auth/activate",
+        json=activation_request("forged-invite-token"),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "activation details could not be verified"
 
 
 def test_patient_activation_rejects_expired_invite() -> None:

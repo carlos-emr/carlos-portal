@@ -162,6 +162,10 @@ class AuthPolicy:
     password_reset_token_ttl: timedelta
     password_reset_request_cooldown: timedelta
     require_mfa: bool
+    # Email is the password-recovery channel and therefore cannot also be an independent sign-in
+    # factor outside local development. Default True preserves explicit unit-policy construction;
+    # runtime policy sets it from the environment.
+    allow_email_mfa: bool = True
     # None means an automated lockout never expires on its own and only staff can clear it.
     # Defaulted so existing AuthPolicy construction in tests keeps working unchanged.
     lockout_duration: timedelta | None = None
@@ -606,6 +610,8 @@ def create_mfa_challenge(
     now: datetime,
 ) -> MfaChallengeDelivery:
     normalized_delivery_method = normalize_mfa_delivery_method(delivery_method)
+    if normalized_delivery_method == MFA_DELIVERY_METHOD_EMAIL and not policy.allow_email_mfa:
+        raise MfaDeliveryUnavailableError()
     ensure_mfa_delivery_available(account, normalized_delivery_method)
     if normalized_delivery_method == MFA_DELIVERY_METHOD_EMAIL:
         cooldown = policy.mfa_email_resend_cooldown
@@ -679,7 +685,10 @@ def create_mfa_challenge(
         code=code,
         delivery_method=normalized_delivery_method,
         destination=destination,
-        available_delivery_methods=available_mfa_delivery_methods(account),
+        available_delivery_methods=available_mfa_delivery_methods(
+            account,
+            allow_email=policy.allow_email_mfa,
+        ),
         expires_at=challenge.expires_at,
         expected_code_hash=challenge.code_hash,
         previous_account_email_sent_at=previous_account_email_sent_at,
@@ -834,9 +843,13 @@ def start_login(
         preferred_delivery_method = normalize_mfa_delivery_method(account.preferred_mfa_method)
         if (
             delivery_method is None
-            and preferred_delivery_method not in available_mfa_delivery_methods(account)
+            and preferred_delivery_method
+            not in available_mfa_delivery_methods(
+                account,
+                allow_email=policy.allow_email_mfa,
+            )
         ):
-            preferred_delivery_method = MFA_DELIVERY_METHOD_EMAIL
+            preferred_delivery_method = MFA_DELIVERY_METHOD_SMS
         requested_delivery_method = normalize_mfa_delivery_method(
             delivery_method or preferred_delivery_method
         )
@@ -936,9 +949,11 @@ def lock_mfa_challenge(
 
 def available_mfa_delivery_methods(
     account: PatientPortalAccount,
+    *,
+    allow_email: bool = True,
 ) -> tuple[str, ...]:
     methods: list[str] = []
-    if account.email:
+    if allow_email and account.email:
         methods.append(MFA_DELIVERY_METHOD_EMAIL)
     if normalize_phone_number(account.phone_number) is not None:
         methods.append(MFA_DELIVERY_METHOD_SMS)
@@ -951,6 +966,7 @@ def get_mfa_challenge_delivery_state(
     *,
     challenge_token_secret: str,
     preferred_delivery_method: str | None = None,
+    allow_email: bool = True,
 ) -> MfaChallengeDelivery | None:
     challenge = get_mfa_challenge_for_token(
         session,
@@ -965,7 +981,9 @@ def get_mfa_challenge_delivery_state(
     if account is None or account.status != ACCOUNT_STATUS_ACTIVE:
         return None
 
-    available_methods = available_mfa_delivery_methods(account)
+    available_methods = available_mfa_delivery_methods(account, allow_email=allow_email)
+    if challenge.delivery_method not in available_methods:
+        return None
     delivery_method = challenge.delivery_method
     if preferred_delivery_method is not None:
         try:
@@ -1049,6 +1067,8 @@ def resend_mfa_challenge(
         raise PasswordResetRequiredError()
 
     normalized_delivery_method = normalize_mfa_delivery_method(delivery_method)
+    if normalized_delivery_method == MFA_DELIVERY_METHOD_EMAIL and not policy.allow_email_mfa:
+        raise MfaDeliveryUnavailableError()
     try:
         ensure_mfa_delivery_available(account, normalized_delivery_method)
     except MfaDeliveryUnavailableError:
@@ -1125,7 +1145,10 @@ def resend_mfa_challenge(
         code=code,
         delivery_method=normalized_delivery_method,
         destination=destination,
-        available_delivery_methods=available_mfa_delivery_methods(account),
+        available_delivery_methods=available_mfa_delivery_methods(
+            account,
+            allow_email=policy.allow_email_mfa,
+        ),
         expires_at=challenge.expires_at,
         expected_code_hash=challenge.code_hash,
         previous_code_hash=previous_code_hash,
@@ -1292,6 +1315,21 @@ def verify_mfa_challenge(
             outcome=AUDIT_OUTCOME_FAILURE,
             actor_type=AUDIT_ACTOR_TYPE_PATIENT,
             reason=AUTH_REASON_MFA_EXPIRED,
+        )
+        raise MfaChallengeNotFoundError()
+    if challenge.delivery_method == MFA_DELIVERY_METHOD_EMAIL and not policy.allow_email_mfa:
+        challenge.status = MFA_CHALLENGE_STATUS_CANCELLED
+        challenge.updated_at = now
+        record_audit_event(
+            session,
+            event_type=AUDIT_EVENT_MFA_VERIFY,
+            outcome=AUDIT_OUTCOME_FAILURE,
+            actor_type=AUDIT_ACTOR_TYPE_PATIENT,
+            actor=account.username,
+            clinic_id=account.clinic_id,
+            demographic_no=account.demographic_no,
+            account_id=account.id,
+            reason=AUTH_REASON_DELIVERY_UNAVAILABLE,
         )
         raise MfaChallengeNotFoundError()
     if account.locked_at is not None:
@@ -1536,7 +1574,6 @@ def complete_password_reset(
     reset_token_secret: str,
     clinic_id: str,
 ) -> PatientPortalAccount:
-    validate_password(new_password)
     now = utc_now()
     token_hash = hash_auth_token(reset_token_secret, "password_reset", reset_token)
     # Scope the lookup itself by the owning account's clinic so a foreign-clinic token is simply

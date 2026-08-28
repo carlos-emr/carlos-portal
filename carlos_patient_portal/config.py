@@ -295,6 +295,11 @@ class Settings(BaseSettings):
     outbox_max_attempts: int = Field(default=14, ge=1, le=100)
     outbox_lease_seconds: int = Field(default=5 * 60, ge=30, le=60 * 60)
     outbox_poll_seconds: int = Field(default=5, ge=1, le=60)
+    # A public reset request becomes durable work before its identity is resolved. Bound that work
+    # across every web worker so a botnet cannot grow the live queue until PostgreSQL or the worker
+    # is exhausted. The endpoint returns one account-neutral 503 when this limit is reached.
+    password_reset_queue_max_pending: int = Field(default=1_000, ge=10, le=1_000_000)
+    password_reset_queue_retry_after_seconds: int = Field(default=60, ge=1, le=60 * 60)
     global_rate_limit_window_seconds: int = Field(default=60, ge=1, le=60 * 60)
     global_rate_limit_max_requests: int = Field(default=300, ge=1, le=10000)
     auth_rate_limit_window_seconds: int = Field(default=60, ge=1, le=60 * 60)

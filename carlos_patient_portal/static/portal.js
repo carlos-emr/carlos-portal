@@ -12,19 +12,34 @@ document.addEventListener("click", (event) => {
   const targetId = revealButton.dataset.revealTarget;
   const csrfToken = revealButton.dataset.csrfToken;
   const target = targetId ? document.getElementById(targetId) : null;
-  if (!revealUrl || !csrfToken || !(target instanceof HTMLElement)) {
+  const passwordInput = document.querySelector("[data-reveal-password]");
+  if (
+    !revealUrl
+    || !csrfToken
+    || !(target instanceof HTMLElement)
+    || !(passwordInput instanceof HTMLInputElement)
+  ) {
+    return;
+  }
+  if (!passwordInput.value) {
+    passwordInput.focus();
     return;
   }
 
   revealButton.disabled = true;
   revealButton.textContent = revealButton.dataset.revealingLabel || "Revealing...";
+  const requestBody = new URLSearchParams({
+    csrf_token: csrfToken,
+    current_password: passwordInput.value,
+  });
+  passwordInput.value = "";
   void fetch(revealUrl, {
     method: "POST",
     credentials: "same-origin",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
     },
-    body: `csrf_token=${encodeURIComponent(csrfToken)}`,
+    body: requestBody.toString(),
   })
     .then((response) => {
       if (response.status === 401) {

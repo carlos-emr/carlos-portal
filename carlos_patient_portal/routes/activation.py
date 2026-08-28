@@ -187,6 +187,7 @@ def register_activation_routes(
                 preferred_mfa_method=payload.mfa_delivery_method,
                 phone_number=payload.phone_number,
                 sms_delivery_available=runtime.sms_sender is not None,
+                allow_email_mfa=settings.is_development,
                 proof_secret=identity_proof_secret,
                 client_reference_hash=client_reference_hash,
                 rate_limit=activation_rate_limit,

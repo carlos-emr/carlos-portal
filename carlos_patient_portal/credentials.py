@@ -22,11 +22,17 @@ from threading import BoundedSemaphore
 from unicodedata import normalize
 
 from argon2 import PasswordHasher
+from zxcvbn import zxcvbn
 
 from carlos_patient_portal.models import MAX_USERNAME_LENGTH, MIN_USERNAME_LENGTH
 
 MIN_PASSWORD_LENGTH = 12
 MAX_PASSWORD_LENGTH = 256
+MIN_PASSWORD_STRENGTH_SCORE = 3
+# The library warns that analyzing more than 72 characters permits CPU denial of service. Longer
+# passwords still receive full length, blocklist, sequence, short-repetition, and account-context
+# checks; strength analysis of the first 72 characters is enough to reject a predictable prefix.
+PASSWORD_STRENGTH_ANALYSIS_LENGTH = 72
 USERNAME_PATTERN = re.compile(r"^[a-z0-9._-]+$")
 PASSWORD_SKELETON_PATTERN = re.compile(r"[^a-z0-9]+")
 PASSWORD_LEET_TRANSLATION = str.maketrans(
@@ -51,6 +57,7 @@ COMMON_PASSWORD_BASES = frozenset(
         "batman",
         "charlie",
         "computer",
+        "correcthorsebatterystaple",
         "carlos",
         "changeme",
         "clinic",
@@ -219,4 +226,12 @@ def validate_password(password: str, *, context_values: tuple[str, ...] = ()) ->
         context_skeleton = _password_skeleton(context_value)
         if len(context_skeleton) >= 4 and context_skeleton in skeleton:
             raise ValueError("password must not contain account or clinic information")
+    # The small explicit set above catches service-specific derivatives efficiently; zxcvbn adds
+    # an offline corpus of common passwords, names and English words plus spatial/repeat/sequence
+    # matching. A score below 3 represents a pattern an online attacker is likely to reach within
+    # a practical guessing campaign. This is screening, not a composition rule: long uncommon
+    # passphrases remain valid without requiring capitals, digits, or punctuation.
+    strength_sample = password[:PASSWORD_STRENGTH_ANALYSIS_LENGTH]
+    if int(zxcvbn(strength_sample)["score"]) < MIN_PASSWORD_STRENGTH_SCORE:
+        raise ValueError("password is too common or easily guessed")
     return password

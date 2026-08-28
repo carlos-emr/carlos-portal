@@ -71,8 +71,10 @@
             <label>
               <span>{{ text.mfa_method }}</span>
               <select name="mfa_delivery_method" data-activation-mfa-method>
-                <option value="email">{{ text.mfa_email }}</option>
-                <option value="sms"{% if not sms_mfa_available %} disabled{% endif %}>{{ text.mfa_sms }}</option>
+                {% if email_mfa_available %}
+                  <option value="email">{{ text.mfa_email }}</option>
+                {% endif %}
+                <option value="sms"{% if not sms_mfa_available %} disabled{% endif %}{% if not email_mfa_available %} selected{% endif %}>{{ text.mfa_sms }}</option>
               </select>
             </label>
             <label>

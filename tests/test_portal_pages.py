@@ -444,9 +444,19 @@ def test_email_password_dashboard_populated_search_pagination_and_copy_controls(
     page_one_response = client.get("/portal/email-passwords")
     csrf_token_match = CSRF_TOKEN_PATTERN.search(page_one_response.text)
     assert csrf_token_match is not None
+    rejected_reveal = client.post(
+        f"/portal/email-passwords/{secret_ids[11]}/reveal",
+        data={
+            "csrf_token": csrf_token_match.group(1),
+            "current_password": "Wrong1!password",
+        },
+    )
     reveal_response = client.post(
         f"/portal/email-passwords/{secret_ids[11]}/reveal",
-        data={"csrf_token": csrf_token_match.group(1)},
+        data={
+            "csrf_token": csrf_token_match.group(1),
+            "current_password": STRONG_PASSWORD,
+        },
     )
     page_two_response = client.get("/portal/email-passwords?page=2")
     out_of_range_page_response = client.get("/portal/email-passwords?page=99")
@@ -488,6 +498,7 @@ def test_email_password_dashboard_populated_search_pagination_and_copy_controls(
     assert 'data-reveal-url="/portal/email-passwords/' in page_one_response.text
     assert 'href="/portal/email-passwords?page=2"' in page_one_response.text
     assert "Page 1 of 2" in page_one_response.text
+    assert rejected_reveal.status_code == 403
     assert reveal_response.status_code == 200
     assert reveal_response.json()["passphrase"] == secret_values[11]
 
@@ -581,7 +592,10 @@ def test_email_password_dashboard_empty_search_and_unavailable_password_states()
     assert csrf_token_match is not None
     reveal_response = client.post(
         f"/portal/email-passwords/{unavailable_id}/reveal",
-        data={"csrf_token": csrf_token_match.group(1)},
+        data={
+            "csrf_token": csrf_token_match.group(1),
+            "current_password": STRONG_PASSWORD,
+        },
     )
 
     assert unavailable_response.status_code == 200
@@ -774,28 +788,39 @@ def test_patient_email_password_api_lists_retrieves_scoped_records_and_audits() 
         "/api/patient/email-passwords",
         headers=bearer_headers(patient_a_token),
     )
-    retrieve_response = client.get(
-        f"/api/patient/email-passwords/{active_a_id}",
+    rejected_retrieve_response = client.post(
+        f"/api/patient/email-passwords/{active_a_id}/reveal",
+        json={"current_password": "Wrong1!password"},
         headers=bearer_headers(patient_a_token),
     )
-    cross_patient_response = client.get(
-        f"/api/patient/email-passwords/{other_patient_id}",
+    retrieve_response = client.post(
+        f"/api/patient/email-passwords/{active_a_id}/reveal",
+        json={"current_password": STRONG_PASSWORD},
         headers=bearer_headers(patient_a_token),
     )
-    revoked_response = client.get(
-        f"/api/patient/email-passwords/{revoked_id}",
+    cross_patient_response = client.post(
+        f"/api/patient/email-passwords/{other_patient_id}/reveal",
+        json={"current_password": STRONG_PASSWORD},
         headers=bearer_headers(patient_a_token),
     )
-    pdf_response = client.get(
-        f"/api/patient/email-passwords/{pdf_id}",
+    revoked_response = client.post(
+        f"/api/patient/email-passwords/{revoked_id}/reveal",
+        json={"current_password": STRONG_PASSWORD},
         headers=bearer_headers(patient_a_token),
     )
-    unavailable_response = client.get(
-        f"/api/patient/email-passwords/{unavailable_id}",
+    pdf_response = client.post(
+        f"/api/patient/email-passwords/{pdf_id}/reveal",
+        json={"current_password": STRONG_PASSWORD},
+        headers=bearer_headers(patient_a_token),
+    )
+    unavailable_response = client.post(
+        f"/api/patient/email-passwords/{unavailable_id}/reveal",
+        json={"current_password": STRONG_PASSWORD},
         headers=bearer_headers(patient_a_token),
     )
 
     assert list_response.status_code == 200
+    assert rejected_retrieve_response.status_code == 403
     assert list_response.headers["cache-control"] == "no-store"
     list_payload = list_response.json()
     assert list_payload["limit"] == 10
@@ -866,6 +891,13 @@ def test_patient_email_password_api_lists_retrieves_scoped_records_and_audits() 
             for event in audit_events
         ] == [
             (AUDIT_EVENT_UNLOCK_SECRET_LIST, AUDIT_OUTCOME_SUCCESS, account_a_id, 1234, None),
+            (
+                AUDIT_EVENT_UNLOCK_SECRET_READ,
+                AUDIT_OUTCOME_FAILURE,
+                account_a_id,
+                1234,
+                "step_up_failed",
+            ),
             (AUDIT_EVENT_UNLOCK_SECRET_READ, AUDIT_OUTCOME_SUCCESS, account_a_id, 1234, None),
             (
                 AUDIT_EVENT_UNLOCK_SECRET_READ,
@@ -896,6 +928,35 @@ def test_patient_email_password_api_lists_retrieves_scoped_records_and_audits() 
                 "decryption_failed",
             ),
         ]
+
+
+def test_email_password_reveal_password_failures_lock_the_account() -> None:
+    app = migrated_development_app(auth_max_failed_password_attempts=2)
+    client = TestClient(app)
+    account_id = activate_seeded_patient_account(app, client)
+    token = sign_in_patient_api_session(client)
+
+    failed_reveals = [
+        client.post(
+            "/api/patient/email-passwords/1/reveal",
+            json={"current_password": "Wrong1!password"},
+            headers=bearer_headers(token),
+        )
+        for _ in range(2)
+    ]
+    rejected_session = client.post(
+        "/api/patient/email-passwords/1/reveal",
+        json={"current_password": STRONG_PASSWORD},
+        headers=bearer_headers(token),
+    )
+
+    assert [response.status_code for response in failed_reveals] == [403, 403]
+    assert rejected_session.status_code == 401
+    with app.state.session_factory() as session:
+        account = session.get(PatientPortalAccount, account_id)
+        assert account is not None
+        assert account.failed_login_count == 2
+        assert account.locked_at is not None
 
 
 def test_browser_email_password_index_records_a_sanitized_list_audit_event() -> None:
@@ -1335,7 +1396,10 @@ def test_reveal_route_audits_and_404s_an_out_of_scope_email_password() -> None:
 
     response = client.post(
         "/portal/email-passwords/424242/reveal",
-        data={"csrf_token": csrf_token_match.group(1)},
+        data={
+            "csrf_token": csrf_token_match.group(1),
+            "current_password": STRONG_PASSWORD,
+        },
     )
 
     assert response.status_code == 404

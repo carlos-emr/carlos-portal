@@ -646,16 +646,18 @@ def test_pending_unlock_secret_cannot_be_retrieved_by_id_before_publication() ->
     )
     secret_id = created.json()["id"]
 
-    before_publish = client.get(
-        f"/api/patient/email-passwords/{secret_id}",
+    before_publish = client.post(
+        f"/api/patient/email-passwords/{secret_id}/reveal",
+        json={"current_password": PASSWORD},
         headers=patient_headers,
     )
     client.post(
         f"/internal/carlos/unlock-secrets/{secret_id}/publish",
         headers=carlos_headers("portal.secret.manage"),
     )
-    after_publish = client.get(
-        f"/api/patient/email-passwords/{secret_id}",
+    after_publish = client.post(
+        f"/api/patient/email-passwords/{secret_id}/reveal",
+        json={"current_password": PASSWORD},
         headers=patient_headers,
     )
 

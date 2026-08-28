@@ -263,7 +263,16 @@ match, mints the token and queues its email. The public request therefore never 
 token/outbox writes that would otherwise create a timing oracle. Reset links and post-change
 security notices remain encrypted at rest. Start at least one worker alongside the web service;
 leases recover work after process loss, retries retain a stable SMTP `Message-ID`, and terminal
-reset-delivery failure revokes the undelivered token:
+reset-delivery failure revokes the undelivered token.
+
+The active reset-request queue is capped by
+`PATIENT_PORTAL_PASSWORD_RESET_QUEUE_MAX_PENDING` (1,000 by default). Admission is serialized with
+a PostgreSQL transaction advisory lock across web workers. A full queue returns the same global
+`503` for every submitted identity and a `Retry-After` controlled by
+`PATIENT_PORTAL_PASSWORD_RESET_QUEUE_RETRY_AFTER_SECONDS`; alert on the
+`password_reset_queue_full` operational failure counter.
+
+Start the worker with:
 
 ```bash
 export PATIENT_PORTAL_OUTBOX_ENCRYPTION_SECRET="a separate 32+ character secret"
@@ -524,6 +533,13 @@ PostgreSQL deployments should use managed database snapshots, PITR, or `pg_dump`
 the deployment platform. Before a pilot, run and document at least one restore drill against a
 non-production database.
 
+Before pilot traffic, record evidence that the PostgreSQL data volume, every snapshot, every
+backup/export, and backup transport are encrypted. Keep storage-encryption keys outside the
+database account and restrict snapshot/restore permissions separately from the portal runtime
+role. The application encrypts reset payloads and unlock secrets itself, but patient email, phone,
+demographic number, and audit metadata intentionally remain queryable database columns and depend
+on this infrastructure control.
+
 Keep `PATIENT_PORTAL_SESSION_SECRET`, `PATIENT_PORTAL_IDENTITY_PROOF_SECRET`,
 `PATIENT_PORTAL_AUDIT_HASH_SECRET`, outbox encryption keys, and unlock-secret encryption keys as
 separate random values in the deployment secret manager. For unlock-secret rotation, configure
@@ -680,9 +696,12 @@ curl -X POST http://127.0.0.1:8090/auth/activate \
 
 Activation checks the invite code, email, date of birth, and HCN/HIN together and returns a generic
 failure when they do not match. Usernames are normalized to lowercase and must be unique. Passwords
-are hashed with Argon2id before storage. Activation chooses email MFA by default; SMS enrollment
-requires a valid phone number and a configured SMS gateway, and the first delivered code verifies
-control of that destination.
+are hashed with Argon2id before storage. Non-development activation requires SMS MFA with a valid
+phone number and configured SMS gateway; completing the first sign-in proves receipt at that number.
+Email remains the password-recovery channel and
+is therefore not accepted as an independent sign-in factor outside local development. Existing
+pre-pilot accounts whose preference is email must have a phone added by staff before they can next
+sign in.
 
 Activation accepts the CSRF-protected browser form or `application/json`; request bodies are capped
 at 16 KiB before validation. Failed activation attempts are audited and rate-limited without storing
@@ -701,7 +720,7 @@ curl -X POST http://127.0.0.1:8090/auth/login \
   -d '{"username": "patient.username", "password": "Stronger1!word"}'
 ```
 
-When MFA is required, login returns an opaque `mfa_challenge_token`. Verify the emailed code
+When MFA is required, login returns an opaque `mfa_challenge_token`. Verify the SMS code
 to create a session:
 
 ```bash
@@ -716,12 +735,12 @@ curl -X POST -H "Authorization: Bearer <session_token>" \
   http://127.0.0.1:8090/auth/logout
 ```
 
-MFA resend supports email and SMS when their destinations and delivery providers are available:
+Production MFA resend supports SMS. Development also supports captured email MFA for local demos:
 
 ```bash
 curl -X POST http://127.0.0.1:8090/auth/mfa/resend \
   -H "Content-Type: application/json" \
-  -d '{"mfa_challenge_token": "<challenge>", "mfa_delivery_method": "email"}'
+  -d '{"mfa_challenge_token": "<challenge>", "mfa_delivery_method": "sms"}'
 ```
 
 Password reset uses a generic request response and a one-time token:
@@ -760,7 +779,9 @@ Dashboard routes:
 - `/portal/account` shows account, contact, password, and MFA settings.
 - `/portal/email-passwords` shows searchable, provider/date-filtered, paginated generated email
   password records for the authenticated patient. Passphrases are decrypted, audited, and returned
-  one at a time only after the patient selects Reveal.
+  one at a time only after the patient supplies their current password and selects Reveal. Bearer
+  clients use `POST /api/patient/email-passwords/{id}/reveal` with `current_password` in the JSON
+  body; the old session-only `GET` disclosure route is intentionally not exposed.
 - `/portal/help` shows clinic help details.
 - `POST /portal/logout` clears the portal session cookie and writes a logout audit event.
 

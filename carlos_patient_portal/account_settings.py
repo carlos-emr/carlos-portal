@@ -162,7 +162,6 @@ def change_account_password(
     policy: AuthPolicy,
     session_token_secret: str,
 ) -> str:
-    validate_password(new_password)
     account = lock_account_for_settings(session, account.id)
     validate_password(
         new_password,
@@ -615,6 +614,7 @@ def update_account_mfa_method(
     current_password: str,
     preferred_mfa_method: str,
     max_failed_password_attempts: int,
+    allow_email_mfa: bool = True,
 ) -> None:
     normalized_method = normalize_mfa_delivery_method(preferred_mfa_method)
     account = lock_account_for_settings(session, account.id)
@@ -625,6 +625,15 @@ def update_account_mfa_method(
         event_type=AUDIT_EVENT_ACCOUNT_MFA_UPDATE,
         max_failed_password_attempts=max_failed_password_attempts,
     )
+    if normalized_method != MFA_DELIVERY_METHOD_SMS and not allow_email_mfa:
+        record_account_settings_audit_event(
+            session,
+            account,
+            event_type=AUDIT_EVENT_ACCOUNT_MFA_UPDATE,
+            outcome=AUDIT_OUTCOME_FAILURE,
+            reason=ACCOUNT_SETTINGS_REASON_DELIVERY_UNAVAILABLE,
+        )
+        raise AccountSettingsValidationError()
     try:
         ensure_mfa_delivery_available(account, normalized_method)
     except MfaDeliveryUnavailableError as exc:

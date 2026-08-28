@@ -253,6 +253,7 @@ def activate_patient_account(
     preferred_mfa_method: str = MFA_DELIVERY_METHOD_EMAIL,
     phone_number: str | None = None,
     sms_delivery_available: bool = True,
+    allow_email_mfa: bool = True,
     proof_secret: str,
     client_reference_hash: str,
     rate_limit: ActivationRateLimit,
@@ -278,18 +279,10 @@ def activate_patient_account(
             raise ActivationError()
         normalized_username = validate_username(username)
         normalized_email = normalize_email(identity_proof.email)
-        validate_password(
-            password,
-            context_values=(
-                normalized_username,
-                normalized_email,
-                identity_proof.date_of_birth.isoformat(),
-                identity_proof.health_card_number,
-                expected_clinic_id,
-            ),
-        )
         normalized_mfa_method = normalize_mfa_delivery_method(preferred_mfa_method)
         normalized_phone_number = normalize_phone_number(phone_number)
+        if normalized_mfa_method == MFA_DELIVERY_METHOD_EMAIL and not allow_email_mfa:
+            raise ActivationDeliveryUnavailableError()
         if normalized_mfa_method == MFA_DELIVERY_METHOD_SMS and not sms_delivery_available:
             raise ActivationDeliveryUnavailableError()
         if normalized_mfa_method == MFA_DELIVERY_METHOD_SMS and normalized_phone_number is None:
@@ -344,6 +337,29 @@ def activate_patient_account(
             invite_id=invite.id if invite else None,
         )
         raise ActivationError()
+
+    try:
+        validate_password(
+            password,
+            context_values=(
+                normalized_username,
+                normalized_email,
+                identity_proof.date_of_birth.isoformat(),
+                identity_proof.health_card_number,
+                expected_clinic_id,
+            ),
+        )
+    except ValueError as exc:
+        record_activation_failure(
+            session,
+            invite_token_hash=invite_token_hash,
+            client_reference_hash=client_reference_hash,
+            reason=ACTIVATION_REASON_INVALID_DETAILS,
+            clinic_id=invite.clinic_id,
+            demographic_no=invite.demographic_no,
+            invite_id=invite.id,
+        )
+        raise ActivationError() from exc
 
     existing_account = find_account_id_for_patient(
         session,

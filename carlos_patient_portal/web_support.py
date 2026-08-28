@@ -725,6 +725,7 @@ def public_auth_template_context(
     notice_message: str | None = None,
     form_values: dict[str, str] | None = None,
     sms_mfa_available: bool | None = None,
+    email_mfa_available: bool | None = None,
     reset_token: str | None = None,
     development_reset_url: str | None = None,
     result_heading: str | None = None,
@@ -746,6 +747,9 @@ def public_auth_template_context(
         "locale_switch_target": locale_switch_targets(request),
         "text": portal_text(locale),
         "sms_mfa_available": sms_mfa_available,
+        "email_mfa_available": (
+            settings.is_development if email_mfa_available is None else email_mfa_available
+        ),
         "reset_token": reset_token,
         "development_reset_url": development_reset_url,
         "result_heading": result_heading,
@@ -885,6 +889,7 @@ def portal_template_context(
         "account_notice": account_notice,
         "account_error": account_error,
         "sms_mfa_available": sms_mfa_available and account.phone_number is not None,
+        "email_mfa_available": settings.is_development,
         "text": text,
     }
     # The only module with its own view state; typed so a rename is a type error, not a blank page.

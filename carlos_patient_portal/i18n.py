@@ -273,6 +273,10 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
         ),
         "reveal": "Reveal",
         "reveal_failed": "Password could not be revealed. Try again.",
+        "reveal_password_hint": "Enter your current password before revealing a passphrase.",
+        "password_reset_temporarily_unavailable": (
+            "Password reset is temporarily unavailable. Please try again shortly."
+        ),
         "revealing": "Revealing...",
         "reset_filters": "Clear filters",
         "search": "Search",

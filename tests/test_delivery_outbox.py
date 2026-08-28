@@ -829,7 +829,11 @@ def test_password_reset_route_resolves_every_identity_through_the_outbox() -> No
     assert invite.status_code == 201, invite.text
     activation = client.post(
         "/auth/activate",
-        json=activation_request(invite.json()["invite_token"]),
+        json=activation_request(
+            invite.json()["invite_token"],
+            mfa_delivery_method="sms",
+            phone_number="+16135550199",
+        ),
     )
     assert activation.status_code in {200, 201}, activation.text
 
@@ -932,7 +936,11 @@ def test_password_reset_hit_and_miss_enqueue_identical_account_neutral_work() ->
     assert invite.status_code == 201
     assert client.post(
         "/auth/activate",
-        json=activation_request(invite.json()["invite_token"]),
+        json=activation_request(
+            invite.json()["invite_token"],
+            mfa_delivery_method="sms",
+            phone_number="+16135550199",
+        ),
     ).status_code in {200, 201}
 
     valid_response = client.post(
@@ -957,3 +965,39 @@ def test_password_reset_hit_and_miss_enqueue_identical_account_neutral_work() ->
     ]
     assert all(command.account_id is None for command in commands)
     assert reset_tokens == []
+
+
+def test_password_reset_queue_applies_account_neutral_durable_backpressure() -> None:
+    app = migrated_staging_app(
+        email_sender=RecordingPortalEmailSender(),
+        password_reset_queue_max_pending=10,
+        password_reset_queue_retry_after_seconds=45,
+    )
+    client = TestClient(app, base_url="https://portal.example.test")
+
+    admitted = [
+        client.post(
+            "/auth/password-reset/request",
+            json={
+                "username": f"missing.patient{index}",
+                "email": f"missing{index}@example.test",
+            },
+        )
+        for index in range(10)
+    ]
+    rejected = client.post(
+        "/auth/password-reset/request",
+        json={"username": "patient.user", "email": SEEDED_INVITE_EMAIL},
+    )
+
+    assert all(response.status_code == 202 for response in admitted)
+    assert rejected.status_code == 503
+    assert rejected.headers["retry-after"] == "45"
+    assert rejected.json() == {"detail": "password reset is temporarily unavailable"}
+    with app.state.session_factory() as session:
+        commands = session.scalars(select(PatientPortalOutboundDelivery)).all()
+    assert len(commands) == 10
+    assert all(command.kind == OUTBOX_KIND_PASSWORD_RESET_REQUEST for command in commands)
+    assert app.state.operational_metrics.snapshot()["failures"] == {
+        "password_reset_queue_full": 1
+    }

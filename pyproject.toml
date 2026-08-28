@@ -23,6 +23,9 @@ dependencies = [
   "pydantic-settings>=2.6,<3",
   "sqlalchemy>=2.0,<3",
   "uvicorn>=0.32,<1",
+  # Offline common-password, dictionary, sequence, and keyboard-pattern screening. Keeping this
+  # local avoids disclosing even a partial patient-password hash to a third-party service.
+  "zxcvbn==4.5.0",
 ]
 
 [project.scripts]

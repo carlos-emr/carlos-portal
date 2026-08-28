@@ -613,6 +613,29 @@ a.module-tile:focus-visible {
   font-weight: normal;
 }
 
+.reveal-step-up {
+  display: grid;
+  gap: 4px;
+  max-width: 360px;
+  margin: 0 0 12px;
+  color: #1f2937;
+  font-size: 13px;
+  font-weight: bold;
+}
+
+.reveal-step-up input {
+  min-height: 36px;
+  padding: 7px 9px;
+  border: 1px solid #aeb7c8;
+  border-radius: 3px;
+  background: #fff;
+}
+
+.reveal-step-up small {
+  color: var(--muted);
+  font-weight: normal;
+}
+
 .filter-error {
   max-width: 920px;
   margin-bottom: 12px;

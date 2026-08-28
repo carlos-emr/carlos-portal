@@ -25,7 +25,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from carlos_patient_portal.auth import normalize_phone_number
 from carlos_patient_portal.credentials import (
     MAX_PASSWORD_LENGTH,
-    validate_password,
     validate_username,
 )
 from carlos_patient_portal.identity import (
@@ -127,11 +126,6 @@ class ActivationRequest(BaseModel):
     def validate_activation_username(cls, value: str) -> str:
         return validate_username(value)
 
-    @field_validator("password")
-    @classmethod
-    def validate_activation_password(cls, value: str) -> str:
-        return validate_password(value)
-
     @model_validator(mode="after")
     def validate_mfa_enrollment(self) -> "ActivationRequest":
         normalized_phone = normalize_phone_number(self.phone_number)
@@ -206,12 +200,6 @@ class PasswordResetCompleteRequest(BaseModel):
     reset_token: str = Field(min_length=1)
     new_password: str = Field(min_length=1, max_length=MAX_PASSWORD_LENGTH, repr=False)
 
-    @field_validator("new_password")
-    @classmethod
-    def validate_new_password(cls, value: str) -> str:
-        return validate_password(value)
-
-
 class PasswordResetCompleteResponse(BaseModel):
     status: Literal["password_reset"]
     username: str
@@ -245,6 +233,12 @@ class EmailPasswordListResponse(BaseModel):
 
 class EmailPasswordSecretResponse(EmailPasswordRecordResponse):
     passphrase: str = Field(repr=False)
+
+
+class EmailPasswordRevealRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: str = Field(min_length=1, max_length=MAX_PASSWORD_LENGTH, repr=False)
 
 
 class AccountAdminResponse(BaseModel):

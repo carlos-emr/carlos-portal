@@ -46,10 +46,12 @@ from carlos_patient_portal.account_settings import (
     PhoneChangeRateLimitedError,
     change_account_password,
     confirm_phone_change,
+    lock_account_for_settings,
     record_account_settings_audit_event,
     resend_phone_change_code,
     update_account_contact,
     update_account_mfa_method,
+    verify_current_password,
 )
 from carlos_patient_portal.audit import record_audit_event
 from carlos_patient_portal.auth import AuthenticatedPortalSession
@@ -88,7 +90,11 @@ from carlos_patient_portal.runtime import (
     RouteDependencies,
     function_scoped_database_dependency,
 )
-from carlos_patient_portal.schemas import EmailPasswordListResponse, EmailPasswordSecretResponse
+from carlos_patient_portal.schemas import (
+    EmailPasswordListResponse,
+    EmailPasswordRevealRequest,
+    EmailPasswordSecretResponse,
+)
 from carlos_patient_portal.sms_delivery import PortalSmsDeliveryError
 from carlos_patient_portal.unlock_secrets import (
     DEFAULT_UNLOCK_SECRET_LIST_LIMIT,
@@ -128,6 +134,25 @@ from carlos_patient_portal.web_support import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def verify_unlock_secret_step_up(
+    session: Session,
+    account: PatientPortalAccount,
+    *,
+    current_password: str,
+    max_failed_password_attempts: int,
+) -> PatientPortalAccount:
+    """Serialize password failures so concurrent reveal attempts cannot bypass lockout."""
+    locked_account = lock_account_for_settings(session, account.id)
+    verify_current_password(
+        session,
+        locked_account,
+        current_password=current_password,
+        event_type=AUDIT_EVENT_UNLOCK_SECRET_READ,
+        max_failed_password_attempts=max_failed_password_attempts,
+    )
+    return locked_account
 
 
 def register_patient_email_password_routes(
@@ -177,12 +202,13 @@ def register_patient_email_password_routes(
             "offset": offset,
         }
 
-    @app.get(
-        "/api/patient/email-passwords/{email_password_id}",
+    @app.post(
+        "/api/patient/email-passwords/{email_password_id}/reveal",
         response_model=EmailPasswordSecretResponse,
     )
     def retrieve_patient_email_password(
         email_password_id: Annotated[int, PathParam(gt=0, le=MAX_DATABASE_ID)],
+        payload: EmailPasswordRevealRequest,
         authenticated_session: Annotated[
             AuthenticatedPortalSession,
             Depends(get_authenticated_portal_session),
@@ -190,6 +216,18 @@ def register_patient_email_password_routes(
         session: Annotated[Session, function_scoped_database_dependency(get_app_database_session)],
     ) -> Response | dict[str, object]:
         account = authenticated_session.account
+        try:
+            account = verify_unlock_secret_step_up(
+                session,
+                account,
+                current_password=payload.current_password,
+                max_failed_password_attempts=runtime.settings.auth_max_failed_password_attempts,
+            )
+        except AccountSettingsStepUpError:
+            return JSONResponse(
+                status_code=status.HTTP_403_FORBIDDEN,
+                content={"detail": "current password could not be verified"},
+            )
         try:
             disclosure = read_scoped_unlock_secret(
                 session,
@@ -696,7 +734,8 @@ def register_portal_routes(
                     form_values,
                     "preferred_mfa_method",
                 ),
-                max_failed_password_attempts=settings.auth_max_failed_password_attempts,
+                max_failed_password_attempts=runtime.settings.auth_max_failed_password_attempts,
+                allow_email_mfa=settings.is_development,
             )
         except AccountSettingsStepUpError:
             return await render_async_account_change_error(
@@ -805,7 +844,7 @@ def register_portal_routes(
         request: Request,
         session: Annotated[Session, function_scoped_database_dependency(get_app_database_session)],
     ) -> Response:
-        await get_portal_account_form_values(
+        form_values = await get_portal_account_form_values(
             request,
             csrf_error_detail="email password could not be revealed",
         )
@@ -817,6 +856,19 @@ def register_portal_routes(
                 headers={"Location": request.url_for("index").path},
             )
         account = authenticated_session.account
+        try:
+            account = await run_in_threadpool(
+                verify_unlock_secret_step_up,
+                session,
+                account,
+                current_password=first_form_value_or_empty(form_values, "current_password"),
+                max_failed_password_attempts=runtime.settings.auth_max_failed_password_attempts,
+            )
+        except AccountSettingsStepUpError:
+            return JSONResponse(
+                status_code=status.HTTP_403_FORBIDDEN,
+                content={"detail": "current password could not be verified"},
+            )
         try:
             passphrase = await run_in_threadpool(
                 read_unlock_secret,

@@ -555,6 +555,13 @@ function screenshotPath(name) {
       await page.locator('.copy-action:visible').count() === 0,
       'Copy controls must stay hidden before an explicit reveal'
     );
+    const revealPasswordInput = page.locator('[data-reveal-password]');
+    assert(
+      await revealPasswordInput.count() === 1
+        && await revealPasswordInput.getAttribute('type') === 'password'
+        && await revealPasswordInput.getAttribute('autocomplete') === 'current-password',
+      'email-password reveal step-up control is incomplete'
+    );
     await page.setViewportSize({ width: 390, height: 844 });
     expectedRevealFailures = 1;
     await page.route('**/portal/email-passwords/*/reveal', (route) => {
@@ -564,6 +571,7 @@ function screenshotPath(name) {
         body: JSON.stringify({ detail: 'email password unavailable' }),
       });
     }, { times: 1 });
+    await revealPasswordInput.fill(changedPassword);
     await page.getByRole('button', { name: 'Reveal' }).first().click();
     await page.getByRole('button', { name: 'Password could not be revealed.' }).waitFor();
     assert(expectedRevealFailures === 0, 'expected reveal failure response was not observed');
@@ -571,6 +579,7 @@ function screenshotPath(name) {
     await page.getByRole('button', { name: 'Reveal' }).first().waitFor();
     await page.setViewportSize({ width: 1440, height: 1000 });
 
+    await revealPasswordInput.fill(changedPassword);
     await page.getByRole('button', { name: 'Reveal' }).first().click();
     await page.getByRole('button', { name: 'Copy' }).first().waitFor();
     const firstPassphrase = (await page.locator('.copyable-password').first().textContent() || '').trim();
@@ -590,6 +599,7 @@ function screenshotPath(name) {
       });
     });
     const secondPasswordRow = page.locator('.email-password-table tbody tr').nth(1);
+    await revealPasswordInput.fill(changedPassword);
     await secondPasswordRow.getByRole('button', { name: 'Reveal' }).click();
     await secondPasswordRow.getByRole('button', { name: 'Copy' }).click();
     await secondPasswordRow.getByRole('button', { name: 'Select and copy manually' }).waitFor();

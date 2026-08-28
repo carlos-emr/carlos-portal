@@ -2,6 +2,7 @@
 
 import re
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import timedelta
 from urllib.parse import parse_qs, urlsplit
 
@@ -10,7 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from carlos_patient_portal import auth, main, web_support
+from carlos_patient_portal import auth, credentials, main, web_support
 from carlos_patient_portal.account_settings import update_account_mfa_method
 from carlos_patient_portal.auth import (
     MFA_DELIVERY_FAILURE_RETRY_GRACE,
@@ -39,6 +40,7 @@ from carlos_patient_portal.models import (
     AUDIT_OUTCOME_SUCCESS,
     AUDIT_OUTCOME_THROTTLED,
     EMAIL_CHANGE_STATUS_REVOKED,
+    MFA_CHALLENGE_STATUS_CANCELLED,
     PASSWORD_RESET_STATUS_USED,
     SESSION_REVOKED_REASON_PASSWORD_CHANGE,
     PatientPortalAccount,
@@ -50,6 +52,7 @@ from carlos_patient_portal.models import (
     PatientPortalSession,
     utc_now,
 )
+from carlos_patient_portal.token_keys import PortalTokenKeys
 from tests.support import (
     CONCURRENT_WRONG_PASSWORD,
     CSRF_TOKEN_PATTERN,
@@ -89,6 +92,41 @@ def assert_browser_notice(response, *, status_code: int, leaked_detail: str) -> 
     assert response.headers["content-type"].startswith("text/html")
     assert "Request could not be completed" in response.text
     assert f'"{leaked_detail}"' not in response.text
+
+
+def test_non_development_policy_cancels_a_preexisting_email_mfa_challenge() -> None:
+    app = migrated_development_app(session_secret="t" * 32)
+    client = TestClient(app)
+    activate_seeded_patient_account(app, client)
+    login = client.post(
+        "/auth/login",
+        json={"username": "patient.user", "password": STRONG_PASSWORD},
+    )
+    assert login.status_code == 200
+    login_payload = login.json()
+    session_secret = app.state.settings.session_secret
+    assert session_secret is not None
+    token_keys = PortalTokenKeys.derive(session_secret.get_secret_value())
+    production_policy = replace(
+        main.auth_policy_from_settings(app.state.settings),
+        allow_email_mfa=False,
+    )
+
+    with app.state.session_factory() as session:
+        with pytest.raises(auth.MfaChallengeNotFoundError):
+            auth.verify_mfa_challenge(
+                session,
+                challenge_token=login_payload["mfa_challenge_token"],
+                code=login_payload["development_mfa_code"],
+                policy=production_policy,
+                challenge_token_secret=token_keys.mfa,
+                session_token_secret=token_keys.session,
+                code_secret=token_keys.mfa,
+            )
+        session.commit()
+        challenge = session.scalar(select(PatientPortalMfaChallenge))
+        assert challenge is not None
+        assert challenge.status == MFA_CHALLENGE_STATUS_CANCELLED
 
 
 def test_file_sqlite_concurrent_login_failures_do_not_return_raw_500(tmp_path) -> None:
@@ -2189,6 +2227,24 @@ def test_expired_password_reset_token_is_rejected(monkeypatch: pytest.MonkeyPatc
         ).status_code
         == 200
     )
+
+
+def test_forged_password_reset_token_skips_expensive_password_strength_analysis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = migrated_development_app()
+    client = TestClient(app)
+
+    def fail_if_called(*_args: object, **_kwargs: object) -> dict[str, object]:
+        pytest.fail("password strength analysis ran before reset token verification")
+
+    monkeypatch.setattr(credentials, "zxcvbn", fail_if_called)
+    response = client.post(
+        "/auth/password-reset/complete",
+        json={"reset_token": "f" * 43, "new_password": STRONG_RESET_PASSWORD},
+    )
+
+    assert response.status_code in {400, 401}
 
 
 def test_consumed_password_reset_token_cannot_be_replayed() -> None:

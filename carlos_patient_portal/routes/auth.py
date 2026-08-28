@@ -66,6 +66,7 @@ from carlos_patient_portal.auth import (
 )
 from carlos_patient_portal.config import Settings
 from carlos_patient_portal.delivery_outbox import (
+    PasswordResetQueueFullError,
     enqueue_contact_change_delivery,
     enqueue_password_reset_request,
     process_one_delivery,
@@ -241,6 +242,7 @@ def build_auth_dependencies(
             payload.mfa_challenge_token,
             challenge_token_secret=runtime.token_keys.mfa,
             preferred_delivery_method=preferred_delivery_method,
+            allow_email=auth_policy.allow_email_mfa,
         )
 
 
@@ -688,15 +690,42 @@ def register_password_reset_routes(
                 # Non-development settings reject this at startup. Keep the invariant local too,
                 # because the queued command cannot safely derive a public link from request Host.
                 raise PortalEmailDeliveryError("password reset email delivery is not configured")
-            await run_in_threadpool(
-                enqueue_password_reset_request,
-                session,
-                username=payload.username,
-                email=payload.email,
-                client_reference_hash=client_reference_hash,
-                encryption_secret=runtime.outbox_encryption_secret,
-                encryption_key_id=runtime.outbox_active_key_id,
-            )
+            try:
+                await run_in_threadpool(
+                    enqueue_password_reset_request,
+                    session,
+                    username=payload.username,
+                    email=payload.email,
+                    client_reference_hash=client_reference_hash,
+                    encryption_secret=runtime.outbox_encryption_secret,
+                    encryption_key_id=runtime.outbox_active_key_id,
+                    max_pending=deps.settings.password_reset_queue_max_pending,
+                )
+            except PasswordResetQueueFullError:
+                # Release the PostgreSQL transaction-scoped admission lock before constructing
+                # the response instead of waiting for dependency teardown to close the session.
+                await run_in_threadpool(session.rollback)
+                runtime.operational_metrics.record_failure("password_reset_queue_full")
+                headers = {
+                    "Retry-After": str(
+                        deps.settings.password_reset_queue_retry_after_seconds
+                    )
+                }
+                if is_browser_form:
+                    response = deps.render_password_reset_request(
+                        request,
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        error_message=localized_auth_text(request)[
+                            "password_reset_temporarily_unavailable"
+                        ],
+                    )
+                    response.headers.update(headers)
+                    return response
+                return JSONResponse(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    content={"detail": "password reset is temporarily unavailable"},
+                    headers=headers,
+                )
             await run_in_threadpool(session.commit)
             # Do not resolve the identity in a response-attached background task. Although Starlette
             # sends the body first, task duration remains observable through connection reuse and

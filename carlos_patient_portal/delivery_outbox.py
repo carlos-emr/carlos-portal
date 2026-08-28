@@ -36,7 +36,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from sqlalchemy import or_, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -89,10 +89,18 @@ OUTBOX_MAX_RETRY_DELAY_SECONDS = 15 * 60
 # not, so the terminal handler must not revoke a token whose link is already in the mailbox.
 OUTBOX_FAILURE_AUDIT_UNAVAILABLE = "delivery_audit_unavailable"
 OUTBOX_FAILURE_KEY_UNAVAILABLE = "encryption_key_unavailable"
+# PostgreSQL transaction-scoped advisory lock namespace reserved for reset-request admission. It
+# makes the count-and-insert capacity decision atomic across web workers without adding a singleton
+# quota table. Production is PostgreSQL-only; SQLite is a single-process development convenience.
+PASSWORD_RESET_QUEUE_ADMISSION_LOCK_ID = 0x4350525155455545
 
 
 class OutboxKeyUnavailableError(Exception):
     """The key a queued row was encrypted under is absent from the configured keyring."""
+
+
+class PasswordResetQueueFullError(Exception):
+    """The durable identity-resolution queue has reached its configured active-work limit."""
 
 
 class OutboxMetrics(Protocol):
@@ -255,8 +263,24 @@ def enqueue_password_reset_request(
     client_reference_hash: str,
     encryption_secret: str,
     encryption_key_id: str = OUTBOX_KEY_ID,
+    max_pending: int = 1_000,
 ) -> PatientPortalOutboundDelivery:
     """Durably queue identity resolution without revealing whether the identity matched."""
+    if max_pending < 1:
+        raise ValueError("max_pending must be positive")
+    bind = session.get_bind()
+    if bind.dialect.name == "postgresql":
+        session.execute(select(func.pg_advisory_xact_lock(PASSWORD_RESET_QUEUE_ADMISSION_LOCK_ID)))
+    active_count = session.scalar(
+        select(func.count(PatientPortalOutboundDelivery.id)).where(
+            PatientPortalOutboundDelivery.kind == OUTBOX_KIND_PASSWORD_RESET_REQUEST,
+            PatientPortalOutboundDelivery.status.in_(
+                (OUTBOX_STATUS_PENDING, OUTBOX_STATUS_PROCESSING)
+            ),
+        )
+    )
+    if active_count is not None and active_count >= max_pending:
+        raise PasswordResetQueueFullError()
     message_id = _new_message_id()
     ciphertext, nonce = _encrypt_payload(
         {

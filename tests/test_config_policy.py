@@ -495,6 +495,10 @@ def test_email_local_part_rejects_invalid_dot_placement(email: str) -> None:
         "Carlos2026!!",
         "aaaaaaaaaaaa",
         "123456789012",
+        "1q2w3e4r5t6y",
+        "zaq12wsx34edc",
+        "correcthorsebatterystaple",
+        "asdfghjkl;12",
     ],
 )
 def test_password_rejects_common_compromised_and_service_specific_choices(
@@ -508,6 +512,18 @@ def test_password_does_not_require_character_classes() -> None:
     assert credentials.validate_password("four random words together") == (
         "four random words together"
     )
+
+
+def test_password_strength_screen_accepts_long_passphrases_without_unbounded_analysis() -> None:
+    words = (
+        "amber telescope orchard glacier velvet mosaic cedar lantern harbour quantum meadow "
+        "compass silver canyon winter falcon library sunrise pebble violin maple island copper "
+        "prairie comet walnut river tulip marble forest"
+    )
+    password = words.ljust(256, "x")
+
+    assert len(password) == credentials.MAX_PASSWORD_LENGTH
+    assert credentials.validate_password(password) == password
 
 
 def test_password_rejects_account_context_even_when_not_on_common_list() -> None:

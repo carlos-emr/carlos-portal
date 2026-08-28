@@ -181,7 +181,9 @@
                   <label>
                     {{ text.mfa_method }}
                     <select name="preferred_mfa_method">
-                      <option value="email"{% if account.preferred_mfa_method == "email" %} selected{% endif %}>{{ text.mfa_email }}</option>
+                      {% if email_mfa_available %}
+                        <option value="email"{% if account.preferred_mfa_method == "email" %} selected{% endif %}>{{ text.mfa_email }}</option>
+                      {% endif %}
                       <option
                         value="sms"
                         {% if account.preferred_mfa_method == "sms" %}selected{% endif %}
@@ -244,6 +246,16 @@
             {% if email_passwords.filter_error %}
               <p class="form-error filter-error" role="alert">{{ email_passwords.filter_error }}</p>
             {% endif %}
+            <label class="reveal-step-up" for="email-password-step-up">
+              <span>{{ text.current_password }}</span>
+              <input
+                id="email-password-step-up"
+                type="password"
+                autocomplete="current-password"
+                data-reveal-password
+              >
+              <small>{{ text.reveal_password_hint }}</small>
+            </label>
             <div class="table-shell" role="region" aria-label="{{ text.email_passwords_region }}">
               <table class="email-password-table">
                 <thead>
