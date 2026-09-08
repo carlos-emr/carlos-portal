@@ -124,6 +124,38 @@ grep -F '"status":"failed"' "$test_root/elevated.json"
 compose exec -T database psql \
   --username portal_schema_owner \
   --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 <<'SQL'
+CREATE TABLE public.policy_rollback_probe (id integer);
+GRANT CREATE ON DATABASE carlos_portal TO portal_audit_maintenance;
+SQL
+if "$repository_root/scripts/production-deploy" apply-db-policy \
+  > "$test_root/elevated-ownership.log" 2>&1; then
+  printf '%s\n' 'database policy accepted database CREATE privilege' >&2
+  exit 1
+fi
+grep -F 'must not own public-schema objects or create database/schema objects' \
+  "$test_root/elevated-ownership.log"
+probe_privilege=$(compose exec -T database psql \
+  --username portal_schema_owner \
+  --dbname carlos_portal \
+  --tuples-only \
+  --no-align \
+  --command "SELECT has_table_privilege('portal_runtime', 'public.policy_rollback_probe', 'SELECT')")
+if [ "$probe_privilege" != "f" ]; then
+  printf '%s\n' 'failed database policy did not roll back its partial grants' >&2
+  exit 1
+fi
+compose exec -T database psql \
+  --username portal_schema_owner \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 <<'SQL'
+REVOKE CREATE ON DATABASE carlos_portal FROM portal_audit_maintenance;
+DROP TABLE public.policy_rollback_probe;
+SQL
+
+compose exec -T database psql \
+  --username portal_schema_owner \
+  --dbname carlos_portal \
   --set ON_ERROR_STOP=1 \
   --command 'ALTER ROLE portal_audit_maintenance SUPERUSER'
 if "$repository_root/scripts/production-deploy" apply-db-policy \

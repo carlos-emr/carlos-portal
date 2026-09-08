@@ -138,6 +138,7 @@ def test_production_stack_smoke_covers_success_replay_and_fail_closed_role() -> 
     assert "production-elevated.env" in smoke
     assert "preflight accepted an elevated runtime database role" in smoke
     assert "database policy accepted an elevated maintenance role" in smoke
+    assert "failed database policy did not roll back its partial grants" in smoke
     assert "outbox is empty" in smoke
 
     settings = Settings(_env_file=environment_path)

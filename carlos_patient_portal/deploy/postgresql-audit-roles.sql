@@ -37,7 +37,9 @@ SELECT
 \if :role_attributes_valid
 \else
   \echo 'Runtime and maintenance roles must be distinct LOGIN roles without elevated attributes or memberships.'
-  \quit 1
+  -- psql 16 has no nonzero \quit argument. ON_ERROR_STOP turns this deliberate SQL error into a
+  -- failing process status that the deployment command cannot mistake for success.
+  SELECT 1 / 0 AS database_role_policy_violation;
 \endif
 
 BEGIN;
@@ -110,7 +112,7 @@ SELECT
 \if :role_ownership_valid
 \else
   \echo 'Runtime and maintenance roles must not own public-schema objects or create database/schema objects.'
-  \quit 1
+  SELECT 1 / 0 AS database_role_policy_violation;
 \endif
 
 COMMIT;
