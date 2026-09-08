@@ -14,6 +14,8 @@ __pycache__/
 .envrc
 .direnv/
 .venv/
+node_modules/
+deploy/*.env
 *.key
 *.pem
 *.p12

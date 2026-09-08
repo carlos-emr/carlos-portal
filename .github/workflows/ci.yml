@@ -207,3 +207,14 @@ jobs:
           python -m pip install --require-hashes -r requirements-runtime.lock
           python -m pip install --no-deps dist/*.whl
           python -m pip check
+
+      - name: Build production container
+        if: matrix.python-version == '3.12'
+        run: |
+          docker build \
+            --build-arg "OCI_REVISION=$GITHUB_SHA" \
+            --tag "carlos-patient-portal:$GITHUB_SHA" \
+            .
+          test "$(docker image inspect --format '{{.Config.User}}' "carlos-patient-portal:$GITHUB_SHA")" = "10001:10001"
+          docker run --rm --entrypoint python "carlos-patient-portal:$GITHUB_SHA" \
+            -c 'import carlos_patient_portal; print(carlos_patient_portal.__file__)'

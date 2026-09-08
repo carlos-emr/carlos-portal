@@ -108,6 +108,10 @@ pip install --no-deps dist/carlos_patient_portal-0.1.0-py3-none-any.whl
 carlos-patient-portal-migrate
 ```
 
+The repository also ships a digest-pinned production container, separate web/migration/outbox
+services, least-privilege database-policy job, and deploy/rollback automation. See
+[`deploy/README.md`](deploy/README.md) for the production deployment path.
+
 Refresh the lock files after dependency changes with:
 
 ```bash

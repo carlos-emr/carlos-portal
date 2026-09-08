@@ -1,0 +1,148 @@
+#!/bin/sh
+set -eu
+
+repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+compose_file=${PORTAL_COMPOSE_FILE:-"$repository_root/compose.production.yaml"}
+export PORTAL_ENV_FILE=${PORTAL_ENV_FILE:-"$repository_root/deploy/production.env"}
+export PORTAL_MIGRATION_ENV_FILE=${PORTAL_MIGRATION_ENV_FILE:-"$repository_root/deploy/migration.env"}
+export PORTAL_DATABASE_ADMIN_ENV_FILE=${PORTAL_DATABASE_ADMIN_ENV_FILE:-"$repository_root/deploy/database-admin.env"}
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/production-deploy COMMAND
+
+Commands:
+  validate          Validate files, the immutable image reference, and Compose configuration
+  migrate           Upgrade PostgreSQL with the schema-owner role
+  apply-db-policy   Reapply least-privilege and append-only audit grants
+  deploy            Validate, migrate, apply grants, start web/worker, and verify readiness
+  readiness         Query the authenticated readiness endpoint from inside the web container
+  status            Show the deployment processes
+  rollback          Restart web/worker with PORTAL_ROLLBACK_IMAGE; never downgrades the database
+EOF
+}
+
+compose() {
+  docker compose --file "$compose_file" "$@"
+}
+
+require_file() {
+  if [ ! -f "$1" ]; then
+    printf 'Required file is missing: %s\n' "$1" >&2
+    exit 1
+  fi
+}
+
+require_private_file() {
+  require_file "$1"
+  if find "$1" -prune -perm /077 -print | grep -q .; then
+    printf 'Secret environment file must not be accessible by group or others: %s\n' "$1" >&2
+    exit 1
+  fi
+}
+
+is_digest_reference() {
+  case "$1" in
+    *@sha256:*) digest=${1##*@sha256:} ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$digest" | grep -Eq '^[0-9a-f]{64}$'
+}
+
+require_image() {
+  if [ -z "${PORTAL_IMAGE:-}" ]; then
+    printf '%s\n' 'PORTAL_IMAGE must name the release image.' >&2
+    exit 1
+  fi
+  if ! is_digest_reference "$PORTAL_IMAGE" \
+    && [ "${PORTAL_ALLOW_MUTABLE_IMAGE:-}" != "true" ]; then
+    printf '%s\n' 'PORTAL_IMAGE must use an immutable @sha256 digest.' >&2
+    printf '%s\n' 'Set PORTAL_ALLOW_MUTABLE_IMAGE=true only for a local deployment rehearsal.' >&2
+    exit 1
+  fi
+}
+
+validate() {
+  command -v docker >/dev/null 2>&1 || {
+    printf '%s\n' 'Docker with the Compose v2 plugin is required.' >&2
+    exit 1
+  }
+  require_image
+  require_private_file "$PORTAL_ENV_FILE"
+  require_private_file "$PORTAL_MIGRATION_ENV_FILE"
+  require_private_file "$PORTAL_DATABASE_ADMIN_ENV_FILE"
+  if [ -z "${PORTAL_DB_CA_FILE:-}" ]; then
+    printf '%s\n' 'PORTAL_DB_CA_FILE must name the PostgreSQL CA certificate.' >&2
+    exit 1
+  fi
+  require_file "${PORTAL_DB_CA_FILE:-}"
+  compose --profile operations config --quiet
+}
+
+readiness_once() {
+  compose exec -T web python -c \
+    'from urllib.request import Request, urlopen; from carlos_patient_portal.config import get_settings; token=get_settings().internal_health_token.get_secret_value(); request=Request("http://127.0.0.1:8090/internal/readiness", headers={"Authorization": "Bearer "+token}); response=urlopen(request, timeout=5); print(response.read().decode())'
+}
+
+wait_for_readiness() {
+  attempt=1
+  while [ "$attempt" -le 30 ]; do
+    if readiness_once; then
+      return 0
+    fi
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+  printf '%s\n' 'Portal did not become ready within 60 seconds.' >&2
+  compose logs --tail 100 web >&2
+  return 1
+}
+
+command_name=${1:-}
+case "$command_name" in
+  validate)
+    validate
+    ;;
+  migrate)
+    validate
+    compose --profile operations run --rm migrate
+    ;;
+  apply-db-policy)
+    validate
+    compose --profile operations run --rm database-policy
+    ;;
+  deploy)
+    validate
+    compose --profile operations run --rm migrate
+    compose --profile operations run --rm database-policy
+    compose up --detach --no-build --remove-orphans web outbox
+    wait_for_readiness
+    ;;
+  readiness)
+    require_image
+    readiness_once
+    ;;
+  status)
+    require_image
+    compose ps
+    ;;
+  rollback)
+    require_image
+    if [ -z "${PORTAL_ROLLBACK_IMAGE:-}" ]; then
+      printf '%s\n' 'PORTAL_ROLLBACK_IMAGE must name the previous immutable image digest.' >&2
+      exit 1
+    fi
+    if ! is_digest_reference "$PORTAL_ROLLBACK_IMAGE"; then
+      printf '%s\n' 'PORTAL_ROLLBACK_IMAGE must use an immutable @sha256 digest.' >&2
+      exit 1
+    fi
+    PORTAL_IMAGE=$PORTAL_ROLLBACK_IMAGE
+    export PORTAL_IMAGE
+    compose up --detach --no-build web outbox
+    wait_for_readiness
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

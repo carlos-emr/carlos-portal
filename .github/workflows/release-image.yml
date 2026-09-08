@@ -1,0 +1,61 @@
+name: Release Patient Portal Image
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  release-image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate release version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          package_version=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          test "$RELEASE_TAG" = "v$package_version"
+
+      - name: Log in to GitHub Container Registry
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build and publish immutable release
+        id: image
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          image_repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          if docker manifest inspect "$image_repository:$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Refusing to overwrite existing image tag $image_repository:$RELEASE_TAG" >&2
+            exit 1
+          fi
+          created=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          docker build \
+            --build-arg "OCI_CREATED=$created" \
+            --build-arg "OCI_REVISION=$GITHUB_SHA" \
+            --build-arg "OCI_SOURCE=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --build-arg "OCI_VERSION=$RELEASE_TAG" \
+            --tag "$image_repository:$RELEASE_TAG" \
+            .
+          docker push "$image_repository:$RELEASE_TAG"
+          digest_reference=$(docker inspect --format='{{index .RepoDigests 0}}' "$image_repository:$RELEASE_TAG")
+          echo "digest-reference=$digest_reference" >> "$GITHUB_OUTPUT"
+
+      - name: Record deployment reference
+        env:
+          DIGEST_REFERENCE: ${{ steps.image.outputs.digest-reference }}
+        run: |
+          {
+            echo '### Patient portal image'
+            echo
+            echo "Deploy this immutable image: \`$DIGEST_REFERENCE\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from carlos_patient_portal.config import Settings
+
 PACKAGE_ROOT = Path(__file__).parents[1] / "carlos_patient_portal"
 REPOSITORY_ROOT = PACKAGE_ROOT.parent
 
@@ -12,6 +14,7 @@ def test_repository_ignores_local_secrets_and_patient_databases() -> None:
         ".env.*",
         ".envrc",
         ".direnv/",
+        "deploy/*.env",
         "*.key",
         "*.pem",
         "*.p12",
@@ -22,6 +25,87 @@ def test_repository_ignores_local_secrets_and_patient_databases() -> None:
         "*.sqlite",
         "*.sqlite3",
     } <= patterns
+
+
+def test_production_image_is_pinned_locked_and_unprivileged() -> None:
+    dockerfile = (REPOSITORY_ROOT / "Dockerfile").read_text()
+
+    assert "slim-bookworm@sha256:" in dockerfile
+    assert dockerfile.count("--require-hashes") == 2
+    assert "--no-isolation" in dockerfile
+    assert 'PYTHONPATH="/opt/portal/lib/python3.12/site-packages"' in dockerfile
+    assert "USER 10001:10001" in dockerfile
+    assert "HEALTHCHECK" in dockerfile
+    assert 'CMD ["uvicorn"' in dockerfile
+
+
+def test_production_compose_separates_runtime_and_privileged_jobs() -> None:
+    compose = (REPOSITORY_ROOT / "compose.production.yaml").read_text()
+
+    assert "${PORTAL_IMAGE:?" in compose
+    assert "127.0.0.1}:${PORTAL_BIND_PORT:-8090}:8090" in compose
+    assert "carlos-patient-portal-outbox-worker" in compose
+    assert "${PORTAL_MIGRATION_ENV_FILE:-deploy/migration.env}" in compose
+    assert "${PORTAL_DATABASE_ADMIN_ENV_FILE:-deploy/database-admin.env}" in compose
+    assert "postgresql-audit-roles.sql" in compose
+    assert compose.count("read_only: true") >= 3
+    assert compose.count("no-new-privileges:true") >= 2
+    assert "profiles:\n      - operations" in compose
+    assert "postgres:" not in compose.split("database-policy:", 1)[0]
+    migration_block = compose.split("  migrate:", 1)[1].split("  database-policy:", 1)[0]
+    assert "PORTAL_ENV_FILE" not in migration_block
+    assert "PORTAL_MIGRATION_ENV_FILE" in migration_block
+
+
+def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
+    script_path = REPOSITORY_ROOT / "scripts" / "production-deploy"
+    script = script_path.read_text()
+
+    assert script_path.stat().st_mode & 0o111
+    assert "^[0-9a-f]{64}$" in script
+    assert "PORTAL_ROLLBACK_IMAGE" in script
+    assert "carlos-patient-portal-migrate" not in script
+    assert "alembic downgrade" not in script
+    assert "carlos-patient-portal-migrate -" not in script
+    assert "compose --profile operations run --rm migrate" in script
+    assert "compose --profile operations run --rm database-policy" in script
+
+
+def test_production_environment_example_can_satisfy_runtime_policy(tmp_path: Path) -> None:
+    example_path = REPOSITORY_ROOT / "deploy" / "production.env.example"
+    values = {
+        key: value
+        for line in example_path.read_text().splitlines()
+        if line and not line.startswith("#")
+        for key, value in [line.split("=", 1)]
+    }
+    secret_names = (
+        "PATIENT_PORTAL_SESSION_SECRET",
+        "PATIENT_PORTAL_IDENTITY_PROOF_SECRET",
+        "PATIENT_PORTAL_AUDIT_HASH_SECRET",
+        "PATIENT_PORTAL_INTERNAL_HEALTH_TOKEN",
+        "PATIENT_PORTAL_INTERNAL_API_TOKEN",
+        "PATIENT_PORTAL_SMS_WEBHOOK_TOKEN",
+    )
+    for index, name in enumerate(secret_names):
+        values[name] = f"production-example-{index}-" + ("x" * 32)
+    values["PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY"] = (
+        "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    )
+    values["PATIENT_PORTAL_OUTBOX_ENCRYPTION_KEYRING"] = (
+        '{"initial":"outbox-example-' + ("x" * 32) + '"}'
+    )
+    values["PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_KEYRING"] = (
+        '{"initial":"unlock-example-' + ("x" * 32) + '"}'
+    )
+
+    configured_path = tmp_path / "production.env"
+    configured_path.write_text("".join(f"{key}={value}\n" for key, value in values.items()))
+    settings = Settings(_env_file=configured_path)
+
+    assert settings.environment == "production"
+    assert settings.resolved_outbox_keyring.keys() == {"initial"}
+    assert settings.resolved_unlock_secret_keyring.keys() == {"initial"}
 
 
 def test_reference_proxy_omits_raw_request_target_and_limits_expensive_routes() -> None:
