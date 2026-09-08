@@ -111,6 +111,8 @@ carlos-patient-portal-migrate
 The repository also ships a digest-pinned production container, separate web/migration/outbox
 services, least-privilege database-policy job, and deploy/rollback automation. See
 [`deploy/README.md`](deploy/README.md) for the production deployment path.
+Real patient information additionally requires the per-clinic evidence gates in
+[`deploy/REAL_DATA_READINESS.md`](deploy/REAL_DATA_READINESS.md).
 
 Refresh the lock files after dependency changes with:
 
@@ -348,6 +350,18 @@ curl -H "Authorization: Bearer $PATIENT_PORTAL_INTERNAL_HEALTH_TOKEN" \
 curl -H "Authorization: Bearer $PATIENT_PORTAL_INTERNAL_HEALTH_TOKEN" \
   http://127.0.0.1:8090/internal/metrics
 ```
+
+Before a deployment may receive real patient information, run the installed preflight after
+migrations and `postgresql-audit-roles.sql`:
+
+```bash
+carlos-patient-portal-preflight
+```
+
+It exits unsuccessfully unless production policy is active, the live database is PostgreSQL over
+TLS, the packaged schema head is applied, the runtime role is not a database administrator or
+schema creator, and the audit table permits append-only application access. Output is secret-free
+JSON so the result can be attached to the deployment change record.
 
 Expose `/internal/health/db` and `/internal/readiness` only to trusted infrastructure such as a load
 balancer or orchestrator health probe.

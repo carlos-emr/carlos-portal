@@ -80,6 +80,31 @@ services:
       - carlos-patient-portal-migrate
     restart: "no"
 
+  # Runs with the restricted application role after migrations/grants and fails unless the live
+  # connection uses TLS, the schema is current, and the audit table is append-only.
+  preflight:
+    <<: *portal-service
+    profiles:
+      - operations
+    command:
+      - carlos-patient-portal-preflight
+    restart: "no"
+
+  # General operator commands use the runtime role. Only prune-audit switches to the separately
+  # supplied maintenance URL; neither long-running process receives that credential.
+  maintenance:
+    <<: *portal-service
+    profiles:
+      - operations
+    env_file:
+      - ${PORTAL_ENV_FILE:-deploy/production.env}
+      - ${PORTAL_MAINTENANCE_ENV_FILE:-deploy/maintenance.env}
+    entrypoint:
+      - carlos-patient-portal-maintenance
+    command:
+      - --help
+    restart: "no"
+
   database-policy:
     image: postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
     profiles:

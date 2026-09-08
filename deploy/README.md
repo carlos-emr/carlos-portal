@@ -5,9 +5,14 @@ the durable outbound-message worker. A one-shot migration process uses the schem
 role, and a second one-shot process reapplies the audit-table grants. PostgreSQL remains external so
 patient data can use managed encryption, backups, point-in-time recovery, and restore tooling.
 
-The same immutable image runs every process. `scripts/production-deploy` refuses a mutable image
-tag during a production deployment, applies migrations and database grants before restarting the
-application, and verifies the authenticated readiness endpoint afterward.
+The same immutable image runs every portal process. `scripts/production-deploy` refuses a mutable
+image tag, applies migrations and database grants, runs the real-data preflight, and verifies the
+authenticated readiness endpoint after rollout.
+
+Before introducing patient information, complete the per-clinic evidence record in
+[`REAL_DATA_READINESS.md`](REAL_DATA_READINESS.md). The automated preflight covers live application
+and database controls; the record covers external delivery, recovery, privacy, security, and
+operational controls that a container cannot verify.
 
 ## Prerequisites
 
@@ -27,18 +32,19 @@ environment example trusts only that address. If `PORTAL_DOCKER_SUBNET` changes,
 
 ## Prepare one clinic
 
-Copy the three examples and restrict access before adding credentials:
+Copy the four examples and restrict access before adding credentials:
 
 ```bash
 install -m 0600 deploy/production.env.example deploy/production.env
 install -m 0600 deploy/migration.env.example deploy/migration.env
 install -m 0600 deploy/database-admin.env.example deploy/database-admin.env
+install -m 0600 deploy/maintenance.env.example deploy/maintenance.env
 ```
 
 Replace every `replace-*` value. Use separate random values for every application secret. Keep the
 database passwords URL-encoded and mount the database provider's CA certificate using
-`PORTAL_DB_CA_FILE`. The deployment loads the owner and admin files only into their one-shot jobs;
-the web and worker never receive those elevated credentials.
+`PORTAL_DB_CA_FILE`. The deployment loads the owner, admin, and maintenance files only into their
+one-shot jobs; the web and worker never receive those elevated credentials.
 
 Use a capacity-appropriate value for `PORTAL_WEB_WORKERS`. Each worker can open
 `PATIENT_PORTAL_DATABASE_POOL_SIZE + PATIENT_PORTAL_DATABASE_MAX_OVERFLOW` connections and the
@@ -52,8 +58,8 @@ docker compose -f compose.production.yaml run --rm web \
 
 ## Release and deploy
 
-Tags matching `v*` publish an image to GitHub Container Registry. Record the digest emitted by the
-release workflow; use that digest rather than its tag:
+Tags matching `v*` publish an image with SBOM and build-provenance attestations to GitHub Container
+Registry. Record the digest emitted by the release workflow; use that digest rather than its tag:
 
 ```bash
 export PORTAL_IMAGE='ghcr.io/carlos-emr/carlos-portal@sha256:replace-with-release-digest'
@@ -64,9 +70,11 @@ scripts/production-deploy status
 ```
 
 Before `deploy`, take or verify a recoverable database snapshot. The command runs Alembic with the
-schema-owner URL, reapplies the append-only audit policy through the database-admin URL, starts the
-web and outbox processes, and waits for database/schema readiness. It does not configure DNS, TLS,
-managed backups, or monitoring on the host.
+schema-owner URL, reapplies the append-only audit policy through the database-admin URL, and runs a
+fail-closed preflight through the restricted runtime role. Preflight requires production policy,
+PostgreSQL, a current schema, database TLS, a non-admin runtime role, and append-only audit access.
+Only after those checks pass does it start web/outbox and wait for readiness. It does not configure
+DNS, edge TLS, managed backups, or monitoring on the host.
 
 The portal is published only on host loopback. Expose it through the reference nginx policy so
 route-specific shared rate limits and CARLOS/internal endpoint ACLs remain in force. Do not publish
@@ -92,14 +100,16 @@ mode and follow a reviewed data migration and Alembic downgrade plan from a rest
 
 ```bash
 scripts/production-deploy readiness
+scripts/production-deploy preflight
+scripts/production-deploy outbox-status
+scripts/production-deploy export-audit 0 1000 > audit-batch.jsonl
+scripts/production-deploy cleanup-auth 30
+scripts/production-deploy prune-audit
 docker compose -f compose.production.yaml logs --tail 100 web outbox
-docker compose -f compose.production.yaml run --rm web \
-  carlos-patient-portal-maintenance outbox-status
-docker compose -f compose.production.yaml run --rm web \
-  carlos-patient-portal-maintenance cleanup-transient-auth --dry-run
 ```
 
-Ship container logs and audit exports to the clinic's protected central sink. Alert separately on
-container restarts, readiness failures, terminal outbox rows, queue age, database saturation, and
-certificate expiry. Schedule audit export, transient-auth cleanup, and retention pruning under the
-clinic's approved retention policy.
+Advance the audit export checkpoint only after `audit-batch.jsonl` is durably accepted by the
+clinic's protected append-only sink. Schedule these commands with the host's audited scheduler and
+capture their exit status. Alert separately on container restarts, readiness failures, terminal
+outbox rows, queue age, database saturation, and certificate expiry. Run retention pruning only
+under the clinic's approved retention policy.

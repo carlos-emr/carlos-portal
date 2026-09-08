@@ -29,6 +29,8 @@ from time import monotonic, sleep
 from alembic import command
 from alembic.config import Config
 from argon2 import PasswordHasher
+from pydantic import ValidationError
+from pydantic_settings import SettingsError
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -55,6 +57,7 @@ from carlos_patient_portal.maintenance import (
     restore_sqlite_database,
     summarize_outbox,
 )
+from carlos_patient_portal.preflight import PreflightCheck, collect_production_preflight
 from carlos_patient_portal.runtime import auth_policy_from_settings
 from carlos_patient_portal.token_keys import PortalTokenKeys
 from carlos_patient_portal.unlock_secrets import reencrypt_unlock_secrets
@@ -86,6 +89,58 @@ def migrate(argv: Sequence[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     command.upgrade(build_alembic_config(), args.revision)
+
+
+def _configuration_failure_checks(
+    exc: ValidationError | SettingsError,
+) -> list[PreflightCheck]:
+    if isinstance(exc, SettingsError):
+        return [
+            PreflightCheck(
+                "configuration",
+                "fail",
+                f"production configuration could not be loaded ({type(exc).__name__})",
+            )
+        ]
+    messages = []
+    for error in exc.errors(include_input=False, include_url=False):
+        location = ".".join(str(part) for part in error["loc"])
+        messages.append(f"{location}: {error['msg']}")
+    return [
+        PreflightCheck(
+            "configuration",
+            "fail",
+            "; ".join(messages) or "production configuration is invalid",
+        )
+    ]
+
+
+def production_preflight(argv: Sequence[str] | None = None) -> None:
+    """Validate the live runtime configuration and database before accepting patient data."""
+    parser = ArgumentParser(
+        prog="carlos-patient-portal-preflight",
+        description="Fail-closed real-data readiness checks for the CARLOS patient portal.",
+    )
+    parser.parse_args(argv)
+    try:
+        settings = get_settings()
+    except (SettingsError, ValidationError) as exc:
+        checks = _configuration_failure_checks(exc)
+    else:
+        checks = collect_production_preflight(settings)
+    passed = all(check.passed for check in checks)
+    print(
+        json.dumps(
+            {
+                "status": "ok" if passed else "failed",
+                "checks": [check.as_dict() for check in checks],
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    )
+    if not passed:
+        raise SystemExit(1)
 
 
 def maintenance(argv: Sequence[str] | None = None) -> None:

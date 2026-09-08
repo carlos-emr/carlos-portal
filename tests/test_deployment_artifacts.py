@@ -47,14 +47,19 @@ def test_production_compose_separates_runtime_and_privileged_jobs() -> None:
     assert "carlos-patient-portal-outbox-worker" in compose
     assert "${PORTAL_MIGRATION_ENV_FILE:-deploy/migration.env}" in compose
     assert "${PORTAL_DATABASE_ADMIN_ENV_FILE:-deploy/database-admin.env}" in compose
+    assert "${PORTAL_MAINTENANCE_ENV_FILE:-deploy/maintenance.env}" in compose
     assert "postgresql-audit-roles.sql" in compose
+    assert "carlos-patient-portal-preflight" in compose
+    assert "carlos-patient-portal-maintenance" in compose
     assert compose.count("read_only: true") >= 3
     assert compose.count("no-new-privileges:true") >= 2
     assert "profiles:\n      - operations" in compose
     assert "postgres:" not in compose.split("database-policy:", 1)[0]
-    migration_block = compose.split("  migrate:", 1)[1].split("  database-policy:", 1)[0]
+    migration_block = compose.split("  migrate:", 1)[1].split("  preflight:", 1)[0]
     assert "PORTAL_ENV_FILE" not in migration_block
     assert "PORTAL_MIGRATION_ENV_FILE" in migration_block
+    preflight_block = compose.split("  preflight:", 1)[1].split("  maintenance:", 1)[0]
+    assert "PORTAL_MAINTENANCE_ENV_FILE" not in preflight_block
 
 
 def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
@@ -69,6 +74,33 @@ def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
     assert "carlos-patient-portal-migrate -" not in script
     assert "compose --profile operations run --rm migrate" in script
     assert "compose --profile operations run --rm database-policy" in script
+    assert "compose --profile operations run --rm preflight" in script
+    assert script.index("run --rm database-policy") < script.index("run --rm preflight")
+    assert script.index("run --rm preflight") < script.index("compose up --detach")
+
+
+def test_release_image_includes_sbom_and_provenance() -> None:
+    workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "release-image.yml").read_text()
+
+    assert "docker buildx build" in workflow
+    assert "--provenance=mode=max" in workflow
+    assert "--sbom=true" in workflow
+    assert 'digest_reference="$image_repository@$digest"' in workflow
+
+
+def test_real_data_readiness_record_covers_external_controls() -> None:
+    record = (REPOSITORY_ROOT / "deploy" / "REAL_DATA_READINESS.md").read_text()
+
+    for evidence in (
+        "immutable image digest",
+        "Run `scripts/production-deploy preflight`",
+        "Restore the latest backup",
+        "Complete penetration testing",
+        "privacy impact",
+        "screen-reader",
+        "operations owner",
+    ):
+        assert evidence in record
 
 
 def test_production_environment_example_can_satisfy_runtime_policy(tmp_path: Path) -> None:

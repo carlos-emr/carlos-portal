@@ -6,6 +6,7 @@ compose_file=${PORTAL_COMPOSE_FILE:-"$repository_root/compose.production.yaml"}
 export PORTAL_ENV_FILE=${PORTAL_ENV_FILE:-"$repository_root/deploy/production.env"}
 export PORTAL_MIGRATION_ENV_FILE=${PORTAL_MIGRATION_ENV_FILE:-"$repository_root/deploy/migration.env"}
 export PORTAL_DATABASE_ADMIN_ENV_FILE=${PORTAL_DATABASE_ADMIN_ENV_FILE:-"$repository_root/deploy/database-admin.env"}
+export PORTAL_MAINTENANCE_ENV_FILE=${PORTAL_MAINTENANCE_ENV_FILE:-"$repository_root/deploy/maintenance.env"}
 
 usage() {
   cat <<'EOF'
@@ -15,8 +16,13 @@ Commands:
   validate          Validate files, the immutable image reference, and Compose configuration
   migrate           Upgrade PostgreSQL with the schema-owner role
   apply-db-policy   Reapply least-privilege and append-only audit grants
-  deploy            Validate, migrate, apply grants, start web/worker, and verify readiness
+  preflight         Verify production policy, PostgreSQL TLS/schema, and runtime privileges
+  deploy            Migrate, apply grants, pass preflight, start services, and verify readiness
   readiness         Query the authenticated readiness endpoint from inside the web container
+  outbox-status     Report queued, leased, delivered, and terminal outbound work
+  export-audit      Export JSONL; accepts optional AFTER_ID and BATCH_SIZE
+  cleanup-auth      Delete expired auth data; accepts optional RETENTION_DAYS
+  prune-audit       Prune one approved retention batch with the maintenance role
   status            Show the deployment processes
   rollback          Restart web/worker with PORTAL_ROLLBACK_IMAGE; never downgrades the database
 EOF
@@ -71,6 +77,7 @@ validate() {
   require_private_file "$PORTAL_ENV_FILE"
   require_private_file "$PORTAL_MIGRATION_ENV_FILE"
   require_private_file "$PORTAL_DATABASE_ADMIN_ENV_FILE"
+  require_private_file "$PORTAL_MAINTENANCE_ENV_FILE"
   if [ -z "${PORTAL_DB_CA_FILE:-}" ]; then
     printf '%s\n' 'PORTAL_DB_CA_FILE must name the PostgreSQL CA certificate.' >&2
     exit 1
@@ -111,16 +118,52 @@ case "$command_name" in
     validate
     compose --profile operations run --rm database-policy
     ;;
+  preflight)
+    validate
+    compose --profile operations run --rm preflight
+    ;;
   deploy)
     validate
     compose --profile operations run --rm migrate
     compose --profile operations run --rm database-policy
+    compose --profile operations run --rm preflight
     compose up --detach --no-build --remove-orphans web outbox
     wait_for_readiness
     ;;
   readiness)
     require_image
     readiness_once
+    ;;
+  outbox-status)
+    validate
+    require_private_file "$PORTAL_MAINTENANCE_ENV_FILE"
+    compose --profile operations run --rm maintenance outbox-status
+    ;;
+  export-audit)
+    validate
+    require_private_file "$PORTAL_MAINTENANCE_ENV_FILE"
+    after_id=${2:-0}
+    batch_size=${3:-1000}
+    case "$after_id:$batch_size" in
+      *[!0-9:]*) printf '%s\n' 'AFTER_ID and BATCH_SIZE must be non-negative integers.' >&2; exit 2 ;;
+    esac
+    compose --profile operations run --rm maintenance \
+      export-audit --after-id "$after_id" --batch-size "$batch_size"
+    ;;
+  cleanup-auth)
+    validate
+    require_private_file "$PORTAL_MAINTENANCE_ENV_FILE"
+    retention_days=${2:-30}
+    case "$retention_days" in
+      *[!0-9]*) printf '%s\n' 'RETENTION_DAYS must be a non-negative integer.' >&2; exit 2 ;;
+    esac
+    compose --profile operations run --rm maintenance \
+      cleanup-transient-auth --retention-days "$retention_days"
+    ;;
+  prune-audit)
+    validate
+    require_private_file "$PORTAL_MAINTENANCE_ENV_FILE"
+    compose --profile operations run --rm maintenance prune-audit
     ;;
   status)
     require_image

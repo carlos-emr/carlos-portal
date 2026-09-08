@@ -41,6 +41,7 @@ from carlos_patient_portal.models import (
     PatientPortalSession,
     utc_now,
 )
+from carlos_patient_portal.preflight import query_runtime_role_policy
 from carlos_patient_portal.token_keys import PortalTokenKeys
 from tests.support import TEST_STAFF_ASSERTION_PUBLIC_KEY, carlos_staff_headers
 
@@ -85,6 +86,7 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
             connection.execute(text(f'DROP ROLE IF EXISTS "{owner_role}"'))
             connection.execute(text(f'CREATE ROLE "{owner_role}" NOLOGIN'))
             connection.execute(text(f'CREATE ROLE "{runtime_role}" NOLOGIN'))
+            connection.execute(text(f'GRANT USAGE ON SCHEMA public TO "{runtime_role}"'))
             connection.execute(
                 text(
                     f'ALTER TABLE public.patient_portal_audit_events OWNER TO "{owner_role}"'
@@ -102,6 +104,11 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
                     f'TO "{runtime_role}"'
                 )
             )
+
+        with engine.connect() as connection:
+            connection.execute(text(f'SET LOCAL ROLE "{runtime_role}"'))
+            with Session(bind=connection) as session:
+                assert query_runtime_role_policy(session).passed
 
         with engine.begin() as connection:
             # Transaction-local role switching prevents a pooled connection from returning to the
