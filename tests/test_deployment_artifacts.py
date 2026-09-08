@@ -69,6 +69,7 @@ def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
     assert script_path.stat().st_mode & 0o111
     assert "^[0-9a-f]{64}$" in script
     assert "PORTAL_ROLLBACK_IMAGE" in script
+    assert "PORTAL_COMPOSE_OVERRIDE_FILE" in script
     assert "carlos-patient-portal-migrate" not in script
     assert "alembic downgrade" not in script
     assert "carlos-patient-portal-migrate -" not in script
@@ -101,6 +102,19 @@ def test_real_data_readiness_record_covers_external_controls() -> None:
         "operations owner",
     ):
         assert evidence in record
+
+
+def test_production_stack_smoke_covers_success_replay_and_fail_closed_role() -> None:
+    smoke_path = REPOSITORY_ROOT / "tests" / "production_stack_smoke.sh"
+    smoke = smoke_path.read_text()
+
+    assert smoke_path.stat().st_mode & 0o111
+    assert "sslmode=verify-full" in smoke
+    assert "postgres:16@sha256:" in smoke
+    assert smoke.count('scripts/production-deploy\" deploy') == 2
+    assert "production-elevated.env" in smoke
+    assert "preflight accepted an elevated runtime database role" in smoke
+    assert "outbox is empty" in smoke
 
 
 def test_production_environment_example_can_satisfy_runtime_policy(tmp_path: Path) -> None:

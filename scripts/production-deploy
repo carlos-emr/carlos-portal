@@ -3,6 +3,7 @@ set -eu
 
 repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 compose_file=${PORTAL_COMPOSE_FILE:-"$repository_root/compose.production.yaml"}
+compose_override_file=${PORTAL_COMPOSE_OVERRIDE_FILE:-}
 export PORTAL_ENV_FILE=${PORTAL_ENV_FILE:-"$repository_root/deploy/production.env"}
 export PORTAL_MIGRATION_ENV_FILE=${PORTAL_MIGRATION_ENV_FILE:-"$repository_root/deploy/migration.env"}
 export PORTAL_DATABASE_ADMIN_ENV_FILE=${PORTAL_DATABASE_ADMIN_ENV_FILE:-"$repository_root/deploy/database-admin.env"}
@@ -29,7 +30,11 @@ EOF
 }
 
 compose() {
-  docker compose --file "$compose_file" "$@"
+  if [ -n "$compose_override_file" ]; then
+    docker compose --file "$compose_file" --file "$compose_override_file" "$@"
+  else
+    docker compose --file "$compose_file" "$@"
+  fi
 }
 
 require_file() {
@@ -74,6 +79,9 @@ validate() {
     exit 1
   }
   require_image
+  if [ -n "$compose_override_file" ]; then
+    require_file "$compose_override_file"
+  fi
   require_private_file "$PORTAL_ENV_FILE"
   require_private_file "$PORTAL_MIGRATION_ENV_FILE"
   require_private_file "$PORTAL_DATABASE_ADMIN_ENV_FILE"

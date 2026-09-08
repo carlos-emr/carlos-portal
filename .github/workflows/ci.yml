@@ -218,3 +218,9 @@ jobs:
           test "$(docker image inspect --format '{{.Config.User}}' "carlos-patient-portal:$GITHUB_SHA")" = "10001:10001"
           docker run --rm --entrypoint python "carlos-patient-portal:$GITHUB_SHA" \
             -c 'import carlos_patient_portal; print(carlos_patient_portal.__file__)'
+
+      - name: Run production stack smoke test
+        if: matrix.python-version == '3.12'
+        env:
+          PORTAL_IMAGE: carlos-patient-portal:${{ github.sha }}
+        run: tests/production_stack_smoke.sh
