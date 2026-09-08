@@ -106,6 +106,7 @@ def test_real_data_readiness_record_covers_external_controls() -> None:
 
 def test_production_stack_smoke_covers_success_replay_and_fail_closed_role() -> None:
     smoke_path = REPOSITORY_ROOT / "tests" / "production_stack_smoke.sh"
+    environment_path = REPOSITORY_ROOT / "tests" / "production-smoke.env"
     smoke = smoke_path.read_text()
 
     assert smoke_path.stat().st_mode & 0o111
@@ -115,6 +116,10 @@ def test_production_stack_smoke_covers_success_replay_and_fail_closed_role() -> 
     assert "production-elevated.env" in smoke
     assert "preflight accepted an elevated runtime database role" in smoke
     assert "outbox is empty" in smoke
+
+    settings = Settings(_env_file=environment_path)
+    assert settings.environment == "production"
+    assert settings.clinic_id == "smoke-clinic"
 
 
 def test_production_environment_example_can_satisfy_runtime_policy(tmp_path: Path) -> None:
