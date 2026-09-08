@@ -69,14 +69,18 @@ scripts/production-deploy deploy
 scripts/production-deploy status
 ```
 
-Before `deploy`, take or verify a recoverable database snapshot. The command runs Alembic with the
-schema-owner URL, reapplies the append-only audit policy through the database-admin URL, and runs a
+Before `deploy`, take or verify a recoverable database snapshot. Each migration must remain
+compatible with both the currently running image and the rollback image; use a reviewed maintenance
+window for a breaking migration. The command runs Alembic with the schema-owner URL, reapplies the
+append-only audit policy through the database-admin URL, and runs a
 fail-closed preflight through the restricted runtime role. Preflight requires production policy,
-PostgreSQL, a current schema, database TLS, a non-admin runtime role, and append-only audit access.
-Only after those checks pass does it start web/outbox and wait for readiness. It does not configure
+PostgreSQL, a current schema, database TLS, a runtime role without inherited privileges or owned
+database objects, and append-only audit access. Only after those checks pass does it start web and
+outbox, then wait for both containers to become healthy. It does not configure
 DNS, edge TLS, managed backups, or monitoring on the host.
 
-The portal is published only on host loopback. Expose it through the reference nginx policy so
+The deployment command rejects any bind address except `127.0.0.1`, because the web process trusts
+forwarding headers from its private bridge. Expose it through the reference nginx policy so
 route-specific shared rate limits and CARLOS/internal endpoint ACLs remain in force. Do not publish
 port 8090 on a public interface.
 

@@ -111,6 +111,17 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
                 assert query_runtime_role_policy(session).passed
 
         with engine.begin() as connection:
+            connection.execute(text(f'GRANT "{owner_role}" TO "{runtime_role}"'))
+        with engine.connect() as connection:
+            connection.execute(text(f'SET LOCAL ROLE "{runtime_role}"'))
+            with Session(bind=connection) as session:
+                inherited_role_check = query_runtime_role_policy(session)
+                assert not inherited_role_check.passed
+                assert "role_membership" in inherited_role_check.detail
+        with engine.begin() as connection:
+            connection.execute(text(f'REVOKE "{owner_role}" FROM "{runtime_role}"'))
+
+        with engine.begin() as connection:
             # Transaction-local role switching prevents a pooled connection from returning to the
             # test harness as the restricted runtime role after this commit.
             connection.execute(text(f'SET LOCAL ROLE "{runtime_role}"'))

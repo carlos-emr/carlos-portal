@@ -8,6 +8,7 @@ export PORTAL_ENV_FILE=${PORTAL_ENV_FILE:-"$repository_root/deploy/production.en
 export PORTAL_MIGRATION_ENV_FILE=${PORTAL_MIGRATION_ENV_FILE:-"$repository_root/deploy/migration.env"}
 export PORTAL_DATABASE_ADMIN_ENV_FILE=${PORTAL_DATABASE_ADMIN_ENV_FILE:-"$repository_root/deploy/database-admin.env"}
 export PORTAL_MAINTENANCE_ENV_FILE=${PORTAL_MAINTENANCE_ENV_FILE:-"$repository_root/deploy/maintenance.env"}
+export PORTAL_BIND_ADDRESS=${PORTAL_BIND_ADDRESS:-127.0.0.1}
 
 usage() {
   cat <<'EOF'
@@ -78,6 +79,10 @@ validate() {
     printf '%s\n' 'Docker with the Compose v2 plugin is required.' >&2
     exit 1
   }
+  if [ "$PORTAL_BIND_ADDRESS" != "127.0.0.1" ]; then
+    printf '%s\n' 'PORTAL_BIND_ADDRESS must be 127.0.0.1 in production.' >&2
+    exit 1
+  fi
   require_image
   if [ -n "$compose_override_file" ]; then
     require_file "$compose_override_file"
@@ -135,7 +140,7 @@ case "$command_name" in
     compose --profile operations run --rm migrate
     compose --profile operations run --rm database-policy
     compose --profile operations run --rm preflight
-    compose up --detach --no-build --remove-orphans web outbox
+    compose up --detach --no-build --remove-orphans --wait --wait-timeout 90 web outbox
     wait_for_readiness
     ;;
   readiness)
@@ -189,7 +194,7 @@ case "$command_name" in
     fi
     PORTAL_IMAGE=$PORTAL_ROLLBACK_IMAGE
     export PORTAL_IMAGE
-    compose up --detach --no-build web outbox
+    compose up --detach --no-build --wait --wait-timeout 90 web outbox
     wait_for_readiness
     ;;
   *)

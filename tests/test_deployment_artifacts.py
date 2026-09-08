@@ -30,6 +30,7 @@ def test_repository_ignores_local_secrets_and_patient_databases() -> None:
 def test_production_image_is_pinned_locked_and_unprivileged() -> None:
     dockerfile = (REPOSITORY_ROOT / "Dockerfile").read_text()
 
+    assert "python:3.12.14-slim-bookworm@sha256:" in dockerfile
     assert "slim-bookworm@sha256:" in dockerfile
     assert dockerfile.count("--require-hashes") == 2
     assert "--no-isolation" in dockerfile
@@ -45,6 +46,10 @@ def test_production_compose_separates_runtime_and_privileged_jobs() -> None:
     assert "${PORTAL_IMAGE:?" in compose
     assert "127.0.0.1}:${PORTAL_BIND_PORT:-8090}:8090" in compose
     assert "carlos-patient-portal-outbox-worker" in compose
+    outbox_block = compose.split("  outbox:", 1)[1].split("  migrate:", 1)[0]
+    assert "healthcheck:" in outbox_block
+    assert "carlos-patient-portal-maintenance" in outbox_block
+    assert "outbox-status" in outbox_block
     assert "${PORTAL_MIGRATION_ENV_FILE:-deploy/migration.env}" in compose
     assert "${PORTAL_DATABASE_ADMIN_ENV_FILE:-deploy/database-admin.env}" in compose
     assert "${PORTAL_MAINTENANCE_ENV_FILE:-deploy/maintenance.env}" in compose
@@ -70,6 +75,8 @@ def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
     assert "^[0-9a-f]{64}$" in script
     assert "PORTAL_ROLLBACK_IMAGE" in script
     assert "PORTAL_COMPOSE_OVERRIDE_FILE" in script
+    assert 'PORTAL_BIND_ADDRESS:-127.0.0.1' in script
+    assert 'PORTAL_BIND_ADDRESS" != "127.0.0.1' in script
     assert "carlos-patient-portal-migrate" not in script
     assert "alembic downgrade" not in script
     assert "carlos-patient-portal-migrate -" not in script
@@ -78,6 +85,7 @@ def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
     assert "compose --profile operations run --rm preflight" in script
     assert script.index("run --rm database-policy") < script.index("run --rm preflight")
     assert script.index("run --rm preflight") < script.index("compose up --detach")
+    assert script.count("--wait --wait-timeout 90") == 2
 
 
 def test_release_image_includes_sbom_and_provenance() -> None:
@@ -87,6 +95,20 @@ def test_release_image_includes_sbom_and_provenance() -> None:
     assert "--provenance=mode=max" in workflow
     assert "--sbom=true" in workflow
     assert 'digest_reference="$image_repository@$digest"' in workflow
+    assert "fetch-depth: 0" in workflow
+    assert 'release_commit=$(git rev-parse "$GITHUB_SHA^{commit}")' in workflow
+    assert 'git merge-base --is-ancestor "$release_commit" origin/main' in workflow
+    assert '--build-arg "OCI_REVISION=$RELEASE_COMMIT"' in workflow
+    assert "group: release-patient-portal-${{ github.ref }}" in workflow
+    assert "checks: read" in workflow
+    assert '{"patient-portal (3.11)", "patient-portal (3.12)"}' in workflow
+
+
+def test_ci_audits_python_and_browser_dependency_graphs() -> None:
+    workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml").read_text()
+
+    assert "python -m pip_audit --strict" in workflow
+    assert "npm audit --audit-level=high" in workflow
 
 
 def test_real_data_readiness_record_covers_external_controls() -> None:
@@ -115,6 +137,7 @@ def test_production_stack_smoke_covers_success_replay_and_fail_closed_role() -> 
     assert smoke.count('scripts/production-deploy\" deploy') == 2
     assert "production-elevated.env" in smoke
     assert "preflight accepted an elevated runtime database role" in smoke
+    assert "database policy accepted an elevated maintenance role" in smoke
     assert "outbox is empty" in smoke
 
     settings = Settings(_env_file=environment_path)

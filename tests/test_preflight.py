@@ -27,6 +27,11 @@ def compliant_runtime_role() -> dict[str, bool]:
         "audit_trigger": False,
         "audit_owner": False,
         "schema_create": False,
+        "database_create": False,
+        "database_owner": False,
+        "role_membership": False,
+        "schema_object_owner": False,
+        "schema_function_execute": False,
         "role_elevated": False,
     }
 
@@ -40,15 +45,7 @@ def test_runtime_role_policy_accepts_only_append_only_audit_access() -> None:
 
 @pytest.mark.parametrize(
     "privilege",
-    [
-        "audit_insert",
-        "audit_update",
-        "audit_delete",
-        "audit_truncate",
-        "audit_owner",
-        "schema_create",
-        "role_elevated",
-    ],
+    compliant_runtime_role(),
 )
 def test_runtime_role_policy_reports_each_privilege_violation(privilege: str) -> None:
     values = compliant_runtime_role()

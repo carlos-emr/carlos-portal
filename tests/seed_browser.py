@@ -2,6 +2,7 @@
 
 import json
 import os
+import tempfile
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -26,7 +27,12 @@ def main() -> None:
     encryption_secret = keyring[settings.unlock_secret_active_key_id]
     engine = create_portal_engine(settings.database_url)
     session_factory = create_session_factory(engine)
-    fixture_path = Path(os.environ["PORTAL_BROWSER_FIXTURE_FILE"])
+    fixture_path = Path(
+        os.environ.get(
+            "PORTAL_BROWSER_FIXTURE_FILE",
+            str(Path(tempfile.gettempdir()) / "patient-portal-browser-fixtures.json"),
+        )
+    )
     try:
         with session_factory() as session:
             with session.begin():
@@ -105,21 +111,25 @@ def main() -> None:
                     proof_secret=settings.identity_proof_secret.get_secret_value(),
                 )
         fixture_path.parent.mkdir(parents=True, exist_ok=True)
-        fixture_path.write_text(
-            json.dumps(
-                {
-                    "activation": {
-                        "inviteCode": activation_invite_token,
-                        "email": ACTIVATION_EMAIL,
-                        "dateOfBirth": ACTIVATION_DATE_OF_BIRTH.isoformat(),
-                        "healthCardNumber": ACTIVATION_HEALTH_CARD_NUMBER,
-                        "username": ACTIVATION_USERNAME,
-                        "password": ACTIVATION_PASSWORD,
-                    }
+        fixture_payload = json.dumps(
+            {
+                "activation": {
+                    "inviteCode": activation_invite_token,
+                    "email": ACTIVATION_EMAIL,
+                    "dateOfBirth": ACTIVATION_DATE_OF_BIRTH.isoformat(),
+                    "healthCardNumber": ACTIVATION_HEALTH_CARD_NUMBER,
+                    "username": ACTIVATION_USERNAME,
+                    "password": ACTIVATION_PASSWORD,
                 }
-            )
+            }
         )
-        fixture_path.chmod(0o600)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(fixture_path, flags, 0o600)
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w") as fixture_file:
+            fixture_file.write(fixture_payload)
     finally:
         engine.dispose()
 

@@ -80,6 +80,10 @@ jobs:
           python -m pip_audit --strict --require-hashes --progress-spinner off -r requirements-runtime.lock
           python -m pip_audit --strict --require-hashes --progress-spinner off -r requirements.lock
 
+      - name: Audit browser dependencies
+        if: matrix.python-version == '3.12'
+        run: npm audit --audit-level=high
+
       - name: Run Ruff
         run: python -m ruff check .
 

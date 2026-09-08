@@ -68,6 +68,11 @@ def evaluate_runtime_role_policy(values: Mapping[str, object]) -> PreflightCheck
         "audit_trigger": False,
         "audit_owner": False,
         "schema_create": False,
+        "database_create": False,
+        "database_owner": False,
+        "role_membership": False,
+        "schema_object_owner": False,
+        "schema_function_execute": False,
         "role_elevated": False,
     }
     violations = sorted(
@@ -116,6 +121,46 @@ def query_runtime_role_policy(session: Session) -> PreflightCheck:
               ) AS audit_sequence_select,
               has_schema_privilege(current_user, 'public', 'USAGE') AS schema_usage,
               has_schema_privilege(current_user, 'public', 'CREATE') AS schema_create,
+              has_database_privilege(current_user, current_database(), 'CREATE')
+                AS database_create,
+              (
+                SELECT d.datdba = r.oid
+                FROM pg_database d
+                JOIN pg_roles r ON r.rolname = current_user
+                WHERE d.datname = current_database()
+              ) AS database_owner,
+              EXISTS (
+                SELECT 1
+                FROM pg_roles granted_role
+                WHERE granted_role.rolname <> current_user
+                  AND pg_has_role(current_user, granted_role.oid, 'MEMBER')
+              ) AS role_membership,
+              EXISTS (
+                SELECT 1
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                JOIN pg_roles r ON r.oid = c.relowner
+                WHERE n.nspname = 'public' AND r.rolname = current_user
+                UNION ALL
+                SELECT 1
+                FROM pg_proc p
+                JOIN pg_namespace n ON n.oid = p.pronamespace
+                JOIN pg_roles r ON r.oid = p.proowner
+                WHERE n.nspname = 'public' AND r.rolname = current_user
+                UNION ALL
+                SELECT 1
+                FROM pg_type t
+                JOIN pg_namespace n ON n.oid = t.typnamespace
+                JOIN pg_roles r ON r.oid = t.typowner
+                WHERE n.nspname = 'public' AND r.rolname = current_user
+              ) AS schema_object_owner,
+              EXISTS (
+                SELECT 1
+                FROM pg_proc p
+                JOIN pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname = 'public'
+                  AND has_function_privilege(current_user, p.oid, 'EXECUTE')
+              ) AS schema_function_execute,
               (
                 SELECT c.relowner = r.oid
                 FROM pg_class c

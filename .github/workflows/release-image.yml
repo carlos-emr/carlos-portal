@@ -6,8 +6,13 @@ on:
       - "v*"
 
 permissions:
+  checks: read
   contents: read
   packages: write
+
+concurrency:
+  group: release-patient-portal-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release-image:
@@ -15,6 +20,8 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - name: Validate release version
         env:
@@ -22,6 +29,40 @@ jobs:
         run: |
           package_version=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
           test "$RELEASE_TAG" = "v$package_version"
+          git fetch --no-tags origin main
+          release_commit=$(git rev-parse "$GITHUB_SHA^{commit}")
+          git merge-base --is-ancestor "$release_commit" origin/main || {
+            echo 'Release tags must point to a commit reachable from main.' >&2
+            exit 1
+          }
+          echo "RELEASE_COMMIT=$release_commit" >> "$GITHUB_ENV"
+
+      - name: Verify required CI checks
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          checks_file="$RUNNER_TEMP/release-check-runs.json"
+          gh api \
+            --header 'Accept: application/vnd.github+json' \
+            "/repos/$GITHUB_REPOSITORY/commits/$RELEASE_COMMIT/check-runs?filter=latest&per_page=100" \
+            > "$checks_file"
+          python3 - "$checks_file" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as check_file:
+              check_runs = json.load(check_file)["check_runs"]
+          conclusions = {run["name"]: run["conclusion"] for run in check_runs}
+          required = {"patient-portal (3.11)", "patient-portal (3.12)"}
+          failed = sorted(
+              name for name in required if conclusions.get(name) != "success"
+          )
+          if failed:
+              details = ", ".join(
+                  f"{name}={conclusions.get(name, 'missing')}" for name in failed
+              )
+              raise SystemExit(f"Required CI checks have not passed: {details}")
+          PY
 
       - name: Log in to GitHub Container Registry
         env:
@@ -43,7 +84,7 @@ jobs:
           docker buildx create --driver docker-container --name portal-release-builder --use
           docker buildx build \
             --build-arg "OCI_CREATED=$created" \
-            --build-arg "OCI_REVISION=$GITHUB_SHA" \
+            --build-arg "OCI_REVISION=$RELEASE_COMMIT" \
             --build-arg "OCI_SOURCE=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
             --build-arg "OCI_VERSION=$RELEASE_TAG" \
             --metadata-file "$metadata_file" \

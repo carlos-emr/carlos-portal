@@ -121,4 +121,16 @@ fi
 grep -F '"name":"runtime_database_role"' "$test_root/elevated.json"
 grep -F '"status":"failed"' "$test_root/elevated.json"
 
+compose exec -T database psql \
+  --username portal_schema_owner \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 \
+  --command 'ALTER ROLE portal_audit_maintenance SUPERUSER'
+if "$repository_root/scripts/production-deploy" apply-db-policy \
+  > "$test_root/elevated-maintenance.log" 2>&1; then
+  printf '%s\n' 'database policy accepted an elevated maintenance role' >&2
+  exit 1
+fi
+grep -F 'without elevated attributes or memberships' "$test_root/elevated-maintenance.log"
+
 printf '%s\n' 'production stack smoke test passed'

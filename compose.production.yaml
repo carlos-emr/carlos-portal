@@ -67,6 +67,15 @@ services:
       - carlos-patient-portal-outbox-worker
     restart: unless-stopped
     stop_grace_period: 30s
+    healthcheck:
+      test:
+        - CMD
+        - carlos-patient-portal-maintenance
+        - outbox-status
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
 
   # One-shot operations are profiles, so `docker compose up` can never rerun a migration or grant
   # elevated database access by accident. scripts/production-deploy invokes them explicitly.

@@ -2,7 +2,7 @@
 
 # Pin the multi-architecture manifest. Dependency upgrades and base-image upgrades are reviewed
 # independently, so rebuilding the same revision cannot silently select a different OS image.
-ARG PYTHON_IMAGE=python:3.12.11-slim-bookworm@sha256:519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7
+ARG PYTHON_IMAGE=python:3.12.14-slim-bookworm@sha256:782412e85d0f0984994c290652577d4018aff08145c85b262bb63dc0c7522254
 
 FROM ${PYTHON_IMAGE} AS builder
 
