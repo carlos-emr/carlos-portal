@@ -7,7 +7,10 @@ patient data can use managed encryption, backups, point-in-time recovery, and re
 
 The same immutable image runs every portal process. `scripts/production-deploy` refuses a mutable
 image tag, applies migrations and database grants, runs the real-data preflight, and verifies the
-authenticated readiness endpoint after rollout.
+authenticated readiness endpoint after rollout. Mutating commands also hold a nonblocking host lock
+at `/var/lock/carlos-patient-portal-deploy.lock` so overlapping operator or scheduler runs fail
+before changing the database or containers. Set `PORTAL_DEPLOY_LOCK_FILE` only when the deployment
+account needs a different persistent, host-local path.
 
 Before introducing patient information, complete the per-clinic evidence record in
 [`REAL_DATA_READINESS.md`](REAL_DATA_READINESS.md). The automated preflight covers live application
@@ -17,9 +20,12 @@ operational controls that a container cannot verify.
 ## Prerequisites
 
 - Docker Engine with the Compose v2 plugin.
-- A managed PostgreSQL 16 database with TLS certificate verification and tested PITR or backups.
-- Pre-created schema-owner, runtime, audit-maintenance, and database-admin roles. The web and outbox
-  credentials must use the runtime role.
+- A dedicated managed PostgreSQL 16 database with TLS certificate verification and tested PITR or
+  backups. The portal owns its `public` schema and does not share it with another application.
+- Pre-created, distinct LOGIN roles for schema ownership, runtime, and audit maintenance, without
+  administrator attributes or inherited memberships, plus a separately controlled database-admin
+  role that owns the database. Grant the schema owner only `CREATE, USAGE` on `public`; the web and
+  outbox credentials must use the runtime role.
 - Host nginx (or an equivalent edge) terminating TLS and proxying to `127.0.0.1:8090`. Start with
   `carlos_patient_portal/deploy/nginx.conf`, replace its example hostname, certificate paths, and
   exact CARLOS source CIDRs, then run `nginx -t` before reloading it.
@@ -43,8 +49,9 @@ install -m 0600 deploy/maintenance.env.example deploy/maintenance.env
 
 Replace every `replace-*` value. Use separate random values for every application secret. Keep the
 database passwords URL-encoded and mount the database provider's CA certificate using
-`PORTAL_DB_CA_FILE`. The deployment loads the owner, admin, and maintenance files only into their
-one-shot jobs; the web and worker never receive those elevated credentials.
+`PORTAL_DB_CA_FILE`. The deployment loads the owner and admin files only into their one-shot jobs,
+and loads the audit-deletion credential only for `prune-audit`; web, worker, and general operator
+commands never receive those elevated credentials.
 
 Use a capacity-appropriate value for `PORTAL_WEB_WORKERS`. Each worker can open
 `PATIENT_PORTAL_DATABASE_POOL_SIZE + PATIENT_PORTAL_DATABASE_MAX_OVERFLOW` connections and the
@@ -78,6 +85,12 @@ PostgreSQL, a current schema, database TLS, a runtime role without inherited pri
 database objects, and append-only audit access. Only after those checks pass does it start web and
 outbox, then wait for both containers to become healthy. It does not configure
 DNS, edge TLS, managed backups, or monitoring on the host.
+
+Migration connections fail after 10 seconds, lock waits after 10 seconds, and statements after 15
+minutes. Database-policy connections use the same connect and lock limits and a 60-second statement
+limit. Override these only for a reviewed migration using
+`PORTAL_MIGRATION_CONNECT_TIMEOUT_SECONDS`, `PORTAL_MIGRATION_LOCK_TIMEOUT_MS`,
+`PORTAL_MIGRATION_STATEMENT_TIMEOUT_MS`, or the corresponding `PORTAL_DATABASE_POLICY_*` variable.
 
 The deployment command rejects any bind address except `127.0.0.1`, because the web process trusts
 forwarding headers from its private bridge. Expose it through the reference nginx policy so

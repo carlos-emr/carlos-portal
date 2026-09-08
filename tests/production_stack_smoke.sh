@@ -16,9 +16,10 @@ export PORTAL_MAINTENANCE_ENV_FILE="$test_root/maintenance.env"
 export PORTAL_DB_CA_FILE="$tls_directory/ca.crt"
 export PORTAL_TEST_SERVER_CERT_FILE="$tls_directory/server.crt"
 export PORTAL_TEST_SERVER_KEY_FILE="$tls_directory/server.key"
-export PORTAL_TEST_POSTGRES_IMAGE="postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20"
+export PORTAL_TEST_POSTGRES_IMAGE="postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825"
 export PORTAL_COMPOSE_FILE="$repository_root/compose.production.yaml"
 export PORTAL_COMPOSE_OVERRIDE_FILE="$repository_root/tests/compose.production-smoke.yaml"
+export PORTAL_DEPLOY_LOCK_FILE="$test_root/production-deploy.lock"
 
 compose() {
   docker compose \
@@ -85,14 +86,26 @@ chmod 0600 \
   "$PORTAL_DATABASE_ADMIN_ENV_FILE" \
   "$PORTAL_MAINTENANCE_ENV_FILE"
 
+(
+  flock --nonblock 8
+  if "$repository_root/scripts/production-deploy" migrate \
+    > "$test_root/deployment-lock.log" 2>&1; then
+    printf '%s\n' 'concurrent migration bypassed the deployment lock' >&2
+    exit 1
+  fi
+  grep -F 'Another portal operation holds the deployment lock' \
+    "$test_root/deployment-lock.log"
+) 8> "$PORTAL_DEPLOY_LOCK_FILE"
+
 compose up --detach --wait database
 compose exec -T database psql \
-  --username portal_schema_owner \
+  --username portal_database_admin \
   --dbname carlos_portal \
   --set ON_ERROR_STOP=1 <<'SQL'
+CREATE ROLE portal_schema_owner LOGIN PASSWORD 'schema-owner-test-password';
 CREATE ROLE portal_runtime LOGIN PASSWORD 'runtime-test-password';
 CREATE ROLE portal_audit_maintenance LOGIN PASSWORD 'maintenance-test-password';
-CREATE ROLE portal_database_admin LOGIN SUPERUSER PASSWORD 'database-admin-test-password';
+GRANT CREATE, USAGE ON SCHEMA public TO portal_schema_owner;
 SQL
 
 "$repository_root/scripts/production-deploy" deploy
@@ -102,6 +115,27 @@ curl --fail --silent --show-error \
   "http://127.0.0.1:$PORTAL_BIND_PORT/health" | grep -F '"status":"ok"'
 "$repository_root/scripts/production-deploy" readiness
 "$repository_root/scripts/production-deploy" outbox-status | grep -F 'outbox is empty'
+if compose exec -T database psql \
+  --username portal_database_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 \
+  --command 'SET ROLE portal_runtime; UPDATE public.alembic_version SET version_num = version_num'; then
+  printf '%s\n' 'runtime role could rewrite the migration revision' >&2
+  exit 1
+fi
+compose exec -T database psql \
+  --username portal_database_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 \
+  --command 'GRANT TRUNCATE ON public.patient_portal_accounts TO portal_runtime'
+if "$repository_root/scripts/production-deploy" preflight \
+  > "$test_root/dangerous-table-privilege.json"; then
+  printf '%s\n' 'preflight accepted a stale runtime TRUNCATE grant' >&2
+  exit 1
+fi
+grep -F 'table_dangerous_privilege' "$test_root/dangerous-table-privilege.json"
+"$repository_root/scripts/production-deploy" apply-db-policy
+"$repository_root/scripts/production-deploy" preflight
 
 # A second complete rollout proves migrations, grants, preflight, and service replacement are
 # idempotent before an operator depends on the same sequence for upgrades.
@@ -122,7 +156,7 @@ grep -F '"name":"runtime_database_role"' "$test_root/elevated.json"
 grep -F '"status":"failed"' "$test_root/elevated.json"
 
 compose exec -T database psql \
-  --username portal_schema_owner \
+  --username portal_database_admin \
   --dbname carlos_portal \
   --set ON_ERROR_STOP=1 <<'SQL'
 CREATE TABLE public.policy_rollback_probe (id integer);
@@ -136,7 +170,7 @@ fi
 grep -F 'must not own public-schema objects or create database/schema objects' \
   "$test_root/elevated-ownership.log"
 probe_privilege=$(compose exec -T database psql \
-  --username portal_schema_owner \
+  --username portal_database_admin \
   --dbname carlos_portal \
   --tuples-only \
   --no-align \
@@ -146,7 +180,7 @@ if [ "$probe_privilege" != "f" ]; then
   exit 1
 fi
 compose exec -T database psql \
-  --username portal_schema_owner \
+  --username portal_database_admin \
   --dbname carlos_portal \
   --set ON_ERROR_STOP=1 <<'SQL'
 REVOKE CREATE ON DATABASE carlos_portal FROM portal_audit_maintenance;
@@ -154,7 +188,7 @@ DROP TABLE public.policy_rollback_probe;
 SQL
 
 compose exec -T database psql \
-  --username portal_schema_owner \
+  --username portal_database_admin \
   --dbname carlos_portal \
   --set ON_ERROR_STOP=1 \
   --command 'ALTER ROLE portal_audit_maintenance SUPERUSER'

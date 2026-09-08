@@ -29,7 +29,7 @@ jobs:
         python-version: ["3.11", "3.12"]
     services:
       postgres:
-        image: postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
+        image: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
         env:
           POSTGRES_DB: carlos_portal
           POSTGRES_PASSWORD: carlos_portal

@@ -1,4 +1,4 @@
--- Apply after migrations with psql variables naming pre-created NOLOGIN/LOGIN roles:
+-- Apply after migrations with psql variables naming pre-created LOGIN roles:
 --   psql "$DATABASE_ADMIN_URL" \
 --     -v owner_role=portal_schema_owner \
 --     -v runtime_role=portal_runtime \
@@ -19,6 +19,12 @@ SELECT
     SELECT rolcanlogin
       AND NOT (rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls)
     FROM pg_roles
+    WHERE rolname = :'owner_role'
+  ) IS TRUE
+  AND (
+    SELECT rolcanlogin
+      AND NOT (rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls)
+    FROM pg_roles
     WHERE rolname = :'runtime_role'
   ) IS TRUE
   AND (
@@ -31,12 +37,12 @@ SELECT
     SELECT 1
     FROM pg_auth_members membership
     JOIN pg_roles member_role ON member_role.oid = membership.member
-    WHERE member_role.rolname IN (:'runtime_role', :'maintenance_role')
+    WHERE member_role.rolname IN (:'owner_role', :'runtime_role', :'maintenance_role')
   ) AS role_attributes_valid
 \gset
 \if :role_attributes_valid
 \else
-  \echo 'Runtime and maintenance roles must be distinct LOGIN roles without elevated attributes or memberships.'
+  \echo 'Schema-owner, runtime, and maintenance roles must be distinct LOGIN roles without elevated attributes or memberships.'
   -- psql 16 has no nonzero \quit argument. ON_ERROR_STOP turns this deliberate SQL error into a
   -- failing process status that the deployment command cannot mistake for success.
   SELECT 1 / 0 AS database_role_policy_violation;
@@ -46,13 +52,52 @@ BEGIN;
 
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 GRANT USAGE ON SCHEMA public TO :"runtime_role", :"maintenance_role";
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC;
 REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM :"runtime_role", :"maintenance_role";
+ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA public
+  REVOKE ALL ON TABLES FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA public
+  REVOKE ALL ON SEQUENCES FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA public
+  REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
 
 -- The runtime role needs ordinary application DML but must not own the evidence table. Run this
 -- after every migration, or mirror these grants through deployment-managed default privileges.
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO :"runtime_role";
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO :"runtime_role";
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM :"runtime_role";
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM :"runtime_role";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
+  public.patient_portal_accounts,
+  public.patient_portal_audit_events,
+  public.patient_portal_contact_review_requests,
+  public.patient_portal_email_change_requests,
+  public.patient_portal_invites,
+  public.patient_portal_mfa_challenges,
+  public.patient_portal_outbound_deliveries,
+  public.patient_portal_password_reset_tokens,
+  public.patient_portal_sessions,
+  public.patient_portal_unlock_secrets
+TO :"runtime_role";
+GRANT USAGE, SELECT ON SEQUENCE
+  public.patient_portal_accounts_id_seq,
+  public.patient_portal_audit_events_id_seq,
+  public.patient_portal_contact_review_requests_id_seq,
+  public.patient_portal_email_change_requests_id_seq,
+  public.patient_portal_invites_id_seq,
+  public.patient_portal_mfa_challenges_id_seq,
+  public.patient_portal_outbound_deliveries_id_seq,
+  public.patient_portal_password_reset_tokens_id_seq,
+  public.patient_portal_sessions_id_seq,
+  public.patient_portal_unlock_secrets_id_seq
+TO :"runtime_role";
+
+-- Schema state is migration evidence. The application reads it for readiness but must never be
+-- able to claim a different migration head or erase the only recorded head.
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
+  ON public.alembic_version FROM :"runtime_role";
+GRANT SELECT ON public.alembic_version TO :"runtime_role";
+
 ALTER TABLE public.patient_portal_audit_events OWNER TO :"owner_role";
 REVOKE UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
   ON public.patient_portal_audit_events FROM :"runtime_role";
@@ -66,14 +111,19 @@ GRANT SELECT, DELETE ON public.patient_portal_audit_events TO :"maintenance_role
 -- Apply grants only when neither restricted role can bypass them through database/schema creation
 -- or ownership. Check after moving the audit table so the final state is what gets approved.
 SELECT
-  NOT has_database_privilege(:'runtime_role', current_database(), 'CREATE')
+  NOT has_database_privilege(:'owner_role', current_database(), 'CREATE')
+  AND NOT has_database_privilege(:'runtime_role', current_database(), 'CREATE')
   AND NOT has_database_privilege(:'maintenance_role', current_database(), 'CREATE')
   AND NOT EXISTS (
     SELECT 1
     FROM pg_database database_record
     JOIN pg_roles owner_role_record ON owner_role_record.oid = database_record.datdba
     WHERE database_record.datname = current_database()
-      AND owner_role_record.rolname IN (:'runtime_role', :'maintenance_role')
+      AND owner_role_record.rolname IN (
+        :'owner_role',
+        :'runtime_role',
+        :'maintenance_role'
+      )
   )
   AND NOT has_schema_privilege(:'runtime_role', 'public', 'CREATE')
   AND NOT has_schema_privilege(:'maintenance_role', 'public', 'CREATE')
@@ -111,7 +161,7 @@ SELECT
 \gset
 \if :role_ownership_valid
 \else
-  \echo 'Runtime and maintenance roles must not own public-schema objects or create database/schema objects.'
+  \echo 'Runtime and maintenance roles must not own public-schema objects or create database/schema objects; the schema owner must not own or create databases.'
   SELECT 1 / 0 AS database_role_policy_violation;
 \endif
 

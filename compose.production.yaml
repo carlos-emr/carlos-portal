@@ -85,6 +85,11 @@ services:
       - operations
     env_file:
       - ${PORTAL_MIGRATION_ENV_FILE:-deploy/migration.env}
+    environment:
+      PGCONNECT_TIMEOUT: ${PORTAL_MIGRATION_CONNECT_TIMEOUT_SECONDS:-10}
+      PGOPTIONS: >-
+        -c lock_timeout=${PORTAL_MIGRATION_LOCK_TIMEOUT_MS:-10000}
+        -c statement_timeout=${PORTAL_MIGRATION_STATEMENT_TIMEOUT_MS:-900000}
     command:
       - carlos-patient-portal-migrate
     restart: "no"
@@ -99,9 +104,19 @@ services:
       - carlos-patient-portal-preflight
     restart: "no"
 
-  # General operator commands use the runtime role. Only prune-audit switches to the separately
-  # supplied maintenance URL; neither long-running process receives that credential.
+  # General operator commands use the runtime role and never receive the deletion credential.
   maintenance:
+    <<: *portal-service
+    profiles:
+      - operations
+    entrypoint:
+      - carlos-patient-portal-maintenance
+    command:
+      - --help
+    restart: "no"
+
+  # Only the offline prune process receives the audit-deletion credential.
+  audit-maintenance:
     <<: *portal-service
     profiles:
       - operations
@@ -115,11 +130,16 @@ services:
     restart: "no"
 
   database-policy:
-    image: postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
+    image: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
     profiles:
       - operations
     env_file:
       - ${PORTAL_DATABASE_ADMIN_ENV_FILE:-deploy/database-admin.env}
+    environment:
+      PGCONNECT_TIMEOUT: ${PORTAL_DATABASE_POLICY_CONNECT_TIMEOUT_SECONDS:-10}
+      PGOPTIONS: >-
+        -c lock_timeout=${PORTAL_DATABASE_POLICY_LOCK_TIMEOUT_MS:-10000}
+        -c statement_timeout=${PORTAL_DATABASE_POLICY_STATEMENT_TIMEOUT_MS:-60000}
     volumes:
       - type: bind
         source: ${PORTAL_DB_CA_FILE:?Set PORTAL_DB_CA_FILE to the PostgreSQL CA certificate}

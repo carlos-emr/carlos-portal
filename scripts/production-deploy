@@ -9,6 +9,7 @@ export PORTAL_MIGRATION_ENV_FILE=${PORTAL_MIGRATION_ENV_FILE:-"$repository_root/
 export PORTAL_DATABASE_ADMIN_ENV_FILE=${PORTAL_DATABASE_ADMIN_ENV_FILE:-"$repository_root/deploy/database-admin.env"}
 export PORTAL_MAINTENANCE_ENV_FILE=${PORTAL_MAINTENANCE_ENV_FILE:-"$repository_root/deploy/maintenance.env"}
 export PORTAL_BIND_ADDRESS=${PORTAL_BIND_ADDRESS:-127.0.0.1}
+deployment_lock_file=${PORTAL_DEPLOY_LOCK_FILE:-/var/lock/carlos-patient-portal-deploy.lock}
 
 usage() {
   cat <<'EOF'
@@ -74,6 +75,19 @@ require_image() {
   fi
 }
 
+acquire_deployment_lock() {
+  command -v flock >/dev/null 2>&1 || {
+    printf '%s\n' 'flock is required for mutating production operations.' >&2
+    exit 1
+  }
+  exec 9>>"$deployment_lock_file"
+  if ! flock --nonblock 9; then
+    printf 'Another portal operation holds the deployment lock: %s\n' \
+      "$deployment_lock_file" >&2
+    exit 1
+  fi
+}
+
 validate() {
   command -v docker >/dev/null 2>&1 || {
     printf '%s\n' 'Docker with the Compose v2 plugin is required.' >&2
@@ -119,6 +133,12 @@ wait_for_readiness() {
 }
 
 command_name=${1:-}
+case "$command_name" in
+  migrate|apply-db-policy|deploy|export-audit|cleanup-auth|prune-audit|rollback)
+    acquire_deployment_lock
+    ;;
+esac
+
 case "$command_name" in
   validate)
     validate
@@ -176,14 +196,14 @@ case "$command_name" in
   prune-audit)
     validate
     require_private_file "$PORTAL_MAINTENANCE_ENV_FILE"
-    compose --profile operations run --rm maintenance prune-audit
+    compose --profile operations run --rm audit-maintenance prune-audit
     ;;
   status)
     require_image
     compose ps
     ;;
   rollback)
-    require_image
+    validate
     if [ -z "${PORTAL_ROLLBACK_IMAGE:-}" ]; then
       printf '%s\n' 'PORTAL_ROLLBACK_IMAGE must name the previous immutable image digest.' >&2
       exit 1

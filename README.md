@@ -143,8 +143,8 @@ Python Packaging Advisory Database. Keep both generated locks in the same depend
   PYSEC-2026-3552, 3553, and 3554; only 50.0.0 fixes all three, so the floor is 50.0.0. The portal
   uses it for AES-256-GCM and HKDF in `unlock_secrets`, so treat advisories against it as
   release-blocking rather than routine.
-- The CI PostgreSQL service uses a digest-pinned `postgres:16` image. Update the tag and digest
-  together after reviewing upstream PostgreSQL image changes.
+- The CI PostgreSQL service uses a digest-pinned `postgres:16.15-bookworm` image. Update the tag and
+  digest together after reviewing upstream PostgreSQL image changes.
 
 ## Run
 
@@ -360,8 +360,8 @@ carlos-patient-portal-preflight
 
 It exits unsuccessfully unless production policy is active, the live database is PostgreSQL over
 TLS, the packaged schema head is applied, the runtime role has no inherited privileges, database or
-schema ownership, database administration, or schema creation, and the audit table permits
-append-only application access. Output is secret-free
+schema ownership, database administration, or schema creation, the migration revision is read-only,
+and the audit table permits append-only application access. Output is secret-free
 JSON so the result can be attached to the deployment change record.
 
 Expose `/internal/health/db` and `/internal/readiness` only to trusted infrastructure such as a load

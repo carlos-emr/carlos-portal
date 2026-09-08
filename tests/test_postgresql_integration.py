@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, inspect, select, text
 from sqlalchemy.dialects import postgresql, sqlite
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -71,6 +72,8 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
     engine = create_portal_engine(POSTGRES_URL)
     owner_role = "portal_test_audit_owner"
     runtime_role = "portal_test_runtime"
+    runtime_password = "portal-test-runtime-password"
+    runtime_engine = None
     original_owner = ""
     try:
         with engine.begin() as connection:
@@ -85,8 +88,13 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
             connection.execute(text(f'DROP ROLE IF EXISTS "{runtime_role}"'))
             connection.execute(text(f'DROP ROLE IF EXISTS "{owner_role}"'))
             connection.execute(text(f'CREATE ROLE "{owner_role}" NOLOGIN'))
-            connection.execute(text(f'CREATE ROLE "{runtime_role}" NOLOGIN'))
+            connection.execute(
+                text(f'CREATE ROLE "{runtime_role}" LOGIN PASSWORD \'{runtime_password}\'')
+            )
             connection.execute(text(f'GRANT USAGE ON SCHEMA public TO "{runtime_role}"'))
+            connection.execute(
+                text(f'GRANT SELECT ON public.alembic_version TO "{runtime_role}"')
+            )
             connection.execute(
                 text(
                     f'ALTER TABLE public.patient_portal_audit_events OWNER TO "{owner_role}"'
@@ -105,26 +113,31 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
                 )
             )
 
+        runtime_url = make_url(POSTGRES_URL).set(
+            username=runtime_role,
+            password=runtime_password,
+        )
+        runtime_engine = create_portal_engine(runtime_url.render_as_string(hide_password=False))
+        with Session(runtime_engine) as session:
+            assert query_runtime_role_policy(session).passed
+
         with engine.connect() as connection:
             connection.execute(text(f'SET LOCAL ROLE "{runtime_role}"'))
             with Session(bind=connection) as session:
-                assert query_runtime_role_policy(session).passed
+                changed_session_role_check = query_runtime_role_policy(session)
+                assert not changed_session_role_check.passed
+                assert "session_role_changed" in changed_session_role_check.detail
 
         with engine.begin() as connection:
             connection.execute(text(f'GRANT "{owner_role}" TO "{runtime_role}"'))
-        with engine.connect() as connection:
-            connection.execute(text(f'SET LOCAL ROLE "{runtime_role}"'))
-            with Session(bind=connection) as session:
-                inherited_role_check = query_runtime_role_policy(session)
-                assert not inherited_role_check.passed
-                assert "role_membership" in inherited_role_check.detail
+        with Session(runtime_engine) as session:
+            inherited_role_check = query_runtime_role_policy(session)
+            assert not inherited_role_check.passed
+            assert "role_membership" in inherited_role_check.detail
         with engine.begin() as connection:
             connection.execute(text(f'REVOKE "{owner_role}" FROM "{runtime_role}"'))
 
-        with engine.begin() as connection:
-            # Transaction-local role switching prevents a pooled connection from returning to the
-            # test harness as the restricted runtime role after this commit.
-            connection.execute(text(f'SET LOCAL ROLE "{runtime_role}"'))
+        with runtime_engine.begin() as connection:
             event_id = connection.scalar(
                 text(
                     "insert into patient_portal_audit_events "
@@ -135,11 +148,14 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
         for statement in (
             "update patient_portal_audit_events set outcome = 'failure' where id = :event_id",
             "delete from patient_portal_audit_events where id = :event_id",
+            "update alembic_version set version_num = version_num",
+            "delete from alembic_version",
         ):
-            with engine.connect() as connection, pytest.raises(DBAPIError):
-                connection.execute(text(f'SET LOCAL ROLE "{runtime_role}"'))
+            with runtime_engine.connect() as connection, pytest.raises(DBAPIError):
                 connection.execute(text(statement), {"event_id": event_id})
     finally:
+        if runtime_engine is not None:
+            runtime_engine.dispose()
         if original_owner:
             quoted_owner = engine.dialect.identifier_preparer.quote(original_owner)
             with engine.begin() as connection:

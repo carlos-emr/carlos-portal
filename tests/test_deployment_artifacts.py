@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from carlos_patient_portal import models
 from carlos_patient_portal.config import Settings
 
 PACKAGE_ROOT = Path(__file__).parents[1] / "carlos_patient_portal"
@@ -56,6 +57,15 @@ def test_production_compose_separates_runtime_and_privileged_jobs() -> None:
     assert "postgresql-audit-roles.sql" in compose
     assert "carlos-patient-portal-preflight" in compose
     assert "carlos-patient-portal-maintenance" in compose
+    assert "postgres:16.15-bookworm@sha256:" in compose
+    maintenance_block = compose.split("  maintenance:", 1)[1].split(
+        "  audit-maintenance:", 1
+    )[0]
+    assert "PORTAL_MAINTENANCE_ENV_FILE" not in maintenance_block
+    audit_maintenance_block = compose.split("  audit-maintenance:", 1)[1].split(
+        "  database-policy:", 1
+    )[0]
+    assert "PORTAL_MAINTENANCE_ENV_FILE" in audit_maintenance_block
     assert compose.count("read_only: true") >= 3
     assert compose.count("no-new-privileges:true") >= 2
     assert "profiles:\n      - operations" in compose
@@ -63,8 +73,25 @@ def test_production_compose_separates_runtime_and_privileged_jobs() -> None:
     migration_block = compose.split("  migrate:", 1)[1].split("  preflight:", 1)[0]
     assert "PORTAL_ENV_FILE" not in migration_block
     assert "PORTAL_MIGRATION_ENV_FILE" in migration_block
+    assert "PORTAL_MIGRATION_LOCK_TIMEOUT_MS:-10000" in migration_block
+    assert "PORTAL_MIGRATION_STATEMENT_TIMEOUT_MS:-900000" in migration_block
     preflight_block = compose.split("  preflight:", 1)[1].split("  maintenance:", 1)[0]
     assert "PORTAL_MAINTENANCE_ENV_FILE" not in preflight_block
+    database_policy_block = compose.split("  database-policy:", 1)[1]
+    assert "PORTAL_DATABASE_POLICY_LOCK_TIMEOUT_MS:-10000" in database_policy_block
+    assert "PORTAL_DATABASE_POLICY_STATEMENT_TIMEOUT_MS:-60000" in database_policy_block
+
+
+def test_database_policy_explicitly_grants_every_application_table_and_sequence() -> None:
+    policy = (
+        PACKAGE_ROOT / "deploy" / "postgresql-audit-roles.sql"
+    ).read_text()
+
+    for table in models.Base.metadata.tables.values():
+        assert f"public.{table.name}" in policy
+        assert f"public.{table.name}_id_seq" in policy
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES" not in policy
+    assert "GRANT USAGE, SELECT ON ALL SEQUENCES" not in policy
 
 
 def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
@@ -77,6 +104,10 @@ def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
     assert "PORTAL_COMPOSE_OVERRIDE_FILE" in script
     assert 'PORTAL_BIND_ADDRESS:-127.0.0.1' in script
     assert 'PORTAL_BIND_ADDRESS" != "127.0.0.1' in script
+    assert "PORTAL_DEPLOY_LOCK_FILE" in script
+    assert "flock --nonblock 9" in script
+    assert "deploy|export-audit|cleanup-auth|prune-audit|rollback" in script
+    assert "run --rm audit-maintenance prune-audit" in script
     assert "carlos-patient-portal-migrate" not in script
     assert "alembic downgrade" not in script
     assert "carlos-patient-portal-migrate -" not in script
@@ -86,6 +117,8 @@ def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
     assert script.index("run --rm database-policy") < script.index("run --rm preflight")
     assert script.index("run --rm preflight") < script.index("compose up --detach")
     assert script.count("--wait --wait-timeout 90") == 2
+    rollback_block = script.split("  rollback)", 1)[1].split("  *)", 1)[0]
+    assert "validate" in rollback_block
 
 
 def test_release_image_includes_sbom_and_provenance() -> None:
@@ -133,12 +166,20 @@ def test_production_stack_smoke_covers_success_replay_and_fail_closed_role() -> 
 
     assert smoke_path.stat().st_mode & 0o111
     assert "sslmode=verify-full" in smoke
-    assert "postgres:16@sha256:" in smoke
+    assert "postgres:16.15-bookworm@sha256:" in smoke
     assert smoke.count('scripts/production-deploy\" deploy') == 2
     assert "production-elevated.env" in smoke
     assert "preflight accepted an elevated runtime database role" in smoke
     assert "database policy accepted an elevated maintenance role" in smoke
     assert "failed database policy did not roll back its partial grants" in smoke
+    assert "concurrent migration bypassed the deployment lock" in smoke
+    assert "runtime role could rewrite the migration revision" in smoke
+    assert "preflight accepted a stale runtime TRUNCATE grant" in smoke
+    smoke_override = (
+        REPOSITORY_ROOT / "tests" / "compose.production-smoke.yaml"
+    ).read_text()
+    assert "POSTGRES_USER: portal_database_admin" in smoke_override
+    assert "POSTGRES_USER: portal_schema_owner" not in smoke_override
     assert "outbox is empty" in smoke
 
     settings = Settings(_env_file=environment_path)

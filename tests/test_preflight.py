@@ -20,6 +20,14 @@ def compliant_runtime_role() -> dict[str, bool]:
         "audit_sequence_usage": True,
         "audit_sequence_select": True,
         "schema_usage": True,
+        "alembic_select": True,
+        "alembic_insert": False,
+        "alembic_update": False,
+        "alembic_delete": False,
+        "alembic_truncate": False,
+        "alembic_references": False,
+        "alembic_trigger": False,
+        "alembic_owner": False,
         "audit_update": False,
         "audit_delete": False,
         "audit_truncate": False,
@@ -32,6 +40,9 @@ def compliant_runtime_role() -> dict[str, bool]:
         "role_membership": False,
         "schema_object_owner": False,
         "schema_function_execute": False,
+        "table_dangerous_privilege": False,
+        "sequence_update": False,
+        "session_role_changed": False,
         "role_elevated": False,
     }
 
@@ -40,7 +51,9 @@ def test_runtime_role_policy_accepts_only_append_only_audit_access() -> None:
     check = evaluate_runtime_role_policy(compliant_runtime_role())
 
     assert check.passed
-    assert check.detail == "runtime role is non-admin and audit evidence is append-only"
+    assert check.detail == (
+        "runtime role is non-admin; schema revision and audit evidence are protected"
+    )
 
 
 @pytest.mark.parametrize(

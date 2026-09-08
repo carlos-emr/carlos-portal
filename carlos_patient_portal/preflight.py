@@ -61,6 +61,14 @@ def evaluate_runtime_role_policy(values: Mapping[str, object]) -> PreflightCheck
         "audit_sequence_usage": True,
         "audit_sequence_select": True,
         "schema_usage": True,
+        "alembic_select": True,
+        "alembic_insert": False,
+        "alembic_update": False,
+        "alembic_delete": False,
+        "alembic_truncate": False,
+        "alembic_references": False,
+        "alembic_trigger": False,
+        "alembic_owner": False,
         "audit_update": False,
         "audit_delete": False,
         "audit_truncate": False,
@@ -73,6 +81,9 @@ def evaluate_runtime_role_policy(values: Mapping[str, object]) -> PreflightCheck
         "role_membership": False,
         "schema_object_owner": False,
         "schema_function_execute": False,
+        "table_dangerous_privilege": False,
+        "sequence_update": False,
+        "session_role_changed": False,
         "role_elevated": False,
     }
     violations = sorted(
@@ -81,7 +92,9 @@ def evaluate_runtime_role_policy(values: Mapping[str, object]) -> PreflightCheck
     return preflight_check(
         "runtime_database_role",
         not violations,
-        passed_detail="runtime role is non-admin and audit evidence is append-only",
+        passed_detail=(
+            "runtime role is non-admin; schema revision and audit evidence are protected"
+        ),
         failed_detail=(
             "runtime database privilege policy failed: " + ",".join(violations)
             if violations
@@ -95,6 +108,27 @@ def query_runtime_role_policy(session: Session) -> PreflightCheck:
         text(
             """
             SELECT
+              session_user <> current_user AS session_role_changed,
+              has_table_privilege(current_user, 'public.alembic_version', 'SELECT')
+                AS alembic_select,
+              has_table_privilege(current_user, 'public.alembic_version', 'INSERT')
+                AS alembic_insert,
+              has_table_privilege(current_user, 'public.alembic_version', 'UPDATE')
+                AS alembic_update,
+              has_table_privilege(current_user, 'public.alembic_version', 'DELETE')
+                AS alembic_delete,
+              has_table_privilege(current_user, 'public.alembic_version', 'TRUNCATE')
+                AS alembic_truncate,
+              has_table_privilege(current_user, 'public.alembic_version', 'REFERENCES')
+                AS alembic_references,
+              has_table_privilege(current_user, 'public.alembic_version', 'TRIGGER')
+                AS alembic_trigger,
+              (
+                SELECT c.relowner = r.oid
+                FROM pg_class c
+                JOIN pg_roles r ON r.rolname = current_user
+                WHERE c.oid = 'public.alembic_version'::regclass
+              ) AS alembic_owner,
               has_table_privilege(current_user, 'public.patient_portal_audit_events', 'SELECT')
                 AS audit_select,
               has_table_privilege(current_user, 'public.patient_portal_audit_events', 'INSERT')
@@ -161,6 +195,26 @@ def query_runtime_role_policy(session: Session) -> PreflightCheck:
                 WHERE n.nspname = 'public'
                   AND has_function_privilege(current_user, p.oid, 'EXECUTE')
               ) AS schema_function_execute,
+              EXISTS (
+                SELECT 1
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = 'public'
+                  AND c.relkind IN ('r', 'p')
+                  AND has_table_privilege(
+                    current_user,
+                    c.oid,
+                    'TRUNCATE,REFERENCES,TRIGGER'
+                  )
+              ) AS table_dangerous_privilege,
+              EXISTS (
+                SELECT 1
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = 'public'
+                  AND c.relkind = 'S'
+                  AND has_sequence_privilege(current_user, c.oid, 'UPDATE')
+              ) AS sequence_update,
               (
                 SELECT c.relowner = r.oid
                 FROM pg_class c
