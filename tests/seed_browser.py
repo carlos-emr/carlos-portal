@@ -1,6 +1,9 @@
 """Seed the isolated development database used by the Playwright CI smoke test."""
 
+import json
+import os
 from datetime import date, timedelta
+from pathlib import Path
 
 from carlos_patient_portal.accounts import ActivationRateLimit, activate_patient_account
 from carlos_patient_portal.config import get_settings
@@ -10,6 +13,11 @@ from carlos_patient_portal.invites import create_invite
 from carlos_patient_portal.unlock_secrets import create_unlock_secret
 
 DEVELOPMENT_PASSWORD = "-".join(("Nectar", "Sparrow", "Quartz", "87!"))
+ACTIVATION_PASSWORD = "-".join(("Cedar", "River", "Comet", "62!"))
+ACTIVATION_EMAIL = "activation.patient@example.com"
+ACTIVATION_DATE_OF_BIRTH = date(1975, 9, 14)
+ACTIVATION_HEALTH_CARD_NUMBER = "EFGH 9876-5432"
+ACTIVATION_USERNAME = "PlaywrightActivate"
 
 
 def main() -> None:
@@ -18,6 +26,7 @@ def main() -> None:
     encryption_secret = keyring[settings.unlock_secret_active_key_id]
     engine = create_portal_engine(settings.database_url)
     session_factory = create_session_factory(engine)
+    fixture_path = Path(os.environ["PORTAL_BROWSER_FIXTURE_FILE"])
     try:
         with session_factory() as session:
             with session.begin():
@@ -82,6 +91,35 @@ def main() -> None:
                         label=label,
                         source_reference=f"ci-message-{index}",
                     )
+                _, activation_invite_token = create_invite(
+                    session,
+                    5678,
+                    "CI browser activation",
+                    clinic_id=settings.clinic_id,
+                    actor_id="ci-seed",
+                    identity_proof=IdentityProof(
+                        email=ACTIVATION_EMAIL,
+                        date_of_birth=ACTIVATION_DATE_OF_BIRTH,
+                        health_card_number=ACTIVATION_HEALTH_CARD_NUMBER,
+                    ),
+                    proof_secret=settings.identity_proof_secret.get_secret_value(),
+                )
+        fixture_path.parent.mkdir(parents=True, exist_ok=True)
+        fixture_path.write_text(
+            json.dumps(
+                {
+                    "activation": {
+                        "inviteCode": activation_invite_token,
+                        "email": ACTIVATION_EMAIL,
+                        "dateOfBirth": ACTIVATION_DATE_OF_BIRTH.isoformat(),
+                        "healthCardNumber": ACTIVATION_HEALTH_CARD_NUMBER,
+                        "username": ACTIVATION_USERNAME,
+                        "password": ACTIVATION_PASSWORD,
+                    }
+                }
+            )
+        )
+        fixture_path.chmod(0o600)
     finally:
         engine.dispose()
 

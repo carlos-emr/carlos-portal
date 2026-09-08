@@ -167,6 +167,7 @@ jobs:
           PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_SECRET: "ci-unlock-secret-key-0000000000001"
           PYTHONPATH: "."
           PORTAL_BASE_URL: "http://127.0.0.1:8090"
+          PORTAL_BROWSER_FIXTURE_FILE: "/tmp/patient-portal-browser-fixtures.json"
           PORTAL_USE_DEVELOPMENT_MFA_CODE: "true"
           PORTAL_SCREENSHOT_DIR: "/tmp/patient-portal-playwright"
         run: |
