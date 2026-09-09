@@ -367,11 +367,19 @@ def query_runtime_role_policy(session: Session) -> PreflightCheck:
                 JOIN pg_roles r ON r.rolname = current_user
                 WHERE d.datname = current_database()
               ) AS database_owner,
-              EXISTS (
-                SELECT 1
-                FROM pg_roles granted_role
-                WHERE granted_role.rolname <> current_user
-                  AND pg_has_role(current_user, granted_role.oid, 'MEMBER')
+              (
+                EXISTS (
+                  SELECT 1
+                  FROM pg_roles granted_role
+                  WHERE granted_role.rolname <> current_user
+                    AND pg_has_role(current_user, granted_role.oid, 'MEMBER')
+                )
+                OR EXISTS (
+                  SELECT 1
+                  FROM pg_auth_members membership
+                  JOIN pg_roles granted_role ON granted_role.oid = membership.roleid
+                  WHERE granted_role.rolname = current_user
+                )
               ) AS role_membership,
               EXISTS (
                 SELECT 1

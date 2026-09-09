@@ -1,5 +1,6 @@
 import os
 import subprocess
+from hashlib import sha256
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
@@ -37,6 +38,8 @@ def install_fake_docker(tmp_path: Path, *, fail_preflight: bool) -> Path:
         "#!/bin/sh\n"
         "printf '%s|%s\\n' \"$PORTAL_IMAGE\" \"$*\" >> \"$FAKE_DOCKER_LOG\"\n"
         "case \"$*\" in\n"
+        "  *'deployment-probe database-artifacts-sha256'*) "
+        "printf '%s\\n' \"${FAKE_ARTIFACT_OUTPUT:-}\"; exit 0 ;;\n"
         f"  *'run --rm preflight'*) {failure} ;;\n"
         "esac\n"
         "exit 0\n"
@@ -104,5 +107,33 @@ def test_database_policy_mismatch_fails_before_database_mutation(tmp_path: Path)
     assert result.returncode != 0
     assert "does not match the policy packaged in PORTAL_IMAGE" in result.stderr
     calls = Path(environment["FAKE_DOCKER_LOG"]).read_text().splitlines()
-    assert any("deployment-probe policy-sha256" in call for call in calls)
+    assert any("deployment-probe database-artifacts-sha256" in call for call in calls)
+    assert not any(call.endswith("run --rm database-policy") for call in calls)
+
+
+def test_database_identity_artifact_mismatch_fails_before_database_mutation(
+    tmp_path: Path,
+) -> None:
+    fake_docker = install_fake_docker(tmp_path, fail_preflight=False)
+    environment = rollback_environment(tmp_path, fake_docker)
+    policy = (
+        REPOSITORY_ROOT
+        / "carlos_patient_portal"
+        / "deploy"
+        / "postgresql-audit-roles.sql"
+    ).read_bytes()
+    environment["FAKE_ARTIFACT_OUTPUT"] = f"{sha256(policy).hexdigest()}|{'0' * 64}"
+
+    result = subprocess.run(  # noqa: S603
+        [str(DEPLOY_SCRIPT), "apply-db-policy"],
+        cwd=REPOSITORY_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "identity query does not match the query packaged" in result.stderr
+    calls = Path(environment["FAKE_DOCKER_LOG"]).read_text().splitlines()
     assert not any(call.endswith("run --rm database-policy") for call in calls)

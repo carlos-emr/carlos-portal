@@ -110,6 +110,17 @@ def test_database_policy_explicitly_grants_every_application_table_and_sequence(
     assert "only the database admin may inherit the schema owner" in policy
 
 
+def test_database_identity_query_attests_live_tls() -> None:
+    identity_query = (
+        PACKAGE_ROOT / "deploy" / "postgresql-database-identity.sql"
+    ).read_text()
+
+    assert "pg_stat_ssl" in identity_query
+    assert "pg_backend_pid()" in identity_query
+    assert "'tls'" in identity_query
+    assert "'plaintext'" in identity_query
+
+
 def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
     script_path = REPOSITORY_ROOT / "scripts" / "production-deploy"
     script = script_path.read_text()
@@ -131,12 +142,15 @@ def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
     assert "compose --profile operations run --rm migrate" in script
     assert "compose --profile operations run --rm database-policy" in script
     assert "compose --profile operations run --rm preflight" in script
-    assert "verify_policy_artifact" in script
+    assert "verify_database_artifacts" in script
     assert "verify_database_targets" in script
     assert "carlos-patient-portal-deployment-probe" in script
+    assert "database-artifacts-sha256" in script
     assert "postgresql-database-identity.sql" in script
     assert "does not match the policy packaged in PORTAL_IMAGE" in script
+    assert "identity query does not match the query packaged in PORTAL_IMAGE" in script
     assert "targets a different PostgreSQL database" in script
+    assert "Database admin connection does not use TLS" in script
     assert script.index("run --rm database-policy") < script.index("run --rm preflight")
     assert script.index("run --rm preflight") < script.index("compose up --detach")
     assert script.count("--wait --wait-timeout 90") == 2

@@ -538,6 +538,8 @@ Apply [`deploy/postgresql-audit-roles.sql`](carlos_patient_portal/deploy/postgre
 after migrations. The web/outbox runtime role can select and append audit events but cannot update,
 delete, or truncate them. Configure `PATIENT_PORTAL_MAINTENANCE_DATABASE_URL` with the separate
 audit-maintenance role only in the offline prune job; destructive pruning refuses the runtime URL.
+For PostgreSQL, the pruning command compares the live runtime and maintenance database identities
+after connection parameters are resolved, and production pruning requires TLS on both sessions.
 Checkpoint each successful JSONL export by its final `id` and ship it to an access-controlled,
 append-only centralized sink before advancing the checkpoint.
 

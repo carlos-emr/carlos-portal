@@ -50,6 +50,9 @@ from carlos_patient_portal.database import (
 Environment = Literal["development", "staging", "test", "production"]
 TrustedClientIpHeader = Literal["x-forwarded-for", "x-real-ip"]
 DEFAULT_DATABASE_URL = "postgresql+psycopg://localhost:5432/carlos_portal"
+PRODUCTION_DATABASE_ROUTING_QUERY_PARAMETERS = frozenset(
+    {"dbname", "host", "hostaddr", "password", "port", "service", "servicefile", "user"}
+)
 DEFAULT_DEVELOPMENT_SMTP_FROM_ADDRESS = "carlos-test@openo-dev.local"
 MIN_PRODUCTION_SECRET_LENGTH = 32
 MAX_CLINIC_ID_LENGTH = 64
@@ -873,6 +876,18 @@ class Settings(BaseSettings):
         parsed_url = urlsplit(database_url)
         if parsed_url.scheme != "postgresql+psycopg":
             raise ValueError(f"production {environment_name} must use postgresql+psycopg")
+        query_parameters = {
+            parameter.casefold()
+            for parameter in parse_qs(parsed_url.query, keep_blank_values=True)
+        }
+        routing_overrides = sorted(
+            query_parameters & PRODUCTION_DATABASE_ROUTING_QUERY_PARAMETERS
+        )
+        if routing_overrides:
+            raise ValueError(
+                f"production {environment_name} must not override connection routing in query "
+                f"parameters ({','.join(routing_overrides)})"
+            )
         database_host = parsed_url.hostname
         if database_host is None or database_host.casefold() == "localhost":
             return

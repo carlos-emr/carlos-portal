@@ -72,6 +72,7 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
     engine = create_portal_engine(POSTGRES_URL)
     owner_role = "portal_test_audit_owner"
     runtime_role = "portal_test_runtime"
+    incoming_role = "portal_test_runtime_member"
     runtime_password = "portal-test-runtime-password"
     runtime_engine = None
     original_owner = ""
@@ -122,6 +123,7 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
                 text(f"REVOKE TEMPORARY ON DATABASE {quoted_database} FROM PUBLIC")
             )
             connection.execute(text("REVOKE ALL ON SCHEMA public FROM PUBLIC"))
+            connection.execute(text(f'DROP ROLE IF EXISTS "{incoming_role}"'))
             connection.execute(text(f'DROP ROLE IF EXISTS "{runtime_role}"'))
             connection.execute(text(f'DROP ROLE IF EXISTS "{owner_role}"'))
             connection.execute(text(f'CREATE ROLE "{owner_role}" NOLOGIN'))
@@ -174,6 +176,16 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
         with engine.begin() as connection:
             connection.execute(text(f'REVOKE "{owner_role}" FROM "{runtime_role}"'))
 
+        with engine.begin() as connection:
+            connection.execute(text(f'CREATE ROLE "{incoming_role}" NOLOGIN'))
+            connection.execute(text(f'GRANT "{runtime_role}" TO "{incoming_role}"'))
+        with Session(runtime_engine) as session:
+            inherited_runtime_check = query_runtime_role_policy(session)
+            assert not inherited_runtime_check.passed
+            assert "role_membership" in inherited_runtime_check.detail
+        with engine.begin() as connection:
+            connection.execute(text(f'DROP ROLE "{incoming_role}"'))
+
         with runtime_engine.begin() as connection:
             event_id = connection.scalar(
                 text(
@@ -202,6 +214,7 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
                         f"OWNER TO {quoted_owner}"
                     )
                 )
+                connection.execute(text(f'DROP ROLE IF EXISTS "{incoming_role}"'))
                 connection.execute(text(f'DROP OWNED BY "{runtime_role}"'))
                 connection.execute(text(f'DROP ROLE IF EXISTS "{runtime_role}"'))
                 connection.execute(text(f'DROP OWNED BY "{owner_role}"'))

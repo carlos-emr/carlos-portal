@@ -3,6 +3,7 @@ import logging
 import os
 import sqlite3
 import stat
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.exc import SQLAlchemyError
@@ -23,6 +24,7 @@ from carlos_patient_portal.maintenance import (
 from tests.support import (
     OUTBOX_ENCRYPTION_SECRET,
     development_settings,
+    production_settings,
     staging_settings,
     upgrade_to_head,
 )
@@ -261,6 +263,95 @@ def test_audit_pruning_rejects_a_different_database_target(
         cli.maintenance(["prune-audit"])
 
     assert "must target the same database" in capsys.readouterr().err
+
+
+def test_audit_pruning_compares_live_targets_after_url_query_parsing(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    settings = Settings(
+        environment="development",
+        database_url=(
+            "postgresql+psycopg://runtime@declared:5432/portal?dbname=runtime_actual"
+        ),
+        maintenance_database_url=(
+            "postgresql+psycopg://maintenance@declared:5432/portal"
+            "?dbname=maintenance_actual"
+        ),
+    )
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+
+    class FakeEngine:
+        def __init__(self, database_name: str) -> None:
+            self.database_name = database_name
+            self.dialect = SimpleNamespace(name="postgresql")
+
+        def dispose(self) -> None:
+            pass
+
+    def fake_create_portal_engine(database_url: str, **_: object) -> FakeEngine:
+        database_name = "maintenance_actual" if "maintenance@" in database_url else "runtime_actual"
+        return FakeEngine(database_name)
+
+    def fake_identity(
+        engine: FakeEngine,
+        *,
+        configured_username: str | None,
+    ) -> tuple[str, str, str, str, bool]:
+        assert configured_username is not None
+        return ("cluster", "42", engine.database_name, configured_username, True)
+
+    monkeypatch.setattr(cli, "create_portal_engine", fake_create_portal_engine)
+    monkeypatch.setattr(cli, "create_session_factory", lambda engine: engine)
+    monkeypatch.setattr(cli, "_postgresql_connection_identity", fake_identity)
+
+    with pytest.raises(SystemExit):
+        cli.maintenance(["prune-audit"])
+
+    assert "connect to different databases" in capsys.readouterr().err
+
+
+def test_production_audit_pruning_requires_tls_on_both_live_connections(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    settings = production_settings(
+        database_url="postgresql+psycopg://runtime@localhost:5432/portal",
+        maintenance_database_url=(
+            "postgresql+psycopg://maintenance@localhost:5432/portal"
+        ),
+    )
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+
+    class FakeEngine:
+        dialect = SimpleNamespace(name="postgresql")
+
+        def dispose(self) -> None:
+            pass
+
+    def fake_identity(
+        engine: FakeEngine,
+        *,
+        configured_username: str | None,
+    ) -> tuple[str, str, str, str, bool]:
+        del engine
+        assert configured_username is not None
+        return (
+            "cluster",
+            "42",
+            "portal",
+            configured_username,
+            configured_username == "maintenance",
+        )
+
+    monkeypatch.setattr(cli, "create_portal_engine", lambda *args, **kwargs: FakeEngine())
+    monkeypatch.setattr(cli, "create_session_factory", lambda engine: engine)
+    monkeypatch.setattr(cli, "_postgresql_connection_identity", fake_identity)
+
+    with pytest.raises(SystemExit):
+        cli.maintenance(["prune-audit"])
+
+    assert "requires TLS for both database connections" in capsys.readouterr().err
 
 
 def test_audit_export_cli_emits_ordered_jsonl(

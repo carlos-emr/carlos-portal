@@ -19,6 +19,7 @@ from carlos_patient_portal import credentials, main, web_support
 from carlos_patient_portal.config import (
     DEFAULT_AUDIT_RETENTION_DAYS,
     DEFAULT_DATABASE_URL,
+    MigrationDatabaseSettings,
     Settings,
     get_migration_database_url,
 )
@@ -778,6 +779,42 @@ def test_production_accepts_remote_postgresql_with_verified_tls() -> None:
     )
 
     assert "sslmode=verify-full" in settings.database_url
+
+
+@pytest.mark.parametrize(
+    "routing_parameter",
+    (
+        "dbname=other_clinic",
+        "host=other.example.test",
+        "hostaddr=192.0.2.10",
+        "port=6543",
+        "service=other",
+    ),
+)
+def test_production_rejects_database_routing_query_overrides(
+    routing_parameter: str,
+) -> None:
+    database_url = (
+        "postgresql+psycopg://portal@database.example.test:5432/portal"
+        f"?sslmode=verify-full&{routing_parameter}"
+    )
+
+    with pytest.raises(ValidationError, match="must not override connection routing"):
+        production_settings(database_url=database_url)
+
+    with pytest.raises(ValidationError, match="must not override connection routing"):
+        MigrationDatabaseSettings(environment="production", database_url=database_url)
+
+
+def test_production_rejects_local_authority_that_redirects_to_plaintext_remote_database() -> None:
+    with pytest.raises(ValidationError, match="must not override connection routing"):
+        MigrationDatabaseSettings(
+            environment="production",
+            database_url=(
+                "postgresql+psycopg://owner@localhost:5432/declared"
+                "?host=remote.example.test&dbname=actual"
+            ),
+        )
 
 
 def test_default_password_lockout_threshold_is_ten() -> None:

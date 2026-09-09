@@ -146,7 +146,11 @@ def production_preflight(argv: Sequence[str] | None = None) -> None:
         raise SystemExit(1)
 
 
-def _database_deployment_identity(engine: Engine, *, configured_username: str | None) -> str:
+def _postgresql_connection_identity(
+    engine: Engine,
+    *,
+    configured_username: str | None,
+) -> tuple[str, str, str, str, bool]:
     with engine.connect() as connection:
         values = connection.execute(
             text(
@@ -163,19 +167,40 @@ def _database_deployment_identity(engine: Engine, *, configured_username: str | 
                 """
             )
         ).mappings().one()
+        driver_connection = connection.connection.driver_connection
+        postgres_connection = getattr(driver_connection, "pgconn", None)
+        tls_enabled = bool(getattr(postgres_connection, "ssl_in_use", False))
     if (
         configured_username is None
         or values["session_role"] != configured_username
         or values["current_role"] != configured_username
     ):
         raise SystemExit("database probe requires a direct session using the URL's login role")
-    fields = (
-        values["system_identifier"],
-        values["database_oid"],
-        values["database_name"],
-        sha256(str(values["current_role"]).encode()).hexdigest(),
+    return (
+        str(values["system_identifier"]),
+        str(values["database_oid"]),
+        str(values["database_name"]),
+        str(values["current_role"]),
+        tls_enabled,
     )
-    return "|".join(str(field).encode().hex() for field in fields[:3]) + f"|{fields[3]}"
+
+
+def _database_deployment_identity(engine: Engine, *, configured_username: str | None) -> str:
+    values = _postgresql_connection_identity(
+        engine,
+        configured_username=configured_username,
+    )
+    fields = (
+        values[0],
+        values[1],
+        values[2],
+        sha256(values[3].encode()).hexdigest(),
+        "tls" if values[4] else "plaintext",
+    )
+    return (
+        "|".join(str(field).encode().hex() for field in fields[:3])
+        + f"|{fields[3]}|{fields[4]}"
+    )
 
 
 def deployment_probe(argv: Sequence[str] | None = None) -> None:
@@ -186,12 +211,25 @@ def deployment_probe(argv: Sequence[str] | None = None) -> None:
     )
     parser.add_argument(
         "probe",
-        choices=("migration", "runtime", "maintenance", "policy-sha256"),
+        choices=(
+            "migration",
+            "runtime",
+            "maintenance",
+            "database-artifacts-sha256",
+        ),
     )
     args = parser.parse_args(argv)
-    if args.probe == "policy-sha256":
-        policy_path = Path(__file__).resolve().parent / "deploy" / "postgresql-audit-roles.sql"
-        print(sha256(policy_path.read_bytes()).hexdigest())
+    if args.probe == "database-artifacts-sha256":
+        deploy_path = Path(__file__).resolve().parent / "deploy"
+        print(
+            "|".join(
+                sha256((deploy_path / artifact).read_bytes()).hexdigest()
+                for artifact in (
+                    "postgresql-audit-roles.sql",
+                    "postgresql-database-identity.sql",
+                )
+            )
+        )
         return
 
     settings = None
@@ -400,8 +438,37 @@ def maintenance(argv: Sequence[str] | None = None) -> None:
         lock_timeout_ms=settings.database_lock_timeout_ms,
         sqlite_busy_timeout_ms=settings.sqlite_busy_timeout_ms,
     )
+    runtime_database_engine = None
+    if (
+        args.command == "prune-audit"
+        and not args.dry_run
+        and database_engine.dialect.name == "postgresql"
+    ):
+        runtime_database_engine = create_portal_engine(
+            settings.database_url,
+            pool_size=settings.database_pool_size,
+            max_overflow=settings.database_max_overflow,
+            pool_timeout_seconds=settings.database_pool_timeout_seconds,
+            connect_timeout_seconds=settings.database_connect_timeout_seconds,
+            statement_timeout_ms=settings.database_statement_timeout_ms,
+            lock_timeout_ms=settings.database_lock_timeout_ms,
+            sqlite_busy_timeout_ms=settings.sqlite_busy_timeout_ms,
+        )
     session_factory = create_session_factory(database_engine)
     try:
+        if runtime_database_engine is not None:
+            runtime_identity = _postgresql_connection_identity(
+                runtime_database_engine,
+                configured_username=make_url(settings.database_url).username,
+            )
+            maintenance_identity = _postgresql_connection_identity(
+                database_engine,
+                configured_username=make_url(database_url).username,
+            )
+            if runtime_identity[:3] != maintenance_identity[:3]:
+                parser.error("maintenance and runtime URLs connect to different databases")
+            if settings.is_production and (not runtime_identity[4] or not maintenance_identity[4]):
+                parser.error("production audit pruning requires TLS for both database connections")
         with session_scope(session_factory) as session:
             if args.command == "rotate-unlock-secrets":
                 rotated_count = reencrypt_unlock_secrets(
@@ -467,6 +534,8 @@ def maintenance(argv: Sequence[str] | None = None) -> None:
             )
             print(f"deleted {deleted_count} audit events older than retention")
     finally:
+        if runtime_database_engine is not None:
+            runtime_database_engine.dispose()
         database_engine.dispose()
 
 

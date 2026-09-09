@@ -98,11 +98,13 @@ both containers to become healthy. It does not configure
 DNS, edge TLS, managed backups, or monitoring on the host.
 
 Before any migration, policy change, or audit prune, the wrapper queries every credential and
-requires the same PostgreSQL system identifier, database OID, and database name. It also requires
-the migration, runtime, and maintenance sessions to use the roles declared by database policy, and
-requires a direct database-admin session. Before applying policy, it compares the host SQL checksum
-with the copy packaged in `PORTAL_IMAGE`; run the wrapper from the same reviewed release checkout as
-the image.
+requires the same PostgreSQL system identifier, database OID, and database name, with TLS active on
+every connection. It also requires the migration, runtime, and maintenance sessions to use the
+roles declared by database policy, and requires a direct database-admin session. Production URLs
+cannot use libpq query parameters such as `host`, `dbname`, or `service` to override their declared
+target. Before applying policy, the wrapper compares both the host policy SQL and database-identity
+query checksums with the copies packaged in `PORTAL_IMAGE`; run the wrapper from the same reviewed
+release checkout as the image.
 
 Migration connections fail after 10 seconds, lock waits after 10 seconds, and statements after 15
 minutes. Database-policy connections use the same connect and lock limits and a 60-second statement

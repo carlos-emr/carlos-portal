@@ -119,6 +119,21 @@ curl --fail --silent --show-error \
 "$repository_root/scripts/production-deploy" readiness
 "$repository_root/scripts/production-deploy" outbox-status | grep -F 'outbox is empty'
 
+# The policy job uses psql directly, so verify its live connection is encrypted before allowing
+# any database mutation instead of relying only on application URL validation.
+plaintext_admin_environment="$test_root/database-admin-plaintext.env"
+sed 's/sslmode=verify-full/sslmode=disable/' \
+  "$PORTAL_DATABASE_ADMIN_ENV_FILE" > "$plaintext_admin_environment"
+chmod 0600 "$plaintext_admin_environment"
+if PORTAL_DATABASE_ADMIN_ENV_FILE="$plaintext_admin_environment" \
+  "$repository_root/scripts/production-deploy" apply-db-policy \
+  > "$test_root/database-admin-plaintext.log" 2>&1; then
+  printf '%s\n' 'database policy accepted a plaintext database-admin connection' >&2
+  exit 1
+fi
+grep -F 'Database admin connection does not use TLS' \
+  "$test_root/database-admin-plaintext.log"
+
 # Every credential is stored separately, so a copied clinic file must be rejected before a
 # migration or retention command can mutate the wrong PostgreSQL database or use the wrong role.
 compose exec -T database psql \
@@ -433,6 +448,12 @@ if "$repository_root/scripts/production-deploy" apply-db-policy \
   exit 1
 fi
 grep -F 'not be inherited by another role' "$test_root/incoming-membership.log"
+if "$repository_root/scripts/production-deploy" preflight \
+  > "$test_root/incoming-membership-preflight.log" 2>&1; then
+  printf '%s\n' 'runtime preflight accepted a role that inherits runtime privileges' >&2
+  exit 1
+fi
+grep -F 'role_membership' "$test_root/incoming-membership-preflight.log"
 compose exec -T database psql \
   --username portal_cluster_admin \
   --dbname carlos_portal \
