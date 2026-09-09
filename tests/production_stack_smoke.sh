@@ -400,6 +400,38 @@ SQL
 "$repository_root/scripts/production-deploy" apply-db-policy
 "$repository_root/scripts/production-deploy" preflight
 
+# Ownership is an implicit privilege that does not appear in an object's ACL. An undeclared owner
+# must be rejected even when the runtime role's own effective grants still match the allowlist.
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 <<'SQL'
+CREATE ROLE portal_unexpected_owner LOGIN;
+ALTER TABLE public.patient_portal_accounts OWNER TO portal_unexpected_owner;
+SQL
+if "$repository_root/scripts/production-deploy" preflight \
+  > "$test_root/unexpected-object-owner.json"; then
+  printf '%s\n' 'preflight accepted patient data owned by an undeclared database role' >&2
+  exit 1
+fi
+grep -F 'unexpected_object_owner' "$test_root/unexpected-object-owner.json"
+if "$repository_root/scripts/production-deploy" apply-db-policy \
+  > "$test_root/unexpected-object-owner-policy.log" 2>&1; then
+  printf '%s\n' 'database policy accepted patient data owned by an undeclared role' >&2
+  exit 1
+fi
+grep -F 'User-schema objects must be owned by the declared schema owner' \
+  "$test_root/unexpected-object-owner-policy.log"
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 <<'SQL'
+ALTER TABLE public.patient_portal_accounts OWNER TO portal_schema_owner;
+DROP ROLE portal_unexpected_owner;
+SQL
+"$repository_root/scripts/production-deploy" apply-db-policy
+"$repository_root/scripts/production-deploy" preflight
+
 # PostgreSQL's default role-named schema can shadow unqualified application tables. Connections pin
 # their search path, while both preflight and the grant policy reject restricted-role ownership in
 # every non-system schema.
@@ -558,12 +590,13 @@ sed \
 chmod 0600 "$privileged_environment"
 PORTAL_ENV_FILE="$privileged_environment"
 export PORTAL_ENV_FILE
-if "$repository_root/scripts/production-deploy" preflight > "$test_root/elevated.json"; then
+if "$repository_root/scripts/production-deploy" preflight \
+  > "$test_root/elevated.log" 2>&1; then
   printf '%s\n' 'preflight accepted an elevated runtime database role' >&2
   exit 1
 fi
-grep -F '"name":"runtime_database_role"' "$test_root/elevated.json"
-grep -F '"status":"failed"' "$test_root/elevated.json"
+grep -F 'production database runtime, schema-owner, and maintenance roles must differ' \
+  "$test_root/elevated.log"
 PORTAL_ENV_FILE="$test_root/production.env"
 
 compose exec -T database psql \

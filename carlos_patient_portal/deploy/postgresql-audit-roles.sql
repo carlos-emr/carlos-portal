@@ -95,6 +95,48 @@ SELECT
   SELECT 1 / 0 AS database_role_policy_violation;
 \endif
 
+-- Ownership grants implicit, non-revocable access and therefore needs the same closed declaration
+-- as explicit ACLs. PostgreSQL 15+ owns the public schema with the predefined
+-- pg_database_owner role, so that role and the actual database owner are both legitimate here.
+SELECT NOT EXISTS (
+  SELECT 1
+  FROM (
+    SELECT namespace_record.nspowner AS owner_oid
+    FROM pg_namespace namespace_record
+    WHERE namespace_record.nspname <> 'information_schema'
+      AND namespace_record.nspname NOT LIKE 'pg\_%' ESCAPE '\'
+    UNION ALL
+    SELECT relation_record.relowner AS owner_oid
+    FROM pg_class relation_record
+    JOIN pg_namespace namespace_record ON namespace_record.oid = relation_record.relnamespace
+    WHERE namespace_record.nspname <> 'information_schema'
+      AND namespace_record.nspname NOT LIKE 'pg\_%' ESCAPE '\'
+    UNION ALL
+    SELECT function_record.proowner AS owner_oid
+    FROM pg_proc function_record
+    JOIN pg_namespace namespace_record ON namespace_record.oid = function_record.pronamespace
+    WHERE namespace_record.nspname <> 'information_schema'
+      AND namespace_record.nspname NOT LIKE 'pg\_%' ESCAPE '\'
+    UNION ALL
+    SELECT type_record.typowner AS owner_oid
+    FROM pg_type type_record
+    JOIN pg_namespace namespace_record ON namespace_record.oid = type_record.typnamespace
+    WHERE namespace_record.nspname <> 'information_schema'
+      AND namespace_record.nspname NOT LIKE 'pg\_%' ESCAPE '\'
+  ) user_schema_owner
+  WHERE user_schema_owner.owner_oid NOT IN (
+    SELECT oid
+    FROM pg_roles
+    WHERE rolname IN (current_user, :'owner_role', 'pg_database_owner')
+  )
+) AS object_owners_valid
+\gset
+\if :object_owners_valid
+\else
+  \echo 'User-schema objects must be owned by the declared schema owner or database owner.'
+  SELECT 1 / 0 AS database_object_owner_policy_violation;
+\endif
+
 BEGIN;
 
 -- A fixed search_path does not suppress PostgreSQL's implicit pg_temp precedence. The application
@@ -312,6 +354,38 @@ SELECT
   AND NOT EXISTS (
     SELECT 1
     FROM (
+      SELECT namespace_record.nspowner AS owner_oid
+      FROM pg_namespace namespace_record
+      WHERE namespace_record.nspname <> 'information_schema'
+        AND namespace_record.nspname NOT LIKE 'pg\_%' ESCAPE '\'
+      UNION ALL
+      SELECT relation_record.relowner AS owner_oid
+      FROM pg_class relation_record
+      JOIN pg_namespace namespace_record ON namespace_record.oid = relation_record.relnamespace
+      WHERE namespace_record.nspname <> 'information_schema'
+        AND namespace_record.nspname NOT LIKE 'pg\_%' ESCAPE '\'
+      UNION ALL
+      SELECT function_record.proowner AS owner_oid
+      FROM pg_proc function_record
+      JOIN pg_namespace namespace_record ON namespace_record.oid = function_record.pronamespace
+      WHERE namespace_record.nspname <> 'information_schema'
+        AND namespace_record.nspname NOT LIKE 'pg\_%' ESCAPE '\'
+      UNION ALL
+      SELECT type_record.typowner AS owner_oid
+      FROM pg_type type_record
+      JOIN pg_namespace namespace_record ON namespace_record.oid = type_record.typnamespace
+      WHERE namespace_record.nspname <> 'information_schema'
+        AND namespace_record.nspname NOT LIKE 'pg\_%' ESCAPE '\'
+    ) user_schema_owner
+    WHERE user_schema_owner.owner_oid NOT IN (
+      SELECT oid
+      FROM pg_roles
+      WHERE rolname IN (current_user, :'owner_role', 'pg_database_owner')
+    )
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM (
       SELECT acl.grantee, namespace_record.nspowner AS owner_oid
       FROM pg_namespace namespace_record
       CROSS JOIN LATERAL aclexplode(namespace_record.nspacl) acl
@@ -364,7 +438,7 @@ SELECT
 \gset
 \if :role_ownership_valid
 \else
-  \echo 'Runtime and maintenance roles must not own non-system-schema objects, create database/schema/temporary objects, or hold privileges outside public; the schema owner must not own or create databases, and user-schema ACLs must not grant access to undeclared roles.'
+  \echo 'Runtime and maintenance roles must not own non-system-schema objects, create database/schema/temporary objects, or hold privileges outside public; user-schema object ownership must not give access to undeclared roles, and ACLs must not grant access to undeclared roles.'
   SELECT 1 / 0 AS database_role_policy_violation;
 \endif
 

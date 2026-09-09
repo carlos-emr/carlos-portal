@@ -110,6 +110,7 @@ def evaluate_runtime_role_policy(values: Mapping[str, object]) -> PreflightCheck
         "session_role_changed": False,
         "role_elevated": False,
         "unexpected_acl_grantee": False,
+        "unexpected_object_owner": False,
     }
     violations = sorted(
         name for name, expected in required.items() if values.get(name) is not expected
@@ -295,6 +296,14 @@ def query_runtime_role_policy(
               SELECT oid
               FROM pg_roles
               WHERE rolname IN (current_user, :schema_owner_role, :maintenance_role)
+              UNION
+              SELECT datdba
+              FROM pg_database
+              WHERE datname = current_database()
+            ), declared_owner_oids AS (
+              SELECT oid
+              FROM pg_roles
+              WHERE rolname IN (current_user, :schema_owner_role, 'pg_database_owner')
               UNION
               SELECT datdba
               FROM pg_database
@@ -522,7 +531,35 @@ def query_runtime_role_policy(
                   )
                   AND acl.grantee <> default_acl.defaclrole
                   AND acl.grantee NOT IN (SELECT oid FROM trusted_role_oids)
-              ) AS unexpected_acl_grantee
+              ) AS unexpected_acl_grantee,
+              EXISTS (
+                SELECT 1
+                FROM pg_namespace n
+                WHERE n.nspname <> 'information_schema'
+                  AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND n.nspowner NOT IN (SELECT oid FROM declared_owner_oids)
+                UNION ALL
+                SELECT 1
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname <> 'information_schema'
+                  AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND c.relowner NOT IN (SELECT oid FROM declared_owner_oids)
+                UNION ALL
+                SELECT 1
+                FROM pg_proc p
+                JOIN pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname <> 'information_schema'
+                  AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND p.proowner NOT IN (SELECT oid FROM declared_owner_oids)
+                UNION ALL
+                SELECT 1
+                FROM pg_type t
+                JOIN pg_namespace n ON n.oid = t.typnamespace
+                WHERE n.nspname <> 'information_schema'
+                  AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND t.typowner NOT IN (SELECT oid FROM declared_owner_oids)
+              ) AS unexpected_object_owner
             """
         ),
         {

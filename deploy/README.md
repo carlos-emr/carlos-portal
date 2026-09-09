@@ -89,9 +89,9 @@ append-only audit policy through the database-admin URL, and runs a
 fail-closed preflight through the restricted runtime role. Preflight requires production policy,
 PostgreSQL, a current schema, database TLS, a runtime role without inherited privileges or owned
 non-system-schema objects, and exact relation, column, sequence, function, grant-option, and
-`PUBLIC` ACLs across every user schema. ACLs granting user-schema access to roles outside the
-declared database admin, schema owner, runtime, and maintenance set are rejected. Runtime and
-maintenance roles cannot access non-`public` schemas or create temporary objects. Runtime
+`PUBLIC` ACLs across every user schema. ACLs or object ownership granting user-schema access to
+roles outside the declared database admin, schema owner, runtime, and maintenance set are rejected.
+Runtime and maintenance roles cannot access non-`public` schemas or create temporary objects. Runtime
 connections pin `search_path` to
 `pg_catalog,public`, so a role-named schema cannot shadow portal objects. Migrations pin it to
 `public`; PostgreSQL still searches the implicitly trusted `pg_catalog` first while using `public`

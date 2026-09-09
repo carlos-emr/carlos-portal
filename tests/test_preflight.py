@@ -52,6 +52,7 @@ def compliant_runtime_role() -> dict[str, bool]:
         "session_role_changed": False,
         "role_elevated": False,
         "unexpected_acl_grantee": False,
+        "unexpected_object_owner": False,
     }
 
 

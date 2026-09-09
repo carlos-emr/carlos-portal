@@ -114,6 +114,7 @@ def test_database_policy_explicitly_grants_every_application_table_and_sequence(
     assert "aclexplode(function_record.proacl)" in policy
     assert "aclexplode(default_acl.defaclacl)" in policy
     assert "ACLs must not grant access to undeclared roles" in policy
+    assert "User-schema objects must be owned by the declared schema owner" in policy
 
 
 def test_database_identity_query_attests_live_tls() -> None:
@@ -245,6 +246,7 @@ def test_production_stack_smoke_covers_success_replay_and_fail_closed_role() -> 
     assert "audit pruning accepted a different PostgreSQL database target" in smoke
     assert "audit pruning accepted a role other than the declared maintenance role" in smoke
     assert "database policy accepted an unexpected member of privileged roles" in smoke
+    assert "preflight accepted patient data owned by an undeclared database role" in smoke
     smoke_override = (
         REPOSITORY_ROOT / "tests" / "compose.production-smoke.yaml"
     ).read_text()
