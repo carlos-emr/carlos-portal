@@ -24,11 +24,12 @@ operational controls that a container cannot verify.
   backups. The portal owns its `public` schema and does not share it with another application.
 - Pre-created, distinct LOGIN roles for schema ownership, runtime, and audit maintenance, without
   administrator attributes or inherited memberships, plus a separately controlled, non-superuser
-  database-admin role that directly owns the database. Grant the schema owner only `CREATE, USAGE`
-  on `public`, and grant the schema-owner role to the database admin so it can reconcile grants and
-  default privileges without a superuser login. The web and outbox credentials must use the runtime
-  role. Provider-managed administrator roles require an explicit compatibility check against these
-  ownership and membership requirements before selection.
+  database-admin LOGIN role that directly owns the database and connects without `SET ROLE`. Grant
+  the schema owner only `CREATE, USAGE` on `public`, and grant that role directly—and no other
+  roles—to the database admin so it can reconcile grants and default privileges without a
+  superuser login. The web and outbox credentials must use the runtime role. Provider-managed
+  administrator roles require an explicit compatibility check against these ownership and
+  membership requirements before selection.
 - Host nginx (or an equivalent edge) terminating TLS and proxying to `127.0.0.1:8090`. Start with
   `carlos_patient_portal/deploy/nginx.conf`, replace its example hostname, certificate paths, and
   exact CARLOS source CIDRs, then run `nginx -t` before reloading it.
@@ -87,8 +88,10 @@ window for a breaking migration. The command runs Alembic with the schema-owner 
 append-only audit policy through the database-admin URL, and runs a
 fail-closed preflight through the restricted runtime role. Preflight requires production policy,
 PostgreSQL, a current schema, database TLS, a runtime role without inherited privileges or owned
-database objects, and append-only audit access. Only after those checks pass does it start web and
-outbox, then wait for both containers to become healthy. It does not configure
+non-system-schema objects, and exact table, column, sequence, grant-option, and `PUBLIC` ACLs. Every
+PostgreSQL connection pins `search_path` to `pg_catalog,public`, so a role-named schema cannot shadow
+portal objects. Only after those checks pass does it start web and outbox, then wait for both
+containers to become healthy. It does not configure
 DNS, edge TLS, managed backups, or monitoring on the host.
 
 Migration connections fail after 10 seconds, lock waits after 10 seconds, and statements after 15

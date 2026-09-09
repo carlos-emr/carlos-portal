@@ -78,11 +78,13 @@ def test_production_compose_separates_runtime_and_privileged_jobs() -> None:
     assert "PORTAL_MIGRATION_ENV_FILE" in migration_block
     assert "PORTAL_MIGRATION_LOCK_TIMEOUT_MS:-10000" in migration_block
     assert "PORTAL_MIGRATION_STATEMENT_TIMEOUT_MS:-900000" in migration_block
+    assert "-c search_path=pg_catalog,public" in migration_block
     preflight_block = compose.split("  preflight:", 1)[1].split("  maintenance:", 1)[0]
     assert "PORTAL_MAINTENANCE_ENV_FILE" not in preflight_block
     database_policy_block = compose.split("  database-policy:", 1)[1]
     assert "PORTAL_DATABASE_POLICY_LOCK_TIMEOUT_MS:-10000" in database_policy_block
     assert "PORTAL_DATABASE_POLICY_STATEMENT_TIMEOUT_MS:-60000" in database_policy_block
+    assert "-c search_path=pg_catalog,public" in database_policy_block
 
 
 def test_database_policy_explicitly_grants_every_application_table_and_sequence() -> None:
@@ -95,6 +97,11 @@ def test_database_policy_explicitly_grants_every_application_table_and_sequence(
         assert f"public.{table.name}_id_seq" in policy
     assert "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES" not in policy
     assert "GRANT USAGE, SELECT ON ALL SEQUENCES" not in policy
+    assert "session_user = current_user" in policy
+    assert "WHERE rolname = current_user" in policy
+    assert "granted_role.rolname <> :'owner_role'" in policy
+    assert "REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), REFERENCES (%1$s)" in policy
+    assert "non-system-schema objects" in policy
 
 
 def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
@@ -184,6 +191,11 @@ def test_production_stack_smoke_covers_success_replay_and_fail_closed_role() -> 
     assert "concurrent migration bypassed the deployment lock" in smoke
     assert "runtime role could rewrite the migration revision" in smoke
     assert "preflight accepted a stale runtime TRUNCATE grant" in smoke
+    assert "preflight accepted column, grant-option, or PUBLIC privilege drift" in smoke
+    assert "preflight accepted a runtime-owned shadow schema" in smoke
+    assert "database policy accepted an elevated database admin" in smoke
+    assert "database policy accepted an extra database-admin membership" in smoke
+    assert "database policy accepted a database-admin connection after SET ROLE" in smoke
     smoke_override = (
         REPOSITORY_ROOT / "tests" / "compose.production-smoke.yaml"
     ).read_text()

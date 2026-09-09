@@ -96,6 +96,7 @@ def evaluate_runtime_role_policy(values: Mapping[str, object]) -> PreflightCheck
         "audit_trigger": False,
         "audit_owner": False,
         "schema_create": False,
+        "search_path_unsafe": False,
         "database_create": False,
         "database_owner": False,
         "role_membership": False,
@@ -143,6 +144,12 @@ def evaluate_runtime_database_allowlist(
         )
         if granted != expected:
             violations.append(f"table:{table_name}")
+        if values.get("grant_option") is True:
+            violations.append(f"table_grant_option:{table_name}")
+        if values.get("public_privilege") is True:
+            violations.append(f"public_table:{table_name}")
+        if values.get("unexpected_column_acl") is True:
+            violations.append(f"column_acl:{table_name}")
 
     actual_sequences = {str(values["name"]): values for values in sequence_values}
     for sequence_name in sorted(set(actual_sequences) | set(EXPECTED_SEQUENCE_PRIVILEGES)):
@@ -158,6 +165,10 @@ def evaluate_runtime_database_allowlist(
         )
         if granted != expected:
             violations.append(f"sequence:{sequence_name}")
+        if values.get("grant_option") is True:
+            violations.append(f"sequence_grant_option:{sequence_name}")
+        if values.get("public_privilege") is True:
+            violations.append(f"public_sequence:{sequence_name}")
 
     return preflight_check(
         "runtime_database_allowlist",
@@ -181,7 +192,32 @@ def query_runtime_database_allowlist(session: Session) -> PreflightCheck:
                   has_table_privilege(current_user, c.oid, 'SELECT') AS can_select,
                   has_table_privilege(current_user, c.oid, 'INSERT') AS can_insert,
                   has_table_privilege(current_user, c.oid, 'UPDATE') AS can_update,
-                  has_table_privilege(current_user, c.oid, 'DELETE') AS can_delete
+                  has_table_privilege(current_user, c.oid, 'DELETE') AS can_delete,
+                  EXISTS (
+                    SELECT 1
+                    FROM aclexplode(c.relacl) acl
+                    WHERE acl.grantee = (
+                      SELECT oid FROM pg_roles WHERE rolname = current_user
+                    )
+                      AND acl.is_grantable
+                  ) AS grant_option,
+                  EXISTS (
+                    SELECT 1
+                    FROM aclexplode(c.relacl) acl
+                    WHERE acl.grantee = 0
+                  ) AS public_privilege,
+                  EXISTS (
+                    SELECT 1
+                    FROM pg_attribute attribute_record
+                    CROSS JOIN LATERAL aclexplode(attribute_record.attacl) acl
+                    WHERE attribute_record.attrelid = c.oid
+                      AND attribute_record.attnum > 0
+                      AND NOT attribute_record.attisdropped
+                      AND acl.grantee IN (
+                        0,
+                        (SELECT oid FROM pg_roles WHERE rolname = current_user)
+                      )
+                  ) AS unexpected_column_acl
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
                 WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
@@ -196,7 +232,20 @@ def query_runtime_database_allowlist(session: Session) -> PreflightCheck:
                 SELECT
                   c.relname AS name,
                   has_sequence_privilege(current_user, c.oid, 'USAGE') AS can_usage,
-                  has_sequence_privilege(current_user, c.oid, 'SELECT') AS can_select
+                  has_sequence_privilege(current_user, c.oid, 'SELECT') AS can_select,
+                  EXISTS (
+                    SELECT 1
+                    FROM aclexplode(c.relacl) acl
+                    WHERE acl.grantee = (
+                      SELECT oid FROM pg_roles WHERE rolname = current_user
+                    )
+                      AND acl.is_grantable
+                  ) AS grant_option,
+                  EXISTS (
+                    SELECT 1
+                    FROM aclexplode(c.relacl) acl
+                    WHERE acl.grantee = 0
+                  ) AS public_privilege
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
                 WHERE n.nspname = 'public' AND c.relkind = 'S'
@@ -213,6 +262,8 @@ def query_runtime_role_policy(session: Session) -> PreflightCheck:
             """
             SELECT
               session_user <> current_user AS session_role_changed,
+              regexp_replace(current_setting('search_path'), '\\s', '', 'g')
+                <> 'pg_catalog,public' AS search_path_unsafe,
               has_table_privilege(current_user, 'public.alembic_version', 'SELECT')
                 AS alembic_select,
               has_table_privilege(current_user, 'public.alembic_version', 'INSERT')
@@ -258,7 +309,13 @@ def query_runtime_role_policy(session: Session) -> PreflightCheck:
                 'SELECT'
               ) AS audit_sequence_select,
               has_schema_privilege(current_user, 'public', 'USAGE') AS schema_usage,
-              has_schema_privilege(current_user, 'public', 'CREATE') AS schema_create,
+              EXISTS (
+                SELECT 1
+                FROM pg_namespace n
+                WHERE n.nspname <> 'information_schema'
+                  AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND has_schema_privilege(current_user, n.oid, 'CREATE')
+              ) AS schema_create,
               has_database_privilege(current_user, current_database(), 'CREATE')
                 AS database_create,
               (
@@ -275,22 +332,35 @@ def query_runtime_role_policy(session: Session) -> PreflightCheck:
               ) AS role_membership,
               EXISTS (
                 SELECT 1
+                FROM pg_namespace n
+                JOIN pg_roles r ON r.oid = n.nspowner
+                WHERE n.nspname <> 'information_schema'
+                  AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND r.rolname = current_user
+                UNION ALL
+                SELECT 1
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
                 JOIN pg_roles r ON r.oid = c.relowner
-                WHERE n.nspname = 'public' AND r.rolname = current_user
+                WHERE n.nspname <> 'information_schema'
+                  AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND r.rolname = current_user
                 UNION ALL
                 SELECT 1
                 FROM pg_proc p
                 JOIN pg_namespace n ON n.oid = p.pronamespace
                 JOIN pg_roles r ON r.oid = p.proowner
-                WHERE n.nspname = 'public' AND r.rolname = current_user
+                WHERE n.nspname <> 'information_schema'
+                  AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND r.rolname = current_user
                 UNION ALL
                 SELECT 1
                 FROM pg_type t
                 JOIN pg_namespace n ON n.oid = t.typnamespace
                 JOIN pg_roles r ON r.oid = t.typowner
-                WHERE n.nspname = 'public' AND r.rolname = current_user
+                WHERE n.nspname <> 'information_schema'
+                  AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND r.rolname = current_user
               ) AS schema_object_owner,
               EXISTS (
                 SELECT 1

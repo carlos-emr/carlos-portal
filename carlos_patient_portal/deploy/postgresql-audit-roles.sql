@@ -12,10 +12,17 @@
 -- These credentials are deliberately narrow. REVOKE cannot neutralize ownership, administrator
 -- attributes, or inherited privileges, so reject such roles before changing any grants.
 SELECT
-  current_user NOT IN (:'owner_role', :'runtime_role', :'maintenance_role')
+  session_user = current_user
+  AND current_user NOT IN (:'owner_role', :'runtime_role', :'maintenance_role')
   AND :'runtime_role' <> :'maintenance_role'
   AND :'runtime_role' <> :'owner_role'
   AND :'maintenance_role' <> :'owner_role'
+  AND (
+    SELECT rolcanlogin
+      AND NOT (rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls)
+    FROM pg_roles
+    WHERE rolname = current_user
+  ) IS TRUE
   AND (
     SELECT rolcanlogin
       AND NOT (rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls)
@@ -46,12 +53,27 @@ SELECT
     JOIN pg_roles database_owner ON database_owner.oid = database_record.datdba
     WHERE database_record.datname = current_database()
   ) IS TRUE
-  AND pg_has_role(current_user, :'owner_role', 'MEMBER')
+  AND EXISTS (
+    SELECT 1
+    FROM pg_auth_members membership
+    JOIN pg_roles member_role ON member_role.oid = membership.member
+    JOIN pg_roles granted_role ON granted_role.oid = membership.roleid
+    WHERE member_role.rolname = current_user
+      AND granted_role.rolname = :'owner_role'
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM pg_auth_members membership
+    JOIN pg_roles member_role ON member_role.oid = membership.member
+    JOIN pg_roles granted_role ON granted_role.oid = membership.roleid
+    WHERE member_role.rolname = current_user
+      AND granted_role.rolname <> :'owner_role'
+  )
     AS role_attributes_valid
 \gset
 \if :role_attributes_valid
 \else
-  \echo 'Database admin must own the database and be a member of the schema-owner role; schema-owner, runtime, and maintenance must be distinct LOGIN roles without elevated attributes or memberships.'
+  \echo 'Database admin must connect directly, own the database, be a direct member only of the schema-owner role, and be a LOGIN role without elevated attributes; schema-owner, runtime, and maintenance must be distinct LOGIN roles without elevated attributes or memberships.'
   -- psql 16 has no nonzero \quit argument. ON_ERROR_STOP turns this deliberate SQL error into a
   -- failing process status that the deployment command cannot mistake for success.
   SELECT 1 / 0 AS database_role_policy_violation;
@@ -74,8 +96,27 @@ ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA public
 
 -- The runtime role needs ordinary application DML but must not own the evidence table. Run this
 -- after every migration, or mirror these grants through deployment-managed default privileges.
-REVOKE ALL ON ALL TABLES IN SCHEMA public FROM :"runtime_role";
-REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM :"runtime_role";
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM :"runtime_role" CASCADE;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM :"runtime_role" CASCADE;
+-- Table-level REVOKE does not erase separately granted column ACLs. Generate explicit revocations
+-- for every current column so a stale narrow grant cannot bypass the table privilege allowlist.
+SELECT format(
+  'REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), REFERENCES (%1$s) ON TABLE %2$I.%3$I FROM %4$I, %5$I, PUBLIC CASCADE;',
+  string_agg(quote_ident(attribute_record.attname), ', ' ORDER BY attribute_record.attnum),
+  namespace_record.nspname,
+  relation_record.relname,
+  :'runtime_role',
+  :'maintenance_role'
+)
+FROM pg_class relation_record
+JOIN pg_namespace namespace_record ON namespace_record.oid = relation_record.relnamespace
+JOIN pg_attribute attribute_record ON attribute_record.attrelid = relation_record.oid
+WHERE namespace_record.nspname = 'public'
+  AND relation_record.relkind IN ('r', 'p')
+  AND attribute_record.attnum > 0
+  AND NOT attribute_record.attisdropped
+GROUP BY namespace_record.nspname, relation_record.relname
+\gexec
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.patient_portal_accounts,
   public.patient_portal_audit_events,
@@ -113,8 +154,8 @@ REVOKE UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
 GRANT SELECT, INSERT ON public.patient_portal_audit_events TO :"runtime_role";
 
 -- Pruning is deliberately isolated. This role cannot modify application state or insert evidence.
-REVOKE ALL ON ALL TABLES IN SCHEMA public FROM :"maintenance_role";
-REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM :"maintenance_role";
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM :"maintenance_role" CASCADE;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM :"maintenance_role" CASCADE;
 GRANT SELECT, DELETE ON public.patient_portal_audit_events TO :"maintenance_role";
 
 -- Apply grants only when neither restricted role can bypass them through database/schema creation
@@ -134,13 +175,22 @@ SELECT
         :'maintenance_role'
       )
   )
-  AND NOT has_schema_privilege(:'runtime_role', 'public', 'CREATE')
-  AND NOT has_schema_privilege(:'maintenance_role', 'public', 'CREATE')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM pg_namespace namespace_record
+    WHERE namespace_record.nspname <> 'information_schema'
+      AND namespace_record.nspname NOT LIKE 'pg\_%' ESCAPE '\'
+      AND (
+        has_schema_privilege(:'runtime_role', namespace_record.oid, 'CREATE')
+        OR has_schema_privilege(:'maintenance_role', namespace_record.oid, 'CREATE')
+      )
+  )
   AND NOT EXISTS (
     SELECT 1
     FROM pg_namespace namespace_record
     JOIN pg_roles owner_role_record ON owner_role_record.oid = namespace_record.nspowner
-    WHERE namespace_record.nspname = 'public'
+    WHERE namespace_record.nspname <> 'information_schema'
+      AND namespace_record.nspname NOT LIKE 'pg\_%' ESCAPE '\'
       AND owner_role_record.rolname IN (:'runtime_role', :'maintenance_role')
   )
   AND NOT EXISTS (
@@ -148,7 +198,8 @@ SELECT
     FROM pg_class relation_record
     JOIN pg_namespace namespace_record ON namespace_record.oid = relation_record.relnamespace
     JOIN pg_roles owner_role_record ON owner_role_record.oid = relation_record.relowner
-    WHERE namespace_record.nspname = 'public'
+    WHERE namespace_record.nspname <> 'information_schema'
+      AND namespace_record.nspname NOT LIKE 'pg\_%' ESCAPE '\'
       AND owner_role_record.rolname IN (:'runtime_role', :'maintenance_role')
   )
   AND NOT EXISTS (
@@ -156,7 +207,8 @@ SELECT
     FROM pg_proc function_record
     JOIN pg_namespace namespace_record ON namespace_record.oid = function_record.pronamespace
     JOIN pg_roles owner_role_record ON owner_role_record.oid = function_record.proowner
-    WHERE namespace_record.nspname = 'public'
+    WHERE namespace_record.nspname <> 'information_schema'
+      AND namespace_record.nspname NOT LIKE 'pg\_%' ESCAPE '\'
       AND owner_role_record.rolname IN (:'runtime_role', :'maintenance_role')
   )
   AND NOT EXISTS (
@@ -164,13 +216,14 @@ SELECT
     FROM pg_type type_record
     JOIN pg_namespace namespace_record ON namespace_record.oid = type_record.typnamespace
     JOIN pg_roles owner_role_record ON owner_role_record.oid = type_record.typowner
-    WHERE namespace_record.nspname = 'public'
+    WHERE namespace_record.nspname <> 'information_schema'
+      AND namespace_record.nspname NOT LIKE 'pg\_%' ESCAPE '\'
       AND owner_role_record.rolname IN (:'runtime_role', :'maintenance_role')
   ) AS role_ownership_valid
 \gset
 \if :role_ownership_valid
 \else
-  \echo 'Runtime and maintenance roles must not own public-schema objects or create database/schema objects; the schema owner must not own or create databases.'
+  \echo 'Runtime and maintenance roles must not own non-system-schema objects or create database/schema objects; the schema owner must not own or create databases.'
   SELECT 1 / 0 AS database_role_policy_violation;
 \endif
 

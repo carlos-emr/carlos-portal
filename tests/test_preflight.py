@@ -3,7 +3,7 @@ import json
 import pytest
 from pydantic_settings import SettingsError
 
-from carlos_patient_portal import cli
+from carlos_patient_portal import cli, database
 from carlos_patient_portal.config import Settings
 from carlos_patient_portal.database import create_portal_engine
 from carlos_patient_portal.preflight import (
@@ -38,6 +38,7 @@ def compliant_runtime_role() -> dict[str, bool]:
         "audit_trigger": False,
         "audit_owner": False,
         "schema_create": False,
+        "search_path_unsafe": False,
         "database_create": False,
         "database_owner": False,
         "role_membership": False,
@@ -58,6 +59,9 @@ def compliant_runtime_data_privileges() -> tuple[list[dict[str, object]], list[d
                 f"can_{privilege}": privilege in expected
                 for privilege in ("select", "insert", "update", "delete")
             },
+            "grant_option": False,
+            "public_privilege": False,
+            "unexpected_column_acl": False,
         }
         for table_name, expected in EXPECTED_TABLE_PRIVILEGES.items()
     ]
@@ -66,6 +70,8 @@ def compliant_runtime_data_privileges() -> tuple[list[dict[str, object]], list[d
             "name": sequence_name,
             "can_usage": "usage" in expected,
             "can_select": "select" in expected,
+            "grant_option": False,
+            "public_privilege": False,
         }
         for sequence_name, expected in EXPECTED_SEQUENCE_PRIVILEGES.items()
     ]
@@ -141,6 +147,59 @@ def test_runtime_database_allowlist_rejects_missing_required_access() -> None:
 
     assert not check.passed
     assert str(tables[0]["name"]) in check.detail
+
+
+@pytest.mark.parametrize(
+    ("object_kind", "field", "violation"),
+    [
+        ("table", "grant_option", "table_grant_option"),
+        ("table", "public_privilege", "public_table"),
+        ("table", "unexpected_column_acl", "column_acl"),
+        ("sequence", "grant_option", "sequence_grant_option"),
+        ("sequence", "public_privilege", "public_sequence"),
+    ],
+)
+def test_runtime_database_allowlist_rejects_acl_escape_hatches(
+    object_kind: str,
+    field: str,
+    violation: str,
+) -> None:
+    tables, sequences = compliant_runtime_data_privileges()
+    values = tables[0] if object_kind == "table" else sequences[0]
+    values[field] = True
+
+    check = evaluate_runtime_database_allowlist(tables, sequences)
+
+    assert not check.passed
+    assert violation in check.detail
+
+
+def test_postgresql_engine_pins_the_catalog_and_application_search_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    sentinel_engine = object()
+
+    def capture_create_engine(
+        database_url: str,
+        **engine_options: object,
+    ) -> object:
+        captured["database_url"] = database_url
+        captured.update(engine_options)
+        return sentinel_engine
+
+    monkeypatch.setattr(database, "create_engine", capture_create_engine)
+
+    engine = database.create_portal_engine("postgresql+psycopg://portal@database/portal")
+
+    assert engine is sentinel_engine
+    assert captured["connect_args"] == {
+        "connect_timeout": 5,
+        "options": (
+            "-c statement_timeout=15000 -c lock_timeout=5000 "
+            "-c search_path=pg_catalog,public"
+        ),
+    }
 
 
 def test_database_preflight_rejects_sqlite_before_running_postgresql_queries() -> None:

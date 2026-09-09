@@ -171,6 +171,114 @@ compose exec -T database psql \
   --set ON_ERROR_STOP=1 \
   --command 'DROP TABLE public.allowlist_drift_probe'
 
+# Column ACLs and grant options are independent privilege paths. They must fail preflight even when
+# the effective table-level booleans still look like the intended allowlist, and policy replay must
+# remove both forms of drift.
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 <<'SQL'
+GRANT UPDATE (outcome) ON public.patient_portal_audit_events TO portal_runtime;
+GRANT SELECT ON public.patient_portal_accounts TO portal_runtime WITH GRANT OPTION;
+GRANT SELECT ON public.patient_portal_accounts TO PUBLIC;
+SQL
+if "$repository_root/scripts/production-deploy" preflight \
+  > "$test_root/acl-drift.json"; then
+  printf '%s\n' 'preflight accepted column, grant-option, or PUBLIC privilege drift' >&2
+  exit 1
+fi
+grep -F 'column_acl:patient_portal_audit_events' "$test_root/acl-drift.json"
+grep -F 'table_grant_option:patient_portal_accounts' "$test_root/acl-drift.json"
+grep -F 'public_table:patient_portal_accounts' "$test_root/acl-drift.json"
+"$repository_root/scripts/production-deploy" apply-db-policy
+"$repository_root/scripts/production-deploy" preflight
+
+# PostgreSQL's default role-named schema can shadow unqualified application tables. Connections pin
+# their search path, while both preflight and the grant policy reject restricted-role ownership in
+# every non-system schema.
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 \
+  --command 'CREATE SCHEMA portal_runtime AUTHORIZATION portal_runtime'
+if "$repository_root/scripts/production-deploy" preflight \
+  > "$test_root/shadow-schema.json"; then
+  printf '%s\n' 'preflight accepted a runtime-owned shadow schema' >&2
+  exit 1
+fi
+grep -F 'schema_create' "$test_root/shadow-schema.json"
+grep -F 'schema_object_owner' "$test_root/shadow-schema.json"
+if "$repository_root/scripts/production-deploy" apply-db-policy \
+  > "$test_root/shadow-schema-policy.log" 2>&1; then
+  printf '%s\n' 'database policy accepted a runtime-owned shadow schema' >&2
+  exit 1
+fi
+grep -F 'must not own non-system-schema objects' "$test_root/shadow-schema-policy.log"
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 \
+  --command 'DROP SCHEMA portal_runtime'
+"$repository_root/scripts/production-deploy" preflight
+
+# The policy administrator is itself part of the trust boundary. Database ownership alone must not
+# allow a superuser (or another role-management credential) to bless restricted-role grants.
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 \
+  --command 'ALTER ROLE portal_database_admin SUPERUSER'
+if "$repository_root/scripts/production-deploy" apply-db-policy \
+  > "$test_root/elevated-admin.log" 2>&1; then
+  printf '%s\n' 'database policy accepted an elevated database admin' >&2
+  exit 1
+fi
+grep -F 'Database admin must connect directly' "$test_root/elevated-admin.log"
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 \
+  --command 'ALTER ROLE portal_database_admin NOSUPERUSER'
+
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 <<'SQL'
+CREATE ROLE portal_admin_extra NOLOGIN;
+GRANT portal_admin_extra TO portal_database_admin;
+SQL
+if "$repository_root/scripts/production-deploy" apply-db-policy \
+  > "$test_root/admin-membership.log" 2>&1; then
+  printf '%s\n' 'database policy accepted an extra database-admin membership' >&2
+  exit 1
+fi
+grep -F 'direct member only of the schema-owner role' "$test_root/admin-membership.log"
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 <<'SQL'
+REVOKE portal_admin_extra FROM portal_database_admin;
+DROP ROLE portal_admin_extra;
+SQL
+
+set_role_admin_environment="$test_root/database-admin-set-role.env"
+cat > "$set_role_admin_environment" <<'EOF'
+DATABASE_ADMIN_URL=postgresql://portal_database_admin:database-admin-test-password@production-test-database:5432/carlos_portal?sslmode=verify-full&sslrootcert=/run/secrets/postgresql-ca.pem&options=-c%20role%3Dportal_schema_owner
+PORTAL_SCHEMA_OWNER_ROLE=portal_schema_owner
+PORTAL_RUNTIME_ROLE=portal_runtime
+PORTAL_MAINTENANCE_ROLE=portal_audit_maintenance
+EOF
+chmod 0600 "$set_role_admin_environment"
+if PORTAL_DATABASE_ADMIN_ENV_FILE="$set_role_admin_environment" \
+  "$repository_root/scripts/production-deploy" apply-db-policy \
+  > "$test_root/admin-set-role.log" 2>&1; then
+  printf '%s\n' 'database policy accepted a database-admin connection after SET ROLE' >&2
+  exit 1
+fi
+grep -F 'Database admin must connect directly' "$test_root/admin-set-role.log"
+"$repository_root/scripts/production-deploy" apply-db-policy
+"$repository_root/scripts/production-deploy" preflight
+
 privileged_environment="$test_root/production-elevated.env"
 sed \
   's#portal_runtime:runtime-test-password#portal_schema_owner:schema-owner-test-password#' \
@@ -199,7 +307,7 @@ if "$repository_root/scripts/production-deploy" apply-db-policy \
   printf '%s\n' 'database policy accepted database CREATE privilege' >&2
   exit 1
 fi
-grep -F 'must not own public-schema objects or create database/schema objects' \
+grep -F 'must not own non-system-schema objects or create database/schema objects' \
   "$test_root/elevated-ownership.log"
 probe_privilege=$(compose exec -T database psql \
   --username portal_cluster_admin \

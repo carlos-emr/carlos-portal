@@ -95,6 +95,7 @@ services:
       PGOPTIONS: >-
         -c lock_timeout=${PORTAL_MIGRATION_LOCK_TIMEOUT_MS:-10000}
         -c statement_timeout=${PORTAL_MIGRATION_STATEMENT_TIMEOUT_MS:-900000}
+        -c search_path=pg_catalog,public
     command:
       - carlos-patient-portal-migrate
     restart: "no"
@@ -145,6 +146,7 @@ services:
       PGOPTIONS: >-
         -c lock_timeout=${PORTAL_DATABASE_POLICY_LOCK_TIMEOUT_MS:-10000}
         -c statement_timeout=${PORTAL_DATABASE_POLICY_STATEMENT_TIMEOUT_MS:-60000}
+        -c search_path=pg_catalog,public
     volumes:
       - type: bind
         source: ${PORTAL_DB_CA_FILE:?Set PORTAL_DB_CA_FILE to the PostgreSQL CA certificate}
