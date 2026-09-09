@@ -75,7 +75,8 @@ jobs:
           npm ci
           # Playwright downloads its own pinned Chromium. Avoid allowing the
           # runner's unrelated Chrome apt source to break OS dependency setup.
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+          grep -rlZF 'https://dl.google.com/linux/chrome' /etc/apt/sources.list.d \
+            | sudo xargs -0r rm -f
           npx playwright install --with-deps chromium
 
       - name: Audit dependencies
