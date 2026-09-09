@@ -22,6 +22,7 @@ import logging
 from argparse import ArgumentParser
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
+from hashlib import sha256
 from pathlib import Path
 from statistics import median
 from time import monotonic, sleep
@@ -31,8 +32,10 @@ from alembic.config import Config
 from argon2 import PasswordHasher
 from pydantic import ValidationError
 from pydantic_settings import SettingsError
-from sqlalchemy.engine import make_url
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.pool import NullPool
 
 from carlos_patient_portal.config import get_migration_database_url, get_settings
 from carlos_patient_portal.database import (
@@ -141,6 +144,90 @@ def production_preflight(argv: Sequence[str] | None = None) -> None:
     )
     if not passed:
         raise SystemExit(1)
+
+
+def _database_deployment_identity(engine: Engine, *, configured_username: str | None) -> str:
+    with engine.connect() as connection:
+        values = connection.execute(
+            text(
+                """
+                SELECT
+                  control_record.system_identifier::text AS system_identifier,
+                  database_record.oid::text AS database_oid,
+                  current_database() AS database_name,
+                  session_user AS session_role,
+                  current_user AS current_role
+                FROM pg_control_system() control_record
+                JOIN pg_database database_record
+                  ON database_record.datname = current_database()
+                """
+            )
+        ).mappings().one()
+    if (
+        configured_username is None
+        or values["session_role"] != configured_username
+        or values["current_role"] != configured_username
+    ):
+        raise SystemExit("database probe requires a direct session using the URL's login role")
+    fields = (
+        values["system_identifier"],
+        values["database_oid"],
+        values["database_name"],
+        sha256(str(values["current_role"]).encode()).hexdigest(),
+    )
+    return "|".join(str(field).encode().hex() for field in fields[:3]) + f"|{fields[3]}"
+
+
+def deployment_probe(argv: Sequence[str] | None = None) -> None:
+    """Emit secret-free release-policy or live-database identity for deployment orchestration."""
+    parser = ArgumentParser(
+        prog="carlos-patient-portal-deployment-probe",
+        description="Compare immutable deployment artifacts and PostgreSQL targets.",
+    )
+    parser.add_argument(
+        "probe",
+        choices=("migration", "runtime", "maintenance", "policy-sha256"),
+    )
+    args = parser.parse_args(argv)
+    if args.probe == "policy-sha256":
+        policy_path = Path(__file__).resolve().parent / "deploy" / "postgresql-audit-roles.sql"
+        print(sha256(policy_path.read_bytes()).hexdigest())
+        return
+
+    settings = None
+    if args.probe == "migration":
+        database_url = get_migration_database_url()
+        # Alembic uses the URL and libpq environment directly. Do the same here so URL-level
+        # options such as `role` cannot disappear during the probe and reappear for the migration.
+        database_engine = create_engine(database_url, poolclass=NullPool)
+    else:
+        settings = get_settings()
+        if args.probe == "maintenance":
+            if settings.maintenance_database_url is None:
+                parser.error("PATIENT_PORTAL_MAINTENANCE_DATABASE_URL is required")
+            database_url = settings.maintenance_database_url
+        else:
+            database_url = settings.database_url
+        database_engine = create_portal_engine(
+            database_url,
+            pool_size=settings.database_pool_size,
+            max_overflow=settings.database_max_overflow,
+            pool_timeout_seconds=settings.database_pool_timeout_seconds,
+            connect_timeout_seconds=settings.database_connect_timeout_seconds,
+            statement_timeout_ms=settings.database_statement_timeout_ms,
+            lock_timeout_ms=settings.database_lock_timeout_ms,
+            sqlite_busy_timeout_ms=settings.sqlite_busy_timeout_ms,
+        )
+    try:
+        configured_username = make_url(database_url).username
+        print(
+            _database_deployment_identity(
+                database_engine,
+                configured_username=configured_username,
+            )
+        )
+    finally:
+        database_engine.dispose()
 
 
 def maintenance(argv: Sequence[str] | None = None) -> None:
@@ -291,14 +378,16 @@ def maintenance(argv: Sequence[str] | None = None) -> None:
             )
         runtime_url = make_url(settings.database_url)
         maintenance_url = make_url(settings.maintenance_database_url)
-        same_database_and_role = (
+        same_database = (
             runtime_url.get_backend_name() == maintenance_url.get_backend_name()
-            and runtime_url.host == maintenance_url.host
-            and runtime_url.port == maintenance_url.port
+            and (runtime_url.host or "").casefold()
+            == (maintenance_url.host or "").casefold()
+            and (runtime_url.port or 5432) == (maintenance_url.port or 5432)
             and runtime_url.database == maintenance_url.database
-            and runtime_url.username == maintenance_url.username
         )
-        if same_database_and_role:
+        if not same_database:
+            parser.error("maintenance and runtime database URLs must target the same database")
+        if runtime_url.username == maintenance_url.username:
             parser.error("maintenance and runtime database URLs must use separate roles")
         database_url = settings.maintenance_database_url
     database_engine = create_portal_engine(

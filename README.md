@@ -366,6 +366,11 @@ and relation, column, sequence, function, grant-option, and `PUBLIC` ACLs across
 the explicit application allowlist. Output is secret-free JSON so the result can be attached to the
 deployment change record.
 
+The production deployment wrapper additionally refuses to mutate PostgreSQL unless the migration,
+runtime, audit-maintenance, and database-policy credentials resolve to the same physical cluster and
+database under their declared roles. It also verifies that the host policy SQL exactly matches the
+copy packaged in the immutable application image.
+
 Expose `/internal/health/db` and `/internal/readiness` only to trusted infrastructure such as a load
 balancer or orchestrator health probe.
 

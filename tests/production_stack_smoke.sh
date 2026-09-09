@@ -118,6 +118,59 @@ curl --fail --silent --show-error \
   "http://127.0.0.1:$PORTAL_BIND_PORT/health" | grep -F '"status":"ok"'
 "$repository_root/scripts/production-deploy" readiness
 "$repository_root/scripts/production-deploy" outbox-status | grep -F 'outbox is empty'
+
+# Every credential is stored separately, so a copied clinic file must be rejected before a
+# migration or retention command can mutate the wrong PostgreSQL database or use the wrong role.
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 \
+  --command 'CREATE DATABASE portal_wrong_target OWNER portal_database_admin'
+wrong_migration_environment="$test_root/migration-wrong-target.env"
+sed 's#/carlos_portal?#/portal_wrong_target?#' \
+  "$PORTAL_MIGRATION_ENV_FILE" > "$wrong_migration_environment"
+chmod 0600 "$wrong_migration_environment"
+if PORTAL_MIGRATION_ENV_FILE="$wrong_migration_environment" \
+  "$repository_root/scripts/production-deploy" migrate \
+  > "$test_root/migration-wrong-target.log" 2>&1; then
+  printf '%s\n' 'migration accepted a different PostgreSQL database target' >&2
+  exit 1
+fi
+grep -F 'Migration connection targets a different PostgreSQL database' \
+  "$test_root/migration-wrong-target.log"
+
+wrong_maintenance_environment="$test_root/maintenance-wrong-target.env"
+sed 's#/carlos_portal?#/portal_wrong_target?#' \
+  "$PORTAL_MAINTENANCE_ENV_FILE" > "$wrong_maintenance_environment"
+chmod 0600 "$wrong_maintenance_environment"
+if PORTAL_MAINTENANCE_ENV_FILE="$wrong_maintenance_environment" \
+  "$repository_root/scripts/production-deploy" prune-audit \
+  > "$test_root/maintenance-wrong-target.log" 2>&1; then
+  printf '%s\n' 'audit pruning accepted a different PostgreSQL database target' >&2
+  exit 1
+fi
+grep -F 'Maintenance connection targets a different PostgreSQL database' \
+  "$test_root/maintenance-wrong-target.log"
+
+wrong_maintenance_role_environment="$test_root/maintenance-wrong-role.env"
+sed \
+  's#portal_audit_maintenance:maintenance-test-password#portal_schema_owner:schema-owner-test-password#' \
+  "$PORTAL_MAINTENANCE_ENV_FILE" > "$wrong_maintenance_role_environment"
+chmod 0600 "$wrong_maintenance_role_environment"
+if PORTAL_MAINTENANCE_ENV_FILE="$wrong_maintenance_role_environment" \
+  "$repository_root/scripts/production-deploy" prune-audit \
+  > "$test_root/maintenance-wrong-role.log" 2>&1; then
+  printf '%s\n' 'audit pruning accepted a role other than the declared maintenance role' >&2
+  exit 1
+fi
+grep -F 'Maintenance connection does not use the role declared by database policy' \
+  "$test_root/maintenance-wrong-role.log"
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 \
+  --command 'DROP DATABASE portal_wrong_target WITH (FORCE)'
+
 if compose exec -T database psql \
   --username portal_cluster_admin \
   --dbname carlos_portal \
@@ -353,6 +406,43 @@ compose exec -T database psql \
 REVOKE portal_admin_extra FROM portal_database_admin;
 DROP ROLE portal_admin_extra;
 SQL
+
+# Membership in the other direction is equally privileged: a member of runtime can read patient
+# data, a member of maintenance can delete audit rows, and a member of the owner can rewrite them.
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 <<'SQL'
+CREATE ROLE portal_incoming_member NOLOGIN;
+GRANT portal_database_admin, portal_schema_owner, portal_runtime, portal_audit_maintenance
+  TO portal_incoming_member;
+SQL
+incoming_privileges=$(compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --tuples-only \
+  --no-align \
+  --command "SELECT has_table_privilege('portal_incoming_member', 'public.patient_portal_accounts', 'SELECT') AND has_table_privilege('portal_incoming_member', 'public.patient_portal_audit_events', 'UPDATE') AND has_table_privilege('portal_incoming_member', 'public.patient_portal_audit_events', 'DELETE')")
+if [ "$incoming_privileges" != "t" ]; then
+  printf '%s\n' 'incoming-role membership fixture did not obtain the protected privileges' >&2
+  exit 1
+fi
+if "$repository_root/scripts/production-deploy" apply-db-policy \
+  > "$test_root/incoming-membership.log" 2>&1; then
+  printf '%s\n' 'database policy accepted an unexpected member of privileged roles' >&2
+  exit 1
+fi
+grep -F 'not be inherited by another role' "$test_root/incoming-membership.log"
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 <<'SQL'
+REVOKE portal_database_admin, portal_schema_owner, portal_runtime, portal_audit_maintenance
+  FROM portal_incoming_member;
+DROP ROLE portal_incoming_member;
+SQL
+"$repository_root/scripts/production-deploy" apply-db-policy
+"$repository_root/scripts/production-deploy" preflight
 
 set_role_admin_environment="$test_root/database-admin-set-role.env"
 cat > "$set_role_admin_environment" <<'EOF'

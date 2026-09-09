@@ -157,6 +157,10 @@ services:
         source: ./carlos_patient_portal/deploy/postgresql-audit-roles.sql
         target: /policy/postgresql-audit-roles.sql
         read_only: true
+      - type: bind
+        source: ./carlos_patient_portal/deploy/postgresql-database-identity.sql
+        target: /policy/postgresql-database-identity.sql
+        read_only: true
     command:
       - /bin/sh
       - -euc

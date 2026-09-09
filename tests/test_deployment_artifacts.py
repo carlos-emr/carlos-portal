@@ -55,6 +55,7 @@ def test_production_compose_separates_runtime_and_privileged_jobs() -> None:
     assert "${PORTAL_DATABASE_ADMIN_ENV_FILE:-deploy/database-admin.env}" in compose
     assert "${PORTAL_MAINTENANCE_ENV_FILE:-deploy/maintenance.env}" in compose
     assert "postgresql-audit-roles.sql" in compose
+    assert "postgresql-database-identity.sql" in compose
     assert "carlos-patient-portal-preflight" in compose
     assert "PATIENT_PORTAL_TRUSTED_PROXY_CIDRS" in compose
     assert "--forwarded-allow-ips=*" not in compose
@@ -105,6 +106,8 @@ def test_database_policy_explicitly_grants_every_application_table_and_sequence(
     assert "non-system-schema objects" in policy
     assert "REVOKE TEMPORARY ON DATABASE" in policy
     assert "hold privileges outside public" in policy
+    assert "membership.roleid" in policy
+    assert "only the database admin may inherit the schema owner" in policy
 
 
 def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
@@ -128,6 +131,12 @@ def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
     assert "compose --profile operations run --rm migrate" in script
     assert "compose --profile operations run --rm database-policy" in script
     assert "compose --profile operations run --rm preflight" in script
+    assert "verify_policy_artifact" in script
+    assert "verify_database_targets" in script
+    assert "carlos-patient-portal-deployment-probe" in script
+    assert "postgresql-database-identity.sql" in script
+    assert "does not match the policy packaged in PORTAL_IMAGE" in script
+    assert "targets a different PostgreSQL database" in script
     assert script.index("run --rm database-policy") < script.index("run --rm preflight")
     assert script.index("run --rm preflight") < script.index("compose up --detach")
     assert script.count("--wait --wait-timeout 90") == 2
@@ -202,6 +211,10 @@ def test_production_stack_smoke_covers_success_replay_and_fail_closed_role() -> 
     assert "preflight accepted UPDATE through an undeclared view" in smoke
     assert "preflight accepted runtime privileges outside public" in smoke
     assert "preflight accepted runtime temporary-object creation" in smoke
+    assert "migration accepted a different PostgreSQL database target" in smoke
+    assert "audit pruning accepted a different PostgreSQL database target" in smoke
+    assert "audit pruning accepted a role other than the declared maintenance role" in smoke
+    assert "database policy accepted an unexpected member of privileged roles" in smoke
     smoke_override = (
         REPOSITORY_ROOT / "tests" / "compose.production-smoke.yaml"
     ).read_text()

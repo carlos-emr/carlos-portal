@@ -131,6 +131,121 @@ validate() {
   compose --profile operations config --quiet
 }
 
+verify_policy_artifact() {
+  command -v sha256sum >/dev/null 2>&1 || {
+    printf '%s\n' 'sha256sum is required to validate the database policy artifact.' >&2
+    exit 1
+  }
+  host_policy_output=$(sha256sum \
+    "$repository_root/carlos_patient_portal/deploy/postgresql-audit-roles.sql")
+  host_policy_hash=${host_policy_output%% *}
+  image_policy_hash=$(compose --profile operations run --rm migrate \
+    carlos-patient-portal-deployment-probe policy-sha256)
+  if [ "$host_policy_hash" != "$image_policy_hash" ]; then
+    printf '%s\n' \
+      'The host database policy does not match the policy packaged in PORTAL_IMAGE.' >&2
+    printf '%s\n' 'Use the deployment tooling from the same reviewed release as the image.' >&2
+    exit 1
+  fi
+}
+
+verify_portal_database_probe() {
+  probe_label=$1
+  expected_role_digest=$2
+  probe_output=$3
+  probe_system_identifier=
+  probe_database_oid=
+  probe_database_name=
+  probe_role_digest=
+  IFS='|' read -r \
+    probe_system_identifier \
+    probe_database_oid \
+    probe_database_name \
+    probe_role_digest <<EOF
+$probe_output
+EOF
+  if [ -z "$probe_system_identifier" ] \
+    || [ -z "$probe_database_oid" ] \
+    || [ -z "$probe_database_name" ] \
+    || [ -z "$probe_role_digest" ]; then
+    printf 'Invalid database identity returned by the %s connection.\n' "$probe_label" >&2
+    exit 1
+  fi
+  if [ "$probe_system_identifier" != "$deployment_system_identifier" ] \
+    || [ "$probe_database_oid" != "$deployment_database_oid" ] \
+    || [ "$probe_database_name" != "$deployment_database_name" ]; then
+    printf '%s connection targets a different PostgreSQL database.\n' "$probe_label" >&2
+    exit 1
+  fi
+  if [ "$probe_role_digest" != "$expected_role_digest" ]; then
+    printf '%s connection does not use the role declared by database policy.\n' \
+      "$probe_label" >&2
+    exit 1
+  fi
+}
+
+verify_database_targets() {
+  database_admin_probe=$(compose --profile operations run --rm database-policy \
+    /bin/sh -euc '
+      role_digest() {
+        printf "%s" "$1" | sha256sum | cut -d " " -f 1
+      }
+      identity=$(psql "$DATABASE_ADMIN_URL" \
+        --no-psqlrc \
+        --quiet \
+        --tuples-only \
+        --no-align \
+        --set ON_ERROR_STOP=1 \
+        --file /policy/postgresql-database-identity.sql)
+      printf "%s|%s|%s|%s\n" \
+        "$identity" \
+        "$(role_digest "$PORTAL_SCHEMA_OWNER_ROLE")" \
+        "$(role_digest "$PORTAL_RUNTIME_ROLE")" \
+        "$(role_digest "$PORTAL_MAINTENANCE_ROLE")"
+    ')
+  deployment_system_identifier=
+  deployment_database_oid=
+  deployment_database_name=
+  database_admin_direct=
+  owner_role_digest=
+  runtime_role_digest=
+  maintenance_role_digest=
+  IFS='|' read -r \
+    deployment_system_identifier \
+    deployment_database_oid \
+    deployment_database_name \
+    database_admin_direct \
+    owner_role_digest \
+    runtime_role_digest \
+    maintenance_role_digest <<EOF
+$database_admin_probe
+EOF
+  if [ -z "$deployment_system_identifier" ] \
+    || [ -z "$deployment_database_oid" ] \
+    || [ -z "$deployment_database_name" ] \
+    || [ -z "$owner_role_digest" ] \
+    || [ -z "$runtime_role_digest" ] \
+    || [ -z "$maintenance_role_digest" ]; then
+    printf '%s\n' 'Invalid database identity returned by the database-admin connection.' >&2
+    exit 1
+  fi
+  if [ "$database_admin_direct" != "direct" ]; then
+    printf '%s\n' 'Database admin must connect directly without SET ROLE.' >&2
+    exit 1
+  fi
+
+  migration_probe=$(compose --profile operations run --rm migrate \
+    carlos-patient-portal-deployment-probe migration)
+  runtime_probe=$(compose --profile operations run --rm preflight \
+    carlos-patient-portal-deployment-probe runtime)
+  maintenance_probe=$(compose --profile operations run --rm \
+    --entrypoint carlos-patient-portal-deployment-probe \
+    audit-maintenance maintenance)
+  verify_portal_database_probe "Migration" "$owner_role_digest" "$migration_probe"
+  verify_portal_database_probe "Runtime" "$runtime_role_digest" "$runtime_probe"
+  verify_portal_database_probe "Maintenance" "$maintenance_role_digest" "$maintenance_probe"
+}
+
 readiness_once() {
   compose exec -T web python -c \
     'from urllib.request import Request, urlopen; from carlos_patient_portal.config import get_settings; token=get_settings().internal_health_token.get_secret_value(); request=Request("http://127.0.0.1:8090/internal/readiness", headers={"Authorization": "Bearer "+token}); response=urlopen(request, timeout=5); print(response.read().decode())'
@@ -163,10 +278,13 @@ case "$command_name" in
     ;;
   migrate)
     validate
+    verify_database_targets
     compose --profile operations run --rm migrate
     ;;
   apply-db-policy)
     validate
+    verify_policy_artifact
+    verify_database_targets
     compose --profile operations run --rm database-policy
     ;;
   preflight)
@@ -175,6 +293,8 @@ case "$command_name" in
     ;;
   deploy)
     validate
+    verify_policy_artifact
+    verify_database_targets
     compose --profile operations run --rm migrate
     compose --profile operations run --rm database-policy
     compose --profile operations run --rm preflight
@@ -214,6 +334,7 @@ case "$command_name" in
   prune-audit)
     validate
     require_private_file "$PORTAL_MAINTENANCE_ENV_FILE"
+    verify_database_targets
     compose --profile operations run --rm audit-maintenance prune-audit
     ;;
   status)

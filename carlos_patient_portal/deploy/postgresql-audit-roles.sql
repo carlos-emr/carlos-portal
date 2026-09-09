@@ -47,6 +47,22 @@ SELECT
     JOIN pg_roles member_role ON member_role.oid = membership.member
     WHERE member_role.rolname IN (:'owner_role', :'runtime_role', :'maintenance_role')
   )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM pg_auth_members membership
+    JOIN pg_roles member_role ON member_role.oid = membership.member
+    JOIN pg_roles granted_role ON granted_role.oid = membership.roleid
+    WHERE granted_role.rolname IN (
+      current_user,
+      :'owner_role',
+      :'runtime_role',
+      :'maintenance_role'
+    )
+      AND NOT (
+        granted_role.rolname = :'owner_role'
+        AND member_role.rolname = current_user
+      )
+  )
   AND (
     SELECT database_owner.rolname = current_user
     FROM pg_database database_record
@@ -73,7 +89,7 @@ SELECT
 \gset
 \if :role_attributes_valid
 \else
-  \echo 'Database admin must connect directly, own the database, be a direct member only of the schema-owner role, and be a LOGIN role without elevated attributes; schema-owner, runtime, and maintenance must be distinct LOGIN roles without elevated attributes or memberships.'
+  \echo 'Database admin must connect directly, own the database, be a direct member only of the schema-owner role, and not be inherited by another role. Schema-owner, runtime, and maintenance must be distinct LOGIN roles without elevated attributes or memberships; only the database admin may inherit the schema owner.'
   -- psql 16 has no nonzero \quit argument. ON_ERROR_STOP turns this deliberate SQL error into a
   -- failing process status that the deployment command cannot mistake for success.
   SELECT 1 / 0 AS database_role_policy_violation;

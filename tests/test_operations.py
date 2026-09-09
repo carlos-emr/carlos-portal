@@ -243,6 +243,26 @@ def test_audit_pruning_rejects_same_role_with_different_query_options(
     assert "separate roles" in capsys.readouterr().err
 
 
+def test_audit_pruning_rejects_a_different_database_target(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runtime_database_url = f"sqlite+pysqlite:///{tmp_path / 'runtime.db'}"
+    maintenance_database_url = f"sqlite+pysqlite:///{tmp_path / 'other-clinic.db'}"
+    settings = Settings(
+        environment="development",
+        database_url=runtime_database_url,
+        maintenance_database_url=maintenance_database_url,
+    )
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+
+    with pytest.raises(SystemExit):
+        cli.maintenance(["prune-audit"])
+
+    assert "must target the same database" in capsys.readouterr().err
+
+
 def test_audit_export_cli_emits_ordered_jsonl(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,

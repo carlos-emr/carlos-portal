@@ -33,6 +33,7 @@ carlos-patient-portal-migrate = "carlos_patient_portal.cli:migrate"
 carlos-patient-portal-maintenance = "carlos_patient_portal.cli:maintenance"
 carlos-patient-portal-outbox-worker = "carlos_patient_portal.cli:outbox_worker"
 carlos-patient-portal-preflight = "carlos_patient_portal.cli:production_preflight"
+carlos-patient-portal-deployment-probe = "carlos_patient_portal.cli:deployment_probe"
 
 [project.optional-dependencies]
 dev = [

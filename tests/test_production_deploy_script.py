@@ -86,3 +86,23 @@ def test_rollback_preflight_failure_leaves_running_services_untouched(tmp_path: 
     calls = Path(environment["FAKE_DOCKER_LOG"]).read_text().splitlines()
     assert any("run --rm preflight" in call for call in calls)
     assert not any(" up --detach" in call for call in calls)
+
+
+def test_database_policy_mismatch_fails_before_database_mutation(tmp_path: Path) -> None:
+    fake_docker = install_fake_docker(tmp_path, fail_preflight=False)
+    environment = rollback_environment(tmp_path, fake_docker)
+
+    result = subprocess.run(  # noqa: S603
+        [str(DEPLOY_SCRIPT), "apply-db-policy"],
+        cwd=REPOSITORY_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "does not match the policy packaged in PORTAL_IMAGE" in result.stderr
+    calls = Path(environment["FAKE_DOCKER_LOG"]).read_text().splitlines()
+    assert any("deployment-probe policy-sha256" in call for call in calls)
+    assert not any(call.endswith("run --rm database-policy") for call in calls)

@@ -97,6 +97,13 @@ as the creation target. Only after those checks pass does it start web and outbo
 both containers to become healthy. It does not configure
 DNS, edge TLS, managed backups, or monitoring on the host.
 
+Before any migration, policy change, or audit prune, the wrapper queries every credential and
+requires the same PostgreSQL system identifier, database OID, and database name. It also requires
+the migration, runtime, and maintenance sessions to use the roles declared by database policy, and
+requires a direct database-admin session. Before applying policy, it compares the host SQL checksum
+with the copy packaged in `PORTAL_IMAGE`; run the wrapper from the same reviewed release checkout as
+the image.
+
 Migration connections fail after 10 seconds, lock waits after 10 seconds, and statements after 15
 minutes. Database-policy connections use the same connect and lock limits and a 60-second statement
 limit. Override these only for a reviewed migration using
