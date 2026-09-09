@@ -15,6 +15,16 @@ SELECT concat_ws(
       FALSE
     ) THEN 'tls'
     ELSE 'plaintext'
+  END,
+  CASE
+    WHEN regexp_replace(current_setting('search_path'), '\s', '', 'g') = 'pg_catalog,public'
+      AND (
+        SELECT setting::bigint > 0 FROM pg_settings WHERE name = 'lock_timeout'
+      )
+      AND (
+        SELECT setting::bigint > 0 FROM pg_settings WHERE name = 'statement_timeout'
+      ) THEN 'safe'
+    ELSE 'unsafe'
   END
 )
 FROM pg_control_system() control_record

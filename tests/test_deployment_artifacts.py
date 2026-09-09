@@ -108,6 +108,12 @@ def test_database_policy_explicitly_grants_every_application_table_and_sequence(
     assert "hold privileges outside public" in policy
     assert "membership.roleid" in policy
     assert "only the database admin may inherit the schema owner" in policy
+    assert "aclexplode(namespace_record.nspacl)" in policy
+    assert "aclexplode(relation_record.relacl)" in policy
+    assert "aclexplode(attribute_record.attacl)" in policy
+    assert "aclexplode(function_record.proacl)" in policy
+    assert "aclexplode(default_acl.defaclacl)" in policy
+    assert "ACLs must not grant access to undeclared roles" in policy
 
 
 def test_database_identity_query_attests_live_tls() -> None:
@@ -119,6 +125,11 @@ def test_database_identity_query_attests_live_tls() -> None:
     assert "pg_backend_pid()" in identity_query
     assert "'tls'" in identity_query
     assert "'plaintext'" in identity_query
+    assert "current_setting('search_path')" in identity_query
+    assert "name = 'lock_timeout'" in identity_query
+    assert "name = 'statement_timeout'" in identity_query
+    assert "'safe'" in identity_query
+    assert "'unsafe'" in identity_query
 
 
 def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
@@ -151,6 +162,11 @@ def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
     assert "identity query does not match the query packaged in PORTAL_IMAGE" in script
     assert "targets a different PostgreSQL database" in script
     assert "Database admin connection does not use TLS" in script
+    assert "does not enforce the deployment session policy" in script
+    migrate_block = script.split("  migrate)", 1)[1].split("    ;;", 1)[0]
+    prune_block = script.split("  prune-audit)", 1)[1].split("    ;;", 1)[0]
+    assert "verify_database_artifacts" in migrate_block
+    assert "verify_database_artifacts" in prune_block
     assert script.index("run --rm database-policy") < script.index("run --rm preflight")
     assert script.index("run --rm preflight") < script.index("compose up --detach")
     assert script.count("--wait --wait-timeout 90") == 2
@@ -246,9 +262,12 @@ def test_production_stack_smoke_covers_success_replay_and_fail_closed_role() -> 
 
 def test_production_environment_example_can_satisfy_runtime_policy(tmp_path: Path) -> None:
     example_path = REPOSITORY_ROOT / "deploy" / "production.env.example"
+    example = example_path.read_text()
+    assert "PATIENT_PORTAL_DATABASE_SCHEMA_OWNER_ROLE=portal_schema_owner" in example
+    assert "PATIENT_PORTAL_DATABASE_MAINTENANCE_ROLE=portal_audit_maintenance" in example
     values = {
         key: value
-        for line in example_path.read_text().splitlines()
+        for line in example.splitlines()
         if line and not line.startswith("#")
         for key, value in [line.split("=", 1)]
     }

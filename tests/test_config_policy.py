@@ -787,6 +787,7 @@ def test_production_accepts_remote_postgresql_with_verified_tls() -> None:
         "dbname=other_clinic",
         "host=other.example.test",
         "hostaddr=192.0.2.10",
+        "options=-c%20search_path%3Dunsafe",
         "port=6543",
         "service=other",
     ),
@@ -799,20 +800,44 @@ def test_production_rejects_database_routing_query_overrides(
         f"?sslmode=verify-full&{routing_parameter}"
     )
 
-    with pytest.raises(ValidationError, match="must not override connection routing"):
+    with pytest.raises(ValidationError, match="must not set restricted libpq"):
         production_settings(database_url=database_url)
 
-    with pytest.raises(ValidationError, match="must not override connection routing"):
+    with pytest.raises(ValidationError, match="must not set restricted libpq"):
         MigrationDatabaseSettings(environment="production", database_url=database_url)
 
 
 def test_production_rejects_local_authority_that_redirects_to_plaintext_remote_database() -> None:
-    with pytest.raises(ValidationError, match="must not override connection routing"):
+    with pytest.raises(ValidationError, match="must not set restricted libpq"):
         MigrationDatabaseSettings(
             environment="production",
             database_url=(
                 "postgresql+psycopg://owner@localhost:5432/declared"
                 "?host=remote.example.test&dbname=actual"
+            ),
+        )
+
+
+def test_production_database_roles_must_be_distinct() -> None:
+    with pytest.raises(ValidationError, match="database runtime, schema-owner, and maintenance"):
+        production_settings(
+            database_url=(
+                "postgresql+psycopg://portal_schema_owner@database.example.test/portal"
+                "?sslmode=verify-full"
+            )
+        )
+
+
+def test_production_maintenance_url_must_use_the_declared_role() -> None:
+    with pytest.raises(ValidationError, match="DATABASE_MAINTENANCE_ROLE"):
+        production_settings(
+            database_url=(
+                "postgresql+psycopg://portal_runtime@database.example.test/portal"
+                "?sslmode=verify-full"
+            ),
+            maintenance_database_url=(
+                "postgresql+psycopg://wrong_role@database.example.test/portal"
+                "?sslmode=verify-full"
             ),
         )
 

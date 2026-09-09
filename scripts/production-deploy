@@ -172,19 +172,22 @@ verify_portal_database_probe() {
   probe_database_name=
   probe_role_digest=
   probe_tls=
+  probe_session_policy=
   IFS='|' read -r \
     probe_system_identifier \
     probe_database_oid \
     probe_database_name \
     probe_role_digest \
-    probe_tls <<EOF
+    probe_tls \
+    probe_session_policy <<EOF
 $probe_output
 EOF
   if [ -z "$probe_system_identifier" ] \
     || [ -z "$probe_database_oid" ] \
     || [ -z "$probe_database_name" ] \
     || [ -z "$probe_role_digest" ] \
-    || [ -z "$probe_tls" ]; then
+    || [ -z "$probe_tls" ] \
+    || [ -z "$probe_session_policy" ]; then
     printf 'Invalid database identity returned by the %s connection.\n' "$probe_label" >&2
     exit 1
   fi
@@ -201,6 +204,11 @@ EOF
   fi
   if [ "$probe_tls" != "tls" ]; then
     printf '%s connection does not use TLS.\n' "$probe_label" >&2
+    exit 1
+  fi
+  if [ "$probe_session_policy" != "safe" ]; then
+    printf '%s connection does not enforce the deployment session policy.\n' \
+      "$probe_label" >&2
     exit 1
   fi
 }
@@ -229,6 +237,7 @@ verify_database_targets() {
   deployment_database_name=
   database_admin_direct=
   database_admin_tls=
+  database_admin_session_policy=
   owner_role_digest=
   runtime_role_digest=
   maintenance_role_digest=
@@ -238,6 +247,7 @@ verify_database_targets() {
     deployment_database_name \
     database_admin_direct \
     database_admin_tls \
+    database_admin_session_policy \
     owner_role_digest \
     runtime_role_digest \
     maintenance_role_digest <<EOF
@@ -247,6 +257,7 @@ EOF
     || [ -z "$deployment_database_oid" ] \
     || [ -z "$deployment_database_name" ] \
     || [ -z "$database_admin_tls" ] \
+    || [ -z "$database_admin_session_policy" ] \
     || [ -z "$owner_role_digest" ] \
     || [ -z "$runtime_role_digest" ] \
     || [ -z "$maintenance_role_digest" ]; then
@@ -259,6 +270,11 @@ EOF
   fi
   if [ "$database_admin_tls" != "tls" ]; then
     printf '%s\n' 'Database admin connection does not use TLS.' >&2
+    exit 1
+  fi
+  if [ "$database_admin_session_policy" != "safe" ]; then
+    printf '%s\n' \
+      'Database admin connection does not enforce the deployment session policy.' >&2
     exit 1
   fi
 
@@ -306,6 +322,7 @@ case "$command_name" in
     ;;
   migrate)
     validate
+    verify_database_artifacts
     verify_database_targets
     compose --profile operations run --rm migrate
     ;;
@@ -362,6 +379,7 @@ case "$command_name" in
   prune-audit)
     validate
     require_private_file "$PORTAL_MAINTENANCE_ENV_FILE"
+    verify_database_artifacts
     verify_database_targets
     compose --profile operations run --rm audit-maintenance prune-audit
     ;;

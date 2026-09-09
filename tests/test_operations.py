@@ -297,9 +297,11 @@ def test_audit_pruning_compares_live_targets_after_url_query_parsing(
         engine: FakeEngine,
         *,
         configured_username: str | None,
-    ) -> tuple[str, str, str, str, bool]:
+        expected_search_path: str,
+    ) -> tuple[str, str, str, str, bool, bool]:
         assert configured_username is not None
-        return ("cluster", "42", engine.database_name, configured_username, True)
+        assert expected_search_path == "pg_catalog,public"
+        return ("cluster", "42", engine.database_name, configured_username, True, True)
 
     monkeypatch.setattr(cli, "create_portal_engine", fake_create_portal_engine)
     monkeypatch.setattr(cli, "create_session_factory", lambda engine: engine)
@@ -320,6 +322,7 @@ def test_production_audit_pruning_requires_tls_on_both_live_connections(
         maintenance_database_url=(
             "postgresql+psycopg://maintenance@localhost:5432/portal"
         ),
+        database_maintenance_role="maintenance",
     )
     monkeypatch.setattr(cli, "get_settings", lambda: settings)
 
@@ -333,15 +336,18 @@ def test_production_audit_pruning_requires_tls_on_both_live_connections(
         engine: FakeEngine,
         *,
         configured_username: str | None,
-    ) -> tuple[str, str, str, str, bool]:
+        expected_search_path: str,
+    ) -> tuple[str, str, str, str, bool, bool]:
         del engine
         assert configured_username is not None
+        assert expected_search_path == "pg_catalog,public"
         return (
             "cluster",
             "42",
             "portal",
             configured_username,
             configured_username == "maintenance",
+            True,
         )
 
     monkeypatch.setattr(cli, "create_portal_engine", lambda *args, **kwargs: FakeEngine())

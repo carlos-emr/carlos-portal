@@ -51,6 +51,7 @@ def compliant_runtime_role() -> dict[str, bool]:
         "sequence_update": False,
         "session_role_changed": False,
         "role_elevated": False,
+        "unexpected_acl_grantee": False,
     }
 
 

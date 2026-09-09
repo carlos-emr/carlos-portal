@@ -89,8 +89,10 @@ append-only audit policy through the database-admin URL, and runs a
 fail-closed preflight through the restricted runtime role. Preflight requires production policy,
 PostgreSQL, a current schema, database TLS, a runtime role without inherited privileges or owned
 non-system-schema objects, and exact relation, column, sequence, function, grant-option, and
-`PUBLIC` ACLs across every user schema. Runtime and maintenance roles cannot access non-`public`
-schemas or create temporary objects. Runtime connections pin `search_path` to
+`PUBLIC` ACLs across every user schema. ACLs granting user-schema access to roles outside the
+declared database admin, schema owner, runtime, and maintenance set are rejected. Runtime and
+maintenance roles cannot access non-`public` schemas or create temporary objects. Runtime
+connections pin `search_path` to
 `pg_catalog,public`, so a role-named schema cannot shadow portal objects. Migrations pin it to
 `public`; PostgreSQL still searches the implicitly trusted `pg_catalog` first while using `public`
 as the creation target. Only after those checks pass does it start web and outbox, then wait for
@@ -102,9 +104,10 @@ requires the same PostgreSQL system identifier, database OID, and database name,
 every connection. It also requires the migration, runtime, and maintenance sessions to use the
 roles declared by database policy, and requires a direct database-admin session. Production URLs
 cannot use libpq query parameters such as `host`, `dbname`, or `service` to override their declared
-target. Before applying policy, the wrapper compares both the host policy SQL and database-identity
-query checksums with the copies packaged in `PORTAL_IMAGE`; run the wrapper from the same reviewed
-release checkout as the image.
+target or `options` to replace the enforced search path and bounded waits. Before any migration,
+policy application, or audit prune, the wrapper compares both the host policy SQL and
+database-identity query checksums with the copies packaged in `PORTAL_IMAGE`; run the wrapper from
+the same reviewed release checkout as the image.
 
 Migration connections fail after 10 seconds, lock waits after 10 seconds, and statements after 15
 minutes. Database-policy connections use the same connect and lock limits and a 60-second statement

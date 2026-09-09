@@ -308,11 +308,63 @@ SELECT
     WHERE namespace_record.nspname <> 'information_schema'
       AND namespace_record.nspname NOT LIKE 'pg\_%' ESCAPE '\'
       AND owner_role_record.rolname IN (:'runtime_role', :'maintenance_role')
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM (
+      SELECT acl.grantee, namespace_record.nspowner AS owner_oid
+      FROM pg_namespace namespace_record
+      CROSS JOIN LATERAL aclexplode(namespace_record.nspacl) acl
+      WHERE namespace_record.nspname <> 'information_schema'
+        AND namespace_record.nspname NOT LIKE 'pg\_%' ESCAPE '\'
+      UNION ALL
+      SELECT acl.grantee, relation_record.relowner AS owner_oid
+      FROM pg_class relation_record
+      JOIN pg_namespace namespace_record ON namespace_record.oid = relation_record.relnamespace
+      CROSS JOIN LATERAL aclexplode(relation_record.relacl) acl
+      WHERE namespace_record.nspname <> 'information_schema'
+        AND namespace_record.nspname NOT LIKE 'pg\_%' ESCAPE '\'
+      UNION ALL
+      SELECT acl.grantee, relation_record.relowner AS owner_oid
+      FROM pg_attribute attribute_record
+      JOIN pg_class relation_record ON relation_record.oid = attribute_record.attrelid
+      JOIN pg_namespace namespace_record ON namespace_record.oid = relation_record.relnamespace
+      CROSS JOIN LATERAL aclexplode(attribute_record.attacl) acl
+      WHERE namespace_record.nspname <> 'information_schema'
+        AND namespace_record.nspname NOT LIKE 'pg\_%' ESCAPE '\'
+        AND attribute_record.attnum > 0
+        AND NOT attribute_record.attisdropped
+      UNION ALL
+      SELECT acl.grantee, function_record.proowner AS owner_oid
+      FROM pg_proc function_record
+      JOIN pg_namespace namespace_record ON namespace_record.oid = function_record.pronamespace
+      CROSS JOIN LATERAL aclexplode(function_record.proacl) acl
+      WHERE namespace_record.nspname <> 'information_schema'
+        AND namespace_record.nspname NOT LIKE 'pg\_%' ESCAPE '\'
+      UNION ALL
+      SELECT acl.grantee, default_acl.defaclrole AS owner_oid
+      FROM pg_default_acl default_acl
+      CROSS JOIN LATERAL aclexplode(default_acl.defaclacl) acl
+      WHERE default_acl.defaclrole = (
+        SELECT oid FROM pg_roles WHERE rolname = :'owner_role'
+      )
+    ) unexpected_acl
+    WHERE unexpected_acl.grantee <> unexpected_acl.owner_oid
+      AND unexpected_acl.grantee NOT IN (
+        SELECT oid
+        FROM pg_roles
+        WHERE rolname IN (
+          current_user,
+          :'owner_role',
+          :'runtime_role',
+          :'maintenance_role'
+        )
+      )
   ) AS role_ownership_valid
 \gset
 \if :role_ownership_valid
 \else
-  \echo 'Runtime and maintenance roles must not own non-system-schema objects, create database/schema/temporary objects, or hold privileges outside public; the schema owner must not own or create databases.'
+  \echo 'Runtime and maintenance roles must not own non-system-schema objects, create database/schema/temporary objects, or hold privileges outside public; the schema owner must not own or create databases, and user-schema ACLs must not grant access to undeclared roles.'
   SELECT 1 / 0 AS database_role_policy_violation;
 \endif
 

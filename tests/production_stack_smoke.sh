@@ -134,6 +134,19 @@ fi
 grep -F 'Database admin connection does not use TLS' \
   "$test_root/database-admin-plaintext.log"
 
+unsafe_admin_environment="$test_root/database-admin-unsafe-session.env"
+sed 's#sslmode=verify-full#options=-c%20lock_timeout%3D0\&sslmode=verify-full#' \
+  "$PORTAL_DATABASE_ADMIN_ENV_FILE" > "$unsafe_admin_environment"
+chmod 0600 "$unsafe_admin_environment"
+if PORTAL_DATABASE_ADMIN_ENV_FILE="$unsafe_admin_environment" \
+  "$repository_root/scripts/production-deploy" apply-db-policy \
+  > "$test_root/database-admin-unsafe-session.log" 2>&1; then
+  printf '%s\n' 'database policy accepted unbounded database-admin lock waits' >&2
+  exit 1
+fi
+grep -F 'Database admin connection does not enforce the deployment session policy' \
+  "$test_root/database-admin-unsafe-session.log"
+
 # Every credential is stored separately, so a copied clinic file must be rejected before a
 # migration or retention command can mutate the wrong PostgreSQL database or use the wrong role.
 compose exec -T database psql \
@@ -354,6 +367,39 @@ grep -F 'public_table:public.patient_portal_accounts' "$test_root/acl-drift.json
 "$repository_root/scripts/production-deploy" apply-db-policy
 "$repository_root/scripts/production-deploy" preflight
 
+# A role outside the declared admin/owner/runtime/maintenance set must not retain direct patient
+# access. Runtime's own effective privileges can still look perfect while this separate login reads
+# the same tables, so both standalone preflight and policy reconciliation must fail closed.
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 <<'SQL'
+CREATE ROLE portal_unexpected_reader LOGIN;
+GRANT SELECT ON public.patient_portal_accounts TO portal_unexpected_reader;
+SQL
+if "$repository_root/scripts/production-deploy" preflight \
+  > "$test_root/unexpected-acl-grantee.json"; then
+  printf '%s\n' 'preflight accepted patient access for an undeclared database role' >&2
+  exit 1
+fi
+grep -F 'unexpected_acl_grantee' "$test_root/unexpected-acl-grantee.json"
+if "$repository_root/scripts/production-deploy" apply-db-policy \
+  > "$test_root/unexpected-acl-grantee-policy.log" 2>&1; then
+  printf '%s\n' 'database policy accepted patient access for an undeclared role' >&2
+  exit 1
+fi
+grep -F 'ACLs must not grant access to undeclared roles' \
+  "$test_root/unexpected-acl-grantee-policy.log"
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 <<'SQL'
+REVOKE ALL ON public.patient_portal_accounts FROM portal_unexpected_reader;
+DROP ROLE portal_unexpected_reader;
+SQL
+"$repository_root/scripts/production-deploy" apply-db-policy
+"$repository_root/scripts/production-deploy" preflight
+
 # PostgreSQL's default role-named schema can shadow unqualified application tables. Connections pin
 # their search path, while both preflight and the grant policy reject restricted-role ownership in
 # every non-system schema.
@@ -463,6 +509,28 @@ REVOKE portal_database_admin, portal_schema_owner, portal_runtime, portal_audit_
 DROP ROLE portal_incoming_member;
 SQL
 "$repository_root/scripts/production-deploy" apply-db-policy
+"$repository_root/scripts/production-deploy" preflight
+
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 <<'SQL'
+CREATE ROLE portal_owner_incoming_member NOLOGIN;
+GRANT portal_schema_owner TO portal_owner_incoming_member;
+SQL
+if "$repository_root/scripts/production-deploy" preflight \
+  > "$test_root/owner-incoming-membership-preflight.log" 2>&1; then
+  printf '%s\n' 'runtime preflight accepted a role that inherits schema-owner privileges' >&2
+  exit 1
+fi
+grep -F 'role_membership' "$test_root/owner-incoming-membership-preflight.log"
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 <<'SQL'
+REVOKE portal_schema_owner FROM portal_owner_incoming_member;
+DROP ROLE portal_owner_incoming_member;
+SQL
 "$repository_root/scripts/production-deploy" preflight
 
 set_role_admin_environment="$test_root/database-admin-set-role.env"

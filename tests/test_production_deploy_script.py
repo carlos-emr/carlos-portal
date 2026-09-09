@@ -3,6 +3,8 @@ import subprocess
 from hashlib import sha256
 from pathlib import Path
 
+import pytest
+
 REPOSITORY_ROOT = Path(__file__).parents[1]
 DEPLOY_SCRIPT = REPOSITORY_ROOT / "scripts" / "production-deploy"
 
@@ -111,8 +113,18 @@ def test_database_policy_mismatch_fails_before_database_mutation(tmp_path: Path)
     assert not any(call.endswith("run --rm database-policy") for call in calls)
 
 
+@pytest.mark.parametrize(
+    ("command", "mutation_suffix"),
+    (
+        ("apply-db-policy", "run --rm database-policy"),
+        ("migrate", "run --rm migrate"),
+        ("prune-audit", "run --rm audit-maintenance prune-audit"),
+    ),
+)
 def test_database_identity_artifact_mismatch_fails_before_database_mutation(
     tmp_path: Path,
+    command: str,
+    mutation_suffix: str,
 ) -> None:
     fake_docker = install_fake_docker(tmp_path, fail_preflight=False)
     environment = rollback_environment(tmp_path, fake_docker)
@@ -125,7 +137,7 @@ def test_database_identity_artifact_mismatch_fails_before_database_mutation(
     environment["FAKE_ARTIFACT_OUTPUT"] = f"{sha256(policy).hexdigest()}|{'0' * 64}"
 
     result = subprocess.run(  # noqa: S603
-        [str(DEPLOY_SCRIPT), "apply-db-policy"],
+        [str(DEPLOY_SCRIPT), command],
         cwd=REPOSITORY_ROOT,
         env=environment,
         capture_output=True,
@@ -136,4 +148,4 @@ def test_database_identity_artifact_mismatch_fails_before_database_mutation(
     assert result.returncode != 0
     assert "identity query does not match the query packaged" in result.stderr
     calls = Path(environment["FAKE_DOCKER_LOG"]).read_text().splitlines()
-    assert not any(call.endswith("run --rm database-policy") for call in calls)
+    assert not any(call.endswith(mutation_suffix) for call in calls)

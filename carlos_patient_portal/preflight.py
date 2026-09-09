@@ -109,6 +109,7 @@ def evaluate_runtime_role_policy(values: Mapping[str, object]) -> PreflightCheck
         "sequence_update": False,
         "session_role_changed": False,
         "role_elevated": False,
+        "unexpected_acl_grantee": False,
     }
     violations = sorted(
         name for name, expected in required.items() if values.get(name) is not expected
@@ -281,10 +282,24 @@ def query_runtime_database_allowlist(session: Session) -> PreflightCheck:
     return evaluate_runtime_database_allowlist(table_values, sequence_values)
 
 
-def query_runtime_role_policy(session: Session) -> PreflightCheck:
+def query_runtime_role_policy(
+    session: Session,
+    *,
+    schema_owner_role: str = "portal_schema_owner",
+    maintenance_role: str = "portal_audit_maintenance",
+) -> PreflightCheck:
     values = session.execute(
         text(
             """
+            WITH trusted_role_oids AS (
+              SELECT oid
+              FROM pg_roles
+              WHERE rolname IN (current_user, :schema_owner_role, :maintenance_role)
+              UNION
+              SELECT datdba
+              FROM pg_database
+              WHERE datname = current_database()
+            )
             SELECT
               session_user <> current_user AS session_role_changed,
               regexp_replace(current_setting('search_path'), '\\s', '', 'g')
@@ -370,15 +385,21 @@ def query_runtime_role_policy(session: Session) -> PreflightCheck:
               (
                 EXISTS (
                   SELECT 1
-                  FROM pg_roles granted_role
-                  WHERE granted_role.rolname <> current_user
-                    AND pg_has_role(current_user, granted_role.oid, 'MEMBER')
-                )
-                OR EXISTS (
-                  SELECT 1
                   FROM pg_auth_members membership
-                  JOIN pg_roles granted_role ON granted_role.oid = membership.roleid
-                  WHERE granted_role.rolname = current_user
+                  WHERE (
+                    membership.roleid IN (SELECT oid FROM trusted_role_oids)
+                    OR membership.member IN (SELECT oid FROM trusted_role_oids)
+                  )
+                    AND NOT (
+                      membership.roleid = (
+                        SELECT oid FROM pg_roles WHERE rolname = :schema_owner_role
+                      )
+                      AND membership.member = (
+                        SELECT datdba
+                        FROM pg_database
+                        WHERE datname = current_database()
+                      )
+                    )
                 )
               ) AS role_membership,
               EXISTS (
@@ -453,9 +474,61 @@ def query_runtime_role_policy(session: Session) -> PreflightCheck:
                 SELECT rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls
                 FROM pg_roles
                 WHERE rolname = current_user
-              ) AS role_elevated
+              ) AS role_elevated,
+              EXISTS (
+                SELECT 1
+                FROM pg_namespace n
+                CROSS JOIN LATERAL aclexplode(n.nspacl) acl
+                WHERE n.nspname <> 'information_schema'
+                  AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND acl.grantee <> n.nspowner
+                  AND acl.grantee NOT IN (SELECT oid FROM trusted_role_oids)
+                UNION ALL
+                SELECT 1
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                CROSS JOIN LATERAL aclexplode(c.relacl) acl
+                WHERE n.nspname <> 'information_schema'
+                  AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND acl.grantee <> c.relowner
+                  AND acl.grantee NOT IN (SELECT oid FROM trusted_role_oids)
+                UNION ALL
+                SELECT 1
+                FROM pg_attribute attribute_record
+                JOIN pg_class c ON c.oid = attribute_record.attrelid
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                CROSS JOIN LATERAL aclexplode(attribute_record.attacl) acl
+                WHERE n.nspname <> 'information_schema'
+                  AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND attribute_record.attnum > 0
+                  AND NOT attribute_record.attisdropped
+                  AND acl.grantee <> c.relowner
+                  AND acl.grantee NOT IN (SELECT oid FROM trusted_role_oids)
+                UNION ALL
+                SELECT 1
+                FROM pg_proc p
+                JOIN pg_namespace n ON n.oid = p.pronamespace
+                CROSS JOIN LATERAL aclexplode(p.proacl) acl
+                WHERE n.nspname <> 'information_schema'
+                  AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND acl.grantee <> p.proowner
+                  AND acl.grantee NOT IN (SELECT oid FROM trusted_role_oids)
+                UNION ALL
+                SELECT 1
+                FROM pg_default_acl default_acl
+                CROSS JOIN LATERAL aclexplode(default_acl.defaclacl) acl
+                WHERE default_acl.defaclrole = (
+                    SELECT oid FROM pg_roles WHERE rolname = :schema_owner_role
+                  )
+                  AND acl.grantee <> default_acl.defaclrole
+                  AND acl.grantee NOT IN (SELECT oid FROM trusted_role_oids)
+              ) AS unexpected_acl_grantee
             """
-        )
+        ),
+        {
+            "schema_owner_role": schema_owner_role,
+            "maintenance_role": maintenance_role,
+        },
     ).mappings().one()
     return evaluate_runtime_role_policy(values)
 
@@ -474,7 +547,12 @@ def query_database_tls(session: Session) -> PreflightCheck:
     )
 
 
-def database_preflight_checks(engine: Engine) -> list[PreflightCheck]:
+def database_preflight_checks(
+    engine: Engine,
+    *,
+    schema_owner_role: str = "portal_schema_owner",
+    maintenance_role: str = "portal_audit_maintenance",
+) -> list[PreflightCheck]:
     backend_check = preflight_check(
         "database_backend",
         engine.dialect.name == "postgresql",
@@ -515,7 +593,13 @@ def database_preflight_checks(engine: Engine) -> list[PreflightCheck]:
                 )
             checks.append(query_database_tls(session))
             if schema_current:
-                checks.append(query_runtime_role_policy(session))
+                checks.append(
+                    query_runtime_role_policy(
+                        session,
+                        schema_owner_role=schema_owner_role,
+                        maintenance_role=maintenance_role,
+                    )
+                )
                 checks.append(query_runtime_database_allowlist(session))
             else:
                 checks.append(
@@ -573,7 +657,13 @@ def collect_production_preflight(settings: Settings) -> list[PreflightCheck]:
         )
         return checks
     try:
-        checks.extend(database_preflight_checks(database_engine))
+        checks.extend(
+            database_preflight_checks(
+                database_engine,
+                schema_owner_role=settings.database_schema_owner_role,
+                maintenance_role=settings.database_maintenance_role,
+            )
+        )
     finally:
         database_engine.dispose()
     return checks

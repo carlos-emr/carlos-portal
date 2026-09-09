@@ -30,6 +30,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import make_url
 
 from carlos_patient_portal.credentials import (
     DEFAULT_PASSWORD_HASH_MAX_CONCURRENCY,
@@ -50,8 +51,18 @@ from carlos_patient_portal.database import (
 Environment = Literal["development", "staging", "test", "production"]
 TrustedClientIpHeader = Literal["x-forwarded-for", "x-real-ip"]
 DEFAULT_DATABASE_URL = "postgresql+psycopg://localhost:5432/carlos_portal"
-PRODUCTION_DATABASE_ROUTING_QUERY_PARAMETERS = frozenset(
-    {"dbname", "host", "hostaddr", "password", "port", "service", "servicefile", "user"}
+PRODUCTION_DATABASE_RESTRICTED_QUERY_PARAMETERS = frozenset(
+    {
+        "dbname",
+        "host",
+        "hostaddr",
+        "options",
+        "password",
+        "port",
+        "service",
+        "servicefile",
+        "user",
+    }
 )
 DEFAULT_DEVELOPMENT_SMTP_FROM_ADDRESS = "carlos-test@openo-dev.local"
 MIN_PRODUCTION_SECRET_LENGTH = 32
@@ -174,6 +185,8 @@ class Settings(BaseSettings):
     # Used only by the offline pruning command. Keeping DELETE credentials out of the web and
     # outbox processes lets the runtime role remain append-only for audit events.
     maintenance_database_url: str | None = None
+    database_schema_owner_role: str = "portal_schema_owner"
+    database_maintenance_role: str = "portal_audit_maintenance"
     database_pool_size: int = Field(default=DEFAULT_DATABASE_POOL_SIZE, ge=1, le=100)
     database_max_overflow: int = Field(default=DEFAULT_DATABASE_MAX_OVERFLOW, ge=0, le=100)
     database_pool_timeout_seconds: int = Field(
@@ -457,6 +470,14 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return value.strip() or None
         return value
+
+    @field_validator("database_schema_owner_role", "database_maintenance_role")
+    @classmethod
+    def validate_database_role_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or len(normalized.encode()) > 63:
+            raise ValueError("database role names must contain between 1 and 63 UTF-8 bytes")
+        return normalized
 
     @field_validator("service_name", "clinic_name", "smtp_host", "sms_sender_id")
     @classmethod
@@ -861,11 +882,24 @@ class Settings(BaseSettings):
     def validate_database_transport_policy(self) -> None:
         if not self.is_production:
             return
+        runtime_role = make_url(self.database_url).username
+        if runtime_role in {
+            self.database_schema_owner_role,
+            self.database_maintenance_role,
+        } or self.database_schema_owner_role == self.database_maintenance_role:
+            raise ValueError(
+                "production database runtime, schema-owner, and maintenance roles must differ"
+            )
         self.validate_database_transport_url(
             self.database_url,
             environment_name="PATIENT_PORTAL_DATABASE_URL",
         )
         if self.maintenance_database_url is not None:
+            if make_url(self.maintenance_database_url).username != self.database_maintenance_role:
+                raise ValueError(
+                    "PATIENT_PORTAL_MAINTENANCE_DATABASE_URL must use "
+                    "PATIENT_PORTAL_DATABASE_MAINTENANCE_ROLE"
+                )
             self.validate_database_transport_url(
                 self.maintenance_database_url,
                 environment_name="PATIENT_PORTAL_MAINTENANCE_DATABASE_URL",
@@ -880,13 +914,13 @@ class Settings(BaseSettings):
             parameter.casefold()
             for parameter in parse_qs(parsed_url.query, keep_blank_values=True)
         }
-        routing_overrides = sorted(
-            query_parameters & PRODUCTION_DATABASE_ROUTING_QUERY_PARAMETERS
+        restricted_overrides = sorted(
+            query_parameters & PRODUCTION_DATABASE_RESTRICTED_QUERY_PARAMETERS
         )
-        if routing_overrides:
+        if restricted_overrides:
             raise ValueError(
-                f"production {environment_name} must not override connection routing in query "
-                f"parameters ({','.join(routing_overrides)})"
+                f"production {environment_name} must not set restricted libpq connection "
+                f"parameters in the URL query ({','.join(restricted_overrides)})"
             )
         database_host = parsed_url.hostname
         if database_host is None or database_host.casefold() == "localhost":

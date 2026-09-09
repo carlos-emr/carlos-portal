@@ -150,7 +150,8 @@ def _postgresql_connection_identity(
     engine: Engine,
     *,
     configured_username: str | None,
-) -> tuple[str, str, str, str, bool]:
+    expected_search_path: str,
+) -> tuple[str, str, str, str, bool, bool]:
     with engine.connect() as connection:
         values = connection.execute(
             text(
@@ -160,7 +161,19 @@ def _postgresql_connection_identity(
                   database_record.oid::text AS database_oid,
                   current_database() AS database_name,
                   session_user AS session_role,
-                  current_user AS current_role
+                  current_user AS current_role,
+                  regexp_replace(current_setting('search_path'), '\\s', '', 'g')
+                    AS search_path,
+                  (
+                    SELECT setting::bigint > 0
+                    FROM pg_settings
+                    WHERE name = 'lock_timeout'
+                  ) AS lock_timeout_bounded,
+                  (
+                    SELECT setting::bigint > 0
+                    FROM pg_settings
+                    WHERE name = 'statement_timeout'
+                  ) AS statement_timeout_bounded
                 FROM pg_control_system() control_record
                 JOIN pg_database database_record
                   ON database_record.datname = current_database()
@@ -182,13 +195,24 @@ def _postgresql_connection_identity(
         str(values["database_name"]),
         str(values["current_role"]),
         tls_enabled,
+        (
+            values["search_path"] == expected_search_path
+            and values["lock_timeout_bounded"] is True
+            and values["statement_timeout_bounded"] is True
+        ),
     )
 
 
-def _database_deployment_identity(engine: Engine, *, configured_username: str | None) -> str:
+def _database_deployment_identity(
+    engine: Engine,
+    *,
+    configured_username: str | None,
+    expected_search_path: str,
+) -> str:
     values = _postgresql_connection_identity(
         engine,
         configured_username=configured_username,
+        expected_search_path=expected_search_path,
     )
     fields = (
         values[0],
@@ -196,10 +220,11 @@ def _database_deployment_identity(engine: Engine, *, configured_username: str | 
         values[2],
         sha256(values[3].encode()).hexdigest(),
         "tls" if values[4] else "plaintext",
+        "safe" if values[5] else "unsafe",
     )
     return (
         "|".join(str(field).encode().hex() for field in fields[:3])
-        + f"|{fields[3]}|{fields[4]}"
+        + f"|{fields[3]}|{fields[4]}|{fields[5]}"
     )
 
 
@@ -262,6 +287,9 @@ def deployment_probe(argv: Sequence[str] | None = None) -> None:
             _database_deployment_identity(
                 database_engine,
                 configured_username=configured_username,
+                expected_search_path=(
+                    "public" if args.probe == "migration" else "pg_catalog,public"
+                ),
             )
         )
     finally:
@@ -460,10 +488,12 @@ def maintenance(argv: Sequence[str] | None = None) -> None:
             runtime_identity = _postgresql_connection_identity(
                 runtime_database_engine,
                 configured_username=make_url(settings.database_url).username,
+                expected_search_path="pg_catalog,public",
             )
             maintenance_identity = _postgresql_connection_identity(
                 database_engine,
                 configured_username=make_url(database_url).username,
+                expected_search_path="pg_catalog,public",
             )
             if runtime_identity[:3] != maintenance_identity[:3]:
                 parser.error("maintenance and runtime URLs connect to different databases")
