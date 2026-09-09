@@ -189,7 +189,9 @@ compose exec -T database psql \
   --username portal_cluster_admin \
   --dbname carlos_portal \
   --set ON_ERROR_STOP=1 <<'SQL'
+SET ROLE portal_schema_owner;
 CREATE TABLE public.policy_rollback_probe (id integer);
+RESET ROLE;
 GRANT CREATE ON DATABASE carlos_portal TO portal_audit_maintenance;
 SQL
 if "$repository_root/scripts/production-deploy" apply-db-policy \
