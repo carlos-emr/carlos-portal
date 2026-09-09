@@ -7,8 +7,11 @@ from carlos_patient_portal import cli
 from carlos_patient_portal.config import Settings
 from carlos_patient_portal.database import create_portal_engine
 from carlos_patient_portal.preflight import (
+    EXPECTED_SEQUENCE_PRIVILEGES,
+    EXPECTED_TABLE_PRIVILEGES,
     collect_production_preflight,
     database_preflight_checks,
+    evaluate_runtime_database_allowlist,
     evaluate_runtime_role_policy,
 )
 
@@ -47,6 +50,28 @@ def compliant_runtime_role() -> dict[str, bool]:
     }
 
 
+def compliant_runtime_data_privileges() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    table_values = [
+        {
+            "name": table_name,
+            **{
+                f"can_{privilege}": privilege in expected
+                for privilege in ("select", "insert", "update", "delete")
+            },
+        }
+        for table_name, expected in EXPECTED_TABLE_PRIVILEGES.items()
+    ]
+    sequence_values = [
+        {
+            "name": sequence_name,
+            "can_usage": "usage" in expected,
+            "can_select": "select" in expected,
+        }
+        for sequence_name, expected in EXPECTED_SEQUENCE_PRIVILEGES.items()
+    ]
+    return table_values, sequence_values
+
+
 def test_runtime_role_policy_accepts_only_append_only_audit_access() -> None:
     check = evaluate_runtime_role_policy(compliant_runtime_role())
 
@@ -68,6 +93,54 @@ def test_runtime_role_policy_reports_each_privilege_violation(privilege: str) ->
 
     assert not check.passed
     assert privilege in check.detail
+
+
+def test_runtime_database_allowlist_accepts_only_the_exact_policy() -> None:
+    tables, sequences = compliant_runtime_data_privileges()
+
+    check = evaluate_runtime_database_allowlist(tables, sequences)
+
+    assert check.passed
+
+
+@pytest.mark.parametrize("object_kind", ["table", "sequence"])
+def test_runtime_database_allowlist_rejects_privileges_on_unknown_objects(
+    object_kind: str,
+) -> None:
+    tables, sequences = compliant_runtime_data_privileges()
+    if object_kind == "table":
+        tables.append(
+            {
+                "name": "unexpected_patient_data",
+                "can_select": True,
+                "can_insert": False,
+                "can_update": True,
+                "can_delete": False,
+            }
+        )
+    else:
+        sequences.append(
+            {
+                "name": "unexpected_patient_data_id_seq",
+                "can_usage": True,
+                "can_select": True,
+            }
+        )
+
+    check = evaluate_runtime_database_allowlist(tables, sequences)
+
+    assert not check.passed
+    assert "unexpected_patient_data" in check.detail
+
+
+def test_runtime_database_allowlist_rejects_missing_required_access() -> None:
+    tables, sequences = compliant_runtime_data_privileges()
+    tables[0]["can_select"] = False
+
+    check = evaluate_runtime_database_allowlist(tables, sequences)
+
+    assert not check.passed
+    assert str(tables[0]["name"]) in check.detail
 
 
 def test_database_preflight_rejects_sqlite_before_running_postgresql_queries() -> None:

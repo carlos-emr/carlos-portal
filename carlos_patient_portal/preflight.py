@@ -22,6 +22,26 @@ from carlos_patient_portal.database import (
 
 PreflightStatus = Literal["pass", "fail"]
 
+ORDINARY_TABLE_PRIVILEGES = frozenset({"select", "insert", "update", "delete"})
+EXPECTED_TABLE_PRIVILEGES = {
+    "alembic_version": frozenset({"select"}),
+    "patient_portal_accounts": ORDINARY_TABLE_PRIVILEGES,
+    "patient_portal_audit_events": frozenset({"select", "insert"}),
+    "patient_portal_contact_review_requests": ORDINARY_TABLE_PRIVILEGES,
+    "patient_portal_email_change_requests": ORDINARY_TABLE_PRIVILEGES,
+    "patient_portal_invites": ORDINARY_TABLE_PRIVILEGES,
+    "patient_portal_mfa_challenges": ORDINARY_TABLE_PRIVILEGES,
+    "patient_portal_outbound_deliveries": ORDINARY_TABLE_PRIVILEGES,
+    "patient_portal_password_reset_tokens": ORDINARY_TABLE_PRIVILEGES,
+    "patient_portal_sessions": ORDINARY_TABLE_PRIVILEGES,
+    "patient_portal_unlock_secrets": ORDINARY_TABLE_PRIVILEGES,
+}
+EXPECTED_SEQUENCE_PRIVILEGES = {
+    f"{table_name}_id_seq": frozenset({"usage", "select"})
+    for table_name in EXPECTED_TABLE_PRIVILEGES
+    if table_name not in {"alembic_version"}
+}
+
 
 @dataclass(frozen=True)
 class PreflightCheck:
@@ -101,6 +121,90 @@ def evaluate_runtime_role_policy(values: Mapping[str, object]) -> PreflightCheck
             else "runtime database privilege policy failed"
         ),
     )
+
+
+def evaluate_runtime_database_allowlist(
+    table_values: list[Mapping[str, object]],
+    sequence_values: list[Mapping[str, object]],
+) -> PreflightCheck:
+    """Require the runtime role's ordinary data access to match the deployment allowlist exactly."""
+    violations: list[str] = []
+    actual_tables = {str(values["name"]): values for values in table_values}
+    for table_name in sorted(set(actual_tables) | set(EXPECTED_TABLE_PRIVILEGES)):
+        expected = EXPECTED_TABLE_PRIVILEGES.get(table_name, frozenset())
+        values = actual_tables.get(table_name)
+        if values is None:
+            violations.append(f"missing_table:{table_name}")
+            continue
+        granted = frozenset(
+            privilege
+            for privilege in ("select", "insert", "update", "delete")
+            if values.get(f"can_{privilege}") is True
+        )
+        if granted != expected:
+            violations.append(f"table:{table_name}")
+
+    actual_sequences = {str(values["name"]): values for values in sequence_values}
+    for sequence_name in sorted(set(actual_sequences) | set(EXPECTED_SEQUENCE_PRIVILEGES)):
+        expected = EXPECTED_SEQUENCE_PRIVILEGES.get(sequence_name, frozenset())
+        values = actual_sequences.get(sequence_name)
+        if values is None:
+            violations.append(f"missing_sequence:{sequence_name}")
+            continue
+        granted = frozenset(
+            privilege
+            for privilege in ("usage", "select")
+            if values.get(f"can_{privilege}") is True
+        )
+        if granted != expected:
+            violations.append(f"sequence:{sequence_name}")
+
+    return preflight_check(
+        "runtime_database_allowlist",
+        not violations,
+        passed_detail="runtime table and sequence privileges match the explicit allowlist",
+        failed_detail=(
+            "runtime database allowlist failed: " + ",".join(violations)
+            if violations
+            else "runtime database allowlist failed"
+        ),
+    )
+
+
+def query_runtime_database_allowlist(session: Session) -> PreflightCheck:
+    table_values = list(
+        session.execute(
+            text(
+                """
+                SELECT
+                  c.relname AS name,
+                  has_table_privilege(current_user, c.oid, 'SELECT') AS can_select,
+                  has_table_privilege(current_user, c.oid, 'INSERT') AS can_insert,
+                  has_table_privilege(current_user, c.oid, 'UPDATE') AS can_update,
+                  has_table_privilege(current_user, c.oid, 'DELETE') AS can_delete
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+                """
+            )
+        ).mappings()
+    )
+    sequence_values = list(
+        session.execute(
+            text(
+                """
+                SELECT
+                  c.relname AS name,
+                  has_sequence_privilege(current_user, c.oid, 'USAGE') AS can_usage,
+                  has_sequence_privilege(current_user, c.oid, 'SELECT') AS can_select
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = 'public' AND c.relkind = 'S'
+                """
+            )
+        ).mappings()
+    )
+    return evaluate_runtime_database_allowlist(table_values, sequence_values)
 
 
 def query_runtime_role_policy(session: Session) -> PreflightCheck:
@@ -288,12 +392,20 @@ def database_preflight_checks(engine: Engine) -> list[PreflightCheck]:
             checks.append(query_database_tls(session))
             if schema_current:
                 checks.append(query_runtime_role_policy(session))
+                checks.append(query_runtime_database_allowlist(session))
             else:
                 checks.append(
                     PreflightCheck(
                         "runtime_database_role",
                         "fail",
                         "runtime privileges cannot be verified until the schema is current",
+                    )
+                )
+                checks.append(
+                    PreflightCheck(
+                        "runtime_database_allowlist",
+                        "fail",
+                        "runtime data access cannot be verified until the schema is current",
                     )
                 )
     except SQLAlchemyError as exc:

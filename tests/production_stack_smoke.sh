@@ -99,12 +99,15 @@ chmod 0600 \
 
 compose up --detach --wait database
 compose exec -T database psql \
-  --username portal_database_admin \
+  --username portal_cluster_admin \
   --dbname carlos_portal \
   --set ON_ERROR_STOP=1 <<'SQL'
+CREATE ROLE portal_database_admin LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD 'database-admin-test-password';
 CREATE ROLE portal_schema_owner LOGIN PASSWORD 'schema-owner-test-password';
 CREATE ROLE portal_runtime LOGIN PASSWORD 'runtime-test-password';
 CREATE ROLE portal_audit_maintenance LOGIN PASSWORD 'maintenance-test-password';
+GRANT portal_schema_owner TO portal_database_admin;
+ALTER DATABASE carlos_portal OWNER TO portal_database_admin;
 GRANT CREATE, USAGE ON SCHEMA public TO portal_schema_owner;
 SQL
 
@@ -116,7 +119,7 @@ curl --fail --silent --show-error \
 "$repository_root/scripts/production-deploy" readiness
 "$repository_root/scripts/production-deploy" outbox-status | grep -F 'outbox is empty'
 if compose exec -T database psql \
-  --username portal_database_admin \
+  --username portal_cluster_admin \
   --dbname carlos_portal \
   --set ON_ERROR_STOP=1 \
   --command 'SET ROLE portal_runtime; UPDATE public.alembic_version SET version_num = version_num'; then
@@ -124,7 +127,7 @@ if compose exec -T database psql \
   exit 1
 fi
 compose exec -T database psql \
-  --username portal_database_admin \
+  --username portal_cluster_admin \
   --dbname carlos_portal \
   --set ON_ERROR_STOP=1 \
   --command 'GRANT TRUNCATE ON public.patient_portal_accounts TO portal_runtime'
@@ -141,6 +144,31 @@ grep -F 'table_dangerous_privilege' "$test_root/dangerous-table-privilege.json"
 # idempotent before an operator depends on the same sequence for upgrades.
 "$repository_root/scripts/production-deploy" deploy
 
+# A direct ordinary-data grant on an undeclared object is privilege drift even when it omits the
+# separately checked TRUNCATE/REFERENCES/TRIGGER privileges. The standalone real-data gate must
+# catch it, and reapplying the explicit policy must remove it.
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 <<'SQL'
+CREATE TABLE public.allowlist_drift_probe (id integer);
+GRANT SELECT, UPDATE ON public.allowlist_drift_probe TO portal_runtime;
+SQL
+if "$repository_root/scripts/production-deploy" preflight \
+  > "$test_root/allowlist-drift.json"; then
+  printf '%s\n' 'preflight accepted ordinary DML on an undeclared table' >&2
+  exit 1
+fi
+grep -F 'runtime_database_allowlist' "$test_root/allowlist-drift.json"
+grep -F 'table:allowlist_drift_probe' "$test_root/allowlist-drift.json"
+"$repository_root/scripts/production-deploy" apply-db-policy
+"$repository_root/scripts/production-deploy" preflight
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 \
+  --command 'DROP TABLE public.allowlist_drift_probe'
+
 privileged_environment="$test_root/production-elevated.env"
 sed \
   's#portal_runtime:runtime-test-password#portal_schema_owner:schema-owner-test-password#' \
@@ -156,7 +184,7 @@ grep -F '"name":"runtime_database_role"' "$test_root/elevated.json"
 grep -F '"status":"failed"' "$test_root/elevated.json"
 
 compose exec -T database psql \
-  --username portal_database_admin \
+  --username portal_cluster_admin \
   --dbname carlos_portal \
   --set ON_ERROR_STOP=1 <<'SQL'
 CREATE TABLE public.policy_rollback_probe (id integer);
@@ -170,7 +198,7 @@ fi
 grep -F 'must not own public-schema objects or create database/schema objects' \
   "$test_root/elevated-ownership.log"
 probe_privilege=$(compose exec -T database psql \
-  --username portal_database_admin \
+  --username portal_cluster_admin \
   --dbname carlos_portal \
   --tuples-only \
   --no-align \
@@ -180,7 +208,7 @@ if [ "$probe_privilege" != "f" ]; then
   exit 1
 fi
 compose exec -T database psql \
-  --username portal_database_admin \
+  --username portal_cluster_admin \
   --dbname carlos_portal \
   --set ON_ERROR_STOP=1 <<'SQL'
 REVOKE CREATE ON DATABASE carlos_portal FROM portal_audit_maintenance;
@@ -188,7 +216,7 @@ DROP TABLE public.policy_rollback_probe;
 SQL
 
 compose exec -T database psql \
-  --username portal_database_admin \
+  --username portal_cluster_admin \
   --dbname carlos_portal \
   --set ON_ERROR_STOP=1 \
   --command 'ALTER ROLE portal_audit_maintenance SUPERUSER'

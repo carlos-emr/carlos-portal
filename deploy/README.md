@@ -23,9 +23,12 @@ operational controls that a container cannot verify.
 - A dedicated managed PostgreSQL 16 database with TLS certificate verification and tested PITR or
   backups. The portal owns its `public` schema and does not share it with another application.
 - Pre-created, distinct LOGIN roles for schema ownership, runtime, and audit maintenance, without
-  administrator attributes or inherited memberships, plus a separately controlled database-admin
-  role that owns the database. Grant the schema owner only `CREATE, USAGE` on `public`; the web and
-  outbox credentials must use the runtime role.
+  administrator attributes or inherited memberships, plus a separately controlled, non-superuser
+  database-admin role that directly owns the database. Grant the schema owner only `CREATE, USAGE`
+  on `public`, and grant the schema-owner role to the database admin so it can reconcile grants and
+  default privileges without a superuser login. The web and outbox credentials must use the runtime
+  role. Provider-managed administrator roles require an explicit compatibility check against these
+  ownership and membership requirements before selection.
 - Host nginx (or an equivalent edge) terminating TLS and proxying to `127.0.0.1:8090`. Start with
   `carlos_patient_portal/deploy/nginx.conf`, replace its example hostname, certificate paths, and
   exact CARLOS source CIDRs, then run `nginx -t` before reloading it.
@@ -33,8 +36,10 @@ operational controls that a container cannot verify.
 - A deployment secret manager capable of writing root-readable files with mode `0600`.
 
 The host nginx source address inside the default Compose bridge is `172.30.80.1`. The supplied
-environment example trusts only that address. If `PORTAL_DOCKER_SUBNET` changes, update
-`PATIENT_PORTAL_TRUSTED_PROXY_CIDRS` to the new bridge gateway `/32` before deployment.
+environment and Compose defaults trust only that address. If `PORTAL_DOCKER_SUBNET` changes, set
+`PORTAL_TRUSTED_PROXY_CIDR` to the exact new bridge gateway `/32` (or `/128` for IPv6) before
+deployment. Compose supplies the same value to Uvicorn and the application's trust policy; wildcard
+or multi-address proxy trust is rejected.
 
 ## Prepare one clinic
 

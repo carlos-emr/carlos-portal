@@ -4,7 +4,9 @@ services:
     environment:
       POSTGRES_DB: carlos_portal
       POSTGRES_PASSWORD: database-admin-test-password
-      POSTGRES_USER: portal_database_admin
+      # The bootstrap identity remains the only superuser. The policy connects as a separately
+      # created non-superuser database owner.
+      POSTGRES_USER: portal_cluster_admin
     volumes:
       - type: bind
         source: ${PORTAL_TEST_SERVER_CERT_FILE:?Set PORTAL_TEST_SERVER_CERT_FILE}
@@ -27,7 +29,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - pg_isready -U portal_database_admin -d carlos_portal
+        - pg_isready -U portal_cluster_admin -d carlos_portal
       interval: 2s
       timeout: 3s
       retries: 30

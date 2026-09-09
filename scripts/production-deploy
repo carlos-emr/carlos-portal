@@ -9,6 +9,7 @@ export PORTAL_MIGRATION_ENV_FILE=${PORTAL_MIGRATION_ENV_FILE:-"$repository_root/
 export PORTAL_DATABASE_ADMIN_ENV_FILE=${PORTAL_DATABASE_ADMIN_ENV_FILE:-"$repository_root/deploy/database-admin.env"}
 export PORTAL_MAINTENANCE_ENV_FILE=${PORTAL_MAINTENANCE_ENV_FILE:-"$repository_root/deploy/maintenance.env"}
 export PORTAL_BIND_ADDRESS=${PORTAL_BIND_ADDRESS:-127.0.0.1}
+export PORTAL_TRUSTED_PROXY_CIDR=${PORTAL_TRUSTED_PROXY_CIDR:-172.30.80.1/32}
 deployment_lock_file=${PORTAL_DEPLOY_LOCK_FILE:-/var/lock/carlos-patient-portal-deploy.lock}
 
 usage() {
@@ -62,6 +63,22 @@ is_digest_reference() {
   printf '%s' "$digest" | grep -Eq '^[0-9a-f]{64}$'
 }
 
+require_host_cidr() {
+  case "$PORTAL_TRUSTED_PROXY_CIDR" in
+    */32|*/128) ;;
+    *)
+      printf '%s\n' 'PORTAL_TRUSTED_PROXY_CIDR must identify one exact IPv4 /32 or IPv6 /128 host.' >&2
+      exit 1
+      ;;
+  esac
+  case "$PORTAL_TRUSTED_PROXY_CIDR" in
+    *','*|*\**|*[!0-9a-fA-F:./]*)
+      printf '%s\n' 'PORTAL_TRUSTED_PROXY_CIDR must contain one numeric host CIDR, never a wildcard or list.' >&2
+      exit 1
+      ;;
+  esac
+}
+
 require_image() {
   if [ -z "${PORTAL_IMAGE:-}" ]; then
     printf '%s\n' 'PORTAL_IMAGE must name the release image.' >&2
@@ -97,6 +114,7 @@ validate() {
     printf '%s\n' 'PORTAL_BIND_ADDRESS must be 127.0.0.1 in production.' >&2
     exit 1
   fi
+  require_host_cidr
   require_image
   if [ -n "$compose_override_file" ]; then
     require_file "$compose_override_file"
@@ -203,7 +221,6 @@ case "$command_name" in
     compose ps
     ;;
   rollback)
-    validate
     if [ -z "${PORTAL_ROLLBACK_IMAGE:-}" ]; then
       printf '%s\n' 'PORTAL_ROLLBACK_IMAGE must name the previous immutable image digest.' >&2
       exit 1
@@ -214,6 +231,10 @@ case "$command_name" in
     fi
     PORTAL_IMAGE=$PORTAL_ROLLBACK_IMAGE
     export PORTAL_IMAGE
+    validate
+    # Run the rollback image's packaged schema and runtime-policy checks before replacing either
+    # healthy service. /health is only a liveness probe and cannot catch schema incompatibility.
+    compose --profile operations run --rm preflight
     compose up --detach --no-build --wait --wait-timeout 90 web outbox
     wait_for_readiness
     ;;

@@ -12,7 +12,8 @@
 -- These credentials are deliberately narrow. REVOKE cannot neutralize ownership, administrator
 -- attributes, or inherited privileges, so reject such roles before changing any grants.
 SELECT
-  :'runtime_role' <> :'maintenance_role'
+  current_user NOT IN (:'owner_role', :'runtime_role', :'maintenance_role')
+  AND :'runtime_role' <> :'maintenance_role'
   AND :'runtime_role' <> :'owner_role'
   AND :'maintenance_role' <> :'owner_role'
   AND (
@@ -38,11 +39,19 @@ SELECT
     FROM pg_auth_members membership
     JOIN pg_roles member_role ON member_role.oid = membership.member
     WHERE member_role.rolname IN (:'owner_role', :'runtime_role', :'maintenance_role')
-  ) AS role_attributes_valid
+  )
+  AND (
+    SELECT database_owner.rolname = current_user
+    FROM pg_database database_record
+    JOIN pg_roles database_owner ON database_owner.oid = database_record.datdba
+    WHERE database_record.datname = current_database()
+  ) IS TRUE
+  AND pg_has_role(current_user, :'owner_role', 'MEMBER')
+    AS role_attributes_valid
 \gset
 \if :role_attributes_valid
 \else
-  \echo 'Schema-owner, runtime, and maintenance roles must be distinct LOGIN roles without elevated attributes or memberships.'
+  \echo 'Database admin must own the database and be a member of the distinct, non-elevated schema-owner role; runtime and maintenance must be separate LOGIN roles without memberships.'
   -- psql 16 has no nonzero \quit argument. ON_ERROR_STOP turns this deliberate SQL error into a
   -- failing process status that the deployment command cannot mistake for success.
   SELECT 1 / 0 AS database_role_policy_violation;

@@ -7,6 +7,11 @@ x-portal-service: &portal-service
   image: ${PORTAL_IMAGE:?Set PORTAL_IMAGE to an immutable registry digest}
   env_file:
     - ${PORTAL_ENV_FILE:-deploy/production.env}
+  environment:
+    # Keep Uvicorn and the application on one exact proxy trust boundary. A wildcard here lets
+    # Uvicorn consume an attacker-supplied leading X-Forwarded-For value before the application can
+    # validate the immediate peer. Settings rejects non-CIDR values such as "*" fail closed.
+    PATIENT_PORTAL_TRUSTED_PROXY_CIDRS: ${PORTAL_TRUSTED_PROXY_CIDR:-172.30.80.1/32}
   volumes:
     - type: bind
       source: ${PORTAL_DB_CA_FILE:?Set PORTAL_DB_CA_FILE to the PostgreSQL CA certificate}
@@ -43,9 +48,9 @@ services:
       - ${PORTAL_WEB_WORKERS:-2}
       - --no-access-log
       - --proxy-headers
-      # The port is bound to host loopback below, and this dedicated bridge is not external. Host
-      # nginx is therefore the only untrusted-boundary peer that can supply forwarding headers.
-      - --forwarded-allow-ips=*
+      # Trust only the host nginx bridge address. This must match the CIDR injected into the
+      # application above; production-deploy rejects a non-host CIDR before Compose runs.
+      - --forwarded-allow-ips=${PORTAL_TRUSTED_PROXY_CIDR:-172.30.80.1/32}
     restart: unless-stopped
     stop_grace_period: 30s
     ports:

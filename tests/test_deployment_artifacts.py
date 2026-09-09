@@ -56,6 +56,9 @@ def test_production_compose_separates_runtime_and_privileged_jobs() -> None:
     assert "${PORTAL_MAINTENANCE_ENV_FILE:-deploy/maintenance.env}" in compose
     assert "postgresql-audit-roles.sql" in compose
     assert "carlos-patient-portal-preflight" in compose
+    assert "PATIENT_PORTAL_TRUSTED_PROXY_CIDRS" in compose
+    assert "--forwarded-allow-ips=*" not in compose
+    assert "--forwarded-allow-ips=${PORTAL_TRUSTED_PROXY_CIDR" in compose
     assert "carlos-patient-portal-maintenance" in compose
     assert "postgres:16.15-bookworm@sha256:" in compose
     maintenance_block = compose.split("  maintenance:", 1)[1].split(
@@ -104,6 +107,7 @@ def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
     assert "PORTAL_COMPOSE_OVERRIDE_FILE" in script
     assert 'PORTAL_BIND_ADDRESS:-127.0.0.1' in script
     assert 'PORTAL_BIND_ADDRESS" != "127.0.0.1' in script
+    assert "PORTAL_TRUSTED_PROXY_CIDR" in script
     assert "PORTAL_DEPLOY_LOCK_FILE" in script
     assert "flock --nonblock 9" in script
     assert "deploy|export-audit|cleanup-auth|prune-audit|rollback" in script
@@ -119,6 +123,11 @@ def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
     assert script.count("--wait --wait-timeout 90") == 2
     rollback_block = script.split("  rollback)", 1)[1].split("  *)", 1)[0]
     assert "validate" in rollback_block
+    assert "run --rm preflight" in rollback_block
+    assert rollback_block.index("PORTAL_IMAGE=$PORTAL_ROLLBACK_IMAGE") < rollback_block.index(
+        "validate"
+    )
+    assert rollback_block.index("run --rm preflight") < rollback_block.index("compose up")
 
 
 def test_release_image_includes_sbom_and_provenance() -> None:
@@ -178,7 +187,10 @@ def test_production_stack_smoke_covers_success_replay_and_fail_closed_role() -> 
     smoke_override = (
         REPOSITORY_ROOT / "tests" / "compose.production-smoke.yaml"
     ).read_text()
-    assert "POSTGRES_USER: portal_database_admin" in smoke_override
+    assert "POSTGRES_USER: portal_cluster_admin" in smoke_override
+    assert "CREATE ROLE portal_database_admin LOGIN NOSUPERUSER" in smoke
+    assert "GRANT portal_schema_owner TO portal_database_admin" in smoke
+    assert "ALTER DATABASE carlos_portal OWNER TO portal_database_admin" in smoke
     assert "POSTGRES_USER: portal_schema_owner" not in smoke_override
     assert "outbox is empty" in smoke
 
@@ -287,26 +299,24 @@ def test_reference_proxy_restricts_every_internal_prefix_not_just_the_carlos_one
     assert "proxy_pass" not in patient_internal_block
 
 
-def test_reference_proxy_sets_forwarded_for_in_every_block_that_breaks_inheritance() -> None:
-    """The proxy must write X-Forwarded-For rather than pass a client-supplied one through.
+def test_reference_proxy_replaces_untrusted_forwarded_for_in_every_proxy_block() -> None:
+    """The public edge must discard an attacker-supplied forwarding chain.
 
-    parse_trusted_client_ip_header gates on the *peer* being a trusted proxy, which this nginx
-    always is, then walks the chain right-to-left. That is only sound if the proxy appends the real
-    peer. Forwarding the client's header untouched makes every client-keyed throttle and every
-    recorded source address attacker-chosen.
-
-    Asserted twice because defining any proxy_set_header inside a location disables inheritance of
-    the whole server-level set, so the /internal/carlos/ block needs its own copy.
+    Uvicorn consumes X-Forwarded-For before the application sees the ASGI scope. Preserving a
+    client-supplied leading value would therefore make request.client, rate-limit keys, and audit
+    source hashes attacker-controlled even though the application also has a trusted-proxy parser.
+    The directive is asserted twice because the CARLOS location replaces inherited proxy headers.
     """
     configuration = (PACKAGE_ROOT / "deploy" / "nginx.conf").read_text()
 
-    assert configuration.count("proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;") == 2
-    # Never the bare client value, which is the spoofable form.
+    assert configuration.count("proxy_set_header X-Forwarded-For $remote_addr;") == 2
+    assert "$proxy_add_x_forwarded_for" not in configuration
+    # Never the bare client-provided value, which is the spoofable form.
     assert "proxy_set_header X-Forwarded-For $http_x_forwarded_for" not in configuration
 
     internal_block = configuration.split("location ^~ /internal/carlos/ {", 1)[1]
     internal_block = internal_block.split("\n  }", 1)[0]
-    assert "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;" in internal_block
+    assert "proxy_set_header X-Forwarded-For $remote_addr;" in internal_block
 
 
 def test_audit_role_policy_keeps_runtime_append_only_and_pruning_separate() -> None:
