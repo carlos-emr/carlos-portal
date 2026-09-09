@@ -151,7 +151,9 @@ compose exec -T database psql \
   --username portal_cluster_admin \
   --dbname carlos_portal \
   --set ON_ERROR_STOP=1 <<'SQL'
+SET ROLE portal_schema_owner;
 CREATE TABLE public.allowlist_drift_probe (id integer);
+RESET ROLE;
 GRANT SELECT, UPDATE ON public.allowlist_drift_probe TO portal_runtime;
 SQL
 if "$repository_root/scripts/production-deploy" preflight \
