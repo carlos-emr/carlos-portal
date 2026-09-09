@@ -158,19 +158,28 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
         )
         runtime_engine = create_portal_engine(runtime_url.render_as_string(hide_password=False))
         with Session(runtime_engine) as session:
-            assert query_runtime_role_policy(session).passed
+            assert query_runtime_role_policy(
+                session,
+                schema_owner_role=owner_role,
+            ).passed
 
         with engine.connect() as connection:
             connection.execute(text(f'SET LOCAL ROLE "{runtime_role}"'))
             with Session(bind=connection) as session:
-                changed_session_role_check = query_runtime_role_policy(session)
+                changed_session_role_check = query_runtime_role_policy(
+                    session,
+                    schema_owner_role=owner_role,
+                )
                 assert not changed_session_role_check.passed
                 assert "session_role_changed" in changed_session_role_check.detail
 
         with engine.begin() as connection:
             connection.execute(text(f'GRANT "{owner_role}" TO "{runtime_role}"'))
         with Session(runtime_engine) as session:
-            inherited_role_check = query_runtime_role_policy(session)
+            inherited_role_check = query_runtime_role_policy(
+                session,
+                schema_owner_role=owner_role,
+            )
             assert not inherited_role_check.passed
             assert "role_membership" in inherited_role_check.detail
         with engine.begin() as connection:
@@ -180,7 +189,10 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
             connection.execute(text(f'CREATE ROLE "{incoming_role}" NOLOGIN'))
             connection.execute(text(f'GRANT "{runtime_role}" TO "{incoming_role}"'))
         with Session(runtime_engine) as session:
-            inherited_runtime_check = query_runtime_role_policy(session)
+            inherited_runtime_check = query_runtime_role_policy(
+                session,
+                schema_owner_role=owner_role,
+            )
             assert not inherited_runtime_check.passed
             assert "role_membership" in inherited_runtime_check.detail
         with engine.begin() as connection:
