@@ -73,6 +73,9 @@ jobs:
         if: matrix.python-version == '3.12'
         run: |
           npm ci
+          # Playwright downloads its own pinned Chromium. Avoid allowing the
+          # runner's unrelated Chrome apt source to break OS dependency setup.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
           npx playwright install --with-deps chromium
 
       - name: Audit dependencies
