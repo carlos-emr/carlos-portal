@@ -92,10 +92,11 @@ services:
       - ${PORTAL_MIGRATION_ENV_FILE:-deploy/migration.env}
     environment:
       PGCONNECT_TIMEOUT: ${PORTAL_MIGRATION_CONNECT_TIMEOUT_SECONDS:-10}
+      # pg_catalog remains implicitly first for lookups; public is the first creation target.
       PGOPTIONS: >-
         -c lock_timeout=${PORTAL_MIGRATION_LOCK_TIMEOUT_MS:-10000}
         -c statement_timeout=${PORTAL_MIGRATION_STATEMENT_TIMEOUT_MS:-900000}
-        -c search_path=pg_catalog,public
+        -c search_path=public
     command:
       - carlos-patient-portal-migrate
     restart: "no"

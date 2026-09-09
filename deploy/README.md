@@ -88,10 +88,11 @@ window for a breaking migration. The command runs Alembic with the schema-owner 
 append-only audit policy through the database-admin URL, and runs a
 fail-closed preflight through the restricted runtime role. Preflight requires production policy,
 PostgreSQL, a current schema, database TLS, a runtime role without inherited privileges or owned
-non-system-schema objects, and exact table, column, sequence, grant-option, and `PUBLIC` ACLs. Every
-PostgreSQL connection pins `search_path` to `pg_catalog,public`, so a role-named schema cannot shadow
-portal objects. Only after those checks pass does it start web and outbox, then wait for both
-containers to become healthy. It does not configure
+non-system-schema objects, and exact table, column, sequence, grant-option, and `PUBLIC` ACLs.
+Runtime connections pin `search_path` to `pg_catalog,public`, so a role-named schema cannot shadow
+portal objects. Migrations pin it to `public`; PostgreSQL still searches the implicitly trusted
+`pg_catalog` first while using `public` as the creation target. Only after those checks pass does it
+start web and outbox, then wait for both containers to become healthy. It does not configure
 DNS, edge TLS, managed backups, or monitoring on the host.
 
 Migration connections fail after 10 seconds, lock waits after 10 seconds, and statements after 15

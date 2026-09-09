@@ -78,7 +78,8 @@ def test_production_compose_separates_runtime_and_privileged_jobs() -> None:
     assert "PORTAL_MIGRATION_ENV_FILE" in migration_block
     assert "PORTAL_MIGRATION_LOCK_TIMEOUT_MS:-10000" in migration_block
     assert "PORTAL_MIGRATION_STATEMENT_TIMEOUT_MS:-900000" in migration_block
-    assert "-c search_path=pg_catalog,public" in migration_block
+    assert "-c search_path=public" in migration_block
+    assert "-c search_path=pg_catalog,public" not in migration_block
     preflight_block = compose.split("  preflight:", 1)[1].split("  maintenance:", 1)[0]
     assert "PORTAL_MAINTENANCE_ENV_FILE" not in preflight_block
     database_policy_block = compose.split("  database-policy:", 1)[1]
