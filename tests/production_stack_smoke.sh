@@ -475,6 +475,7 @@ if "$repository_root/scripts/production-deploy" preflight > "$test_root/elevated
 fi
 grep -F '"name":"runtime_database_role"' "$test_root/elevated.json"
 grep -F '"status":"failed"' "$test_root/elevated.json"
+PORTAL_ENV_FILE="$test_root/production.env"
 
 compose exec -T database psql \
   --username portal_cluster_admin \
