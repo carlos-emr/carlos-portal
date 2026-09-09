@@ -51,7 +51,7 @@ SELECT
 \gset
 \if :role_attributes_valid
 \else
-  \echo 'Database admin must own the database and be a member of the distinct, non-elevated schema-owner role; runtime and maintenance must be separate LOGIN roles without memberships.'
+  \echo 'Database admin must own the database and be a member of the schema-owner role; schema-owner, runtime, and maintenance must be distinct LOGIN roles without elevated attributes or memberships.'
   -- psql 16 has no nonzero \quit argument. ON_ERROR_STOP turns this deliberate SQL error into a
   -- failing process status that the deployment command cannot mistake for success.
   SELECT 1 / 0 AS database_role_policy_violation;
