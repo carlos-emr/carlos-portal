@@ -75,8 +75,13 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
     runtime_password = "portal-test-runtime-password"
     runtime_engine = None
     original_owner = ""
+    database_name = ""
+    public_schema_usage = False
+    public_schema_create = False
+    public_database_temporary = False
     try:
         with engine.begin() as connection:
+            database_name = str(connection.scalar(text("select current_database()")))
             original_owner = str(
                 connection.scalar(
                     text(
@@ -85,6 +90,38 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
                     )
                 )
             )
+            public_schema_privileges = set(
+                connection.scalars(
+                    text(
+                        "select acl.privilege_type "
+                        "from pg_namespace n "
+                        "cross join lateral aclexplode(n.nspacl) acl "
+                        "where n.nspname = 'public' and acl.grantee = 0"
+                    )
+                )
+            )
+            public_schema_usage = "USAGE" in public_schema_privileges
+            public_schema_create = "CREATE" in public_schema_privileges
+            public_database_temporary = bool(
+                connection.scalar(
+                    text(
+                        "select exists ("
+                        "select 1 from pg_database d "
+                        "cross join lateral aclexplode("
+                        "coalesce(d.datacl, acldefault('d', d.datdba))"
+                        ") acl "
+                        "where d.datname = current_database() "
+                        "and acl.grantee = 0 "
+                        "and acl.privilege_type = 'TEMPORARY'"
+                        ")"
+                    )
+                )
+            )
+            quoted_database = engine.dialect.identifier_preparer.quote(database_name)
+            connection.execute(
+                text(f"REVOKE TEMPORARY ON DATABASE {quoted_database} FROM PUBLIC")
+            )
+            connection.execute(text("REVOKE ALL ON SCHEMA public FROM PUBLIC"))
             connection.execute(text(f'DROP ROLE IF EXISTS "{runtime_role}"'))
             connection.execute(text(f'DROP ROLE IF EXISTS "{owner_role}"'))
             connection.execute(text(f'CREATE ROLE "{owner_role}" NOLOGIN'))
@@ -169,6 +206,15 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
                 connection.execute(text(f'DROP ROLE IF EXISTS "{runtime_role}"'))
                 connection.execute(text(f'DROP OWNED BY "{owner_role}"'))
                 connection.execute(text(f'DROP ROLE IF EXISTS "{owner_role}"'))
+                if public_schema_usage:
+                    connection.execute(text("GRANT USAGE ON SCHEMA public TO PUBLIC"))
+                if public_schema_create:
+                    connection.execute(text("GRANT CREATE ON SCHEMA public TO PUBLIC"))
+                if public_database_temporary and database_name:
+                    quoted_database = engine.dialect.identifier_preparer.quote(database_name)
+                    connection.execute(
+                        text(f"GRANT TEMPORARY ON DATABASE {quoted_database} TO PUBLIC")
+                    )
         engine.dispose()
 
 
