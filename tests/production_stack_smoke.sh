@@ -162,7 +162,7 @@ if "$repository_root/scripts/production-deploy" preflight \
   exit 1
 fi
 grep -F 'runtime_database_allowlist' "$test_root/allowlist-drift.json"
-grep -F 'table:allowlist_drift_probe' "$test_root/allowlist-drift.json"
+grep -F 'table:public.allowlist_drift_probe' "$test_root/allowlist-drift.json"
 "$repository_root/scripts/production-deploy" apply-db-policy
 "$repository_root/scripts/production-deploy" preflight
 compose exec -T database psql \
@@ -170,6 +170,99 @@ compose exec -T database psql \
   --dbname carlos_portal \
   --set ON_ERROR_STOP=1 \
   --command 'DROP TABLE public.allowlist_drift_probe'
+
+# Views are table-like privilege objects too. A grant on an updatable view must not sit outside the
+# explicit base-table allowlist, especially when the view's owner can update the audit table.
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 <<'SQL'
+SET ROLE portal_schema_owner;
+CREATE VIEW public.audit_update_escape AS
+  SELECT outcome FROM public.patient_portal_audit_events;
+RESET ROLE;
+GRANT UPDATE ON public.audit_update_escape TO portal_runtime;
+SQL
+if "$repository_root/scripts/production-deploy" preflight \
+  > "$test_root/view-drift.json"; then
+  printf '%s\n' 'preflight accepted UPDATE through an undeclared view' >&2
+  exit 1
+fi
+grep -F 'table:public.audit_update_escape' "$test_root/view-drift.json"
+"$repository_root/scripts/production-deploy" apply-db-policy
+"$repository_root/scripts/production-deploy" preflight
+if compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 \
+  --command "SET ROLE portal_runtime; UPDATE public.audit_update_escape SET outcome = 'rewritten'"; then
+  printf '%s\n' 'database policy left runtime UPDATE on an undeclared view' >&2
+  exit 1
+fi
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 \
+  --command 'DROP VIEW public.audit_update_escape'
+
+# Privileges in another user schema must survive neither policy validation nor preflight. An
+# owner-controlled updatable view there can otherwise route runtime UPDATE back to protected data.
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 <<'SQL'
+CREATE SCHEMA privilege_escape AUTHORIZATION portal_schema_owner;
+SET ROLE portal_schema_owner;
+CREATE VIEW privilege_escape.audit_update_escape AS
+  SELECT outcome FROM public.patient_portal_audit_events;
+RESET ROLE;
+GRANT USAGE ON SCHEMA privilege_escape TO portal_runtime;
+GRANT UPDATE ON privilege_escape.audit_update_escape TO portal_runtime;
+SQL
+if "$repository_root/scripts/production-deploy" preflight \
+  > "$test_root/nonpublic-privilege.json"; then
+  printf '%s\n' 'preflight accepted runtime privileges outside public' >&2
+  exit 1
+fi
+grep -F 'nonpublic_schema_usage' "$test_root/nonpublic-privilege.json"
+grep -F 'table:privilege_escape.audit_update_escape' "$test_root/nonpublic-privilege.json"
+if "$repository_root/scripts/production-deploy" apply-db-policy \
+  > "$test_root/nonpublic-policy.log" 2>&1; then
+  printf '%s\n' 'database policy accepted runtime privileges outside public' >&2
+  exit 1
+fi
+grep -F 'hold privileges outside public' "$test_root/nonpublic-policy.log"
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 \
+  --command 'DROP SCHEMA privilege_escape CASCADE'
+"$repository_root/scripts/production-deploy" apply-db-policy
+"$repository_root/scripts/production-deploy" preflight
+
+# pg_temp implicitly precedes even a fixed search_path. The runtime role does not need temporary
+# objects, so preflight must detect the drift and policy replay must revoke it.
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 \
+  --command 'GRANT TEMPORARY ON DATABASE carlos_portal TO portal_runtime'
+if "$repository_root/scripts/production-deploy" preflight \
+  > "$test_root/temporary-privilege.json"; then
+  printf '%s\n' 'preflight accepted runtime temporary-object creation' >&2
+  exit 1
+fi
+grep -F 'database_temporary' "$test_root/temporary-privilege.json"
+"$repository_root/scripts/production-deploy" apply-db-policy
+"$repository_root/scripts/production-deploy" preflight
+if compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 \
+  --command 'SET ROLE portal_runtime; CREATE TEMP TABLE patient_portal_audit_events (id integer)'; then
+  printf '%s\n' 'database policy left runtime temporary-object creation enabled' >&2
+  exit 1
+fi
 
 # Column ACLs and grant options are independent privilege paths. They must fail preflight even when
 # the effective table-level booleans still look like the intended allowlist, and policy replay must
@@ -187,9 +280,9 @@ if "$repository_root/scripts/production-deploy" preflight \
   printf '%s\n' 'preflight accepted column, grant-option, or PUBLIC privilege drift' >&2
   exit 1
 fi
-grep -F 'column_acl:patient_portal_audit_events' "$test_root/acl-drift.json"
-grep -F 'table_grant_option:patient_portal_accounts' "$test_root/acl-drift.json"
-grep -F 'public_table:patient_portal_accounts' "$test_root/acl-drift.json"
+grep -F 'column_acl:public.patient_portal_audit_events' "$test_root/acl-drift.json"
+grep -F 'table_grant_option:public.patient_portal_accounts' "$test_root/acl-drift.json"
+grep -F 'public_table:public.patient_portal_accounts' "$test_root/acl-drift.json"
 "$repository_root/scripts/production-deploy" apply-db-policy
 "$repository_root/scripts/production-deploy" preflight
 
@@ -307,7 +400,7 @@ if "$repository_root/scripts/production-deploy" apply-db-policy \
   printf '%s\n' 'database policy accepted database CREATE privilege' >&2
   exit 1
 fi
-grep -F 'must not own non-system-schema objects or create database/schema objects' \
+grep -F 'must not own non-system-schema objects' \
   "$test_root/elevated-ownership.log"
 probe_privilege=$(compose exec -T database psql \
   --username portal_cluster_admin \

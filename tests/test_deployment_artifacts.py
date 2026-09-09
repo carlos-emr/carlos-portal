@@ -103,6 +103,8 @@ def test_database_policy_explicitly_grants_every_application_table_and_sequence(
     assert "granted_role.rolname <> :'owner_role'" in policy
     assert "REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), REFERENCES (%1$s)" in policy
     assert "non-system-schema objects" in policy
+    assert "REVOKE TEMPORARY ON DATABASE" in policy
+    assert "hold privileges outside public" in policy
 
 
 def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
@@ -197,6 +199,9 @@ def test_production_stack_smoke_covers_success_replay_and_fail_closed_role() -> 
     assert "database policy accepted an elevated database admin" in smoke
     assert "database policy accepted an extra database-admin membership" in smoke
     assert "database policy accepted a database-admin connection after SET ROLE" in smoke
+    assert "preflight accepted UPDATE through an undeclared view" in smoke
+    assert "preflight accepted runtime privileges outside public" in smoke
+    assert "preflight accepted runtime temporary-object creation" in smoke
     smoke_override = (
         REPOSITORY_ROOT / "tests" / "compose.production-smoke.yaml"
     ).read_text()

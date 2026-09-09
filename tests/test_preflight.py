@@ -38,8 +38,11 @@ def compliant_runtime_role() -> dict[str, bool]:
         "audit_trigger": False,
         "audit_owner": False,
         "schema_create": False,
+        "nonpublic_schema_usage": False,
+        "public_schema_privilege": False,
         "search_path_unsafe": False,
         "database_create": False,
+        "database_temporary": False,
         "database_owner": False,
         "role_membership": False,
         "schema_object_owner": False,
@@ -54,6 +57,7 @@ def compliant_runtime_role() -> dict[str, bool]:
 def compliant_runtime_data_privileges() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     table_values = [
         {
+            "schema": "public",
             "name": table_name,
             **{
                 f"can_{privilege}": privilege in expected
@@ -67,6 +71,7 @@ def compliant_runtime_data_privileges() -> tuple[list[dict[str, object]], list[d
     ]
     sequence_values = [
         {
+            "schema": "public",
             "name": sequence_name,
             "can_usage": "usage" in expected,
             "can_select": "select" in expected,
@@ -147,6 +152,28 @@ def test_runtime_database_allowlist_rejects_missing_required_access() -> None:
 
     assert not check.passed
     assert str(tables[0]["name"]) in check.detail
+
+
+def test_runtime_database_allowlist_rejects_access_outside_public() -> None:
+    tables, sequences = compliant_runtime_data_privileges()
+    tables.append(
+        {
+            "schema": "privilege_escape",
+            "name": "audit_update_escape",
+            "can_select": False,
+            "can_insert": False,
+            "can_update": True,
+            "can_delete": False,
+            "grant_option": False,
+            "public_privilege": False,
+            "unexpected_column_acl": False,
+        }
+    )
+
+    check = evaluate_runtime_database_allowlist(tables, sequences)
+
+    assert not check.passed
+    assert "table:privilege_escape.audit_update_escape" in check.detail
 
 
 @pytest.mark.parametrize(

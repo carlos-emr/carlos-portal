@@ -361,9 +361,10 @@ carlos-patient-portal-preflight
 It exits unsuccessfully unless production policy is active, the live database is PostgreSQL over
 TLS, the packaged schema head is applied, the runtime role has no inherited privileges, database or
 schema ownership, database administration, or schema creation, the migration revision is read-only,
-the PostgreSQL search path is pinned to `pg_catalog,public`, and table, column, sequence,
-grant-option, and `PUBLIC` ACLs match the explicit application allowlist. Output is secret-free
-JSON so the result can be attached to the deployment change record.
+the PostgreSQL search path is pinned to `pg_catalog,public`, temporary-object creation is disabled,
+and relation, column, sequence, function, grant-option, and `PUBLIC` ACLs across user schemas match
+the explicit application allowlist. Output is secret-free JSON so the result can be attached to the
+deployment change record.
 
 Expose `/internal/health/db` and `/internal/readiness` only to trusted infrastructure such as a load
 balancer or orchestrator health probe.

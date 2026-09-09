@@ -96,8 +96,11 @@ def evaluate_runtime_role_policy(values: Mapping[str, object]) -> PreflightCheck
         "audit_trigger": False,
         "audit_owner": False,
         "schema_create": False,
+        "nonpublic_schema_usage": False,
+        "public_schema_privilege": False,
         "search_path_unsafe": False,
         "database_create": False,
+        "database_temporary": False,
         "database_owner": False,
         "role_membership": False,
         "schema_object_owner": False,
@@ -130,10 +133,18 @@ def evaluate_runtime_database_allowlist(
 ) -> PreflightCheck:
     """Require the runtime role's ordinary data access to match the deployment allowlist exactly."""
     violations: list[str] = []
-    actual_tables = {str(values["name"]): values for values in table_values}
-    for table_name in sorted(set(actual_tables) | set(EXPECTED_TABLE_PRIVILEGES)):
-        expected = EXPECTED_TABLE_PRIVILEGES.get(table_name, frozenset())
-        values = actual_tables.get(table_name)
+    expected_tables = {
+        ("public", table_name): privileges
+        for table_name, privileges in EXPECTED_TABLE_PRIVILEGES.items()
+    }
+    actual_tables = {
+        (str(values.get("schema", "public")), str(values["name"])): values
+        for values in table_values
+    }
+    for table_key in sorted(set(actual_tables) | set(expected_tables)):
+        table_name = ".".join(table_key)
+        expected = expected_tables.get(table_key, frozenset())
+        values = actual_tables.get(table_key)
         if values is None:
             violations.append(f"missing_table:{table_name}")
             continue
@@ -151,10 +162,18 @@ def evaluate_runtime_database_allowlist(
         if values.get("unexpected_column_acl") is True:
             violations.append(f"column_acl:{table_name}")
 
-    actual_sequences = {str(values["name"]): values for values in sequence_values}
-    for sequence_name in sorted(set(actual_sequences) | set(EXPECTED_SEQUENCE_PRIVILEGES)):
-        expected = EXPECTED_SEQUENCE_PRIVILEGES.get(sequence_name, frozenset())
-        values = actual_sequences.get(sequence_name)
+    expected_sequences = {
+        ("public", sequence_name): privileges
+        for sequence_name, privileges in EXPECTED_SEQUENCE_PRIVILEGES.items()
+    }
+    actual_sequences = {
+        (str(values.get("schema", "public")), str(values["name"])): values
+        for values in sequence_values
+    }
+    for sequence_key in sorted(set(actual_sequences) | set(expected_sequences)):
+        sequence_name = ".".join(sequence_key)
+        expected = expected_sequences.get(sequence_key, frozenset())
+        values = actual_sequences.get(sequence_key)
         if values is None:
             violations.append(f"missing_sequence:{sequence_name}")
             continue
@@ -188,6 +207,7 @@ def query_runtime_database_allowlist(session: Session) -> PreflightCheck:
             text(
                 """
                 SELECT
+                  n.nspname AS schema,
                   c.relname AS name,
                   has_table_privilege(current_user, c.oid, 'SELECT') AS can_select,
                   has_table_privilege(current_user, c.oid, 'INSERT') AS can_insert,
@@ -220,7 +240,9 @@ def query_runtime_database_allowlist(session: Session) -> PreflightCheck:
                   ) AS unexpected_column_acl
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
-                WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+                WHERE n.nspname <> 'information_schema'
+                  AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
                 """
             )
         ).mappings()
@@ -230,6 +252,7 @@ def query_runtime_database_allowlist(session: Session) -> PreflightCheck:
             text(
                 """
                 SELECT
+                  n.nspname AS schema,
                   c.relname AS name,
                   has_sequence_privilege(current_user, c.oid, 'USAGE') AS can_usage,
                   has_sequence_privilege(current_user, c.oid, 'SELECT') AS can_select,
@@ -248,7 +271,9 @@ def query_runtime_database_allowlist(session: Session) -> PreflightCheck:
                   ) AS public_privilege
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
-                WHERE n.nspname = 'public' AND c.relkind = 'S'
+                WHERE n.nspname <> 'information_schema'
+                  AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND c.relkind = 'S'
                 """
             )
         ).mappings()
@@ -316,8 +341,26 @@ def query_runtime_role_policy(session: Session) -> PreflightCheck:
                   AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
                   AND has_schema_privilege(current_user, n.oid, 'CREATE')
               ) AS schema_create,
+              EXISTS (
+                SELECT 1
+                FROM pg_namespace n
+                WHERE n.nspname <> 'information_schema'
+                  AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND n.nspname <> 'public'
+                  AND has_schema_privilege(current_user, n.oid, 'USAGE')
+              ) AS nonpublic_schema_usage,
+              EXISTS (
+                SELECT 1
+                FROM pg_namespace n
+                CROSS JOIN LATERAL aclexplode(n.nspacl) acl
+                WHERE n.nspname <> 'information_schema'
+                  AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND acl.grantee = 0
+              ) AS public_schema_privilege,
               has_database_privilege(current_user, current_database(), 'CREATE')
                 AS database_create,
+              has_database_privilege(current_user, current_database(), 'TEMPORARY')
+                AS database_temporary,
               (
                 SELECT d.datdba = r.oid
                 FROM pg_database d
@@ -366,15 +409,17 @@ def query_runtime_role_policy(session: Session) -> PreflightCheck:
                 SELECT 1
                 FROM pg_proc p
                 JOIN pg_namespace n ON n.oid = p.pronamespace
-                WHERE n.nspname = 'public'
+                WHERE n.nspname <> 'information_schema'
+                  AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
                   AND has_function_privilege(current_user, p.oid, 'EXECUTE')
               ) AS schema_function_execute,
               EXISTS (
                 SELECT 1
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
-                WHERE n.nspname = 'public'
-                  AND c.relkind IN ('r', 'p')
+                WHERE n.nspname <> 'information_schema'
+                  AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
                   AND has_table_privilege(
                     current_user,
                     c.oid,
@@ -385,7 +430,8 @@ def query_runtime_role_policy(session: Session) -> PreflightCheck:
                 SELECT 1
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
-                WHERE n.nspname = 'public'
+                WHERE n.nspname <> 'information_schema'
+                  AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
                   AND c.relkind = 'S'
                   AND has_sequence_privilege(current_user, c.oid, 'UPDATE')
               ) AS sequence_update,

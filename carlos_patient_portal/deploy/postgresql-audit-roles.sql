@@ -81,6 +81,16 @@ SELECT
 
 BEGIN;
 
+-- A fixed search_path does not suppress PostgreSQL's implicit pg_temp precedence. The application
+-- never needs temporary objects, so remove the database privilege that could create a shadow table.
+SELECT format(
+  'REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC, %I, %I;',
+  current_database(),
+  :'runtime_role',
+  :'maintenance_role'
+)
+\gexec
+
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 GRANT USAGE ON SCHEMA public TO :"runtime_role", :"maintenance_role";
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC;
@@ -98,8 +108,8 @@ ALTER DEFAULT PRIVILEGES FOR ROLE :"owner_role" IN SCHEMA public
 -- after every migration, or mirror these grants through deployment-managed default privileges.
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM :"runtime_role" CASCADE;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM :"runtime_role" CASCADE;
--- Table-level REVOKE does not erase separately granted column ACLs. Generate explicit revocations
--- for every current column so a stale narrow grant cannot bypass the table privilege allowlist.
+-- Also generate explicit column revocations for every base/partitioned table so the intended ACL
+-- reset remains visible and a stale narrow grant cannot bypass the table privilege allowlist.
 SELECT format(
   'REVOKE SELECT (%1$s), INSERT (%1$s), UPDATE (%1$s), REFERENCES (%1$s) ON TABLE %2$I.%3$I FROM %4$I, %5$I, PUBLIC CASCADE;',
   string_agg(quote_ident(attribute_record.attname), ', ' ORDER BY attribute_record.attnum),
@@ -164,6 +174,8 @@ SELECT
   NOT has_database_privilege(:'owner_role', current_database(), 'CREATE')
   AND NOT has_database_privilege(:'runtime_role', current_database(), 'CREATE')
   AND NOT has_database_privilege(:'maintenance_role', current_database(), 'CREATE')
+  AND NOT has_database_privilege(:'runtime_role', current_database(), 'TEMPORARY')
+  AND NOT has_database_privilege(:'maintenance_role', current_database(), 'TEMPORARY')
   AND NOT EXISTS (
     SELECT 1
     FROM pg_database database_record
@@ -183,6 +195,67 @@ SELECT
       AND (
         has_schema_privilege(:'runtime_role', namespace_record.oid, 'CREATE')
         OR has_schema_privilege(:'maintenance_role', namespace_record.oid, 'CREATE')
+      )
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM pg_namespace namespace_record
+    WHERE namespace_record.nspname <> 'information_schema'
+      AND namespace_record.nspname NOT LIKE 'pg\_%' ESCAPE '\'
+      AND namespace_record.nspname <> 'public'
+      AND (
+        has_schema_privilege(:'runtime_role', namespace_record.oid, 'USAGE')
+        OR has_schema_privilege(:'maintenance_role', namespace_record.oid, 'USAGE')
+      )
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM pg_class relation_record
+    JOIN pg_namespace namespace_record ON namespace_record.oid = relation_record.relnamespace
+    WHERE namespace_record.nspname <> 'information_schema'
+      AND namespace_record.nspname NOT LIKE 'pg\_%' ESCAPE '\'
+      AND namespace_record.nspname <> 'public'
+      AND relation_record.relkind IN ('r', 'p', 'v', 'm', 'f')
+      AND (
+        has_table_privilege(
+          :'runtime_role',
+          relation_record.oid,
+          'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
+        )
+        OR has_table_privilege(
+          :'maintenance_role',
+          relation_record.oid,
+          'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
+        )
+      )
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM pg_class sequence_record
+    JOIN pg_namespace namespace_record ON namespace_record.oid = sequence_record.relnamespace
+    WHERE namespace_record.nspname <> 'information_schema'
+      AND namespace_record.nspname NOT LIKE 'pg\_%' ESCAPE '\'
+      AND namespace_record.nspname <> 'public'
+      AND sequence_record.relkind = 'S'
+      AND (
+        has_sequence_privilege(
+          :'runtime_role', sequence_record.oid, 'USAGE,SELECT,UPDATE'
+        )
+        OR has_sequence_privilege(
+          :'maintenance_role', sequence_record.oid, 'USAGE,SELECT,UPDATE'
+        )
+      )
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM pg_proc function_record
+    JOIN pg_namespace namespace_record ON namespace_record.oid = function_record.pronamespace
+    WHERE namespace_record.nspname <> 'information_schema'
+      AND namespace_record.nspname NOT LIKE 'pg\_%' ESCAPE '\'
+      AND namespace_record.nspname <> 'public'
+      AND (
+        has_function_privilege(:'runtime_role', function_record.oid, 'EXECUTE')
+        OR has_function_privilege(:'maintenance_role', function_record.oid, 'EXECUTE')
       )
   )
   AND NOT EXISTS (
@@ -223,7 +296,7 @@ SELECT
 \gset
 \if :role_ownership_valid
 \else
-  \echo 'Runtime and maintenance roles must not own non-system-schema objects or create database/schema objects; the schema owner must not own or create databases.'
+  \echo 'Runtime and maintenance roles must not own non-system-schema objects, create database/schema/temporary objects, or hold privileges outside public; the schema owner must not own or create databases.'
   SELECT 1 / 0 AS database_role_policy_violation;
 \endif
 
