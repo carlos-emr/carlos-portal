@@ -124,7 +124,7 @@ async function assertAccessiblePage(page, surface) {
         (element.getAttribute('aria-label') || '').trim()
         || labelledBy
         || [...(element.labels || [])].some((label) => (label.textContent || '').trim())
-        || (element.textContent || '').trim()
+        || (element instanceof HTMLButtonElement && (element.textContent || '').trim())
         || (element.getAttribute('title') || '').trim()
       );
     });
@@ -559,10 +559,9 @@ function screenshotPath(name) {
     };
     page.on('request', countMissingTokenPost);
     await page.getByRole('button', { name: 'Update password' }).click();
-    await page.waitForTimeout(100);
+    await page.locator('[data-reset-token-error]:visible').waitFor();
     page.off('request', countMissingTokenPost);
     assert(missingTokenPosts === 0, 'password-reset form submitted without a token');
-    await page.locator('[data-reset-token-error]:visible').waitFor();
     await page.getByRole('link', { name: 'Back to sign in' }).click();
 
     const resetCompletionUrl = portalUrl(
