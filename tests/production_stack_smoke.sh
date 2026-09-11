@@ -194,7 +194,7 @@ if PORTAL_MAINTENANCE_ENV_FILE="$wrong_maintenance_role_environment" \
   printf '%s\n' 'audit pruning accepted a role other than the declared maintenance role' >&2
   exit 1
 fi
-grep -F 'PATIENT_PORTAL_MAINTENANCE_DATABASE_URL must use' \
+grep -F 'deployment probe configuration is invalid' \
   "$test_root/maintenance-wrong-role.log"
 compose exec -T database psql \
   --username portal_cluster_admin \
