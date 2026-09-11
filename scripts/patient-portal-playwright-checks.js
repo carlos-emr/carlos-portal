@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * Live browser smoke test for the CARLOS patient portal and local mail capture.
+ * Live browser checks for the CARLOS patient portal and local mail capture.
  *
  * Defaults are for the local devcontainer:
  *   npm run test:patient-portal-playwright
@@ -36,6 +36,7 @@ const fixturePath = process.env.PORTAL_BROWSER_FIXTURE_FILE
   || '/tmp/patient-portal-browser-fixtures.json';
 const browserFixtures = JSON.parse(readFileSync(fixturePath, 'utf8'));
 const activationFixture = browserFixtures.activation;
+const passwordResetFixture = browserFixtures.passwordReset;
 
 assert(
   activationFixture
@@ -46,6 +47,15 @@ assert(
     && activationFixture.username
     && activationFixture.password,
   `activation fixture is incomplete in ${fixturePath}`
+);
+assert(
+  passwordResetFixture
+    && passwordResetFixture.email
+    && passwordResetFixture.username
+    && passwordResetFixture.oldPassword
+    && passwordResetFixture.newPassword
+    && passwordResetFixture.token,
+  `password-reset fixture is incomplete in ${fixturePath}`
 );
 
 function validateBaseUrl(rawBaseUrl) {
@@ -95,6 +105,50 @@ function assert(condition, message) {
   }
 }
 
+async function assertAccessiblePage(page, surface) {
+  const problems = await page.evaluate(() => {
+    const duplicateIds = [...document.querySelectorAll('[id]')]
+      .map((element) => element.id)
+      .filter((id, index, ids) => id && ids.indexOf(id) !== index);
+    const visibleControls = [...document.querySelectorAll(
+      'input:not([type="hidden"]), select, textarea, button'
+    )].filter((element) => element.getClientRects().length > 0);
+    const unnamedControls = visibleControls.filter((element) => {
+      const labelledBy = (element.getAttribute('aria-labelledby') || '')
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((id) => document.getElementById(id)?.textContent || '')
+        .join(' ')
+        .trim();
+      return !(
+        (element.getAttribute('aria-label') || '').trim()
+        || labelledBy
+        || [...(element.labels || [])].some((label) => (label.textContent || '').trim())
+        || (element.textContent || '').trim()
+        || (element.getAttribute('title') || '').trim()
+      );
+    });
+    const imagesWithoutAlt = [...document.querySelectorAll('img:not([alt])')];
+    return {
+      duplicateIds: [...new Set(duplicateIds)],
+      imagesWithoutAlt: imagesWithoutAlt.length,
+      mainLandmarks: document.querySelectorAll('main').length,
+      unnamedControls: unnamedControls.map((element) => (
+        `${element.tagName.toLowerCase()}[name="${element.getAttribute('name') || ''}"]`
+      )),
+      visibleHeadings: [...document.querySelectorAll('h1')]
+        .filter((element) => element.getClientRects().length > 0).length,
+    };
+  });
+  assert(problems.mainLandmarks === 1, `${surface} must have exactly one main landmark`);
+  assert(problems.visibleHeadings === 1, `${surface} must have exactly one visible h1`);
+  assert(problems.duplicateIds.length === 0,
+    `${surface} has duplicate IDs: ${problems.duplicateIds.join(', ')}`);
+  assert(problems.imagesWithoutAlt === 0, `${surface} has an image without alt text`);
+  assert(problems.unnamedControls.length === 0,
+    `${surface} has unnamed controls: ${problems.unnamedControls.join(', ')}`);
+}
+
 function runMailCommand(...args) {
   return execFileSync(mailCommand, args, {
     encoding: 'utf8',
@@ -141,6 +195,8 @@ function screenshotPath(name) {
   const browserIssues = [];
   let expectedAuthConsoleErrors = 0;
   let expectedAuthFailures = 0;
+  let expectedResetConsoleErrors = 0;
+  let expectedResetFailures = 0;
   let expectedRevealFailures = 0;
   const browser = await chromium.launch({
     headless: true,
@@ -220,6 +276,12 @@ function screenshotPath(name) {
     if (isExpectedAuthFailure) {
       expectedAuthFailures -= 1;
     }
+    const isExpectedResetFailure = response.status() === 400
+      && expectedResetFailures > 0
+      && responsePath === portalPathname('/auth/password-reset/complete');
+    if (isExpectedResetFailure) {
+      expectedResetFailures -= 1;
+    }
     const isExpectedRevealFailure = response.status() === 503
       && expectedRevealFailures > 0
       && responsePath.startsWith(portalPathname('/portal/email-passwords/'))
@@ -231,6 +293,7 @@ function screenshotPath(name) {
       response.status() >= 400
       && !isExpectedMfaCooldown
       && !isExpectedAuthFailure
+      && !isExpectedResetFailure
       && !isExpectedRevealFailure
     ) {
       badResponses.push({ status: response.status(), url: response.url() });
@@ -243,6 +306,12 @@ function screenshotPath(name) {
     if (isExpectedAuthFailureConsoleError) {
       expectedAuthConsoleErrors -= 1;
     }
+    const isExpectedResetFailureConsoleError = message.text().includes(
+      'Failed to load resource: the server responded with a status of 400'
+    ) && expectedResetConsoleErrors > 0;
+    if (isExpectedResetFailureConsoleError) {
+      expectedResetConsoleErrors -= 1;
+    }
     const isExpectedMfaCooldownConsoleError = message.text().includes(
       'Failed to load resource: the server responded with a status of 429'
     );
@@ -252,6 +321,7 @@ function screenshotPath(name) {
     if (
       message.type() === 'error'
       && !isExpectedAuthFailureConsoleError
+      && !isExpectedResetFailureConsoleError
       && !isExpectedMfaCooldownConsoleError
       && !isExpectedRevealFailureConsoleError
     ) {
@@ -272,6 +342,7 @@ function screenshotPath(name) {
     });
     await page.waitForURL((url) => url.pathname === portalPathname('/'));
     await page.getByRole('heading', { name: 'Sign in' }).waitFor();
+    await assertAccessiblePage(page, 'sign-in page');
 
     await page.goto(portalUrl('/'), { waitUntil: 'networkidle', timeout: 30000 }); // nosemgrep: javascript.playwright.security.audit.playwright-goto-injection.playwright-goto-injection -- portalUrl requires a root-relative path and validateBaseUrl restricts targets to local/private hosts by default
 
@@ -347,6 +418,7 @@ function screenshotPath(name) {
     });
     await page.getByRole('link', { name: 'Activate account' }).click();
     await page.getByRole('heading', { name: 'Activate your account' }).waitFor();
+    await assertAccessiblePage(page, 'activation page');
     assert(
       await page.locator('input[name="date_of_birth"][type="date"]').count() === 1,
       'activation date-of-birth control is missing'
@@ -403,6 +475,7 @@ function screenshotPath(name) {
       page.getByRole('button', { name: 'Sign in' }).click(),
     ]);
     await page.getByRole('heading', { name: 'Verification code' }).waitFor();
+    await assertAccessiblePage(page, 'MFA page');
     const activationMfaCode = await page.locator('[data-development-mfa-code]').getAttribute(
       'data-development-mfa-code'
     );
@@ -425,6 +498,7 @@ function screenshotPath(name) {
 
     await page.getByRole('link', { name: 'Forgot username or password?' }).click();
     await page.getByRole('heading', { name: 'Reset your password' }).waitFor();
+    await assertAccessiblePage(page, 'password-reset request page');
     const resetMobileLayout = await page.evaluate(() => ({
       viewportWidth: window.innerWidth,
       documentWidth: document.documentElement.scrollWidth,
@@ -437,7 +511,172 @@ function screenshotPath(name) {
       path: screenshotPath('patient-portal-password-reset-mobile'),
       fullPage: true,
     });
+
+    // Public reset requests must return the same generic success for an unknown identity and must
+    // never expose a reset link. This browser check complements the timing-focused unit coverage.
+    await page.locator('input[name="username"]').fill('no-such-playwright-reset-user');
+    await page.locator('input[name="email"]').fill('unknown.reset@example.com');
+    const unknownResetResponsePromise = page.waitForResponse(
+      (response) => new URL(response.url()).pathname
+        === portalPathname('/auth/password-reset/request')
+        && response.request().method() === 'POST'
+    );
+    await page.getByRole('button', { name: 'Send reset link' }).click();
+    const unknownResetResponse = await unknownResetResponsePromise;
+    assert(
+      unknownResetResponse.status() === 202,
+      `unknown-account reset request returned ${unknownResetResponse.status()}`
+    );
+    await page.getByRole('status').filter({
+      hasText: 'If the account details match, a password reset link has been sent by email.',
+    }).waitFor();
+    assert(
+      await page.getByRole('link', { name: 'Open reset page' }).count() === 0,
+      'unknown-account reset request exposed a development reset link'
+    );
+
+    // A reset completion page opened without a fragment must fail client-side without posting an
+    // empty credential. The real token below then exercises fragment scrubbing and both server
+    // validation outcomes before it is consumed.
+    await page.goto(portalUrl('/auth/password-reset/complete'), {
+      waitUntil: 'networkidle',
+      timeout: 30000,
+    });
+    await page.getByRole('heading', { name: 'Choose a new password' }).waitFor();
+    await assertAccessiblePage(page, 'password-reset completion page');
+    await page.locator('input[name="new_password"]').fill(passwordResetFixture.newPassword);
+    await page.locator('input[name="new_password_confirmation"]').fill(
+      passwordResetFixture.newPassword
+    );
+    let missingTokenPosts = 0;
+    const countMissingTokenPost = (request) => {
+      if (
+        request.method() === 'POST'
+        && new URL(request.url()).pathname === portalPathname('/auth/password-reset/complete')
+      ) {
+        missingTokenPosts += 1;
+      }
+    };
+    page.on('request', countMissingTokenPost);
+    await page.getByRole('button', { name: 'Update password' }).click();
+    await page.waitForTimeout(100);
+    page.off('request', countMissingTokenPost);
+    assert(missingTokenPosts === 0, 'password-reset form submitted without a token');
+    await page.locator('[data-reset-token-error]:visible').waitFor();
     await page.getByRole('link', { name: 'Back to sign in' }).click();
+
+    const resetCompletionUrl = portalUrl(
+      `/auth/password-reset/complete#token=${encodeURIComponent(passwordResetFixture.token)}`
+    );
+    await page.goto(resetCompletionUrl, { waitUntil: 'networkidle', timeout: 30000 });
+    await page.waitForFunction(() => window.location.hash === '');
+    assert(
+      await page.locator('input[name="reset_token"]').inputValue()
+        === passwordResetFixture.token,
+      'password-reset token was not copied from the URL fragment into the form'
+    );
+    assert(!page.url().includes('#'), 'password-reset token remained in browser history');
+
+    await page.locator('input[name="new_password"]').fill(passwordResetFixture.newPassword);
+    await page.locator('input[name="new_password_confirmation"]').fill(
+      `${passwordResetFixture.newPassword}-mismatch`
+    );
+    expectedResetConsoleErrors += 1;
+    expectedResetFailures += 1;
+    const mismatchResponsePromise = page.waitForResponse(
+      (response) => new URL(response.url()).pathname
+        === portalPathname('/auth/password-reset/complete')
+        && response.request().method() === 'POST'
+    );
+    await page.getByRole('button', { name: 'Update password' }).click();
+    const mismatchResponse = await mismatchResponsePromise;
+    assert(mismatchResponse.status() === 400,
+      `mismatched reset password returned ${mismatchResponse.status()}`);
+    await page.getByRole('alert').filter({
+      hasText: 'The password confirmation does not match.',
+    }).waitFor();
+    assert(
+      await page.locator('input[name="reset_token"]').inputValue()
+        === passwordResetFixture.token,
+      'password-reset validation error discarded the one-time token'
+    );
+
+    await page.locator('input[name="new_password"]').fill(passwordResetFixture.newPassword);
+    await page.locator('input[name="new_password_confirmation"]').fill(
+      passwordResetFixture.newPassword
+    );
+    const successfulResetResponsePromise = page.waitForResponse(
+      (response) => new URL(response.url()).pathname
+        === portalPathname('/auth/password-reset/complete')
+        && response.request().method() === 'POST'
+    );
+    await page.getByRole('button', { name: 'Update password' }).click();
+    const successfulResetResponse = await successfulResetResponsePromise;
+    assert(successfulResetResponse.status() === 200,
+      `valid password reset returned ${successfulResetResponse.status()}`);
+    await page.getByRole('heading', { name: 'Password reset' }).waitFor();
+    const resetResultText = await page.locator('body').innerText();
+    assert(
+      !resetResultText.includes(passwordResetFixture.token)
+        && !resetResultText.includes(passwordResetFixture.newPassword),
+      'password-reset result echoed the token or new password'
+    );
+    await page.getByRole('link', { name: 'Sign in' }).click();
+
+    await page.goto(resetCompletionUrl, { waitUntil: 'networkidle', timeout: 30000 });
+    await page.locator('input[name="new_password"]').fill(passwordResetFixture.oldPassword);
+    await page.locator('input[name="new_password_confirmation"]').fill(
+      passwordResetFixture.oldPassword
+    );
+    expectedResetConsoleErrors += 1;
+    expectedResetFailures += 1;
+    const replayedResetResponsePromise = page.waitForResponse(
+      (response) => new URL(response.url()).pathname
+        === portalPathname('/auth/password-reset/complete')
+        && response.request().method() === 'POST'
+    );
+    await page.getByRole('button', { name: 'Update password' }).click();
+    const replayedResetResponse = await replayedResetResponsePromise;
+    assert(replayedResetResponse.status() === 400,
+      `replayed password reset returned ${replayedResetResponse.status()}`);
+    await page.locator('[role="alert"]').filter({
+      hasText: 'The password reset link is invalid or has expired.',
+    }).first().waitFor();
+
+    await page.getByRole('link', { name: 'Back to sign in' }).click();
+    await page.locator('input[name="username"]').fill(passwordResetFixture.username);
+    await page.locator('input[name="password"]').fill(passwordResetFixture.oldPassword);
+    expectedAuthConsoleErrors += 1;
+    expectedAuthFailures += 1;
+    const oldResetPasswordResponsePromise = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === portalPathname('/auth/login')
+        && response.request().method() === 'POST'
+    );
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    const oldResetPasswordResponse = await oldResetPasswordResponsePromise;
+    assert(oldResetPasswordResponse.status() === 401,
+      `old reset-account password returned ${oldResetPasswordResponse.status()}`);
+    await page.getByRole('alert').filter({ hasText: 'Incorrect Username or Password' }).waitFor();
+
+    await page.locator('input[name="username"]').fill(passwordResetFixture.username);
+    await page.locator('input[name="password"]').fill(passwordResetFixture.newPassword);
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await page.getByRole('heading', { name: 'Verification code' }).waitFor();
+    const resetAccountMfaCode = await page.locator('[data-development-mfa-code]').getAttribute(
+      'data-development-mfa-code'
+    );
+    assert(resetAccountMfaCode, 'reset account MFA code was not available');
+    await page.locator('input[name="code"]').fill(resetAccountMfaCode);
+    await page.getByRole('button', { name: 'Verify' }).click();
+    await page.getByRole('heading', { name: 'Patient portal' }).waitFor();
+    await assertAccessiblePage(page, 'patient dashboard');
+    assert(
+      (await page.locator('.signed-in-user').textContent() || '').trim()
+        === passwordResetFixture.username.toLowerCase(),
+      'reset account did not sign in with its new password'
+    );
+    await page.getByRole('button', { name: 'Logout' }).click();
+    await page.getByRole('heading', { name: 'Sign in' }).waitFor();
     await page.setViewportSize({ width: 1440, height: 1000 });
 
     await page.locator('input[name="username"]').fill('no-such-playwright-user');
@@ -587,6 +826,7 @@ function screenshotPath(name) {
     await page.getByRole('link', { name: 'Account', exact: true }).click();
     await page.waitForURL((url) => url.pathname === portalPathname('/portal/account'));
     await page.getByRole('heading', { name: 'Account' }).waitFor();
+    await assertAccessiblePage(page, 'account page');
     assert(
       await page.locator('input[name="new_password_confirmation"][required]').count() === 1,
       'account password confirmation is missing'
@@ -680,6 +920,7 @@ function screenshotPath(name) {
     await page.getByRole('link', { name: 'Help', exact: true }).click();
     await page.waitForURL((url) => url.pathname === portalPathname('/portal/help'));
     await page.getByRole('heading', { name: 'Help' }).waitFor();
+    await assertAccessiblePage(page, 'help page');
     await page.screenshot({
       path: screenshotPath('patient-portal-help-mobile'),
       fullPage: true,
@@ -690,6 +931,7 @@ function screenshotPath(name) {
       (url) => url.pathname === portalPathname('/portal/email-passwords')
     );
     await page.getByRole('heading', { name: 'Email passwords' }).waitFor();
+    await assertAccessiblePage(page, 'email-password page');
     assert(
       await page.locator('select[name="provider"]').count() === 1
         && await page.locator('input[name="date_from"][type="date"]').count() === 1
@@ -858,9 +1100,12 @@ function screenshotPath(name) {
 
     assert(expectedAuthFailures === 0, 'expected browser authentication failures were not observed');
     assert(expectedAuthConsoleErrors === 0, 'expected authentication console errors were not observed');
+    assert(expectedResetFailures === 0, 'expected password-reset failures were not observed');
+    assert(expectedResetConsoleErrors === 0,
+      'expected password-reset console errors were not observed');
     assert(badResponses.length === 0, `unexpected HTTP errors: ${JSON.stringify(badResponses)}`);
     assert(browserIssues.length === 0, `browser errors: ${JSON.stringify(browserIssues)}`);
-    console.log('Patient portal Playwright smoke test passed');
+    console.log('Patient portal Playwright checks passed');
     console.log(`Sign-in mobile screenshot: ${screenshotPath('patient-portal-sign-in-mobile')}`);
     console.log(`Activation mobile screenshot: ${screenshotPath('patient-portal-activation-mobile')}`);
     console.log(`Password-reset mobile screenshot: ${screenshotPath('patient-portal-password-reset-mobile')}`);
