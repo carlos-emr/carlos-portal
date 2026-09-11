@@ -68,6 +68,7 @@ python -m pip install --no-build-isolation --no-deps -e .
 export PORTAL_DEMO_DIRECTORY="$(mktemp -d)"
 export PATIENT_PORTAL_ENVIRONMENT=development
 export PATIENT_PORTAL_DATABASE_URL="sqlite+pysqlite:///${PORTAL_DEMO_DIRECTORY}/portal.db"
+export PATIENT_PORTAL_SESSION_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 export PATIENT_PORTAL_IDENTITY_PROOF_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 export PATIENT_PORTAL_AUDIT_HASH_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 export PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
@@ -316,11 +317,14 @@ account and starting the portal:
 npm run test:patient-portal-playwright
 ```
 
-The test clears the local capture inbox, signs in as the configurable development patient, retrieves
-the MFA code through `/scripts/mail`, verifies the dashboard on desktop and mobile viewports, and
-logs out. Override `PORTAL_BASE_URL`, `PORTAL_TEST_USER`, `PORTAL_TEST_PASSWORD`,
-`PORTAL_MAIL_COMMAND`, or `PORTAL_SCREENSHOT_DIR` when the local setup differs from the defaults.
-The test refuses public hosts unless `ALLOW_NON_LOCAL_BASE_URL=true` is deliberately set.
+The test clears the local capture inbox, exercises account activation and password recovery, signs
+in as the configurable development patient, verifies the dashboard on desktop and mobile viewports,
+and logs out. It reads MFA codes through `/scripts/mail` by default; set
+`PORTAL_USE_DEVELOPMENT_MFA_CODE=true` when the server exposes development codes in the page.
+Override `PORTAL_BASE_URL`, `PORTAL_TEST_USER`, `PORTAL_TEST_PASSWORD`, `PORTAL_EXPECTED_USER`,
+`PORTAL_EXPECTED_EMAIL`, `PORTAL_MAIL_COMMAND`, `PORTAL_BROWSER_FIXTURE_FILE`, or
+`PORTAL_SCREENSHOT_DIR` when the local setup differs from the defaults. The test refuses public
+hosts unless `PORTAL_ALLOW_NON_LOCAL_BASE_URL=true` is deliberately set.
 
 `PATIENT_PORTAL_CLINIC_ID` and `PATIENT_PORTAL_CLINIC_NAME` have development placeholders.
 Non-development startup rejects those placeholders. The configured clinic is enforced on login

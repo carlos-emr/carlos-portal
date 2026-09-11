@@ -9,19 +9,27 @@
  *   PORTAL_BASE_URL=http://127.0.0.1:8090
  *   PORTAL_TEST_USER=CarlosPatient
  *   PORTAL_TEST_PASSWORD=the seeded development password
+ *   PORTAL_EXPECTED_USER=carlospatient
+ *   PORTAL_EXPECTED_EMAIL=example.patient@example.com
  *   PORTAL_MAIL_COMMAND=/scripts/mail
+ *   PORTAL_USE_DEVELOPMENT_MFA_CODE=true to read codes rendered by a development server
  *   PORTAL_BROWSER_FIXTURE_FILE=/tmp/patient-portal-browser-fixtures.json
  *   PORTAL_SCREENSHOT_DIR=/tmp
  *   CHROME_PATH=/path/to/chrome-or-chromium
- *   ALLOW_NON_LOCAL_BASE_URL=true only for an intentional non-production test target
+ *   PORTAL_ALLOW_NON_LOCAL_BASE_URL=true only for an intentional non-production test target
  */
 
 const { execFileSync } = require('node:child_process');
 const { readFileSync } = require('node:fs');
 const { isIP } = require('node:net');
+const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
 
+const allowNonLocalBaseUrl = (
+  process.env.PORTAL_ALLOW_NON_LOCAL_BASE_URL
+  ?? process.env.ALLOW_NON_LOCAL_BASE_URL
+) === 'true';
 const baseUrl = validateBaseUrl(process.env.PORTAL_BASE_URL || 'http://127.0.0.1:8090');
 const testUser = process.env.PORTAL_TEST_USER || 'CarlosPatient';
 const testPassword = process.env.PORTAL_TEST_PASSWORD || ['Nectar', 'Sparrow', 'Quartz', '87!'].join('-');
@@ -30,10 +38,10 @@ const expectedEmail = process.env.PORTAL_EXPECTED_EMAIL || 'example.patient@exam
 const changedPassword = ['Orbit', 'Lantern', 'Meadow', '49!'].join('-');
 const mailCommand = process.env.PORTAL_MAIL_COMMAND || '/scripts/mail';
 const useDevelopmentMfaCode = process.env.PORTAL_USE_DEVELOPMENT_MFA_CODE === 'true';
-const screenshotDir = path.resolve(process.env.PORTAL_SCREENSHOT_DIR || '/tmp');
+const screenshotDir = path.resolve(process.env.PORTAL_SCREENSHOT_DIR || os.tmpdir());
 const chromePath = process.env.CHROME_PATH || '';
 const fixturePath = process.env.PORTAL_BROWSER_FIXTURE_FILE
-  || '/tmp/patient-portal-browser-fixtures.json';
+  || path.join(os.tmpdir(), 'patient-portal-browser-fixtures.json');
 const browserFixtures = JSON.parse(readFileSync(fixturePath, 'utf8'));
 const activationFixture = browserFixtures.activation;
 const passwordResetFixture = browserFixtures.passwordReset;
@@ -77,10 +85,10 @@ function validateBaseUrl(rawBaseUrl) {
   if (
     !localHosts.has(host)
     && !privateIpv4
-    && process.env.ALLOW_NON_LOCAL_BASE_URL !== 'true'
+    && !allowNonLocalBaseUrl
   ) {
     throw new Error(
-      `Refusing non-local PORTAL_BASE_URL host ${host}; set ALLOW_NON_LOCAL_BASE_URL=true only for an intentional test target`
+      `Refusing non-local PORTAL_BASE_URL host ${host}; set PORTAL_ALLOW_NON_LOCAL_BASE_URL=true only for an intentional test target`
     );
   }
   parsed.pathname = parsed.pathname.replace(/\/$/, '');
@@ -183,6 +191,27 @@ function readCapturedMfaCode() {
     sleep(250);
   }
   throw new Error('Captured MFA email did not arrive within five seconds');
+}
+
+async function readBrowserMfaCode(page, expectedRecipient) {
+  if (useDevelopmentMfaCode) {
+    const code = await page.locator('[data-development-mfa-code]').getAttribute(
+      'data-development-mfa-code'
+    );
+    assert(code, 'development MFA code was not available');
+    return code;
+  }
+
+  const capturedMail = readCapturedMfaCode();
+  assert(
+    capturedMail.recipient === expectedRecipient,
+    `unexpected MFA recipient ${capturedMail.recipient}`
+  );
+  assert(
+    capturedMail.subject === 'Your CARLOS Patient Portal verification code',
+    `unexpected MFA subject ${capturedMail.subject}`
+  );
+  return capturedMail.code;
 }
 
 function screenshotPath(name) {
@@ -437,9 +466,13 @@ function screenshotPath(name) {
       fullPage: true,
     });
     assert(
-      await page.locator('select[name="mfa_delivery_method"] option[value="sms"]:disabled').count()
-        === 1,
-      'activation SMS option must reflect the unavailable test sender'
+      await page.locator(
+        'select[name="mfa_delivery_method"] option[value="email"]'
+      ).count() === 1
+        && await page.locator(
+          'select[name="mfa_delivery_method"] option[value="sms"]'
+        ).count() === 1,
+      'activation must render both MFA delivery methods'
     );
     await page.locator('input[name="invite_code"]').fill(activationFixture.inviteCode);
     await page.locator('input[name="email"]').fill(activationFixture.email);
@@ -476,10 +509,7 @@ function screenshotPath(name) {
     ]);
     await page.getByRole('heading', { name: 'Verification code' }).waitFor();
     await assertAccessiblePage(page, 'MFA page');
-    const activationMfaCode = await page.locator('[data-development-mfa-code]').getAttribute(
-      'data-development-mfa-code'
-    );
-    assert(activationMfaCode, 'activated account MFA code was not available');
+    const activationMfaCode = await readBrowserMfaCode(page, activationFixture.email);
     await page.locator('input[name="code"]').fill(activationMfaCode);
     await Promise.all([
       page.waitForURL((url) => url.pathname === portalPathname('/portal')),
@@ -661,10 +691,7 @@ function screenshotPath(name) {
     await page.locator('input[name="password"]').fill(passwordResetFixture.newPassword);
     await page.getByRole('button', { name: 'Sign in' }).click();
     await page.getByRole('heading', { name: 'Verification code' }).waitFor();
-    const resetAccountMfaCode = await page.locator('[data-development-mfa-code]').getAttribute(
-      'data-development-mfa-code'
-    );
-    assert(resetAccountMfaCode, 'reset account MFA code was not available');
+    const resetAccountMfaCode = await readBrowserMfaCode(page, passwordResetFixture.email);
     await page.locator('input[name="code"]').fill(resetAccountMfaCode);
     await page.getByRole('button', { name: 'Verify' }).click();
     await page.getByRole('heading', { name: 'Patient portal' }).waitFor();
@@ -730,24 +757,7 @@ function screenshotPath(name) {
       fullPage: true,
     });
 
-    const capturedMail = useDevelopmentMfaCode
-      ? {
-          code: await page.locator('[data-development-mfa-code]').getAttribute(
-            'data-development-mfa-code'
-          ),
-        }
-      : readCapturedMfaCode();
-    assert(capturedMail.code, 'MFA code was not available');
-    if (!useDevelopmentMfaCode) {
-      assert(
-        capturedMail.recipient === expectedEmail,
-        `unexpected MFA recipient ${capturedMail.recipient}`
-      );
-      assert(
-        capturedMail.subject === 'Your CARLOS Patient Portal verification code',
-        `unexpected MFA subject ${capturedMail.subject}`
-      );
-    }
+    const mfaCode = await readBrowserMfaCode(page, expectedEmail);
     const resendResponsePromise = page.waitForResponse(
       (response) => new URL(response.url()).pathname === portalPathname('/auth/mfa/resend')
     );
@@ -757,7 +767,7 @@ function screenshotPath(name) {
     await page.getByRole('alert').filter({ hasText: 'A code was sent recently.' }).waitFor();
     await page.getByRole('heading', { name: 'Verification code' }).waitFor();
 
-    const incorrectMfaCode = capturedMail.code === '000000' ? '111111' : '000000';
+    const incorrectMfaCode = mfaCode === '000000' ? '111111' : '000000';
     await page.locator('input[name="code"]').fill(incorrectMfaCode);
     expectedAuthConsoleErrors += 1;
     expectedAuthFailures += 1;
@@ -777,7 +787,7 @@ function screenshotPath(name) {
     await page.getByRole('heading', { name: 'Verification code' }).waitFor();
 
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await page.locator('input[name="code"]').fill(capturedMail.code);
+    await page.locator('input[name="code"]').fill(mfaCode);
     await Promise.all([
       page.waitForURL((url) => url.pathname === portalPathname('/portal'), { timeout: 30000 }),
       page.getByRole('button', { name: 'Verify' }).click(),
