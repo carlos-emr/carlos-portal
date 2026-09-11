@@ -1,6 +1,10 @@
+import json
+from base64 import urlsafe_b64encode
 from datetime import date, timedelta
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -30,12 +34,17 @@ from carlos_patient_portal.models import (
     PatientPortalInvite,
     PatientPortalPasswordResetToken,
     PatientPortalSession,
+    PatientPortalStaffAssertionUse,
     PatientPortalUnlockSecret,
     utc_now,
 )
+from carlos_patient_portal.staff_identity import staff_request_hash
 from tests.support import (
+    TEST_STAFF_ASSERTION_KEY_ID,
     TEST_STAFF_ASSERTION_PUBLIC_KEY,
+    TEST_STAFF_ASSERTION_PUBLIC_KEYRING,
     carlos_staff_headers,
+    migrated_staging_app,
     sign_staff_assertion,
     upgrade_to_head,
 )
@@ -94,19 +103,20 @@ def apply_contact_change(
 
 
 def internal_app(**overrides: object):
+    settings_values = {
+        "environment": "development",
+        "clinic_id": "clinic-a",
+        "clinic_name": "Clinic A",
+        "database_url": "sqlite+pysqlite:///:memory:",
+        "internal_api_token": INTERNAL_API_TOKEN,
+        "internal_staff_assertion_public_key": TEST_STAFF_ASSERTION_PUBLIC_KEY,
+        "identity_proof_secret": IDENTITY_PROOF_SECRET,
+        "audit_hash_secret": AUDIT_HASH_SECRET,
+        "unlock_secret_encryption_secret": UNLOCK_SECRET,
+        **overrides,
+    }
     app = create_app(
-        Settings(
-            environment="development",
-            clinic_id="clinic-a",
-            clinic_name="Clinic A",
-            database_url="sqlite+pysqlite:///:memory:",
-            internal_api_token=INTERNAL_API_TOKEN,
-            internal_staff_assertion_public_key=TEST_STAFF_ASSERTION_PUBLIC_KEY,
-            identity_proof_secret=IDENTITY_PROOF_SECRET,
-            audit_hash_secret=AUDIT_HASH_SECRET,
-            unlock_secret_encryption_secret=UNLOCK_SECRET,
-            **overrides,
-        )
+        Settings(**settings_values)
     )
     upgrade_to_head(app.state.database_engine)
     return app
@@ -118,6 +128,30 @@ def carlos_headers(
     token: str = INTERNAL_API_TOKEN,
 ) -> dict[str, str]:
     return carlos_staff_headers(*permissions, clinic_id=clinic_id, token=token)
+
+
+def bound_carlos_headers(
+    *permissions: str,
+    method: str,
+    path: str,
+    body: bytes = b"",
+    key_id: str = TEST_STAFF_ASSERTION_KEY_ID,
+    signing_key: Ed25519PrivateKey | None = None,
+) -> dict[str, str]:
+    request_hash = staff_request_hash(method, path.encode(), b"", body)
+    assertion_options: dict[str, object] = {}
+    if signing_key is not None:
+        assertion_options["signing_key"] = signing_key
+    return {
+        "Authorization": f"Bearer {INTERNAL_API_TOKEN}",
+        "X-CARLOS-Staff-Assertion": sign_staff_assertion(
+            *permissions,
+            clinic_id="clinic-a",
+            key_id=key_id,
+            request_hash=request_hash,
+            **assertion_options,
+        ),
+    }
 
 
 def invite_request(demographic_no: int = 1234) -> dict[str, object]:
@@ -263,6 +297,130 @@ def test_internal_api_rejects_tampered_expired_and_wrong_audience_assertions() -
             },
         )
         assert response.status_code == 404
+
+
+def test_request_bound_staff_assertion_is_consumed_once() -> None:
+    path = "/internal/carlos/contact-reviews"
+    app = internal_app(
+        internal_staff_assertion_public_key=None,
+        internal_staff_assertion_public_keyring=TEST_STAFF_ASSERTION_PUBLIC_KEYRING,
+    )
+    client = TestClient(app)
+    headers = bound_carlos_headers(
+        "portal.contact.review",
+        method="GET",
+        path=path,
+    )
+
+    first = client.get(path, headers=headers)
+    replay = client.get(path, headers=headers)
+
+    assert first.status_code == 200
+    assert replay.status_code == 404
+    with app.state.session_factory() as session:
+        assert len(list(session.scalars(select(PatientPortalStaffAssertionUse)))) == 1
+
+
+def test_staff_request_hash_binds_method_path_query_and_body() -> None:
+    baseline = staff_request_hash("POST", b"/internal/carlos/example", b"page=1", b"{}")
+
+    assert staff_request_hash("GET", b"/internal/carlos/example", b"page=1", b"{}") != baseline
+    assert staff_request_hash("POST", b"/internal/carlos/other", b"page=1", b"{}") != baseline
+    assert staff_request_hash("POST", b"/internal/carlos/example", b"page=2", b"{}") != baseline
+    assert staff_request_hash("POST", b"/internal/carlos/example", b"page=1", b"[]") != baseline
+
+
+def test_request_bound_staff_assertion_rejects_a_changed_body() -> None:
+    path = "/internal/carlos/patients/1234/invites"
+    payload = invite_request()
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    app = internal_app(
+        internal_staff_assertion_public_key=None,
+        internal_staff_assertion_public_keyring=TEST_STAFF_ASSERTION_PUBLIC_KEYRING,
+    )
+    client = TestClient(app)
+    headers = {
+        **bound_carlos_headers(
+            "portal.invite.manage",
+            method="POST",
+            path=path,
+            body=body,
+        ),
+        "Content-Type": "application/json",
+    }
+    changed_body = json.dumps(
+        {**payload, "email": "attacker@example.test"},
+        separators=(",", ":"),
+    ).encode()
+
+    changed = client.post(path, headers=headers, content=changed_body)
+    original = client.post(path, headers=headers, content=body)
+
+    assert changed.status_code == 404
+    assert original.status_code == 201
+
+
+def test_staff_assertion_keyring_accepts_overlapping_rotation_keys() -> None:
+    alternate_private_key = Ed25519PrivateKey.from_private_bytes(bytes(range(33, 65)))
+    alternate_public_key = (
+        urlsafe_b64encode(
+            alternate_private_key.public_key().public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            )
+        )
+        .rstrip(b"=")
+        .decode("ascii")
+    )
+    keyring = json.dumps(
+        {
+            TEST_STAFF_ASSERTION_KEY_ID: TEST_STAFF_ASSERTION_PUBLIC_KEY,
+            "next-2026": alternate_public_key,
+        }
+    )
+    path = "/internal/carlos/contact-reviews"
+    client = TestClient(
+        internal_app(
+            internal_staff_assertion_public_key=None,
+            internal_staff_assertion_public_keyring=keyring,
+        )
+    )
+
+    current = client.get(
+        path,
+        headers=bound_carlos_headers(
+            "portal.contact.review",
+            method="GET",
+            path=path,
+        ),
+    )
+    next_key = client.get(
+        path,
+        headers=bound_carlos_headers(
+            "portal.contact.review",
+            method="GET",
+            path=path,
+            key_id="next-2026",
+            signing_key=alternate_private_key,
+        ),
+    )
+
+    assert current.status_code == 200
+    assert next_key.status_code == 200
+
+
+def test_non_development_rejects_legacy_unbound_staff_assertions() -> None:
+    client = TestClient(
+        migrated_staging_app(),
+        base_url="https://portal.example.test",
+    )
+
+    response = client.get(
+        "/internal/carlos/contact-reviews",
+        headers=carlos_staff_headers("portal.contact.review"),
+    )
+
+    assert response.status_code == 404
 
 
 def test_internal_mutations_reject_unknown_or_blank_fields_and_publish_schemas() -> None:

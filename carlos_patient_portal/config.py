@@ -69,6 +69,7 @@ MIN_PRODUCTION_SECRET_LENGTH = 32
 MAX_CLINIC_ID_LENGTH = 64
 MAX_CONFIG_CLINIC_ID_LENGTH = 20
 CLINIC_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+STAFF_ASSERTION_KEY_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 # A conservative day count guarantees at least 25 complete calendar years,
 # including every leap-day distribution, before an event becomes eligible.
 DEFAULT_AUDIT_RETENTION_DAYS = 25 * 366
@@ -107,7 +108,7 @@ def _reject_duplicate_keyring_members(
     parsed: dict[str, object] = {}
     for key, value in pairs:
         if key in parsed:
-            raise ValueError("unlock-secret keyring contains a duplicate JSON member")
+            raise ValueError("keyring contains a duplicate JSON member")
         parsed[key] = value
     return parsed
 
@@ -161,6 +162,45 @@ def parse_encryption_keyring(
         if normalized_key_id in normalized_keyring:
             raise ValueError(f"{label} key IDs must be unique after trimming whitespace")
         normalized_keyring[normalized_key_id] = secret.strip()
+    return normalized_keyring
+
+
+def validate_ed25519_public_key(value: str, *, variable_name: str) -> str:
+    try:
+        padding = "=" * (-len(value) % 4)
+        decoded = urlsafe_b64decode(value + padding)
+    except (Base64DecodeError, ValueError) as exc:
+        raise ValueError(f"{variable_name} must be base64url") from exc
+    if len(decoded) != 32 or urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii") != value:
+        raise ValueError(f"{variable_name} must encode one 32-byte Ed25519 public key")
+    return value
+
+
+def parse_staff_assertion_public_keyring(encoded_keyring: str) -> dict[str, str]:
+    variable_name = "PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING"
+    try:
+        parsed_keyring = json.loads(
+            encoded_keyring,
+            object_pairs_hook=_reject_duplicate_keyring_members,
+        )
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{variable_name} must be a JSON object") from exc
+    if not isinstance(parsed_keyring, dict) or not parsed_keyring:
+        raise ValueError(f"{variable_name} must be a non-empty JSON object")
+
+    normalized_keyring: dict[str, str] = {}
+    for key_id, public_key in parsed_keyring.items():
+        if not isinstance(key_id, str) or not STAFF_ASSERTION_KEY_ID_PATTERN.fullmatch(key_id):
+            raise ValueError(
+                "staff assertion key IDs must contain 1 to 64 ASCII letters, numbers, dots, "
+                "underscores, or hyphens"
+            )
+        if not isinstance(public_key, str):
+            raise ValueError(f"each {variable_name} value must be a string")
+        normalized_keyring[key_id] = validate_ed25519_public_key(
+            public_key,
+            variable_name=f"{variable_name}[{key_id}]",
+        )
     return normalized_keyring
 
 
@@ -235,9 +275,10 @@ class Settings(BaseSettings):
     # Without it, rotating the shared service token means restarting both systems in lockstep,
     # which in practice means the token never gets rotated.
     internal_api_token_previous: SecretStr | None = None
-    # Raw Ed25519 public key encoded as unpadded base64url. CARLOS retains the private key and
-    # signs short-lived provider assertions; the portal never receives signing capability.
+    # The singular key keeps local development fixtures compatible. Staging/production require
+    # the keyed JSON ring so callers can rotate signing keys without a lockstep restart.
     internal_staff_assertion_public_key: str | None = Field(default=None, max_length=64)
+    internal_staff_assertion_public_keyring: str | None = Field(default=None, max_length=8192)
     smtp_host: str | None = Field(default=None, max_length=253)
     smtp_port: int = Field(default=25, ge=1, le=65535)
     smtp_from_address: str | None = Field(default=None, max_length=254)
@@ -459,6 +500,7 @@ class Settings(BaseSettings):
         "sms_sender_id",
         "trusted_proxy_cidrs",
         "internal_staff_assertion_public_key",
+        "internal_staff_assertion_public_keyring",
         "unlock_secret_active_key_id",
         "service_name",
         "clinic_name",
@@ -493,19 +535,10 @@ class Settings(BaseSettings):
     def validate_internal_staff_assertion_public_key(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        try:
-            padding = "=" * (-len(value) % 4)
-            decoded = urlsafe_b64decode(value + padding)
-        except (Base64DecodeError, ValueError) as exc:
-            raise ValueError(
-                "PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY must be base64url"
-            ) from exc
-        if len(decoded) != 32 or urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii") != value:
-            raise ValueError(
-                "PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY must encode one "
-                "32-byte Ed25519 public key"
-            )
-        return value
+        return validate_ed25519_public_key(
+            value,
+            variable_name="PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY",
+        )
 
     @field_validator("smtp_from_address")
     @classmethod
@@ -707,6 +740,23 @@ class Settings(BaseSettings):
             raise ValueError("PATIENT_PORTAL_OUTBOX_ACTIVE_KEY_ID must exist in the keyring")
         return normalized_keyring
 
+    @property
+    def resolved_internal_staff_assertion_public_keys(self) -> dict[str, str]:
+        if self.internal_staff_assertion_public_keyring is None:
+            return (
+                {"legacy": self.internal_staff_assertion_public_key}
+                if self.internal_staff_assertion_public_key is not None
+                else {}
+            )
+        if self.internal_staff_assertion_public_key is not None:
+            raise ValueError(
+                "configure either PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY or "
+                "PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING, not both"
+            )
+        return parse_staff_assertion_public_keyring(
+            self.internal_staff_assertion_public_keyring
+        )
+
     def validate_secret_policy(self) -> None:
         secret_fields = {
             "identity_proof_secret": "PATIENT_PORTAL_IDENTITY_PROOF_SECRET",
@@ -770,10 +820,21 @@ class Settings(BaseSettings):
             _validate_distinct_secret_values(configured_secrets)
 
     def validate_internal_api_rotation_policy(self) -> None:
-        if self.internal_api_token is not None and self.internal_staff_assertion_public_key is None:
+        public_keys = self.resolved_internal_staff_assertion_public_keys
+        if self.internal_api_token is not None and not public_keys:
             raise ValueError(
-                "PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY must be set when "
+                "PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY or "
+                "PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING must be set when "
                 "PATIENT_PORTAL_INTERNAL_API_TOKEN is configured"
+            )
+        if (
+            not self.is_development
+            and self.internal_api_token is not None
+            and self.internal_staff_assertion_public_keyring is None
+        ):
+            raise ValueError(
+                "PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING must be set outside "
+                "development so request binding and overlap-safe key rotation are enforced"
             )
         if self.internal_api_token_previous is None:
             return

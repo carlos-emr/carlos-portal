@@ -34,12 +34,16 @@ EXPECTED_TABLE_PRIVILEGES = {
     "patient_portal_outbound_deliveries": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_password_reset_tokens": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_sessions": ORDINARY_TABLE_PRIVILEGES,
+    "patient_portal_staff_assertion_uses": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_unlock_secrets": ORDINARY_TABLE_PRIVILEGES,
 }
+TABLES_WITHOUT_SEQUENCES = frozenset(
+    {"alembic_version", "patient_portal_staff_assertion_uses"}
+)
 EXPECTED_SEQUENCE_PRIVILEGES = {
     f"{table_name}_id_seq": frozenset({"usage", "select"})
     for table_name in EXPECTED_TABLE_PRIVILEGES
-    if table_name not in {"alembic_version"}
+    if table_name not in TABLES_WITHOUT_SEQUENCES
 }
 
 

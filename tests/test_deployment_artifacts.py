@@ -96,7 +96,8 @@ def test_database_policy_explicitly_grants_every_application_table_and_sequence(
 
     for table in models.Base.metadata.tables.values():
         assert f"public.{table.name}" in policy
-        assert f"public.{table.name}_id_seq" in policy
+        if table.name != "patient_portal_staff_assertion_uses":
+            assert f"public.{table.name}_id_seq" in policy
     assert "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES" not in policy
     assert "GRANT USAGE, SELECT ON ALL SEQUENCES" not in policy
     assert "session_user = current_user" in policy
@@ -283,8 +284,8 @@ def test_production_environment_example_can_satisfy_runtime_policy(tmp_path: Pat
     )
     for index, name in enumerate(secret_names):
         values[name] = f"production-example-{index}-" + ("x" * 32)
-    values["PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY"] = (
-        "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+    values["PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING"] = (
+        '{"initial":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"}'
     )
     values["PATIENT_PORTAL_OUTBOX_ENCRYPTION_KEYRING"] = (
         '{"initial":"outbox-example-' + ("x" * 32) + '"}'

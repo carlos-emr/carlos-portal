@@ -24,7 +24,10 @@ test result, ticket, or named approver is not evidence.
 ## CARLOS, email, and SMS
 
 - [ ] Complete CARLOS invite, resend, revoke, staff unlock, and contact-review workflows end to end.
-- [ ] Verify CARLOS assertions use the expected clinic, audience, permissions, expiry, and key.
+- [ ] Verify CARLOS assertions use the expected clinic, audience, permissions, expiry, key ID, and
+      request hash; confirm an exact replay and a changed body/path are rejected.
+- [ ] Exercise assertion-key rotation with old and new public keys overlapping, then remove the old
+      key after its final assertion expires.
 - [ ] Complete password stage, send, publish, revoke, replay, resend, and reconciliation workflows.
 - [ ] Verify SMTP STARTTLS, authentication, SPF, DKIM, DMARC, bounce handling, and provider alerts.
 - [ ] Verify SMS authentication, delivery, retry behavior, invalid-number handling, and alerts.

@@ -452,7 +452,8 @@ if "$repository_root/scripts/production-deploy" apply-db-policy \
   printf '%s\n' 'database policy accepted a runtime-owned shadow schema' >&2
   exit 1
 fi
-grep -F 'must not own non-system-schema objects' "$test_root/shadow-schema-policy.log"
+grep -F 'User-schema objects must be owned by the declared schema owner' \
+  "$test_root/shadow-schema-policy.log"
 compose exec -T database psql \
   --username portal_cluster_admin \
   --dbname carlos_portal \

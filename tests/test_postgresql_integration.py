@@ -2,6 +2,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Barrier, Event, Lock
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -40,9 +41,15 @@ from carlos_patient_portal.models import (
     PatientPortalEmailChangeRequest,
     PatientPortalOutboundDelivery,
     PatientPortalSession,
+    PatientPortalStaffAssertionUse,
     utc_now,
 )
 from carlos_patient_portal.preflight import query_runtime_role_policy
+from carlos_patient_portal.staff_identity import (
+    CarlosServiceAuthenticationError,
+    StaffPrincipal,
+    consume_staff_assertion,
+)
 from carlos_patient_portal.token_keys import PortalTokenKeys
 from tests.support import TEST_STAFF_ASSERTION_PUBLIC_KEY, carlos_staff_headers
 
@@ -254,6 +261,43 @@ def clean_postgresql_database() -> None:
             quoted_names = ", ".join(f'"{name}"' for name in table_names)
             with engine.begin() as connection:
                 connection.execute(text(f"TRUNCATE TABLE {quoted_names} CASCADE"))
+    finally:
+        engine.dispose()
+
+
+def test_postgresql_consumes_one_staff_assertion_once_across_workers() -> None:
+    assert POSTGRES_URL is not None
+    clean_postgresql_database()
+    engine = create_portal_engine(POSTGRES_URL)
+    assertion_id = str(uuid4())
+    principal = StaffPrincipal(
+        provider_id="postgres-provider",
+        display_name="PostgreSQL Test",
+        clinic_id="postgres-clinic",
+        permissions=frozenset({"portal.contact.review"}),
+        assertion_id=assertion_id,
+        assertion_expires_at=int((utc_now() + timedelta(minutes=1)).timestamp()),
+        request_bound=True,
+    )
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    barrier = Barrier(2)
+
+    def consume_from_worker() -> str:
+        barrier.wait(timeout=10)
+        try:
+            consume_staff_assertion(session_factory, principal)
+            return "accepted"
+        except CarlosServiceAuthenticationError:
+            return "replayed"
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = sorted(executor.map(lambda _: consume_from_worker(), range(2)))
+        with Session(engine) as session:
+            stored_ids = list(session.scalars(select(PatientPortalStaffAssertionUse.assertion_id)))
+
+        assert results == ["accepted", "replayed"]
+        assert stored_ids == [assertion_id]
     finally:
         engine.dispose()
 

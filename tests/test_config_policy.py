@@ -44,6 +44,7 @@ from tests.support import (
     NON_DEVELOPMENT_SESSION_SECRET,
     SEEDED_INVITE_EMAIL,
     STRONG_PASSWORD,
+    TEST_STAFF_ASSERTION_PUBLIC_KEY,
     RecordingPortalSmsSender,
     browser_sign_in_seeded_patient,
     csrf_token_from_response,
@@ -726,12 +727,43 @@ def test_staging_fails_closed_without_delivery_services_or_internal_api_token() 
 
 
 def test_internal_api_requires_a_canonical_ed25519_staff_assertion_key() -> None:
-    with pytest.raises(ValidationError, match="INTERNAL_STAFF_ASSERTION_PUBLIC_KEY must be set"):
+    with pytest.raises(ValidationError, match="INTERNAL_STAFF_ASSERTION_PUBLIC_KEY.*must be set"):
         development_settings(internal_api_token="c" * 32)
     with pytest.raises(ValidationError, match="must encode one 32-byte Ed25519 public key"):
         development_settings(
             internal_api_token="c" * 32,
             internal_staff_assertion_public_key="not-a-public-key",
+        )
+
+
+def test_non_development_requires_a_staff_assertion_keyring_for_rotation() -> None:
+    with pytest.raises(ValidationError, match="PUBLIC_KEYRING must be set outside development"):
+        production_settings(
+            internal_staff_assertion_public_key=TEST_STAFF_ASSERTION_PUBLIC_KEY,
+            internal_staff_assertion_public_keyring=None,
+        )
+
+
+def test_staff_assertion_keyring_rejects_invalid_or_ambiguous_members() -> None:
+    with pytest.raises(ValidationError, match="configure either"):
+        development_settings(
+            internal_api_token="c" * 32,
+            internal_staff_assertion_public_key=TEST_STAFF_ASSERTION_PUBLIC_KEY,
+            internal_staff_assertion_public_keyring=json.dumps(
+                {"new": TEST_STAFF_ASSERTION_PUBLIC_KEY}
+            ),
+        )
+    with pytest.raises(ValidationError, match="key IDs"):
+        development_settings(
+            internal_api_token="c" * 32,
+            internal_staff_assertion_public_keyring=json.dumps(
+                {"bad key": TEST_STAFF_ASSERTION_PUBLIC_KEY}
+            ),
+        )
+    with pytest.raises(ValidationError, match="32-byte Ed25519 public key"):
+        development_settings(
+            internal_api_token="c" * 32,
+            internal_staff_assertion_public_keyring=json.dumps({"new": "invalid"}),
         )
 
 

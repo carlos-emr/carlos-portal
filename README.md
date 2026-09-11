@@ -334,7 +334,7 @@ hyphens, and 20 characters or fewer.
 Non-development deployments must set `PATIENT_PORTAL_INTERNAL_HEALTH_TOKEN`,
 `PATIENT_PORTAL_SESSION_SECRET`, `PATIENT_PORTAL_IDENTITY_PROOF_SECRET`,
 `PATIENT_PORTAL_AUDIT_HASH_SECRET`, `PATIENT_PORTAL_INTERNAL_API_TOKEN`,
-`PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY`, SMTP, SMS, either
+`PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING`, SMTP, SMS, either
 `PATIENT_PORTAL_OUTBOX_ENCRYPTION_SECRET` or `PATIENT_PORTAL_OUTBOX_ENCRYPTION_KEYRING`, and either
 `PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_SECRET` or
 `PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_KEYRING`.
@@ -604,18 +604,33 @@ The remaining secrets have deliberately different rotation behavior:
   over to the new token, then clear `_PREVIOUS` and restart the portal again. Both values are
   accepted while `_PREVIOUS` is set, so leaving it configured permanently defeats the rotation;
   treat clearing it as part of the same change.
+- Rotate CARLOS assertion keys by adding the new public key under a new `kid` in
+  `PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING`, restarting the portal, moving the
+  caller to that `kid`, then removing the old member after every assertion issued under it has
+  expired. Never reuse a `kid` for different key material. The portal accepts both keys during the
+  overlap and selects exactly the key named by the signed assertion.
 
 ## CARLOS Internal API
 
 Set `PATIENT_PORTAL_INTERNAL_API_TOKEN` to enable the production staff/service contract. Requests
 must include its Bearer token and an `X-CARLOS-Staff-Assertion`. Configure
-`PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY` with CARLOS's raw Ed25519 public key encoded as
-unpadded base64url. CARLOS signs a compact `<payload>.<signature>` assertion for the authenticated
-provider. The JSON payload must contain exactly `iss`, `aud`, `iat`, `exp`, `jti`, `provider_id`,
-`provider_name`, `clinic_id`, and `permissions`; use issuer `carlos`, audience
+`PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING` as a JSON object mapping stable key IDs to
+raw Ed25519 public keys encoded as unpadded base64url. CARLOS signs a compact
+`<payload>.<signature>` assertion for the authenticated provider. The JSON payload must contain
+exactly `iss`, `aud`, `iat`, `exp`, `jti`, `kid`, `request_hash`, `provider_id`, `provider_name`,
+`clinic_id`, and `permissions`; use issuer `carlos`, audience
 `carlos-patient-portal-internal-api`, a canonical UUID `jti`, and a lifetime no longer than 120
-seconds. The portal verifies the signature, expiry, clinic, and permission before handling a staff
-request. CARLOS must keep the Ed25519 private key outside the portal deployment.
+seconds. Assertions without `kid` and `request_hash` are accepted only in development. The portal
+verifies the signature, expiry, clinic, request binding, one-time nonce, and permission before
+handling a staff request. CARLOS must keep every Ed25519 private key outside the portal deployment.
+
+`request_hash` is the lowercase SHA-256 hexadecimal digest of four length-framed byte strings:
+uppercase HTTP method, raw URL path, raw query string without `?`, and exact request body. For each
+component, hash its unsigned eight-byte big-endian length followed by its bytes. Empty query/body
+components still contribute an eight-byte zero length. Generate a fresh assertion and UUID for
+every attempt; the portal stores the consumed UUID before executing the operation, so retries must
+be signed again. This binds a staff credential to one exact request and makes replay protection
+effective across every portal worker through PostgreSQL.
 
 The service token still authenticates CARLOS as a workload, while the signed assertion binds the
 specific provider and permissions. Keep `/internal/carlos/` reachable only from CARLOS application

@@ -20,17 +20,23 @@
 import json
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from binascii import Error as Base64DecodeError
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from hashlib import sha256
 from secrets import compare_digest
 from time import time
 from uuid import UUID
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from sqlalchemy import delete
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, sessionmaker
 
 from carlos_patient_portal.config import Settings
 from carlos_patient_portal.invites import normalize_clinic_id, normalize_staff_actor
+from carlos_patient_portal.models import PatientPortalStaffAssertionUse, utc_now
 
 MAX_PERMISSION_LENGTH = 64
 MAX_PERMISSION_COUNT = 32
@@ -51,6 +57,8 @@ STAFF_ASSERTION_FIELDS = {
     "provider_id",
     "provider_name",
 }
+BOUND_STAFF_ASSERTION_FIELDS = STAFF_ASSERTION_FIELDS | {"kid", "request_hash"}
+REQUEST_HASH_HEX_LENGTH = 64
 
 
 class CarlosServiceAuthenticationError(Exception):
@@ -67,6 +75,9 @@ class StaffPrincipal:
     display_name: str
     clinic_id: str
     permissions: frozenset[str]
+    assertion_id: str | None = None
+    assertion_expires_at: int | None = None
+    request_bound: bool = False
 
     def require(self, permission: str) -> None:
         if permission not in self.permissions:
@@ -121,7 +132,33 @@ def _decode_base64url(value: str, *, expected_length: int | None = None) -> byte
     return decoded
 
 
-def verify_staff_assertion(public_key_value: str, assertion: str) -> StaffPrincipal:
+def staff_request_hash(
+    method: str,
+    raw_path: bytes,
+    query_string: bytes,
+    body: bytes,
+) -> str:
+    """Hash an exact HTTP request with length framing between every component.
+
+    The caller signs this lowercase hexadecimal digest. Length framing prevents ambiguous
+    concatenations, and hashing the raw path/query/body prevents a valid assertion from being
+    moved to another internal operation or used with altered input.
+    """
+    method_bytes = method.upper().encode("ascii")
+    digest = sha256()
+    for component in (method_bytes, raw_path, query_string, body):
+        digest.update(len(component).to_bytes(8, "big"))
+        digest.update(component)
+    return digest.hexdigest()
+
+
+def verify_staff_assertion(
+    public_keys: Mapping[str, str],
+    assertion: str,
+    *,
+    expected_request_hash: str | None = None,
+    allow_legacy_unbound: bool = False,
+) -> StaffPrincipal:
     """Verify a short-lived CARLOS provider assertion and return its bound principal."""
     if (
         not assertion
@@ -133,20 +170,38 @@ def verify_staff_assertion(public_key_value: str, assertion: str) -> StaffPrinci
         raise CarlosServiceAuthenticationError()
     payload_bytes = _decode_base64url(encoded_payload)
     signature = _decode_base64url(encoded_signature, expected_length=64)
-    public_key_bytes = _decode_base64url(public_key_value, expected_length=32)
     try:
-        Ed25519PublicKey.from_public_bytes(public_key_bytes).verify(signature, payload_bytes)
         payload = json.loads(payload_bytes)
     except (
-        InvalidSignature,
         UnicodeDecodeError,
         json.JSONDecodeError,
         ValueError,
         TypeError,
     ) as exc:
         raise CarlosServiceAuthenticationError() from exc
-    if not isinstance(payload, dict) or set(payload) != STAFF_ASSERTION_FIELDS:
+    if not isinstance(payload, dict):
         raise CarlosServiceAuthenticationError()
+    is_bound = set(payload) == BOUND_STAFF_ASSERTION_FIELDS
+    is_legacy = set(payload) == STAFF_ASSERTION_FIELDS
+    if not is_bound and not (is_legacy and allow_legacy_unbound and len(public_keys) == 1):
+        raise CarlosServiceAuthenticationError()
+    key_id = payload.get("kid") if is_bound else next(iter(public_keys), None)
+    if not isinstance(key_id, str) or key_id not in public_keys:
+        raise CarlosServiceAuthenticationError()
+    public_key_bytes = _decode_base64url(public_keys[key_id], expected_length=32)
+    try:
+        Ed25519PublicKey.from_public_bytes(public_key_bytes).verify(signature, payload_bytes)
+    except (InvalidSignature, ValueError, TypeError) as exc:
+        raise CarlosServiceAuthenticationError() from exc
+    if is_bound:
+        request_hash = payload.get("request_hash")
+        if (
+            expected_request_hash is None
+            or not isinstance(request_hash, str)
+            or len(request_hash) != REQUEST_HASH_HEX_LENGTH
+            or not compare_digest(request_hash, expected_request_hash)
+        ):
+            raise CarlosServiceAuthenticationError()
     if (
         payload.get("aud") != STAFF_ASSERTION_AUDIENCE
         or payload.get("iss") != STAFF_ASSERTION_ISSUER
@@ -187,6 +242,9 @@ def verify_staff_assertion(public_key_value: str, assertion: str) -> StaffPrinci
             display_name=normalize_staff_actor(provider_name),
             clinic_id=normalize_clinic_id(clinic_id),
             permissions=normalize_permissions(raw_permissions),
+            assertion_id=jti if is_bound else None,
+            assertion_expires_at=expires_at if is_bound else None,
+            request_bound=is_bound,
         )
     except (KeyError, ValueError) as exc:
         raise CarlosServiceAuthenticationError() from exc
@@ -197,25 +255,64 @@ def authenticate_carlos_staff(
     *,
     authorization: str | None,
     staff_assertion: str | None,
+    expected_request_hash: str | None = None,
 ) -> StaffPrincipal:
     accepted_tokens = settings.accepted_internal_api_tokens
+    public_keys = settings.resolved_internal_staff_assertion_public_keys
     scheme, _, supplied_token = (authorization or "").partition(" ")
     if (
         not accepted_tokens
         or scheme.casefold() != "bearer"
         or not supplied_token
         or not matches_any_service_token(supplied_token, accepted_tokens)
-        or settings.internal_staff_assertion_public_key is None
+        or not public_keys
         or staff_assertion is None
     ):
         raise CarlosServiceAuthenticationError()
     try:
         principal = verify_staff_assertion(
-            settings.internal_staff_assertion_public_key,
+            public_keys,
             staff_assertion,
+            expected_request_hash=expected_request_hash,
+            allow_legacy_unbound=settings.is_development,
         )
         if principal.clinic_id != settings.clinic_id:
             raise CarlosServiceAuthenticationError()
         return principal
     except ValueError as exc:
+        raise CarlosServiceAuthenticationError() from exc
+
+
+def consume_staff_assertion(
+    session_factory: sessionmaker[Session],
+    principal: StaffPrincipal,
+) -> None:
+    """Atomically consume one request-bound assertion across every portal worker."""
+    if (
+        not principal.request_bound
+        or principal.assertion_id is None
+        or principal.assertion_expires_at is None
+    ):
+        return
+    now = utc_now()
+    expires_at = datetime.fromtimestamp(principal.assertion_expires_at, tz=UTC)
+    if expires_at <= now:
+        raise CarlosServiceAuthenticationError()
+    try:
+        with session_factory() as session:
+            with session.begin():
+                session.execute(
+                    delete(PatientPortalStaffAssertionUse).where(
+                        PatientPortalStaffAssertionUse.expires_at <= now
+                    )
+                )
+                session.add(
+                    PatientPortalStaffAssertionUse(
+                        assertion_id=principal.assertion_id,
+                        created_at=now,
+                        expires_at=expires_at,
+                    )
+                )
+                session.flush()
+    except IntegrityError as exc:
         raise CarlosServiceAuthenticationError() from exc

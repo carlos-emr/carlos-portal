@@ -33,7 +33,7 @@ operational controls that a container cannot verify.
 - Host nginx (or an equivalent edge) terminating TLS and proxying to `127.0.0.1:8090`. Start with
   `carlos_patient_portal/deploy/nginx.conf`, replace its example hostname, certificate paths, and
   exact CARLOS source CIDRs, then run `nginx -t` before reloading it.
-- SMTP and SMS provider credentials and CARLOS's Ed25519 public assertion key.
+- SMTP and SMS provider credentials and CARLOS's Ed25519 public assertion keyring.
 - A deployment secret manager capable of writing root-readable files with mode `0600`.
 
 The host nginx source address inside the default Compose bridge is `172.30.80.1`. The supplied

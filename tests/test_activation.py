@@ -1,5 +1,6 @@
 """Invite activation: turning an invite plus identity proof into a portal account."""
 
+import json
 from datetime import timedelta
 
 import pytest
@@ -21,6 +22,7 @@ from carlos_patient_portal.models import (
     PatientPortalInvite,
     utc_now,
 )
+from carlos_patient_portal.staff_identity import staff_request_hash
 from tests.support import (
     AUDIT_HASH_SECRET,
     NON_DEVELOPMENT_SESSION_SECRET,
@@ -218,10 +220,18 @@ def test_non_development_requires_sms_for_activation_and_login_mfa() -> None:
         outbox_encryption_secret="o" * 32,
     )
     client = TestClient(app, base_url="https://portal.example.test")
+    invite_path = "/internal/carlos/patients/1234/invites"
+    invite_body = json.dumps(seeded_invite_request(), separators=(",", ":")).encode()
     invite = client.post(
-        "/internal/carlos/patients/1234/invites",
-        headers=carlos_staff_headers("portal.invite.manage"),
-        json=seeded_invite_request(),
+        invite_path,
+        headers={
+            **carlos_staff_headers(
+                "portal.invite.manage",
+                request_hash=staff_request_hash("POST", invite_path.encode(), b"", invite_body),
+            ),
+            "Content-Type": "application/json",
+        },
+        content=invite_body,
     )
     assert invite.status_code == 201, invite.text
     invite_token = invite.json()["invite_token"]

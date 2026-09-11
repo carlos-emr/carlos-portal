@@ -70,6 +70,11 @@ TEST_STAFF_ASSERTION_PUBLIC_KEY = (
     .rstrip(b"=")
     .decode("ascii")
 )
+TEST_STAFF_ASSERTION_KEY_ID = "test-2026"
+TEST_STAFF_ASSERTION_PUBLIC_KEYRING = json.dumps(
+    {TEST_STAFF_ASSERTION_KEY_ID: TEST_STAFF_ASSERTION_PUBLIC_KEY},
+    separators=(",", ":"),
+)
 
 
 WRONG_INTERNAL_HEALTH_TOKEN = "w" * MIN_PRODUCTION_SECRET_LENGTH
@@ -130,6 +135,9 @@ def sign_staff_assertion(
     expires_at: int | None = None,
     audience: str = "carlos-patient-portal-internal-api",
     issuer: str = "carlos",
+    key_id: str | None = None,
+    request_hash: str | None = None,
+    signing_key: Ed25519PrivateKey = TEST_STAFF_ASSERTION_PRIVATE_KEY,
     claim_overrides: dict[str, object] | None = None,
 ) -> str:
     now = int(datetime.now(UTC).timestamp())
@@ -146,13 +154,18 @@ def sign_staff_assertion(
         "provider_id": provider_id,
         "provider_name": provider_name,
     }
+    if key_id is not None or request_hash is not None:
+        if key_id is None or request_hash is None:
+            raise ValueError("key_id and request_hash must be supplied together")
+        claims["kid"] = key_id
+        claims["request_hash"] = request_hash
     claims.update(claim_overrides or {})
     payload = json.dumps(
         claims,
         separators=(",", ":"),
         sort_keys=True,
     ).encode()
-    signature = TEST_STAFF_ASSERTION_PRIVATE_KEY.sign(payload)
+    signature = signing_key.sign(payload)
     return f"{_base64url(payload)}.{_base64url(signature)}"
 
 
@@ -162,7 +175,14 @@ def carlos_staff_headers(
     provider_id: str = "provider-42",
     provider_name: str = "CarlosDoc",
     token: str = INTERNAL_API_TOKEN,
+    request_hash: str | None = None,
+    key_id: str = TEST_STAFF_ASSERTION_KEY_ID,
 ) -> dict[str, str]:
+    assertion_options = (
+        {"key_id": key_id, "request_hash": request_hash}
+        if request_hash is not None
+        else {}
+    )
     return {
         "Authorization": f"Bearer {token}",
         "X-CARLOS-Staff-Assertion": sign_staff_assertion(
@@ -170,6 +190,7 @@ def carlos_staff_headers(
             clinic_id=clinic_id,
             provider_id=provider_id,
             provider_name=provider_name,
+            **assertion_options,
         ),
     }
 
@@ -207,7 +228,7 @@ def non_development_settings_values(environment: str) -> dict[str, object]:
         "unlock_secret_encryption_secret": UNLOCK_SECRET_ENCRYPTION_SECRET,
         "internal_health_token": INTERNAL_HEALTH_TOKEN,
         "internal_api_token": INTERNAL_API_TOKEN,
-        "internal_staff_assertion_public_key": TEST_STAFF_ASSERTION_PUBLIC_KEY,
+        "internal_staff_assertion_public_keyring": TEST_STAFF_ASSERTION_PUBLIC_KEYRING,
         "smtp_host": "mail.internal",
         "smtp_from_address": "portal@example.test",
         "smtp_starttls": True,

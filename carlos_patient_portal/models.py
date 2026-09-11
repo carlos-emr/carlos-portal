@@ -130,6 +130,7 @@ MAX_AUDIT_ACTOR_ID_LENGTH = 128
 MAX_AUDIT_RESOURCE_TYPE_LENGTH = 64
 MAX_AUDIT_RESOURCE_ID_LENGTH = 128
 MAX_AUDIT_REASON_LENGTH = 64
+STAFF_ASSERTION_ID_LENGTH = 36
 MAX_UNLOCK_SECRET_LABEL_LENGTH = 128
 MAX_UNLOCK_SECRET_SOURCE_REFERENCE_LENGTH = 128
 MAX_UNLOCK_SECRET_ACTOR_LENGTH = 128
@@ -148,6 +149,39 @@ PENDING_STATUS_SQL = "status = 'pending'"
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+class PatientPortalStaffAssertionUse(Base):
+    """A short-lived, globally unique CARLOS assertion nonce.
+
+    The row is inserted before an internal request may execute. Keeping the nonce in PostgreSQL
+    makes replay protection effective across every web worker and every portal instance; expired
+    rows are removed opportunistically when a later assertion is consumed.
+    """
+
+    __tablename__ = "patient_portal_staff_assertion_uses"
+    __table_args__ = (
+        CheckConstraint(
+            f"length(assertion_id) = {STAFF_ASSERTION_ID_LENGTH}",
+            name="ck_pp_staff_assertion_use_id_length",
+        ),
+        CheckConstraint(
+            "expires_at > created_at",
+            name="ck_pp_staff_assertion_use_expiry_after_creation",
+        ),
+        Index("ix_pp_staff_assertion_use_expires", "expires_at"),
+    )
+
+    assertion_id: Mapped[str] = mapped_column(
+        String(STAFF_ASSERTION_ID_LENGTH),
+        primary_key=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class PatientPortalAccount(Base):
