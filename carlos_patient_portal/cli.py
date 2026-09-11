@@ -37,7 +37,12 @@ from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.pool import NullPool
 
-from carlos_patient_portal.config import get_migration_database_url, get_settings
+from carlos_patient_portal.config import (
+    Settings,
+    get_migration_database_url,
+    get_outbox_settings,
+    get_settings,
+)
 from carlos_patient_portal.database import (
     create_portal_engine,
     create_session_factory,
@@ -91,7 +96,13 @@ def migrate(argv: Sequence[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
 
-    command.upgrade(build_alembic_config(), args.revision)
+    try:
+        alembic_config = build_alembic_config()
+    except (SettingsError, ValidationError, SQLAlchemyError, ValueError):
+        # Pydantic's default traceback can include the rejected environment input. Database URLs
+        # are plain strings rather than SecretStr, so never let a malformed credential reach logs.
+        parser.error("migration configuration is invalid")
+    command.upgrade(alembic_config, args.revision)
 
 
 def _configuration_failure_checks(
@@ -228,6 +239,41 @@ def _database_deployment_identity(
     )
 
 
+def _outbox_configuration_digest(settings: Settings) -> str:
+    session_secret = settings.secret_value("session_secret")
+    if session_secret is None:
+        raise SystemExit("outbox compatibility probe requires PATIENT_PORTAL_SESSION_SECRET")
+    compatibility_values = {
+        "clinic_id": settings.clinic_id,
+        "clinic_name": settings.clinic_name,
+        "public_base_url": settings.public_base_url,
+        "password_reset_key": PortalTokenKeys.derive(session_secret).password_reset,
+        "password_reset_request_cooldown_seconds": (
+            settings.password_reset_request_cooldown_seconds
+        ),
+        "password_reset_token_ttl_seconds": settings.password_reset_token_ttl_seconds,
+        "outbox_active_key_id": settings.outbox_active_key_id,
+        "outbox_keyring": settings.resolved_outbox_keyring,
+        "service_name": settings.service_name,
+        # A worker pointed at a different relay can disclose portal messages even when every
+        # encryption and database setting matches. Treat the complete SMTP destination and
+        # credential tuple as shared deployment policy too; only its digest leaves the container.
+        "smtp_host": settings.smtp_host,
+        "smtp_port": settings.smtp_port,
+        "smtp_from_address": settings.resolved_smtp_from_address,
+        "smtp_starttls": settings.smtp_starttls,
+        "smtp_username": settings.smtp_username,
+        "smtp_password": settings.secret_value("smtp_password"),
+        "smtp_timeout_seconds": settings.smtp_timeout_seconds,
+    }
+    encoded_values = json.dumps(
+        compatibility_values,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    return sha256(encoded_values).hexdigest()
+
+
 def deployment_probe(argv: Sequence[str] | None = None) -> None:
     """Emit secret-free release-policy or live-database identity for deployment orchestration."""
     parser = ArgumentParser(
@@ -239,8 +285,11 @@ def deployment_probe(argv: Sequence[str] | None = None) -> None:
         choices=(
             "migration",
             "runtime",
+            "outbox",
             "maintenance",
             "database-artifacts-sha256",
+            "outbox-configuration-sha256",
+            "runtime-outbox-configuration-sha256",
         ),
     )
     args = parser.parse_args(argv)
@@ -256,33 +305,50 @@ def deployment_probe(argv: Sequence[str] | None = None) -> None:
             )
         )
         return
+    if args.probe in {
+        "outbox-configuration-sha256",
+        "runtime-outbox-configuration-sha256",
+    }:
+        try:
+            outbox_settings = (
+                get_outbox_settings()
+                if args.probe == "outbox-configuration-sha256"
+                else get_settings()
+            )
+        except (SettingsError, ValidationError):
+            parser.error("deployment probe configuration is invalid")
+        print(_outbox_configuration_digest(outbox_settings))
+        return
 
     settings = None
-    if args.probe == "migration":
-        database_url = get_migration_database_url()
-        # Alembic uses the URL and libpq environment directly. Do the same here so URL-level
-        # options such as `role` cannot disappear during the probe and reappear for the migration.
-        database_engine = create_engine(database_url, poolclass=NullPool)
-    else:
-        settings = get_settings()
-        if args.probe == "maintenance":
-            if settings.maintenance_database_url is None:
-                parser.error("PATIENT_PORTAL_MAINTENANCE_DATABASE_URL is required")
-            database_url = settings.maintenance_database_url
-        else:
-            database_url = settings.database_url
-        database_engine = create_portal_engine(
-            database_url,
-            pool_size=settings.database_pool_size,
-            max_overflow=settings.database_max_overflow,
-            pool_timeout_seconds=settings.database_pool_timeout_seconds,
-            connect_timeout_seconds=settings.database_connect_timeout_seconds,
-            statement_timeout_ms=settings.database_statement_timeout_ms,
-            lock_timeout_ms=settings.database_lock_timeout_ms,
-            sqlite_busy_timeout_ms=settings.sqlite_busy_timeout_ms,
-        )
     try:
+        if args.probe == "migration":
+            database_url = get_migration_database_url()
+            # Alembic uses the URL and libpq environment directly. Do the same here so URL-level
+            # options such as `role` cannot disappear during the probe and reappear for migration.
+            database_engine = create_engine(database_url, poolclass=NullPool)
+        else:
+            settings = get_outbox_settings() if args.probe == "outbox" else get_settings()
+            if args.probe == "maintenance":
+                if settings.maintenance_database_url is None:
+                    parser.error("PATIENT_PORTAL_MAINTENANCE_DATABASE_URL is required")
+                database_url = settings.maintenance_database_url
+            else:
+                database_url = settings.database_url
+            database_engine = create_portal_engine(
+                database_url,
+                pool_size=settings.database_pool_size,
+                max_overflow=settings.database_max_overflow,
+                pool_timeout_seconds=settings.database_pool_timeout_seconds,
+                connect_timeout_seconds=settings.database_connect_timeout_seconds,
+                statement_timeout_ms=settings.database_statement_timeout_ms,
+                lock_timeout_ms=settings.database_lock_timeout_ms,
+                sqlite_busy_timeout_ms=settings.sqlite_busy_timeout_ms,
+            )
         configured_username = make_url(database_url).username
+    except (SettingsError, ValidationError, SQLAlchemyError, ValueError):
+        parser.error("deployment probe configuration is invalid")
+    try:
         print(
             _database_deployment_identity(
                 database_engine,
@@ -386,7 +452,13 @@ def maintenance(argv: Sequence[str] | None = None) -> None:
     benchmark_parser.add_argument("--operations", type=int, default=8)
 
     args = parser.parse_args(argv)
-    settings = get_settings()
+    # The outbox container deliberately has a reduced secret set. Its health check uses this
+    # read-only subcommand, so loading the full web settings here would make a healthy worker look
+    # unhealthy unless it were given credentials it must not receive.
+    try:
+        settings = get_outbox_settings() if args.command == "outbox-status" else get_settings()
+    except (SettingsError, ValidationError):
+        parser.error("maintenance configuration is invalid")
 
     if args.command == "backup-sqlite":
         backup_path = backup_sqlite_database(
@@ -592,7 +664,10 @@ def outbox_worker(argv: Sequence[str] | None = None) -> None:
     if args.max_deliveries < 0:
         parser.error("--max-deliveries must not be negative")
 
-    settings = get_settings()
+    try:
+        settings = get_outbox_settings()
+    except (SettingsError, ValidationError):
+        parser.error("outbox configuration is invalid")
     outbox_encryption_keys = settings.resolved_outbox_keyring
     if not outbox_encryption_keys:
         parser.error(

@@ -139,6 +139,17 @@ SELECT NOT EXISTS (
 
 BEGIN;
 
+-- Keep every declared login able to perform its next bounded operation even if database-wide
+-- CONNECT defaults are tightened by the hosting platform.
+SELECT format(
+  'GRANT CONNECT ON DATABASE %I TO %I, %I, %I;',
+  current_database(),
+  :'owner_role',
+  :'runtime_role',
+  :'maintenance_role'
+)
+\gexec
+
 -- A fixed search_path does not suppress PostgreSQL's implicit pg_temp precedence. The application
 -- never needs temporary objects, so remove the database privilege that could create a shadow table.
 SELECT format(
@@ -150,6 +161,7 @@ SELECT format(
 \gexec
 
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
+GRANT CREATE, USAGE ON SCHEMA public TO :"owner_role";
 GRANT USAGE ON SCHEMA public TO :"runtime_role", :"maintenance_role";
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC;

@@ -12,6 +12,9 @@ x-portal-service: &portal-service
     # Uvicorn consume an attacker-supplied leading X-Forwarded-For value before the application can
     # validate the immediate peer. Settings rejects non-CIDR values such as "*" fail closed.
     PATIENT_PORTAL_TRUSTED_PROXY_CIDRS: ${PORTAL_TRUSTED_PROXY_CIDR:-172.30.80.1/32}
+    # Empty for current releases. The rollback wrapper sets this public (not private) key only
+    # while crossing back to an image that predates assertion keyrings.
+    PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY: ${PORTAL_LEGACY_STAFF_ASSERTION_PUBLIC_KEY:-}
   volumes:
     - type: bind
       source: ${PORTAL_DB_CA_FILE:?Set PORTAL_DB_CA_FILE to the PostgreSQL CA certificate}
@@ -68,6 +71,12 @@ services:
 
   outbox:
     <<: *portal-service
+    env_file:
+      - ${PORTAL_OUTBOX_ENV_FILE:-deploy/outbox.env}
+    # The worker does not accept client traffic and must not inherit proxy configuration. The sole
+    # explicit value is a public-key compatibility bridge used only by a legacy rollback image.
+    environment:
+      PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY: ${PORTAL_LEGACY_STAFF_ASSERTION_PUBLIC_KEY:-}
     command:
       - carlos-patient-portal-outbox-worker
     restart: unless-stopped

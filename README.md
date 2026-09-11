@@ -365,7 +365,10 @@ the PostgreSQL search path is pinned to `pg_catalog,public`, temporary-object cr
 and relation, column, sequence, function, grant-option, and `PUBLIC` ACLs across user schemas match
 the explicit application allowlist. Explicit user-schema ACLs and implicit object ownership for
 undeclared database roles also fail the gate. Output is secret-free JSON so the result can be
-attached to the deployment change record.
+attached to the deployment change record. The gate also verifies that the declared schema-owner,
+database-owner, and audit-maintenance roles have not gained elevated attributes, and that the
+runtime, schema-owner, and maintenance roles retain explicit database connection access while the
+maintenance role keeps only its intended audit-table read/delete access.
 
 The production deployment wrapper additionally refuses to mutate PostgreSQL unless the migration,
 runtime, audit-maintenance, and database-policy credentials resolve to the same physical cluster and

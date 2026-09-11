@@ -1,9 +1,11 @@
 # Production deployment
 
 This deployment runs one clinic's portal as two long-lived processes: the FastAPI web service and
-the durable outbound-message worker. A one-shot migration process uses the schema-owner database
-role, and a second one-shot process reapplies the audit-table grants. PostgreSQL remains external so
-patient data can use managed encryption, backups, point-in-time recovery, and restore tooling.
+the durable outbound-message worker. They use separate environment files so the worker does not
+receive web-only identity, audit, internal-API, SMS, or unlock-secret credentials. A one-shot
+migration process uses the schema-owner database role, and a second one-shot process reapplies the
+audit-table grants. PostgreSQL remains external so patient data can use managed encryption,
+backups, point-in-time recovery, and restore tooling.
 
 The same immutable image runs every portal process. `scripts/production-deploy` refuses a mutable
 image tag, applies migrations and database grants, runs the real-data preflight, and verifies the
@@ -44,10 +46,11 @@ or multi-address proxy trust is rejected.
 
 ## Prepare one clinic
 
-Copy the four examples and restrict access before adding credentials:
+Copy the five examples and restrict access before adding credentials:
 
 ```bash
 install -m 0600 deploy/production.env.example deploy/production.env
+install -m 0600 deploy/outbox.env.example deploy/outbox.env
 install -m 0600 deploy/migration.env.example deploy/migration.env
 install -m 0600 deploy/database-admin.env.example deploy/database-admin.env
 install -m 0600 deploy/maintenance.env.example deploy/maintenance.env
@@ -55,9 +58,17 @@ install -m 0600 deploy/maintenance.env.example deploy/maintenance.env
 
 Replace every `replace-*` value. Use separate random values for every application secret. Keep the
 database passwords URL-encoded and mount the database provider's CA certificate using
-`PORTAL_DB_CA_FILE`. The deployment loads the owner and admin files only into their one-shot jobs,
-and loads the audit-deletion credential only for `prune-audit`; web, worker, and general operator
-commands never receive those elevated credentials.
+`PORTAL_DB_CA_FILE`. The outbox file deliberately repeats only the runtime database, reset-token,
+session, outbox-encryption, retry, and SMTP settings the worker needs. Make worker-owned policy
+changes in `outbox.env`; the similarly named values in `production.env` configure only the web and
+general maintenance processes. The deployment refuses to start when the two files disagree on the
+clinic, public URL, reset-token policy/key, or outbox encryption keys, or when the outbox database
+connection resolves to a different target or runtime role. Shared clinic and service names are
+also compared, along with the SMTP destination, sender, transport, and credentials, so messages
+cannot silently use different branding or leave through an unintended relay. The
+deployment loads the owner and admin files only into their one-shot jobs, and loads the
+audit-deletion credential only for `prune-audit`; web, worker, and general operator commands never
+receive those elevated credentials.
 
 Use a capacity-appropriate value for `PORTAL_WEB_WORKERS`. Each worker can open
 `PATIENT_PORTAL_DATABASE_POOL_SIZE + PATIENT_PORTAL_DATABASE_MAX_OVERFLOW` connections and the
@@ -92,17 +103,21 @@ non-system-schema objects, and exact relation, column, sequence, function, grant
 `PUBLIC` ACLs across every user schema. ACLs or object ownership granting user-schema access to
 roles outside the declared database admin, schema owner, runtime, and maintenance set are rejected.
 Runtime and maintenance roles cannot access non-`public` schemas or create temporary objects. Runtime
-connections pin `search_path` to
+connections, migrations, and audit retention each retain an explicit database `CONNECT` grant, and
+runtime connections pin `search_path` to
 `pg_catalog,public`, so a role-named schema cannot shadow portal objects. Migrations pin it to
 `public`; PostgreSQL still searches the implicitly trusted `pg_catalog` first while using `public`
 as the creation target. Only after those checks pass does it start web and outbox, then wait for
 both containers to become healthy. It does not configure
 DNS, edge TLS, managed backups, or monitoring on the host.
 
-Before any migration, policy change, or audit prune, the wrapper queries every credential and
-requires the same PostgreSQL system identifier, database OID, and database name, with TLS active on
-every connection. It also requires the migration, runtime, and maintenance sessions to use the
-roles declared by database policy, and requires a direct database-admin session. Production URLs
+Before a migration, the wrapper proves that the schema-owner and direct database-admin credentials
+target the same PostgreSQL system identifier, database OID, and database name over TLS. It then
+reconciles database policy before querying the runtime, outbox, and maintenance credentials; this
+ordering lets the policy job restore an explicitly declared `CONNECT` grant without weakening the
+identity check on any credential. Audit pruning still verifies every credential before deletion.
+The wrapper requires the migration, runtime, and maintenance sessions to use the roles declared by
+database policy, and requires a direct database-admin session. Production URLs
 cannot use libpq query parameters such as `host`, `dbname`, or `service` to override their declared
 target or `options` to replace the enforced search path and bounded waits. Before any migration,
 policy application, or audit prune, the wrapper compares both the host policy SQL and
@@ -135,6 +150,16 @@ scripts/production-deploy rollback
 Database downgrades are deliberately never automatic. Several migrations refuse to discard queued
 messages or audit evidence. If an application rollback is not schema-compatible, enter maintenance
 mode and follow a reviewed data migration and Alembic downgrade plan from a restored copy first.
+The wrapper probes the rollback image for worker-specific settings support. When crossing back to
+an older image that predates the isolated outbox environment and assertion keyrings, first export
+`PORTAL_LEGACY_STAFF_ASSERTION_PUBLIC_KEY` with the unpadded base64url public key that image should
+trust. Coordinate CARLOS to issue that image's legacy assertion shape during the rollback. The
+wrapper warns, maps the public key to the older singular setting, and temporarily supplies the
+legacy web environment to that worker. Later images retain the separate outbox secret file, and
+rollback refuses to restart them unless the web and worker connections resolve to the same live
+database and runtime role with TLS and bounded session waits. Unset the compatibility variable
+before a later current-image deployment; current production releases deliberately reject singular
+and keyring assertion settings used together.
 
 ## Operational commands
 

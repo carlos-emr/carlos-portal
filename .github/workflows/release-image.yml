@@ -75,8 +75,14 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           image_repository="ghcr.io/${GITHUB_REPOSITORY,,}"
-          if docker manifest inspect "$image_repository:$RELEASE_TAG" >/dev/null 2>&1; then
+          manifest_error="$RUNNER_TEMP/portal-manifest-inspect.err"
+          if docker manifest inspect "$image_repository:$RELEASE_TAG" \
+            >/dev/null 2>"$manifest_error"; then
             echo "Refusing to overwrite existing image tag $image_repository:$RELEASE_TAG" >&2
+            exit 1
+          fi
+          if ! grep -Eiq 'manifest unknown|no such manifest' "$manifest_error"; then
+            echo "Could not prove that image tag $image_repository:$RELEASE_TAG is unused." >&2
             exit 1
           fi
           created=$(date -u +%Y-%m-%dT%H:%M:%SZ)

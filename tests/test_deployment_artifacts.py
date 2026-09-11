@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from carlos_patient_portal import models
-from carlos_patient_portal.config import Settings
+from carlos_patient_portal.config import OutboxSettings, Settings
 
 PACKAGE_ROOT = Path(__file__).parents[1] / "carlos_patient_portal"
 REPOSITORY_ROOT = PACKAGE_ROOT.parent
@@ -48,6 +48,10 @@ def test_production_compose_separates_runtime_and_privileged_jobs() -> None:
     assert "127.0.0.1}:${PORTAL_BIND_PORT:-8090}:8090" in compose
     assert "carlos-patient-portal-outbox-worker" in compose
     outbox_block = compose.split("  outbox:", 1)[1].split("  migrate:", 1)[0]
+    assert "${PORTAL_OUTBOX_ENV_FILE:-deploy/outbox.env}" in outbox_block
+    assert "${PORTAL_ENV_FILE:-deploy/production.env}" not in outbox_block
+    assert "PATIENT_PORTAL_TRUSTED_PROXY_CIDRS" not in outbox_block
+    assert "PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY" in outbox_block
     assert "healthcheck:" in outbox_block
     assert "carlos-patient-portal-maintenance" in outbox_block
     assert "outbox-status" in outbox_block
@@ -145,6 +149,7 @@ def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
     assert 'PORTAL_BIND_ADDRESS:-127.0.0.1' in script
     assert 'PORTAL_BIND_ADDRESS" != "127.0.0.1' in script
     assert "PORTAL_TRUSTED_PROXY_CIDR" in script
+    assert "PORTAL_OUTBOX_ENV_FILE" in script
     assert "PORTAL_DEPLOY_LOCK_FILE" in script
     assert "flock --nonblock 9" in script
     assert "deploy|export-audit|cleanup-auth|prune-audit|rollback" in script
@@ -157,20 +162,25 @@ def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
     assert "compose --profile operations run --rm preflight" in script
     assert "verify_database_artifacts" in script
     assert "verify_database_targets" in script
+    assert "verify_outbox_configuration" in script
     assert "carlos-patient-portal-deployment-probe" in script
     assert "database-artifacts-sha256" in script
     assert "postgresql-database-identity.sql" in script
     assert "does not match the policy packaged in PORTAL_IMAGE" in script
     assert "identity query does not match the query packaged in PORTAL_IMAGE" in script
     assert "targets a different PostgreSQL database" in script
+    assert 'verify_portal_database_probe "Outbox" "$runtime_role_digest"' in script
     assert "Database admin connection does not use TLS" in script
     assert "does not enforce the deployment session policy" in script
     migrate_block = script.split("  migrate)", 1)[1].split("    ;;", 1)[0]
     prune_block = script.split("  prune-audit)", 1)[1].split("    ;;", 1)[0]
     assert "verify_database_artifacts" in migrate_block
     assert "verify_database_artifacts" in prune_block
-    assert script.index("run --rm database-policy") < script.index("run --rm preflight")
-    assert script.index("run --rm preflight") < script.index("compose up --detach")
+    deploy_block = script.split("  deploy)", 1)[1].split("    ;;", 1)[0]
+    assert deploy_block.index("run --rm database-policy") < deploy_block.index(
+        "run --rm preflight"
+    )
+    assert deploy_block.index("run --rm preflight") < deploy_block.index("compose up --detach")
     assert script.count("--wait --wait-timeout 90") == 2
     rollback_block = script.split("  rollback)", 1)[1].split("  *)", 1)[0]
     assert "validate" in rollback_block
@@ -179,6 +189,9 @@ def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
         "validate"
     )
     assert rollback_block.index("run --rm preflight") < rollback_block.index("compose up")
+    assert 'hasattr(c, "get_outbox_settings") else 42' in rollback_block
+    assert '"$capability_status" -ne 42' in rollback_block
+    assert "PORTAL_OUTBOX_ENV_FILE=$PORTAL_ENV_FILE" in rollback_block
 
 
 def test_release_image_includes_sbom_and_provenance() -> None:
@@ -195,6 +208,9 @@ def test_release_image_includes_sbom_and_provenance() -> None:
     assert "group: release-patient-portal-${{ github.ref }}" in workflow
     assert "checks: read" in workflow
     assert '{"patient-portal (3.11)", "patient-portal (3.12)"}' in workflow
+    assert 'manifest_error="$RUNNER_TEMP/portal-manifest-inspect.err"' in workflow
+    assert "manifest unknown|no such manifest" in workflow
+    assert "Could not prove that image tag" in workflow
 
 
 def test_ci_audits_python_and_browser_dependency_graphs() -> None:
@@ -303,6 +319,41 @@ def test_production_environment_example_can_satisfy_runtime_policy(tmp_path: Pat
     assert settings.resolved_unlock_secret_keyring.keys() == {"initial"}
 
 
+def test_outbox_environment_example_excludes_web_only_secrets(tmp_path: Path) -> None:
+    example_path = REPOSITORY_ROOT / "deploy" / "outbox.env.example"
+    example = example_path.read_text()
+    for excluded_name in (
+        "IDENTITY_PROOF_SECRET",
+        "AUDIT_HASH_SECRET",
+        "INTERNAL_API_TOKEN",
+        "INTERNAL_HEALTH_TOKEN",
+        "MAINTENANCE_DATABASE_URL",
+        "SMS_WEBHOOK_URL",
+        "SMS_WEBHOOK_TOKEN",
+        "UNLOCK_SECRET_ENCRYPTION",
+    ):
+        assert excluded_name not in example
+    values = {
+        key: value
+        for line in example.splitlines()
+        if line and not line.startswith("#")
+        for key, value in [line.split("=", 1)]
+    }
+    values["PATIENT_PORTAL_SESSION_SECRET"] = "s" * 32
+    values["PATIENT_PORTAL_OUTBOX_ENCRYPTION_KEYRING"] = '{"initial":"' + ("o" * 32) + '"}'
+    configured_path = tmp_path / "outbox.env"
+    configured_path.write_text("".join(f"{key}={value}\n" for key, value in values.items()))
+
+    settings = OutboxSettings(_env_file=configured_path)
+
+    assert settings.environment == "production"
+    assert settings.resolved_outbox_keyring.keys() == {"initial"}
+    assert settings.unlock_secret_encryption_keyring is None
+    assert settings.outbox_max_attempts == 14
+    assert settings.password_reset_token_ttl_seconds == 3600
+    assert settings.smtp_timeout_seconds == 10
+
+
 def test_reference_proxy_omits_raw_request_target_and_limits_expensive_routes() -> None:
     configuration = (PACKAGE_ROOT / "deploy" / "nginx.conf").read_text()
 
@@ -329,7 +380,7 @@ def test_reference_proxy_omits_raw_request_target_and_limits_expensive_routes() 
     assert "allow 127.0.0.1/32" in configuration
     assert "deny all" in configuration
     assert "proxy_set_header X-Forwarded-Proto $scheme" in configuration
-    assert configuration.count('proxy_set_header X-CARLOS-Provider-ID ""') == 1
+    assert configuration.count('proxy_set_header X-CARLOS-Provider-ID ""') == 2
     assert configuration.count('proxy_set_header X-CARLOS-Staff-Assertion ""') == 1
     assert (
         configuration.count(
@@ -384,6 +435,13 @@ def test_reference_proxy_replaces_untrusted_forwarded_for_in_every_proxy_block()
     internal_block = configuration.split("location ^~ /internal/carlos/ {", 1)[1]
     internal_block = internal_block.split("\n  }", 1)[0]
     assert "proxy_set_header X-Forwarded-For $remote_addr;" in internal_block
+    for header_name in (
+        "X-CARLOS-Provider-ID",
+        "X-CARLOS-Provider-Name",
+        "X-CARLOS-Clinic-ID",
+        "X-CARLOS-Permissions",
+    ):
+        assert f'proxy_set_header {header_name} "";' in internal_block
 
 
 def test_audit_role_policy_keeps_runtime_append_only_and_pruning_separate() -> None:

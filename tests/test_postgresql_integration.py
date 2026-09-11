@@ -137,6 +137,9 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
             connection.execute(
                 text(f'CREATE ROLE "{runtime_role}" LOGIN PASSWORD \'{runtime_password}\'')
             )
+            connection.execute(
+                text(f'GRANT CONNECT ON DATABASE {quoted_database} TO "{runtime_role}"')
+            )
             connection.execute(text(f'GRANT USAGE ON SCHEMA public TO "{runtime_role}"'))
             connection.execute(
                 text(f'GRANT SELECT ON public.alembic_version TO "{runtime_role}"')

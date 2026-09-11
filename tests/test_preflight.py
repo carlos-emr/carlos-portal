@@ -11,9 +11,11 @@ from carlos_patient_portal.preflight import (
     EXPECTED_TABLE_PRIVILEGES,
     collect_production_preflight,
     database_preflight_checks,
+    evaluate_declared_database_roles,
     evaluate_runtime_database_allowlist,
     evaluate_runtime_role_policy,
 )
+from tests.support import production_settings
 
 
 def compliant_runtime_role() -> dict[str, bool]:
@@ -41,6 +43,7 @@ def compliant_runtime_role() -> dict[str, bool]:
         "nonpublic_schema_usage": False,
         "public_schema_privilege": False,
         "search_path_unsafe": False,
+        "database_connect": True,
         "database_create": False,
         "database_temporary": False,
         "database_owner": False,
@@ -53,6 +56,32 @@ def compliant_runtime_role() -> dict[str, bool]:
         "role_elevated": False,
         "unexpected_acl_grantee": False,
         "unexpected_object_owner": False,
+    }
+
+
+def compliant_declared_database_roles() -> dict[str, bool]:
+    return {
+        "declared_roles_valid": True,
+        "schema_owner_database_connect": True,
+        "schema_owner_database_create": False,
+        "schema_owner_schema_usage": True,
+        "schema_owner_schema_create": True,
+        "maintenance_database_connect": True,
+        "maintenance_database_create": False,
+        "maintenance_database_temporary": False,
+        "maintenance_schema_usage": True,
+        "maintenance_schema_create": False,
+        "maintenance_nonpublic_schema_usage": False,
+        "maintenance_role_membership": False,
+        "maintenance_object_owner": False,
+        "maintenance_audit_select": True,
+        "maintenance_audit_delete": True,
+        "maintenance_audit_dangerous": False,
+        "maintenance_unexpected_table_privilege": False,
+        "maintenance_grant_option": False,
+        "maintenance_column_privilege": False,
+        "maintenance_sequence_privilege": False,
+        "maintenance_function_execute": False,
     }
 
 
@@ -103,6 +132,23 @@ def test_runtime_role_policy_reports_each_privilege_violation(privilege: str) ->
     values[privilege] = not values[privilege]
 
     check = evaluate_runtime_role_policy(values)
+
+    assert not check.passed
+    assert privilege in check.detail
+
+
+def test_declared_database_role_policy_accepts_only_maintenance_audit_deletion() -> None:
+    check = evaluate_declared_database_roles(compliant_declared_database_roles())
+
+    assert check.passed
+
+
+@pytest.mark.parametrize("privilege", compliant_declared_database_roles())
+def test_declared_database_role_policy_reports_each_violation(privilege: str) -> None:
+    values = compliant_declared_database_roles()
+    values[privilege] = not values[privilege]
+
+    check = evaluate_declared_database_roles(values)
 
     assert not check.passed
     assert privilege in check.detail
@@ -303,3 +349,23 @@ def test_preflight_cli_omits_settings_source_values_from_errors(
     output = capsys.readouterr().out
     assert "raw-environment-secret-must-not-appear" not in output
     assert "SettingsError" in output
+
+
+def test_preflight_cli_reports_a_malformed_database_url_as_json(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "get_settings",
+        lambda: production_settings(database_url="postgresql+psycopg:malformed"),
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli.production_preflight([])
+
+    assert exit_info.value.code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "failed"
+    assert payload["checks"][0]["name"] == "configuration"
+    assert "valid SQLAlchemy database URL" in payload["checks"][0]["detail"]

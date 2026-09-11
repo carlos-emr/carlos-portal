@@ -718,6 +718,20 @@ def register_internal_account_routes(
         )
         if account is None:
             raise HTTPException(status_code=404, detail=INTERNAL_ACCOUNT_NOT_FOUND_DETAIL)
+        record_audit_event(
+            session,
+            event_type=AUDIT_EVENT_STAFF_ACTION,
+            outcome=AUDIT_OUTCOME_SUCCESS,
+            actor_type=AUDIT_ACTOR_TYPE_STAFF,
+            actor=principal.display_name,
+            actor_id=principal.provider_id,
+            clinic_id=principal.clinic_id,
+            demographic_no=demographic_no,
+            account_id=account.id,
+            resource_type="portal_account",
+            resource_id=str(account.id),
+            reason="status_viewed",
+        )
         return {
             "id": account.id,
             "clinic_id": account.clinic_id,
@@ -965,6 +979,18 @@ def register_internal_contact_review_routes(
             offset=offset,
         )
         total = count_pending_contact_reviews(session, clinic_id=principal.clinic_id)
+        record_audit_event(
+            session,
+            event_type=AUDIT_EVENT_STAFF_ACTION,
+            outcome=AUDIT_OUTCOME_SUCCESS,
+            actor_type=AUDIT_ACTOR_TYPE_STAFF,
+            actor=principal.display_name,
+            actor_id=principal.provider_id,
+            clinic_id=principal.clinic_id,
+            resource_type="contact_review",
+            resource_id=f"offset:{offset}:limit:{limit}",
+            reason="pending_list_viewed",
+        )
         return {
             "items": [
                 {

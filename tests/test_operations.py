@@ -44,6 +44,115 @@ def test_alembic_config_escapes_percent_interpolation(monkeypatch: pytest.Monkey
     assert config.get_main_option("sqlalchemy.url") == database_url
 
 
+@pytest.mark.parametrize(
+    ("entrypoint", "arguments", "failure_message"),
+    (
+        (cli.migrate, [], "migration configuration is invalid"),
+        (
+            cli.deployment_probe,
+            ["migration"],
+            "deployment probe configuration is invalid",
+        ),
+        (cli.maintenance, ["outbox-status"], "maintenance configuration is invalid"),
+        (cli.outbox_worker, ["--once"], "outbox configuration is invalid"),
+    ),
+)
+def test_configuration_cli_hides_rejected_url_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    entrypoint,
+    arguments: list[str],
+    failure_message: str,
+) -> None:
+    sentinel_password = "SENTINEL-DATABASE-PASSWORD"
+    for name in list(os.environ):
+        if name.startswith("PATIENT_PORTAL_"):
+            monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PATIENT_PORTAL_ENVIRONMENT", "production")
+    monkeypatch.setenv(
+        "PATIENT_PORTAL_DATABASE_URL",
+        f"invalid://user:{sentinel_password}",
+    )
+    cli.get_settings.cache_clear()
+    cli.get_outbox_settings.cache_clear()
+
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            entrypoint(arguments)
+    finally:
+        cli.get_settings.cache_clear()
+        cli.get_outbox_settings.cache_clear()
+
+    assert exc_info.value.code == 2
+    stderr = capsys.readouterr().err
+    assert failure_message in stderr
+    assert sentinel_password not in stderr
+
+
+def test_outbox_configuration_digest_covers_shared_worker_policy() -> None:
+    settings = staging_settings()
+    changed_ttl = staging_settings(password_reset_token_ttl_seconds=7200)
+    changed_clinic = staging_settings(clinic_id="another-clinic")
+    changed_clinic_name = staging_settings(clinic_name="Another Clinic")
+    changed_service_name = staging_settings(service_name="Another Portal")
+    changed_smtp_host = staging_settings(smtp_host="other-mail.internal")
+    smtp_settings = staging_settings(
+        smtp_username="relay-user",
+        smtp_password="y" * 32,
+    )
+    changed_smtp_password = staging_settings(
+        smtp_username="relay-user",
+        smtp_password="z" * 32,
+    )
+
+    digest = cli._outbox_configuration_digest(settings)
+
+    assert len(digest) == 64
+    assert digest != cli._outbox_configuration_digest(changed_ttl)
+    assert digest != cli._outbox_configuration_digest(changed_clinic)
+    assert digest != cli._outbox_configuration_digest(changed_clinic_name)
+    assert digest != cli._outbox_configuration_digest(changed_service_name)
+    assert digest != cli._outbox_configuration_digest(changed_smtp_host)
+    assert cli._outbox_configuration_digest(smtp_settings) != cli._outbox_configuration_digest(
+        changed_smtp_password
+    )
+
+
+@pytest.mark.parametrize(
+    ("probe", "selected_loader", "rejected_loader"),
+    (
+        (
+            "runtime-outbox-configuration-sha256",
+            "get_settings",
+            "get_outbox_settings",
+        ),
+        (
+            "outbox-configuration-sha256",
+            "get_outbox_settings",
+            "get_settings",
+        ),
+    ),
+)
+def test_outbox_configuration_probe_loads_the_matching_service_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    probe: str,
+    selected_loader: str,
+    rejected_loader: str,
+) -> None:
+    settings = staging_settings()
+    monkeypatch.setattr(cli, selected_loader, lambda: settings)
+
+    def reject_wrong_environment() -> None:
+        raise AssertionError("loaded the other service's environment")
+
+    monkeypatch.setattr(cli, rejected_loader, reject_wrong_environment)
+
+    cli.deployment_probe([probe])
+
+    assert capsys.readouterr().out.strip() == cli._outbox_configuration_digest(settings)
+
+
 def test_sqlite_backup_rejects_prefix_lookalike_backend() -> None:
     with pytest.raises(BackupUnsupportedError):
         sqlite_database_path("sqlitefake:////tmp/portal.db")
@@ -389,6 +498,28 @@ def test_audit_export_cli_emits_ordered_jsonl(
     assert exported["clinic_id"] == "clinic-a"
 
 
+def test_outbox_status_uses_the_reduced_worker_settings(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'outbox-status.db'}"
+    settings = development_settings(database_url=database_url)
+    engine = create_portal_engine(database_url)
+    upgrade_to_head(engine)
+    engine.dispose()
+
+    def reject_web_settings() -> Settings:
+        raise AssertionError("outbox status must not load the web secret bundle")
+
+    monkeypatch.setattr(cli, "get_settings", reject_web_settings)
+    monkeypatch.setattr(cli, "get_outbox_settings", lambda: settings)
+
+    cli.maintenance(["outbox-status"])
+
+    assert capsys.readouterr().out == "outbox is empty\n"
+
+
 def test_outbox_worker_survives_a_transient_database_fault(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -414,7 +545,7 @@ def test_outbox_worker_survives_a_transient_database_fault(
         database_url=f"sqlite+pysqlite:///{tmp_path / 'worker.db'}",
         outbox_encryption_secret=OUTBOX_ENCRYPTION_SECRET,
     )
-    monkeypatch.setattr(cli, "get_settings", lambda: worker_settings)
+    monkeypatch.setattr(cli, "get_outbox_settings", lambda: worker_settings)
     monkeypatch.setattr(cli, "build_portal_email_sender", lambda _settings: object())
     monkeypatch.setattr(cli, "process_one_delivery", flaky_delivery)
     monkeypatch.setattr(cli, "sleep", lambda _seconds: None)
@@ -445,7 +576,7 @@ def test_outbox_worker_uses_the_active_key_from_a_keyring(
     def capture_delivery(*args: object, **kwargs: object) -> None:
         delivery_arguments.update(kwargs)
 
-    monkeypatch.setattr(cli, "get_settings", lambda: worker_settings)
+    monkeypatch.setattr(cli, "get_outbox_settings", lambda: worker_settings)
     monkeypatch.setattr(cli, "build_portal_email_sender", lambda _settings: object())
     monkeypatch.setattr(cli, "process_one_delivery", capture_delivery)
 

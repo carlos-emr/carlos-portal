@@ -1143,6 +1143,17 @@ def test_internal_staff_can_disable_and_reenable_portal_access() -> None:
         "status": "active",
         "force_password_reset": True,
     }
+    with app.state.session_factory() as session:
+        status_read = session.scalar(
+            select(PatientPortalAuditEvent).where(
+                PatientPortalAuditEvent.event_type == AUDIT_EVENT_STAFF_ACTION,
+                PatientPortalAuditEvent.reason == "status_viewed",
+            )
+        )
+        assert status_read is not None
+        assert status_read.actor_id == "provider-42"
+        assert status_read.demographic_no == 1234
+        assert status_read.account_id == initial.json()["id"]
 
 
 def test_internal_contact_review_is_clinic_scoped_and_applies_staff_decision() -> None:
@@ -1205,9 +1216,18 @@ def test_internal_contact_review_is_clinic_scoped_and_applies_staff_decision() -
     assert replay.status_code == 200
     with app.state.session_factory() as session:
         account = session.scalar(select(PatientPortalAccount))
+        list_audit = session.scalar(
+            select(PatientPortalAuditEvent).where(
+                PatientPortalAuditEvent.event_type == AUDIT_EVENT_STAFF_ACTION,
+                PatientPortalAuditEvent.reason == "pending_list_viewed",
+            )
+        )
         assert account is not None
         assert account.email == "updated.patient@example.com"
         assert account.phone_number == "+16135550199"
+        assert list_audit is not None
+        assert list_audit.actor_id == "provider-42"
+        assert list_audit.resource_id == "offset:0:limit:50"
 
 
 def test_internal_contact_review_rejection_retains_current_contact() -> None:

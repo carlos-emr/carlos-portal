@@ -20,6 +20,7 @@ from carlos_patient_portal.config import (
     DEFAULT_AUDIT_RETENTION_DAYS,
     DEFAULT_DATABASE_URL,
     MigrationDatabaseSettings,
+    OutboxSettings,
     Settings,
     get_migration_database_url,
 )
@@ -333,6 +334,141 @@ def test_migration_settings_still_enforce_the_production_transport(
 
     with pytest.raises(ValidationError, match="postgresql\\+psycopg"):
         get_migration_database_url()
+
+
+def test_migration_settings_reject_malformed_url_without_echoing_credentials() -> None:
+    sentinel_password = "SENTINEL-DATABASE-PASSWORD"
+
+    with pytest.raises(ValidationError, match="valid SQLAlchemy database URL") as exc_info:
+        MigrationDatabaseSettings(
+            database_url=(
+                f"postgresql+psycopg://portal:{sentinel_password}@localhost:not-a-port/portal"
+            )
+        )
+
+    assert sentinel_password not in str(exc_info.value)
+
+
+def test_malformed_production_database_url_is_a_validation_error() -> None:
+    with pytest.raises(ValidationError, match="valid SQLAlchemy database URL"):
+        production_settings(database_url="postgresql+psycopg:malformed")
+
+
+def test_settings_validation_errors_hide_rejected_database_credentials() -> None:
+    sentinel_password = "SENTINEL-DATABASE-PASSWORD"
+
+    with pytest.raises(ValidationError) as exc_info:
+        production_settings(database_url=f"invalid://portal:{sentinel_password}")
+
+    assert sentinel_password not in str(exc_info.value)
+
+
+def test_outbox_settings_need_no_web_only_secrets() -> None:
+    settings = OutboxSettings(
+        environment="production",
+        clinic_id="clinic-a",
+        clinic_name="Clinic A",
+        public_base_url="https://portal.example.test",
+        database_url="postgresql+psycopg://portal_runtime@localhost/carlos_portal",
+        session_secret="s" * 32,
+        outbox_encryption_secret="o" * 32,
+        smtp_host="mail.internal",
+        smtp_from_address="portal@example.test",
+        smtp_starttls=True,
+    )
+
+    assert settings.identity_proof_secret is None
+    assert settings.audit_hash_secret is None
+    assert settings.internal_api_token is None
+    assert settings.sms_webhook_token is None
+    assert settings.unlock_secret_encryption_secret is None
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value", "environment_name"),
+    (
+        (
+            "maintenance_database_url",
+            "postgresql+psycopg://portal_audit_maintenance@localhost/carlos_portal",
+            "PATIENT_PORTAL_MAINTENANCE_DATABASE_URL",
+        ),
+        ("identity_proof_secret", "i" * 32, "PATIENT_PORTAL_IDENTITY_PROOF_SECRET"),
+        ("audit_hash_secret", "a" * 32, "PATIENT_PORTAL_AUDIT_HASH_SECRET"),
+        (
+            "unlock_secret_encryption_secret",
+            "u" * 32,
+            "PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_SECRET",
+        ),
+        (
+            "unlock_secret_encryption_keyring",
+            json.dumps({"old": "u" * 32}),
+            "PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_KEYRING",
+        ),
+        ("internal_health_token", "h" * 32, "PATIENT_PORTAL_INTERNAL_HEALTH_TOKEN"),
+        ("internal_api_token", "a" * 32, "PATIENT_PORTAL_INTERNAL_API_TOKEN"),
+        (
+            "internal_api_token_previous",
+            "p" * 32,
+            "PATIENT_PORTAL_INTERNAL_API_TOKEN_PREVIOUS",
+        ),
+        ("dev_admin_token", "d" * 32, "PATIENT_PORTAL_DEV_ADMIN_TOKEN"),
+        ("sms_webhook_url", "https://sms.example.test/send", "PATIENT_PORTAL_SMS_WEBHOOK_URL"),
+        ("sms_webhook_token", "m" * 32, "PATIENT_PORTAL_SMS_WEBHOOK_TOKEN"),
+    ),
+)
+def test_outbox_settings_reject_web_only_credentials(
+    field_name: str,
+    value: str,
+    environment_name: str,
+) -> None:
+    with pytest.raises(ValidationError, match=environment_name):
+        OutboxSettings(
+            environment="production",
+            clinic_id="clinic-a",
+            clinic_name="Clinic A",
+            public_base_url="https://portal.example.test",
+            database_url="postgresql+psycopg://portal_runtime@localhost/carlos_portal",
+            session_secret="s" * 32,
+            outbox_encryption_secret="o" * 32,
+            smtp_host="mail.internal",
+            smtp_from_address="portal@example.test",
+            smtp_starttls=True,
+            **{field_name: value},
+        )
+
+
+def test_outbox_settings_reject_reused_session_and_encryption_secrets() -> None:
+    shared_secret = "x" * 32
+
+    with pytest.raises(ValidationError, match="must not reuse"):
+        OutboxSettings(
+            environment="production",
+            clinic_id="clinic-a",
+            clinic_name="Clinic A",
+            public_base_url="https://portal.example.test",
+            database_url="postgresql+psycopg://portal_runtime@localhost/carlos_portal",
+            session_secret=shared_secret,
+            outbox_encryption_secret=shared_secret,
+            smtp_host="mail.internal",
+            smtp_from_address="portal@example.test",
+            smtp_starttls=True,
+        )
+
+
+def test_outbox_settings_reject_a_blank_session_secret_at_startup() -> None:
+    with pytest.raises(ValidationError, match="SESSION_SECRET must not be blank"):
+        OutboxSettings(
+            environment="production",
+            clinic_id="clinic-a",
+            clinic_name="Clinic A",
+            public_base_url="https://portal.example.test",
+            database_url="postgresql+psycopg://portal_runtime@localhost/carlos_portal",
+            session_secret=" " * 32,
+            outbox_encryption_secret="o" * 32,
+            smtp_host="mail.internal",
+            smtp_from_address="portal@example.test",
+            smtp_starttls=True,
+        )
 
 
 def test_migration_settings_accept_the_documented_environment_alias(

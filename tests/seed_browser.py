@@ -123,13 +123,21 @@ def main() -> None:
                 }
             }
         )
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        descriptor = os.open(fixture_path, flags, 0o600)
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "w") as fixture_file:
-            fixture_file.write(fixture_payload)
+        # The fixture contains a one-time invite and test password. Write it under a random 0600
+        # name and atomically replace the predictable path, avoiding both symlink following and a
+        # brief readable window if an old path was created with permissive mode bits.
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=fixture_path.parent,
+            prefix=f".{fixture_path.name}.",
+        )
+        temporary_path = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as fixture_file:
+                fixture_file.write(fixture_payload)
+            os.replace(temporary_path, fixture_path)
+        except BaseException:
+            temporary_path.unlink(missing_ok=True)
+            raise
     finally:
         engine.dispose()
 

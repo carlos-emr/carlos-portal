@@ -10,6 +10,7 @@ export PORTAL_IMAGE=${PORTAL_IMAGE:?Set PORTAL_IMAGE to the locally built test i
 export PORTAL_ALLOW_MUTABLE_IMAGE=true
 export PORTAL_BIND_PORT=${PORTAL_BIND_PORT:-18090}
 export PORTAL_ENV_FILE="$test_root/production.env"
+export PORTAL_OUTBOX_ENV_FILE="$test_root/outbox.env"
 export PORTAL_MIGRATION_ENV_FILE="$test_root/migration.env"
 export PORTAL_DATABASE_ADMIN_ENV_FILE="$test_root/database-admin.env"
 export PORTAL_MAINTENANCE_ENV_FILE="$test_root/maintenance.env"
@@ -67,6 +68,7 @@ else
 fi
 
 cp "$repository_root/tests/production-smoke.env" "$PORTAL_ENV_FILE"
+cp "$repository_root/tests/production-smoke-outbox.env" "$PORTAL_OUTBOX_ENV_FILE"
 cat > "$PORTAL_MIGRATION_ENV_FILE" <<'EOF'
 PATIENT_PORTAL_ENVIRONMENT=production
 PATIENT_PORTAL_DATABASE_URL=postgresql+psycopg://portal_schema_owner:schema-owner-test-password@production-test-database:5432/carlos_portal?sslmode=verify-full&sslrootcert=/run/secrets/postgresql-ca.pem
@@ -82,6 +84,7 @@ PATIENT_PORTAL_MAINTENANCE_DATABASE_URL=postgresql+psycopg://portal_audit_mainte
 EOF
 chmod 0600 \
   "$PORTAL_ENV_FILE" \
+  "$PORTAL_OUTBOX_ENV_FILE" \
   "$PORTAL_MIGRATION_ENV_FILE" \
   "$PORTAL_DATABASE_ADMIN_ENV_FILE" \
   "$PORTAL_MAINTENANCE_ENV_FILE"
@@ -218,6 +221,57 @@ if "$repository_root/scripts/production-deploy" preflight \
   exit 1
 fi
 grep -F 'table_dangerous_privilege' "$test_root/dangerous-table-privilege.json"
+"$repository_root/scripts/production-deploy" apply-db-policy
+"$repository_root/scripts/production-deploy" preflight
+
+# The schema-owner privilege is needed by the next migration, not by the running application.
+# Keep it in the live preflight so drift is found before an upgrade window, and make policy replay
+# repair it instead of relying on a one-time database bootstrap command.
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 \
+  --command 'REVOKE CREATE ON SCHEMA public FROM portal_schema_owner'
+if "$repository_root/scripts/production-deploy" preflight \
+  > "$test_root/schema-owner-create-drift.json"; then
+  printf '%s\n' 'preflight accepted a schema owner unable to run the next migration' >&2
+  exit 1
+fi
+grep -F 'schema_owner_schema_create' "$test_root/schema-owner-create-drift.json"
+"$repository_root/scripts/production-deploy" apply-db-policy
+"$repository_root/scripts/production-deploy" preflight
+
+# Standalone preflight must detect privilege drift on the offline maintenance role too. Otherwise a
+# leaked maintenance credential could quietly gain patient-table access between deployments while
+# the runtime role continued to look perfectly restricted.
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 \
+  --command 'GRANT SELECT ON public.patient_portal_accounts TO portal_audit_maintenance'
+if "$repository_root/scripts/production-deploy" preflight \
+  > "$test_root/maintenance-privilege-drift.json"; then
+  printf '%s\n' 'preflight accepted patient-table access for the maintenance role' >&2
+  exit 1
+fi
+grep -F 'maintenance_unexpected_table_privilege' \
+  "$test_root/maintenance-privilege-drift.json"
+"$repository_root/scripts/production-deploy" apply-db-policy
+"$repository_root/scripts/production-deploy" preflight
+
+# CONNECT is made explicit for the roles used by future migrations and audit retention. Detect a
+# missing direct grant even while PostgreSQL's default PUBLIC grant happens to keep it effective.
+compose exec -T database psql \
+  --username portal_cluster_admin \
+  --dbname carlos_portal \
+  --set ON_ERROR_STOP=1 \
+  --command 'REVOKE CONNECT ON DATABASE carlos_portal FROM portal_audit_maintenance'
+if "$repository_root/scripts/production-deploy" preflight \
+  > "$test_root/maintenance-connect-drift.json"; then
+  printf '%s\n' 'preflight accepted a missing maintenance CONNECT grant' >&2
+  exit 1
+fi
+grep -F 'maintenance_database_connect' "$test_root/maintenance-connect-drift.json"
 "$repository_root/scripts/production-deploy" apply-db-policy
 "$repository_root/scripts/production-deploy" preflight
 

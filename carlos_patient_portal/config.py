@@ -31,6 +31,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
 from carlos_patient_portal.credentials import (
     DEFAULT_PASSWORD_HASH_MAX_CONCURRENCY,
@@ -377,6 +378,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_prefix="PATIENT_PORTAL_",
+        # Validation failures can be rendered by an ASGI server before application logging is
+        # configured. Do not let Pydantic include rejected raw inputs such as database URLs (and
+        # their embedded passwords) in that startup traceback.
+        hide_input_in_errors=True,
         # Most PATIENT_PORTAL_* typos fail safe, because a missing required secret aborts
         # startup. Mistyping *both* TRUSTED_CLIENT_IP_HEADER and TRUSTED_PROXY_CIDRS does not:
         # validate_proxy_policy is satisfied by two Nones, so the portal starts believing
@@ -943,7 +948,14 @@ class Settings(BaseSettings):
     def validate_database_transport_policy(self) -> None:
         if not self.is_production:
             return
-        runtime_role = make_url(self.database_url).username
+        self.validate_database_transport_url(
+            self.database_url,
+            environment_name="PATIENT_PORTAL_DATABASE_URL",
+        )
+        runtime_role = self.database_url_username(
+            self.database_url,
+            environment_name="PATIENT_PORTAL_DATABASE_URL",
+        )
         if runtime_role in {
             self.database_schema_owner_role,
             self.database_maintenance_role,
@@ -951,20 +963,29 @@ class Settings(BaseSettings):
             raise ValueError(
                 "production database runtime, schema-owner, and maintenance roles must differ"
             )
-        self.validate_database_transport_url(
-            self.database_url,
-            environment_name="PATIENT_PORTAL_DATABASE_URL",
-        )
         if self.maintenance_database_url is not None:
-            if make_url(self.maintenance_database_url).username != self.database_maintenance_role:
-                raise ValueError(
-                    "PATIENT_PORTAL_MAINTENANCE_DATABASE_URL must use "
-                    "PATIENT_PORTAL_DATABASE_MAINTENANCE_ROLE"
-                )
             self.validate_database_transport_url(
                 self.maintenance_database_url,
                 environment_name="PATIENT_PORTAL_MAINTENANCE_DATABASE_URL",
             )
+            if (
+                self.database_url_username(
+                    self.maintenance_database_url,
+                    environment_name="PATIENT_PORTAL_MAINTENANCE_DATABASE_URL",
+                )
+                != self.database_maintenance_role
+            ):
+                raise ValueError(
+                    "PATIENT_PORTAL_MAINTENANCE_DATABASE_URL must use "
+                    "PATIENT_PORTAL_DATABASE_MAINTENANCE_ROLE"
+                )
+
+    @staticmethod
+    def database_url_username(database_url: str, *, environment_name: str) -> str | None:
+        try:
+            return make_url(database_url).username
+        except (ArgumentError, ValueError) as exc:
+            raise ValueError(f"{environment_name} must be a valid SQLAlchemy database URL") from exc
 
     @staticmethod
     def validate_database_transport_url(database_url: str, *, environment_name: str) -> None:
@@ -1083,9 +1104,67 @@ class Settings(BaseSettings):
         return self
 
 
+class OutboxSettings(Settings):
+    """Production settings limited to what the outbound-delivery worker needs.
+
+    The worker shares application code and a database role with the web process, but it must not
+    receive identity-proof, audit-hash, internal-API, SMS, or unlock-secret credentials. A dedicated
+    model lets its environment file omit those values instead of copying the complete web secret
+    bundle into a second long-lived process.
+    """
+
+    @model_validator(mode="after")
+    def reject_unsafe_runtime_policy(self) -> "OutboxSettings":
+        forbidden_credentials = {
+            "maintenance_database_url": "PATIENT_PORTAL_MAINTENANCE_DATABASE_URL",
+            "identity_proof_secret": "PATIENT_PORTAL_IDENTITY_PROOF_SECRET",
+            "audit_hash_secret": "PATIENT_PORTAL_AUDIT_HASH_SECRET",
+            "unlock_secret_encryption_secret": (
+                "PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_SECRET"
+            ),
+            "unlock_secret_encryption_keyring": (
+                "PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_KEYRING"
+            ),
+            "internal_health_token": "PATIENT_PORTAL_INTERNAL_HEALTH_TOKEN",
+            "internal_api_token": "PATIENT_PORTAL_INTERNAL_API_TOKEN",
+            "internal_api_token_previous": "PATIENT_PORTAL_INTERNAL_API_TOKEN_PREVIOUS",
+            "dev_admin_token": "PATIENT_PORTAL_DEV_ADMIN_TOKEN",
+            "sms_webhook_url": "PATIENT_PORTAL_SMS_WEBHOOK_URL",
+            "sms_webhook_token": "PATIENT_PORTAL_SMS_WEBHOOK_TOKEN",
+        }
+        present_credentials = sorted(
+            environment_name
+            for field_name, environment_name in forbidden_credentials.items()
+            if not self.is_development and getattr(self, field_name) is not None
+        )
+        if present_credentials:
+            raise ValueError(
+                "outbox settings must not include web-only credentials: "
+                + ",".join(present_credentials)
+            )
+        # Reuse the common parser, length, blank-value, active-key, and secret-reuse checks without
+        # requiring the unrelated services enforced by validate_required_production_services().
+        self.validate_secret_policy()
+        if not self.is_development and not self.resolved_outbox_keyring:
+            raise ValueError(
+                "PATIENT_PORTAL_OUTBOX_ENCRYPTION_SECRET or "
+                "PATIENT_PORTAL_OUTBOX_ENCRYPTION_KEYRING must be set outside development"
+            )
+        self.validate_smtp_policy()
+        self.validate_database_transport_policy()
+        self.validate_clinic_policy()
+        self.validate_session_policy()
+        return self
+
+
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+@lru_cache
+def get_outbox_settings() -> OutboxSettings:
+    return OutboxSettings()
 
 
 class MigrationDatabaseSettings(BaseSettings):
@@ -1114,6 +1193,7 @@ class MigrationDatabaseSettings(BaseSettings):
         env_file=".env",
         env_prefix="PATIENT_PORTAL_",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
     @field_validator("environment", mode="before")
@@ -1125,6 +1205,13 @@ class MigrationDatabaseSettings(BaseSettings):
     def validate_transport(self) -> "MigrationDatabaseSettings":
         if self.environment == "production":
             Settings.validate_database_transport_url(
+                self.database_url,
+                environment_name="PATIENT_PORTAL_DATABASE_URL",
+            )
+            # Transport parsing alone does not reject every malformed SQLAlchemy URL (for example,
+            # a nonnumeric port on localhost). Reject it before Alembic can render the raw URL in a
+            # startup traceback.
+            Settings.database_url_username(
                 self.database_url,
                 environment_name="PATIENT_PORTAL_DATABASE_URL",
             )

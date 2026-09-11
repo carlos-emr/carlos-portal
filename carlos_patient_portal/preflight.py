@@ -103,6 +103,7 @@ def evaluate_runtime_role_policy(values: Mapping[str, object]) -> PreflightCheck
         "nonpublic_schema_usage": False,
         "public_schema_privilege": False,
         "search_path_unsafe": False,
+        "database_connect": True,
         "database_create": False,
         "database_temporary": False,
         "database_owner": False,
@@ -129,6 +130,46 @@ def evaluate_runtime_role_policy(values: Mapping[str, object]) -> PreflightCheck
             "runtime database privilege policy failed: " + ",".join(violations)
             if violations
             else "runtime database privilege policy failed"
+        ),
+    )
+
+
+def evaluate_declared_database_roles(values: Mapping[str, object]) -> PreflightCheck:
+    """Verify that owner/maintenance roles still match the least-privilege declaration."""
+    required = {
+        "declared_roles_valid": True,
+        "schema_owner_database_connect": True,
+        "schema_owner_database_create": False,
+        "schema_owner_schema_usage": True,
+        "schema_owner_schema_create": True,
+        "maintenance_database_connect": True,
+        "maintenance_database_create": False,
+        "maintenance_database_temporary": False,
+        "maintenance_schema_usage": True,
+        "maintenance_schema_create": False,
+        "maintenance_nonpublic_schema_usage": False,
+        "maintenance_role_membership": False,
+        "maintenance_object_owner": False,
+        "maintenance_audit_select": True,
+        "maintenance_audit_delete": True,
+        "maintenance_audit_dangerous": False,
+        "maintenance_unexpected_table_privilege": False,
+        "maintenance_grant_option": False,
+        "maintenance_column_privilege": False,
+        "maintenance_sequence_privilege": False,
+        "maintenance_function_execute": False,
+    }
+    violations = sorted(
+        name for name, expected in required.items() if values.get(name) is not expected
+    )
+    return preflight_check(
+        "declared_database_roles",
+        not violations,
+        passed_detail="schema-owner, database-owner, and maintenance roles match policy",
+        failed_detail=(
+            "declared database role policy failed: " + ",".join(violations)
+            if violations
+            else "declared database role policy failed"
         ),
     )
 
@@ -287,6 +328,313 @@ def query_runtime_database_allowlist(session: Session) -> PreflightCheck:
     return evaluate_runtime_database_allowlist(table_values, sequence_values)
 
 
+def query_declared_database_roles(
+    session: Session,
+    *,
+    schema_owner_role: str,
+    maintenance_role: str,
+) -> PreflightCheck:
+    """Inspect declared non-runtime roles through PostgreSQL's public system catalogs."""
+    values = session.execute(
+        text(
+            """
+            WITH maintenance_role_record AS (
+              SELECT oid
+              FROM pg_roles
+              WHERE rolname = :maintenance_role
+            ), schema_owner_role_record AS (
+              SELECT oid
+              FROM pg_roles
+              WHERE rolname = :schema_owner_role
+            ), declared_role_records AS (
+              SELECT role_record.*
+              FROM pg_roles role_record
+              WHERE role_record.oid IN (
+                SELECT oid FROM maintenance_role_record
+                UNION
+                SELECT oid FROM schema_owner_role_record
+                UNION
+                SELECT datdba
+                FROM pg_database
+                WHERE datname = current_database()
+              )
+            )
+            SELECT
+              (
+                SELECT count(*) = 3 AND bool_and(
+                  rolcanlogin
+                  AND NOT (
+                    rolsuper
+                    OR rolcreaterole
+                    OR rolcreatedb
+                    OR rolreplication
+                    OR rolbypassrls
+                  )
+                )
+                FROM declared_role_records
+              ) AS declared_roles_valid,
+              COALESCE(
+                (
+                  SELECT bool_or(
+                    acl.grantee = schema_owner_role_record.oid
+                    AND acl.privilege_type = 'CONNECT'
+                  )
+                  FROM schema_owner_role_record
+                  CROSS JOIN pg_database database_record
+                  CROSS JOIN LATERAL aclexplode(
+                    COALESCE(
+                      database_record.datacl,
+                      acldefault('d', database_record.datdba)
+                    )
+                  ) acl
+                  WHERE database_record.datname = current_database()
+                ),
+                FALSE
+              ) AS schema_owner_database_connect,
+              COALESCE(
+                (
+                  SELECT has_database_privilege(
+                    schema_owner_role_record.oid,
+                    current_database(),
+                    'CREATE'
+                  )
+                  FROM schema_owner_role_record
+                ),
+                TRUE
+              ) AS schema_owner_database_create,
+              (
+                SELECT has_schema_privilege(
+                  schema_owner_role_record.oid,
+                  'public',
+                  'USAGE'
+                )
+                FROM schema_owner_role_record
+              ) AS schema_owner_schema_usage,
+              (
+                SELECT has_schema_privilege(
+                  schema_owner_role_record.oid,
+                  'public',
+                  'CREATE'
+                )
+                FROM schema_owner_role_record
+              ) AS schema_owner_schema_create,
+              COALESCE(
+                (
+                  SELECT bool_or(
+                    acl.grantee = maintenance_role_record.oid
+                    AND acl.privilege_type = 'CONNECT'
+                  )
+                  FROM maintenance_role_record
+                  CROSS JOIN pg_database database_record
+                  CROSS JOIN LATERAL aclexplode(
+                    COALESCE(
+                      database_record.datacl,
+                      acldefault('d', database_record.datdba)
+                    )
+                  ) acl
+                  WHERE database_record.datname = current_database()
+                ),
+                FALSE
+              ) AS maintenance_database_connect,
+              COALESCE(
+                (
+                  SELECT has_database_privilege(
+                    maintenance_role_record.oid,
+                    current_database(),
+                    'CREATE'
+                  )
+                  FROM maintenance_role_record
+                ),
+                TRUE
+              ) AS maintenance_database_create,
+              COALESCE(
+                (
+                  SELECT has_database_privilege(
+                    maintenance_role_record.oid,
+                    current_database(),
+                    'TEMPORARY'
+                  )
+                  FROM maintenance_role_record
+                ),
+                TRUE
+              ) AS maintenance_database_temporary,
+              (
+                SELECT has_schema_privilege(
+                  maintenance_role_record.oid,
+                  'public',
+                  'USAGE'
+                )
+                FROM maintenance_role_record
+              ) AS maintenance_schema_usage,
+              EXISTS (
+                SELECT 1
+                FROM maintenance_role_record
+                CROSS JOIN pg_namespace namespace_record
+                WHERE namespace_record.nspname <> 'information_schema'
+                  AND namespace_record.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND has_schema_privilege(
+                    maintenance_role_record.oid,
+                    namespace_record.oid,
+                    'CREATE'
+                  )
+              ) AS maintenance_schema_create,
+              EXISTS (
+                SELECT 1
+                FROM maintenance_role_record
+                CROSS JOIN pg_namespace namespace_record
+                WHERE namespace_record.nspname <> 'information_schema'
+                  AND namespace_record.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND namespace_record.nspname <> 'public'
+                  AND has_schema_privilege(
+                    maintenance_role_record.oid,
+                    namespace_record.oid,
+                    'USAGE'
+                  )
+              ) AS maintenance_nonpublic_schema_usage,
+              EXISTS (
+                SELECT 1
+                FROM maintenance_role_record
+                CROSS JOIN pg_auth_members membership
+                WHERE membership.roleid = maintenance_role_record.oid
+                   OR membership.member = maintenance_role_record.oid
+              ) AS maintenance_role_membership,
+              EXISTS (
+                SELECT 1
+                FROM maintenance_role_record
+                CROSS JOIN pg_namespace namespace_record
+                WHERE namespace_record.nspname <> 'information_schema'
+                  AND namespace_record.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND namespace_record.nspowner = maintenance_role_record.oid
+                UNION ALL
+                SELECT 1
+                FROM maintenance_role_record
+                CROSS JOIN pg_class relation_record
+                JOIN pg_namespace namespace_record
+                  ON namespace_record.oid = relation_record.relnamespace
+                WHERE namespace_record.nspname <> 'information_schema'
+                  AND namespace_record.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND relation_record.relowner = maintenance_role_record.oid
+                UNION ALL
+                SELECT 1
+                FROM maintenance_role_record
+                CROSS JOIN pg_proc function_record
+                JOIN pg_namespace namespace_record
+                  ON namespace_record.oid = function_record.pronamespace
+                WHERE namespace_record.nspname <> 'information_schema'
+                  AND namespace_record.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND function_record.proowner = maintenance_role_record.oid
+                UNION ALL
+                SELECT 1
+                FROM maintenance_role_record
+                CROSS JOIN pg_type type_record
+                JOIN pg_namespace namespace_record
+                  ON namespace_record.oid = type_record.typnamespace
+                WHERE namespace_record.nspname <> 'information_schema'
+                  AND namespace_record.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND type_record.typowner = maintenance_role_record.oid
+              ) AS maintenance_object_owner,
+              (
+                SELECT has_table_privilege(
+                  maintenance_role_record.oid,
+                  'public.patient_portal_audit_events',
+                  'SELECT'
+                )
+                FROM maintenance_role_record
+              ) AS maintenance_audit_select,
+              (
+                SELECT has_table_privilege(
+                  maintenance_role_record.oid,
+                  'public.patient_portal_audit_events',
+                  'DELETE'
+                )
+                FROM maintenance_role_record
+              ) AS maintenance_audit_delete,
+              COALESCE(
+                (
+                  SELECT has_table_privilege(
+                    maintenance_role_record.oid,
+                    'public.patient_portal_audit_events',
+                    'INSERT,UPDATE,TRUNCATE,REFERENCES,TRIGGER'
+                  )
+                  FROM maintenance_role_record
+                ),
+                TRUE
+              ) AS maintenance_audit_dangerous,
+              EXISTS (
+                SELECT 1
+                FROM maintenance_role_record
+                CROSS JOIN pg_class relation_record
+                JOIN pg_namespace namespace_record
+                  ON namespace_record.oid = relation_record.relnamespace
+                WHERE namespace_record.nspname <> 'information_schema'
+                  AND namespace_record.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND relation_record.relkind IN ('r', 'p', 'v', 'm', 'f')
+                  AND (
+                    namespace_record.nspname,
+                    relation_record.relname
+                  ) <> ('public', 'patient_portal_audit_events')
+                  AND has_table_privilege(
+                    maintenance_role_record.oid,
+                    relation_record.oid,
+                    'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
+                  )
+              ) AS maintenance_unexpected_table_privilege,
+              EXISTS (
+                SELECT 1
+                FROM maintenance_role_record
+                CROSS JOIN pg_class relation_record
+                CROSS JOIN LATERAL aclexplode(relation_record.relacl) acl
+                WHERE acl.grantee = maintenance_role_record.oid
+                  AND acl.is_grantable
+              ) AS maintenance_grant_option,
+              EXISTS (
+                SELECT 1
+                FROM maintenance_role_record
+                CROSS JOIN pg_attribute attribute_record
+                CROSS JOIN LATERAL aclexplode(attribute_record.attacl) acl
+                WHERE attribute_record.attnum > 0
+                  AND NOT attribute_record.attisdropped
+                  AND acl.grantee = maintenance_role_record.oid
+              ) AS maintenance_column_privilege,
+              EXISTS (
+                SELECT 1
+                FROM maintenance_role_record
+                CROSS JOIN pg_class sequence_record
+                JOIN pg_namespace namespace_record
+                  ON namespace_record.oid = sequence_record.relnamespace
+                WHERE namespace_record.nspname <> 'information_schema'
+                  AND namespace_record.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND sequence_record.relkind = 'S'
+                  AND has_sequence_privilege(
+                    maintenance_role_record.oid,
+                    sequence_record.oid,
+                    'USAGE,SELECT,UPDATE'
+                  )
+              ) AS maintenance_sequence_privilege,
+              EXISTS (
+                SELECT 1
+                FROM maintenance_role_record
+                CROSS JOIN pg_proc function_record
+                JOIN pg_namespace namespace_record
+                  ON namespace_record.oid = function_record.pronamespace
+                WHERE namespace_record.nspname <> 'information_schema'
+                  AND namespace_record.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+                  AND has_function_privilege(
+                    maintenance_role_record.oid,
+                    function_record.oid,
+                    'EXECUTE'
+                  )
+              ) AS maintenance_function_execute
+            """
+        ),
+        {
+            "schema_owner_role": schema_owner_role,
+            "maintenance_role": maintenance_role,
+        },
+    ).mappings().one()
+    return evaluate_declared_database_roles(values)
+
+
 def query_runtime_role_policy(
     session: Session,
     *,
@@ -385,6 +733,21 @@ def query_runtime_role_policy(
                   AND n.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
                   AND acl.grantee = 0
               ) AS public_schema_privilege,
+              EXISTS (
+                SELECT 1
+                FROM pg_database database_record
+                CROSS JOIN LATERAL aclexplode(
+                  COALESCE(
+                    database_record.datacl,
+                    acldefault('d', database_record.datdba)
+                  )
+                ) acl
+                WHERE database_record.datname = current_database()
+                  AND acl.grantee = (
+                    SELECT oid FROM pg_roles WHERE rolname = current_user
+                  )
+                  AND acl.privilege_type = 'CONNECT'
+              ) AS database_connect,
               has_database_privilege(current_user, current_database(), 'CREATE')
                 AS database_create,
               has_database_privilege(current_user, current_database(), 'TEMPORARY')
@@ -641,6 +1004,13 @@ def database_preflight_checks(
                         maintenance_role=maintenance_role,
                     )
                 )
+                checks.append(
+                    query_declared_database_roles(
+                        session,
+                        schema_owner_role=schema_owner_role,
+                        maintenance_role=maintenance_role,
+                    )
+                )
                 checks.append(query_runtime_database_allowlist(session))
             else:
                 checks.append(
@@ -648,6 +1018,13 @@ def database_preflight_checks(
                         "runtime_database_role",
                         "fail",
                         "runtime privileges cannot be verified until the schema is current",
+                    )
+                )
+                checks.append(
+                    PreflightCheck(
+                        "declared_database_roles",
+                        "fail",
+                        "declared database roles cannot be verified until the schema is current",
                     )
                 )
                 checks.append(

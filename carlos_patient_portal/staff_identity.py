@@ -59,6 +59,7 @@ STAFF_ASSERTION_FIELDS = {
 }
 BOUND_STAFF_ASSERTION_FIELDS = STAFF_ASSERTION_FIELDS | {"kid", "request_hash"}
 REQUEST_HASH_HEX_LENGTH = 64
+REQUEST_HASH_CHARACTERS = frozenset("0123456789abcdef")
 
 
 class CarlosServiceAuthenticationError(Exception):
@@ -132,6 +133,17 @@ def _decode_base64url(value: str, *, expected_length: int | None = None) -> byte
     return decoded
 
 
+def _reject_duplicate_assertion_claims(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    claims: dict[str, object] = {}
+    for name, value in pairs:
+        if name in claims:
+            raise ValueError("staff assertion contains a duplicate claim")
+        claims[name] = value
+    return claims
+
+
 def staff_request_hash(
     method: str,
     raw_path: bytes,
@@ -171,7 +183,10 @@ def verify_staff_assertion(
     payload_bytes = _decode_base64url(encoded_payload)
     signature = _decode_base64url(encoded_signature, expected_length=64)
     try:
-        payload = json.loads(payload_bytes)
+        payload = json.loads(
+            payload_bytes,
+            object_pairs_hook=_reject_duplicate_assertion_claims,
+        )
     except (
         UnicodeDecodeError,
         json.JSONDecodeError,
@@ -199,6 +214,8 @@ def verify_staff_assertion(
             expected_request_hash is None
             or not isinstance(request_hash, str)
             or len(request_hash) != REQUEST_HASH_HEX_LENGTH
+            or not request_hash.isascii()
+            or not set(request_hash) <= REQUEST_HASH_CHARACTERS
             or not compare_digest(request_hash, expected_request_hash)
         ):
             raise CarlosServiceAuthenticationError()
@@ -269,18 +286,15 @@ def authenticate_carlos_staff(
         or staff_assertion is None
     ):
         raise CarlosServiceAuthenticationError()
-    try:
-        principal = verify_staff_assertion(
-            public_keys,
-            staff_assertion,
-            expected_request_hash=expected_request_hash,
-            allow_legacy_unbound=settings.is_development,
-        )
-        if principal.clinic_id != settings.clinic_id:
-            raise CarlosServiceAuthenticationError()
-        return principal
-    except ValueError as exc:
-        raise CarlosServiceAuthenticationError() from exc
+    principal = verify_staff_assertion(
+        public_keys,
+        staff_assertion,
+        expected_request_hash=expected_request_hash,
+        allow_legacy_unbound=settings.is_development,
+    )
+    if principal.clinic_id != settings.clinic_id:
+        raise CarlosServiceAuthenticationError()
+    return principal
 
 
 def consume_staff_assertion(
