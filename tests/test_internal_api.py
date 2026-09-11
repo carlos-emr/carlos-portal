@@ -543,6 +543,83 @@ def test_internal_invite_list_resend_and_revoke_lifecycle() -> None:
     assert missing_revoke.status_code == 404
 
 
+def test_internal_invite_rejects_scope_conflicts_and_superseded_revocation(
+    monkeypatch,
+) -> None:
+    client = TestClient(internal_app())
+    headers = carlos_headers("portal.invite.manage")
+
+    scope_mismatch = client.post(
+        "/internal/carlos/patients/1234/invites",
+        headers=headers,
+        json=invite_request(demographic_no=5678),
+    )
+    created = client.post(
+        "/internal/carlos/patients/1234/invites",
+        headers=headers,
+        json=invite_request(),
+    )
+    resent = client.post(
+        f"/internal/carlos/invites/{created.json()['id']}/resend",
+        headers=headers,
+    )
+    superseded_revoke = client.post(
+        f"/internal/carlos/invites/{created.json()['id']}/revoke",
+        headers=headers,
+    )
+
+    assert scope_mismatch.status_code == 400
+    assert created.status_code == 201
+    assert resent.status_code == 200
+    assert superseded_revoke.status_code == 409
+    assert superseded_revoke.json()["detail"] == "superseded invite cannot be revoked"
+
+    def reject_concurrent_invite(*args, **kwargs):
+        raise internal_routes.PendingInviteExistsError()
+
+    monkeypatch.setattr(internal_routes, "create_invite", reject_concurrent_invite)
+    concurrent = client.post(
+        "/internal/carlos/patients/5678/invites",
+        headers=headers,
+        json=invite_request(demographic_no=5678),
+    )
+    assert concurrent.status_code == 409
+    assert concurrent.json()["detail"] == "pending invite already exists"
+
+
+def test_internal_resource_lookups_hide_missing_records() -> None:
+    client = TestClient(internal_app())
+
+    unlock = client.post(
+        "/internal/carlos/patients/1234/unlock",
+        headers=carlos_headers("portal.account.unlock"),
+    )
+    account = client.get(
+        "/internal/carlos/patients/1234/portal-account",
+        headers=carlos_headers("portal.account.manage"),
+    )
+    publish_secret = client.post(
+        "/internal/carlos/unlock-secrets/999999/publish",
+        headers=carlos_headers("portal.secret.manage"),
+    )
+    revoke_secret = client.post(
+        "/internal/carlos/unlock-secrets/999999/revoke",
+        headers=carlos_headers("portal.secret.manage"),
+        json={"reason": "message_recalled"},
+    )
+    review = client.post(
+        "/internal/carlos/contact-reviews/999999/decision",
+        headers=carlos_headers("portal.contact.review"),
+        json={"approve": True, "revision": "missing-revision"},
+    )
+
+    assert unlock.status_code == 404
+    assert account.status_code == 404
+    assert publish_secret.status_code == 404
+    assert revoke_secret.status_code == 404
+    assert review.status_code == 404
+
+
 def test_internal_unlock_secret_is_idempotent_scoped_and_target_audited() -> None:
     app = internal_app()
     client = TestClient(app)

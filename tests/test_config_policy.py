@@ -765,6 +765,35 @@ def test_staff_assertion_keyring_rejects_invalid_or_ambiguous_members() -> None:
             internal_api_token="c" * 32,
             internal_staff_assertion_public_keyring=json.dumps({"new": "invalid"}),
         )
+    with pytest.raises(ValidationError, match="must be a JSON object"):
+        development_settings(
+            internal_api_token="c" * 32,
+            internal_staff_assertion_public_keyring="{",
+        )
+    with pytest.raises(ValidationError, match="must be a non-empty JSON object"):
+        development_settings(
+            internal_api_token="c" * 32,
+            internal_staff_assertion_public_keyring="[]",
+        )
+    with pytest.raises(ValidationError, match="duplicate JSON member"):
+        development_settings(
+            internal_api_token="c" * 32,
+            internal_staff_assertion_public_keyring=(
+                '{"same":"' + TEST_STAFF_ASSERTION_PUBLIC_KEY + '","same":"'
+                + TEST_STAFF_ASSERTION_PUBLIC_KEY
+                + '"}'
+            ),
+        )
+    with pytest.raises(ValidationError, match="value must be a string"):
+        development_settings(
+            internal_api_token="c" * 32,
+            internal_staff_assertion_public_keyring=json.dumps({"new": 123}),
+        )
+    with pytest.raises(ValidationError, match="must be base64url"):
+        development_settings(
+            internal_api_token="c" * 32,
+            internal_staff_assertion_public_keyring=json.dumps({"new": "A"}),
+        )
 
 
 @pytest.mark.parametrize("settings_factory", [staging_settings, production_settings])
