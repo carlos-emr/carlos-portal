@@ -36,6 +36,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from carlos_patient_portal.database import Base
 
 INVITE_STATUS_PENDING = "pending"
+INVITE_STATUS_PREPARED = "prepared"
 INVITE_STATUS_REVOKED = "revoked"
 INVITE_STATUS_ACCEPTED = "accepted"
 INVITE_STATUS_SUPERSEDED = "superseded"
@@ -140,6 +141,8 @@ MAX_UNLOCK_SECRET_KEY_ID_LENGTH = 64
 MAX_UNLOCK_SECRET_REVOKE_REASON_LENGTH = 64
 UNLOCK_SECRET_NONCE_LENGTH = 12
 OUTBOX_NONCE_LENGTH = 12
+MAX_INVITE_DELIVERY_OPERATION_ID_LENGTH = 64
+MAX_INVITE_DELIVERY_REFERENCE_LENGTH = 128
 ACCOUNT_FOREIGN_KEY_TARGET = "patient_portal_accounts.id"
 DEMOGRAPHIC_NO_POSITIVE_SQL = "demographic_no > 0"
 EXPIRY_AFTER_CREATION_SQL = "expires_at > created_at"
@@ -827,8 +830,44 @@ class PatientPortalInvite(Base):
             name="ck_patient_portal_invites_expires_after_created",
         ),
         CheckConstraint(
-            "status in ('pending', 'revoked', 'accepted', 'superseded')",
+            "status in ('prepared', 'pending', 'revoked', 'accepted', 'superseded')",
             name="ck_patient_portal_invites_status",
+        ),
+        CheckConstraint(
+            "(encrypted_invite_token is null and invite_token_nonce is null and "
+            "invite_token_key_id is null) or "
+            "(encrypted_invite_token is not null and invite_token_nonce is not null and "
+            "invite_token_key_id is not null)",
+            name="ck_pp_invites_prepared_token_fields_complete",
+        ),
+        CheckConstraint(
+            "status != 'prepared' or (delivery_operation_id is not null and "
+            "encrypted_invite_token is not null and delivery_reference is null)",
+            name="ck_pp_invites_prepared_fields_present",
+        ),
+        CheckConstraint(
+            "status = 'prepared' or encrypted_invite_token is null",
+            name="ck_pp_invites_token_only_while_prepared",
+        ),
+        CheckConstraint(
+            "delivery_reference is null or delivery_operation_id is not null",
+            name="ck_pp_invites_delivery_reference_has_operation",
+        ),
+        CheckConstraint(
+            "delivery_operation_id is null or length(delivery_operation_id) between 1 and 64",
+            name="ck_pp_invites_delivery_operation_length",
+        ),
+        CheckConstraint(
+            "delivery_reference is null or length(delivery_reference) between 1 and 128",
+            name="ck_pp_invites_delivery_reference_length",
+        ),
+        CheckConstraint(
+            f"invite_token_nonce is null or length(invite_token_nonce) = {OUTBOX_NONCE_LENGTH}",
+            name="ck_pp_invites_token_nonce_length",
+        ),
+        CheckConstraint(
+            "invite_token_key_id is null or length(invite_token_key_id) between 1 and 64",
+            name="ck_pp_invites_token_key_id_length",
         ),
         CheckConstraint(
             ("status = 'accepted' or (accepted_at is null and accepted_account_id is null)"),
@@ -862,6 +901,26 @@ class PatientPortalInvite(Base):
             "supersedes_invite_id",
         ),
         Index("ux_patient_portal_invites_token_hash", "token_hash", unique=True),
+        Index(
+            "ux_pp_invites_clinic_delivery_operation",
+            "clinic_id",
+            "delivery_operation_id",
+            unique=True,
+        ),
+        Index(
+            "ux_pp_invites_clinic_delivery_reference",
+            "clinic_id",
+            "delivery_reference",
+            unique=True,
+        ),
+        Index(
+            "ux_pp_invites_one_prepared_per_patient",
+            "clinic_id",
+            "demographic_no",
+            unique=True,
+            sqlite_where=text("status = 'prepared'"),
+            postgresql_where=text("status = 'prepared'"),
+        ),
         Index(
             "ux_patient_portal_invites_one_pending_per_patient",
             "clinic_id",
@@ -918,6 +977,15 @@ class PatientPortalInvite(Base):
         ForeignKey("patient_portal_invites.id", ondelete="SET NULL"),
         nullable=True,
     )
+    delivery_operation_id: Mapped[str | None] = mapped_column(
+        String(MAX_INVITE_DELIVERY_OPERATION_ID_LENGTH), nullable=True
+    )
+    delivery_reference: Mapped[str | None] = mapped_column(
+        String(MAX_INVITE_DELIVERY_REFERENCE_LENGTH), nullable=True
+    )
+    encrypted_invite_token: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    invite_token_nonce: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    invite_token_key_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class PatientPortalUnlockSecret(Base):

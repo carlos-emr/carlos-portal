@@ -51,11 +51,16 @@ from carlos_patient_portal.invites import (
     AcceptedInviteError,
     AccountAlreadyExistsError,
     InviteNotFoundError,
+    InvitePreparationConflictError,
+    InvitePreparationKeyUnavailableError,
     PendingInviteExistsError,
     RevokedInviteError,
     SupersededInviteError,
+    activate_prepared_invite,
     create_invite,
     list_invites,
+    prepare_create_invite,
+    prepare_resend_invite,
     resend_invite,
     revoke_invite,
 )
@@ -65,6 +70,8 @@ from carlos_patient_portal.models import (
     AUDIT_EVENT_STAFF_ACTION,
     AUDIT_OUTCOME_FAILURE,
     AUDIT_OUTCOME_SUCCESS,
+    MAX_INVITE_DELIVERY_OPERATION_ID_LENGTH,
+    MAX_INVITE_DELIVERY_REFERENCE_LENGTH,
     UNLOCK_SECRET_STATUS_PENDING,
     UNLOCK_SECRET_STATUS_REVOKED,
     PatientPortalAccount,
@@ -128,6 +135,17 @@ INTERNAL_CREATE_INVITE_RESPONSES = {
     **INTERNAL_CONFLICT_RESPONSES,
     status.HTTP_400_BAD_REQUEST: {"description": "The demographic scope does not match."},
 }
+INTERNAL_PREPARE_INVITE_RESPONSES = {
+    **INTERNAL_CONFLICT_RESPONSES,
+    status.HTTP_503_SERVICE_UNAVAILABLE: {
+        "description": "The encrypted invite preparation cannot be recovered.",
+        "model": InternalErrorResponse,
+    },
+}
+INTERNAL_PREPARE_CREATE_INVITE_RESPONSES = {
+    **INTERNAL_PREPARE_INVITE_RESPONSES,
+    status.HTTP_400_BAD_REQUEST: {"description": "The demographic scope does not match."},
+}
 
 
 class InternalRuntime(Protocol):
@@ -135,6 +153,9 @@ class InternalRuntime(Protocol):
     session_factory: sessionmaker[Session]
     identity_proof_secret: str
     audit_hash_secret: str
+    outbox_encryption_secret: str
+    outbox_encryption_keys: dict[str, str] | None
+    outbox_active_key_id: str
     unlock_secret_encryption_secret: str
     unlock_secret_encryption_keys: dict[str, str] | None
     unlock_secret_active_key_id: str
@@ -189,10 +210,45 @@ class InternalInviteResponse(BaseModel):
     expires_at: datetime
     accepted_account_id: int | None
     supersedes_invite_id: int | None
+    delivery_operation_id: str | None = None
+    delivery_reference: str | None = None
 
 
 class InternalInviteTokenResponse(InternalInviteResponse):
     invite_token: str
+
+
+class InternalInvitePrepareRequest(InviteCreateRequest):
+    delivery_operation_id: str = Field(
+        min_length=1,
+        max_length=MAX_INVITE_DELIVERY_OPERATION_ID_LENGTH,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+
+
+class InternalInviteResendPrepareRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    delivery_operation_id: str = Field(
+        min_length=1,
+        max_length=MAX_INVITE_DELIVERY_OPERATION_ID_LENGTH,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+
+
+class InternalInviteDeliveryCommitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    delivery_operation_id: str = Field(
+        min_length=1,
+        max_length=MAX_INVITE_DELIVERY_OPERATION_ID_LENGTH,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+    delivery_reference: str = Field(
+        min_length=1,
+        max_length=MAX_INVITE_DELIVERY_REFERENCE_LENGTH,
+        pattern=r"^[A-Za-z0-9._:/-]+$",
+    )
 
 
 class InternalAccountUnlockResponse(BaseModel):
@@ -322,6 +378,8 @@ def invite_payload(
         "expires_at": invite.expires_at,
         "accepted_account_id": invite.accepted_account_id,
         "supersedes_invite_id": invite.supersedes_invite_id,
+        "delivery_operation_id": invite.delivery_operation_id,
+        "delivery_reference": invite.delivery_reference,
     }
     if invite_token is not None:
         payload["invite_token"] = invite_token
@@ -510,6 +568,116 @@ def register_internal_invite_routes(
     deps: InternalRouteDependencies,
 ) -> None:
     """Invite lifecycle: create, list, resend, and revoke."""
+
+    @app.post(
+        "/internal/carlos/patients/{demographic_no}/invites/prepare",
+        status_code=201,
+        response_model=InternalInviteTokenResponse,
+        responses=INTERNAL_PREPARE_CREATE_INVITE_RESPONSES,
+    )
+    def internal_prepare_invite(
+        demographic_no: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
+        payload: InternalInvitePrepareRequest,
+        principal: Annotated[
+            StaffPrincipal, Depends(deps.staff_principal_requiring(PERMISSION_INVITE_MANAGE))
+        ],
+        session: Annotated[Session, deps.session_dependency],
+    ) -> dict[str, object]:
+        if payload.demographic_no != demographic_no:
+            raise HTTPException(status_code=400, detail="demographic scope mismatch")
+        try:
+            invite, invite_token = prepare_create_invite(
+                session,
+                demographic_no,
+                principal.display_name,
+                actor_id=principal.provider_id,
+                delivery_operation_id=payload.delivery_operation_id,
+                identity_proof=IdentityProof(
+                    email=payload.email,
+                    date_of_birth=payload.date_of_birth,
+                    health_card_number=payload.health_card_number,
+                ),
+                proof_secret=runtime.identity_proof_secret,
+                encryption_secret=runtime.outbox_encryption_secret,
+                encryption_key_id=runtime.outbox_active_key_id,
+                encryption_keys=runtime.outbox_encryption_keys
+                or {runtime.outbox_active_key_id: runtime.outbox_encryption_secret},
+                clinic_id=principal.clinic_id,
+            )
+        except AccountAlreadyExistsError as exc:
+            raise HTTPException(status_code=409, detail="portal account already exists") from exc
+        except PendingInviteExistsError as exc:
+            raise HTTPException(status_code=409, detail="pending invite already exists") from exc
+        except InvitePreparationKeyUnavailableError as exc:
+            raise HTTPException(status_code=503, detail="invite preparation unavailable") from exc
+        except InvitePreparationConflictError as exc:
+            raise HTTPException(status_code=409, detail="invite preparation conflicts") from exc
+        return invite_payload(invite, invite_token=invite_token)
+
+    @app.post(
+        "/internal/carlos/invites/{invite_id}/resend/prepare",
+        status_code=201,
+        response_model=InternalInviteTokenResponse,
+        responses=INTERNAL_PREPARE_INVITE_RESPONSES,
+    )
+    def internal_prepare_invite_resend(
+        invite_id: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
+        payload: InternalInviteResendPrepareRequest,
+        principal: Annotated[
+            StaffPrincipal, Depends(deps.staff_principal_requiring(PERMISSION_INVITE_MANAGE))
+        ],
+        session: Annotated[Session, deps.session_dependency],
+    ) -> dict[str, object]:
+        try:
+            invite, invite_token = prepare_resend_invite(
+                session,
+                invite_id,
+                principal.display_name,
+                actor_id=principal.provider_id,
+                delivery_operation_id=payload.delivery_operation_id,
+                encryption_secret=runtime.outbox_encryption_secret,
+                encryption_key_id=runtime.outbox_active_key_id,
+                encryption_keys=runtime.outbox_encryption_keys
+                or {runtime.outbox_active_key_id: runtime.outbox_encryption_secret},
+                clinic_id=principal.clinic_id,
+            )
+        except InviteNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="invite not found") from exc
+        except (RevokedInviteError, AcceptedInviteError, SupersededInviteError) as exc:
+            raise HTTPException(status_code=409, detail="invite cannot be resent") from exc
+        except InvitePreparationKeyUnavailableError as exc:
+            raise HTTPException(status_code=503, detail="invite preparation unavailable") from exc
+        except InvitePreparationConflictError as exc:
+            raise HTTPException(status_code=409, detail="invite preparation conflicts") from exc
+        return invite_payload(invite, invite_token=invite_token)
+
+    @app.post(
+        "/internal/carlos/invites/{invite_id}/commit-delivery",
+        response_model=InternalInviteResponse,
+        responses=INTERNAL_CONFLICT_RESPONSES,
+    )
+    def internal_commit_invite_delivery(
+        invite_id: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
+        payload: InternalInviteDeliveryCommitRequest,
+        principal: Annotated[
+            StaffPrincipal, Depends(deps.staff_principal_requiring(PERMISSION_INVITE_MANAGE))
+        ],
+        session: Annotated[Session, deps.session_dependency],
+    ) -> dict[str, object]:
+        try:
+            invite = activate_prepared_invite(
+                session,
+                invite_id,
+                delivery_operation_id=payload.delivery_operation_id,
+                delivery_reference=payload.delivery_reference,
+                clinic_id=principal.clinic_id,
+            )
+        except InviteNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="invite not found") from exc
+        except InvitePreparationConflictError as exc:
+            raise HTTPException(status_code=409, detail="invite delivery conflicts") from exc
+        return invite_payload(invite)
+
     @app.post(
         "/internal/carlos/patients/{demographic_no}/invites",
         status_code=201,

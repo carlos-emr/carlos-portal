@@ -62,11 +62,12 @@ be true for it to stay acceptable.
 
 The portal leans on two PostgreSQL features that MariaDB does not offer equivalently:
 
-- **Partial unique indexes** (`WHERE status = 'pending'`), used to enforce one pending invite per
-  patient, one pending reset token per account, one pending contact review per account, and one
-  pending email-change request per account. These are correctness invariants held by the database
-  rather than by application code, and MariaDB has no partial-index equivalent — they would become
-  application-level checks with a race window.
+- **Partial unique indexes** (`WHERE status = 'pending'` or `WHERE status = 'prepared'`), used to
+  enforce one pending and one delivery-prepared invite per patient, one pending reset token per
+  account, one pending contact review per account, and one pending email-change request per account.
+  These are correctness invariants held by the database rather than by application code, and
+  MariaDB has no partial-index equivalent — they would become application-level checks with a race
+  window.
 - **Transactional advisory locks** (`pg_advisory_xact_lock`), used to serialise activation-attempt
   throttling so a burst of concurrent activation attempts cannot each read a stale failure count.
 

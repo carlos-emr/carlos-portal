@@ -290,9 +290,9 @@ carlos-patient-portal-outbox-worker
 ```
 
 Restart the web and worker processes with the same keyring. Retain the old member until no pending
-or processing outbox row carries its key ID; removing it sooner makes those deliveries fail with
-`encryption_key_unavailable`. Once the old rows have drained, remove the old member and restart
-both processes again.
+or processing outbox row and no prepared invite carries its key ID; removing it sooner makes those
+deliveries or prepare retries fail with `encryption_key_unavailable`. Once the old rows have drained,
+remove the old member and restart both processes again.
 
 Production SMS uses an authenticated HTTPS JSON webhook configured with
 `PATIENT_PORTAL_SMS_WEBHOOK_URL` and `PATIENT_PORTAL_SMS_WEBHOOK_TOKEN`. The provider adapter receives
@@ -490,6 +490,9 @@ rollback from dropping encryption context or lifecycle evidence. Preserve or tra
 under an approved retention and key-management procedure before retrying a downgrade.
 Migration `0002_staff_identity_audit` preflights FHIR audit events before changing schema, and
 `0004_invite_issuance_history` similarly refuses to discard superseded invite history.
+Migration `0011_atomic_invite_delivery` refuses to downgrade while an invite is prepared, because
+downgrading would discard the only encrypted copy of a token CARLOS may still be retrying into its
+durable email queue.
 
 Keep every revision id to 32 characters or fewer. Alembic creates `alembic_version.version_num` as
 `VARCHAR(32)`; SQLite ignores the declared width but PostgreSQL enforces it, so a longer id passes
@@ -595,7 +598,7 @@ The reference nginx policy forwards only the signed assertion to the internal ro
 
 Permissions are deliberately narrow:
 
-- `portal.invite.manage`: create, list, resend, and revoke clinic-scoped invites.
+- `portal.invite.manage`: prepare, commit, create, list, resend, and revoke clinic-scoped invites.
 - `portal.account.unlock`: unlock a patient and require a fresh password reset.
 - `portal.account.manage`: read portal status and disable/re-enable patient access.
 - `portal.secret.manage`: idempotently create, publish, and revoke generated email passphrases.
@@ -615,10 +618,26 @@ source reference returns a conflict.
 The generated OpenAPI contract includes explicit request, response, pagination, one-time plaintext,
 and error models for these routes.
 
+CARLOS invitation delivery uses a two-phase contract. The prepare endpoints are:
+
+- `POST /internal/carlos/patients/{demographic_no}/invites/prepare` for a first invite.
+- `POST /internal/carlos/invites/{id}/resend/prepare` for a replacement.
+
+Both require a stable `delivery_operation_id`; retrying the same operation returns the same token
+while it is prepared.
+A prepared token is encrypted with the portal outbox keyring and cannot activate an account. For a
+resend, the old pending token remains valid. After CARLOS has durably committed the email job, it
+calls `POST /internal/carlos/invites/{id}/commit-delivery` with the same operation id and the unique
+email `delivery_reference`. That transaction activates the new token, erases its recoverable
+ciphertext, and supersedes the old token. Exact commit retries are idempotent; changing either
+identifier or reusing one delivery reference for another invite is a conflict. The legacy immediate
+create/resend endpoints remain available for existing development and API clients, but CARLOS must
+not use them for patient email delivery.
+
 Invite retention is state-specific: accepted invite records are retained with the long-term audit
-record; expired pending, revoked, and superseded records are eligible for transient cleanup only
-after the configured cleanup delay. Cleanup rechecks status and expiry in the delete statement so a
-concurrent state transition cannot delete a renewed record.
+record; expired prepared, pending, revoked, and superseded records are eligible for transient
+cleanup only after the configured cleanup delay. Cleanup rechecks status and expiry in the delete
+statement so a concurrent state transition cannot delete a renewed record.
 
 ## Development Invite API
 

@@ -35,6 +35,7 @@ from carlos_patient_portal.models import (
 )
 from tests.support import (
     TEST_STAFF_ASSERTION_PUBLIC_KEY,
+    activation_request,
     carlos_staff_headers,
     sign_staff_assertion,
     upgrade_to_head,
@@ -383,6 +384,185 @@ def test_internal_invite_list_resend_and_revoke_lifecycle() -> None:
     assert revoked.json()["status"] == "revoked"
     assert rejected_resend.status_code == 409
     assert missing_revoke.status_code == 404
+
+
+def test_internal_prepared_invite_is_idempotent_and_inactive_until_delivery_commit() -> None:
+    app = internal_app()
+    client = TestClient(app)
+    headers = carlos_headers("portal.invite.manage")
+    request = {**invite_request(), "delivery_operation_id": "invite-email:operation-1"}
+
+    prepared = client.post(
+        "/internal/carlos/patients/1234/invites/prepare",
+        headers=headers,
+        json=request,
+    )
+    repeated = client.post(
+        "/internal/carlos/patients/1234/invites/prepare",
+        headers=headers,
+        json=request,
+    )
+
+    assert prepared.status_code == 201
+    assert repeated.status_code == 201
+    assert prepared.json()["status"] == "prepared"
+    assert repeated.json()["id"] == prepared.json()["id"]
+    assert repeated.json()["invite_token"] == prepared.json()["invite_token"]
+    assert prepared.json()["delivery_reference"] is None
+    assert (
+        client.post(
+            "/auth/activate",
+            json=activation_request(prepared.json()["invite_token"]),
+        ).status_code
+        == 400
+    )
+
+    commit_body = {
+        "delivery_operation_id": request["delivery_operation_id"],
+        "delivery_reference": "email-outbox:42",
+    }
+    committed = client.post(
+        f"/internal/carlos/invites/{prepared.json()['id']}/commit-delivery",
+        headers=headers,
+        json=commit_body,
+    )
+    repeated_commit = client.post(
+        f"/internal/carlos/invites/{prepared.json()['id']}/commit-delivery",
+        headers=headers,
+        json=commit_body,
+    )
+
+    assert committed.status_code == 200
+    assert committed.json()["status"] == "pending"
+    assert committed.json()["delivery_reference"] == "email-outbox:42"
+    assert repeated_commit.status_code == 200
+    with app.state.session_factory() as session:
+        persisted = session.get(PatientPortalInvite, prepared.json()["id"])
+        assert persisted is not None
+        assert persisted.encrypted_invite_token is None
+        assert persisted.invite_token_nonce is None
+        assert persisted.invite_token_key_id is None
+
+
+def test_internal_prepared_resend_keeps_old_invite_valid_until_delivery_commit() -> None:
+    app = internal_app()
+    client = TestClient(app)
+    headers = carlos_headers("portal.invite.manage")
+    created = client.post(
+        "/internal/carlos/patients/1234/invites",
+        headers=headers,
+        json=invite_request(),
+    )
+    old_id = created.json()["id"]
+    prepared = client.post(
+        f"/internal/carlos/invites/{old_id}/resend/prepare",
+        headers=headers,
+        json={"delivery_operation_id": "invite-email:operation-2"},
+    )
+
+    assert prepared.status_code == 201
+    assert prepared.json()["status"] == "prepared"
+    assert prepared.json()["supersedes_invite_id"] == old_id
+    with app.state.session_factory() as session:
+        assert session.get(PatientPortalInvite, old_id).status == "pending"
+
+    committed = client.post(
+        f"/internal/carlos/invites/{prepared.json()['id']}/commit-delivery",
+        headers=headers,
+        json={
+            "delivery_operation_id": "invite-email:operation-2",
+            "delivery_reference": "email-outbox:43",
+        },
+    )
+
+    assert committed.status_code == 200
+    with app.state.session_factory() as session:
+        assert session.get(PatientPortalInvite, old_id).status == "superseded"
+        assert session.get(PatientPortalInvite, prepared.json()["id"]).status == "pending"
+
+
+def test_internal_invite_delivery_commit_rejects_mismatched_operation_or_reference() -> None:
+    app = internal_app()
+    client = TestClient(app)
+    headers = carlos_headers("portal.invite.manage")
+    prepared = client.post(
+        "/internal/carlos/patients/1234/invites/prepare",
+        headers=headers,
+        json={**invite_request(), "delivery_operation_id": "invite-email:operation-3"},
+    )
+    path = f"/internal/carlos/invites/{prepared.json()['id']}/commit-delivery"
+
+    wrong_operation = client.post(
+        path,
+        headers=headers,
+        json={
+            "delivery_operation_id": "invite-email:wrong",
+            "delivery_reference": "email-outbox:44",
+        },
+    )
+    committed = client.post(
+        path,
+        headers=headers,
+        json={
+            "delivery_operation_id": "invite-email:operation-3",
+            "delivery_reference": "email-outbox:44",
+        },
+    )
+    wrong_replay = client.post(
+        path,
+        headers=headers,
+        json={
+            "delivery_operation_id": "invite-email:operation-3",
+            "delivery_reference": "email-outbox:45",
+        },
+    )
+
+    assert wrong_operation.status_code == 409
+    assert committed.status_code == 200
+    assert wrong_replay.status_code == 409
+
+
+def test_internal_invite_delivery_reference_cannot_activate_two_invites() -> None:
+    app = internal_app()
+    client = TestClient(app)
+    headers = carlos_headers("portal.invite.manage")
+    first = client.post(
+        "/internal/carlos/patients/1234/invites/prepare",
+        headers=headers,
+        json={**invite_request(), "delivery_operation_id": "invite-email:first"},
+    )
+    second = client.post(
+        "/internal/carlos/patients/5678/invites/prepare",
+        headers=headers,
+        json={
+            **invite_request(5678),
+            "email": "second.patient@example.com",
+            "delivery_operation_id": "invite-email:second",
+        },
+    )
+    reference = "email-outbox:shared"
+
+    first_commit = client.post(
+        f"/internal/carlos/invites/{first.json()['id']}/commit-delivery",
+        headers=headers,
+        json={
+            "delivery_operation_id": "invite-email:first",
+            "delivery_reference": reference,
+        },
+    )
+    second_commit = client.post(
+        f"/internal/carlos/invites/{second.json()['id']}/commit-delivery",
+        headers=headers,
+        json={
+            "delivery_operation_id": "invite-email:second",
+            "delivery_reference": reference,
+        },
+    )
+
+    assert first_commit.status_code == 200
+    assert second_commit.status_code == 409
+    with app.state.session_factory() as session:
+        assert session.get(PatientPortalInvite, second.json()["id"]).status == "prepared"
 
 
 def test_internal_unlock_secret_is_idempotent_scoped_and_target_audited() -> None:
@@ -1138,8 +1318,11 @@ def test_internal_contact_review_feed_pages_beyond_one_hundred_requests() -> Non
 # ever validated. That ordering is itself asserted below.
 INTERNAL_ROUTE_PERMISSIONS = (
     ("POST", "/internal/carlos/patients/1234/invites", "portal.invite.manage"),
+    ("POST", "/internal/carlos/patients/1234/invites/prepare", "portal.invite.manage"),
     ("GET", "/internal/carlos/patients/1234/invites", "portal.invite.manage"),
     ("POST", "/internal/carlos/invites/1/resend", "portal.invite.manage"),
+    ("POST", "/internal/carlos/invites/1/resend/prepare", "portal.invite.manage"),
+    ("POST", "/internal/carlos/invites/1/commit-delivery", "portal.invite.manage"),
     ("POST", "/internal/carlos/invites/1/revoke", "portal.invite.manage"),
     ("POST", "/internal/carlos/patients/1234/unlock", "portal.account.unlock"),
     ("GET", "/internal/carlos/patients/1234/portal-account", "portal.account.manage"),
@@ -1170,9 +1353,12 @@ def test_internal_openapi_contract_is_stable() -> None:
     assert paths == {
         "/internal/carlos/contact-reviews": ["get"],
         "/internal/carlos/contact-reviews/{review_request_id}/decision": ["post"],
+        "/internal/carlos/invites/{invite_id}/commit-delivery": ["post"],
         "/internal/carlos/invites/{invite_id}/resend": ["post"],
+        "/internal/carlos/invites/{invite_id}/resend/prepare": ["post"],
         "/internal/carlos/invites/{invite_id}/revoke": ["post"],
         "/internal/carlos/patients/{demographic_no}/invites": ["get", "post"],
+        "/internal/carlos/patients/{demographic_no}/invites/prepare": ["post"],
         "/internal/carlos/patients/{demographic_no}/portal-account": ["get"],
         "/internal/carlos/patients/{demographic_no}/portal-account/access": ["post"],
         "/internal/carlos/patients/{demographic_no}/unlock": ["post"],
