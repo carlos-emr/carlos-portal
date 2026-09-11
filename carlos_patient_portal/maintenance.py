@@ -33,6 +33,7 @@ from sqlalchemy.orm import Session
 
 from carlos_patient_portal.models import (
     INVITE_STATUS_PENDING,
+    INVITE_STATUS_PREPARED,
     INVITE_STATUS_REVOKED,
     INVITE_STATUS_SUPERSEDED,
     OUTBOX_STATUS_DELIVERED,
@@ -247,6 +248,7 @@ def cleanup_transient_auth_rows(
                 PatientPortalInvite.expires_at < before,
                 PatientPortalInvite.status.in_(
                     (
+                        INVITE_STATUS_PREPARED,
                         INVITE_STATUS_PENDING,
                         INVITE_STATUS_REVOKED,
                         INVITE_STATUS_SUPERSEDED,
