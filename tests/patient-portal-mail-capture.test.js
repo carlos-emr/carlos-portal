@@ -51,6 +51,21 @@ test('waits for the patient portal MFA subject', () => {
   assert.equal(reads, 2);
 });
 
+test('accepts CRLF line endings in captured MFA mail', () => {
+  const message = capturedMessage('expected.patient@example.com', '222222')
+    .replaceAll('\n', '\r\n');
+
+  const code = readCapturedMfaCode({
+    expectedRecipient: 'expected.patient@example.com',
+    readLatest: () => message,
+    wait: () => {},
+    maxAttempts: 1,
+    pollIntervalMs: 0,
+  });
+
+  assert.equal(code, '222222');
+});
+
 test('fails when no matching MFA mail arrives', () => {
   let reads = 0;
   let waits = 0;

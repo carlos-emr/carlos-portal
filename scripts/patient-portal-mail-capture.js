@@ -19,7 +19,7 @@ function readCapturedMfaCode({
       if (
         codeMatch
         && recipientMatch?.[1] === expectedRecipient
-        && subjectMatch?.[1] === expectedSubject
+        && subjectMatch?.[1].trim() === expectedSubject
       ) {
         return codeMatch[1];
       }
