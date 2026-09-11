@@ -2,11 +2,13 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Barrier, Event, Lock
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, inspect, select, text
 from sqlalchemy.dialects import postgresql, sqlite
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -39,7 +41,14 @@ from carlos_patient_portal.models import (
     PatientPortalEmailChangeRequest,
     PatientPortalOutboundDelivery,
     PatientPortalSession,
+    PatientPortalStaffAssertionUse,
     utc_now,
+)
+from carlos_patient_portal.preflight import query_runtime_role_policy
+from carlos_patient_portal.staff_identity import (
+    CarlosServiceAuthenticationError,
+    StaffPrincipal,
+    consume_staff_assertion,
 )
 from carlos_patient_portal.token_keys import PortalTokenKeys
 from tests.support import TEST_STAFF_ASSERTION_PUBLIC_KEY, carlos_staff_headers
@@ -70,9 +79,17 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
     engine = create_portal_engine(POSTGRES_URL)
     owner_role = "portal_test_audit_owner"
     runtime_role = "portal_test_runtime"
+    incoming_role = "portal_test_runtime_member"
+    runtime_password = "portal-test-runtime-password"
+    runtime_engine = None
     original_owner = ""
+    database_name = ""
+    public_schema_usage = False
+    public_schema_create = False
+    public_database_temporary = False
     try:
         with engine.begin() as connection:
+            database_name = str(connection.scalar(text("select current_database()")))
             original_owner = str(
                 connection.scalar(
                     text(
@@ -81,10 +98,52 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
                     )
                 )
             )
+            public_schema_privileges = set(
+                connection.scalars(
+                    text(
+                        "select acl.privilege_type "
+                        "from pg_namespace n "
+                        "cross join lateral aclexplode(n.nspacl) acl "
+                        "where n.nspname = 'public' and acl.grantee = 0"
+                    )
+                )
+            )
+            public_schema_usage = "USAGE" in public_schema_privileges
+            public_schema_create = "CREATE" in public_schema_privileges
+            public_database_temporary = bool(
+                connection.scalar(
+                    text(
+                        "select exists ("
+                        "select 1 from pg_database d "
+                        "cross join lateral aclexplode("
+                        "coalesce(d.datacl, acldefault('d', d.datdba))"
+                        ") acl "
+                        "where d.datname = current_database() "
+                        "and acl.grantee = 0 "
+                        "and acl.privilege_type = 'TEMPORARY'"
+                        ")"
+                    )
+                )
+            )
+            quoted_database = engine.dialect.identifier_preparer.quote(database_name)
+            connection.execute(
+                text(f"REVOKE TEMPORARY ON DATABASE {quoted_database} FROM PUBLIC")
+            )
+            connection.execute(text("REVOKE ALL ON SCHEMA public FROM PUBLIC"))
+            connection.execute(text(f'DROP ROLE IF EXISTS "{incoming_role}"'))
             connection.execute(text(f'DROP ROLE IF EXISTS "{runtime_role}"'))
             connection.execute(text(f'DROP ROLE IF EXISTS "{owner_role}"'))
             connection.execute(text(f'CREATE ROLE "{owner_role}" NOLOGIN'))
-            connection.execute(text(f'CREATE ROLE "{runtime_role}" NOLOGIN'))
+            connection.execute(
+                text(f'CREATE ROLE "{runtime_role}" LOGIN PASSWORD \'{runtime_password}\'')
+            )
+            connection.execute(
+                text(f'GRANT CONNECT ON DATABASE {quoted_database} TO "{runtime_role}"')
+            )
+            connection.execute(text(f'GRANT USAGE ON SCHEMA public TO "{runtime_role}"'))
+            connection.execute(
+                text(f'GRANT SELECT ON public.alembic_version TO "{runtime_role}"')
+            )
             connection.execute(
                 text(
                     f'ALTER TABLE public.patient_portal_audit_events OWNER TO "{owner_role}"'
@@ -103,10 +162,53 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
                 )
             )
 
-        with engine.begin() as connection:
-            # Transaction-local role switching prevents a pooled connection from returning to the
-            # test harness as the restricted runtime role after this commit.
+        runtime_url = make_url(POSTGRES_URL).set(
+            username=runtime_role,
+            password=runtime_password,
+        )
+        runtime_engine = create_portal_engine(runtime_url.render_as_string(hide_password=False))
+        with Session(runtime_engine) as session:
+            assert query_runtime_role_policy(
+                session,
+                schema_owner_role=owner_role,
+            ).passed
+
+        with engine.connect() as connection:
             connection.execute(text(f'SET LOCAL ROLE "{runtime_role}"'))
+            with Session(bind=connection) as session:
+                changed_session_role_check = query_runtime_role_policy(
+                    session,
+                    schema_owner_role=owner_role,
+                )
+                assert not changed_session_role_check.passed
+                assert "session_role_changed" in changed_session_role_check.detail
+
+        with engine.begin() as connection:
+            connection.execute(text(f'GRANT "{owner_role}" TO "{runtime_role}"'))
+        with Session(runtime_engine) as session:
+            inherited_role_check = query_runtime_role_policy(
+                session,
+                schema_owner_role=owner_role,
+            )
+            assert not inherited_role_check.passed
+            assert "role_membership" in inherited_role_check.detail
+        with engine.begin() as connection:
+            connection.execute(text(f'REVOKE "{owner_role}" FROM "{runtime_role}"'))
+
+        with engine.begin() as connection:
+            connection.execute(text(f'CREATE ROLE "{incoming_role}" NOLOGIN'))
+            connection.execute(text(f'GRANT "{runtime_role}" TO "{incoming_role}"'))
+        with Session(runtime_engine) as session:
+            inherited_runtime_check = query_runtime_role_policy(
+                session,
+                schema_owner_role=owner_role,
+            )
+            assert not inherited_runtime_check.passed
+            assert "role_membership" in inherited_runtime_check.detail
+        with engine.begin() as connection:
+            connection.execute(text(f'DROP ROLE "{incoming_role}"'))
+
+        with runtime_engine.begin() as connection:
             event_id = connection.scalar(
                 text(
                     "insert into patient_portal_audit_events "
@@ -117,11 +219,14 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
         for statement in (
             "update patient_portal_audit_events set outcome = 'failure' where id = :event_id",
             "delete from patient_portal_audit_events where id = :event_id",
+            "update alembic_version set version_num = version_num",
+            "delete from alembic_version",
         ):
-            with engine.connect() as connection, pytest.raises(DBAPIError):
-                connection.execute(text(f'SET LOCAL ROLE "{runtime_role}"'))
+            with runtime_engine.connect() as connection, pytest.raises(DBAPIError):
                 connection.execute(text(statement), {"event_id": event_id})
     finally:
+        if runtime_engine is not None:
+            runtime_engine.dispose()
         if original_owner:
             quoted_owner = engine.dialect.identifier_preparer.quote(original_owner)
             with engine.begin() as connection:
@@ -131,10 +236,20 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
                         f"OWNER TO {quoted_owner}"
                     )
                 )
+                connection.execute(text(f'DROP ROLE IF EXISTS "{incoming_role}"'))
                 connection.execute(text(f'DROP OWNED BY "{runtime_role}"'))
                 connection.execute(text(f'DROP ROLE IF EXISTS "{runtime_role}"'))
                 connection.execute(text(f'DROP OWNED BY "{owner_role}"'))
                 connection.execute(text(f'DROP ROLE IF EXISTS "{owner_role}"'))
+                if public_schema_usage:
+                    connection.execute(text("GRANT USAGE ON SCHEMA public TO PUBLIC"))
+                if public_schema_create:
+                    connection.execute(text("GRANT CREATE ON SCHEMA public TO PUBLIC"))
+                if public_database_temporary and database_name:
+                    quoted_database = engine.dialect.identifier_preparer.quote(database_name)
+                    connection.execute(
+                        text(f"GRANT TEMPORARY ON DATABASE {quoted_database} TO PUBLIC")
+                    )
         engine.dispose()
 
 
@@ -149,6 +264,43 @@ def clean_postgresql_database() -> None:
             quoted_names = ", ".join(f'"{name}"' for name in table_names)
             with engine.begin() as connection:
                 connection.execute(text(f"TRUNCATE TABLE {quoted_names} CASCADE"))
+    finally:
+        engine.dispose()
+
+
+def test_postgresql_consumes_one_staff_assertion_once_across_workers() -> None:
+    assert POSTGRES_URL is not None
+    clean_postgresql_database()
+    engine = create_portal_engine(POSTGRES_URL)
+    assertion_id = str(uuid4())
+    principal = StaffPrincipal(
+        provider_id="postgres-provider",
+        display_name="PostgreSQL Test",
+        clinic_id="postgres-clinic",
+        permissions=frozenset({"portal.contact.review"}),
+        assertion_id=assertion_id,
+        assertion_expires_at=int((utc_now() + timedelta(minutes=1)).timestamp()),
+        request_bound=True,
+    )
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    barrier = Barrier(2)
+
+    def consume_from_worker() -> str:
+        barrier.wait(timeout=10)
+        try:
+            consume_staff_assertion(session_factory, principal)
+            return "accepted"
+        except CarlosServiceAuthenticationError:
+            return "replayed"
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = sorted(executor.map(lambda _: consume_from_worker(), range(2)))
+        with Session(engine) as session:
+            stored_ids = list(session.scalars(select(PatientPortalStaffAssertionUse.assertion_id)))
+
+        assert results == ["accepted", "replayed"]
+        assert stored_ids == [assertion_id]
     finally:
         engine.dispose()
 

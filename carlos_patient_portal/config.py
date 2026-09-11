@@ -30,6 +30,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
 from carlos_patient_portal.credentials import (
     DEFAULT_PASSWORD_HASH_MAX_CONCURRENCY,
@@ -50,11 +52,25 @@ from carlos_patient_portal.database import (
 Environment = Literal["development", "staging", "test", "production"]
 TrustedClientIpHeader = Literal["x-forwarded-for", "x-real-ip"]
 DEFAULT_DATABASE_URL = "postgresql+psycopg://localhost:5432/carlos_portal"
+PRODUCTION_DATABASE_RESTRICTED_QUERY_PARAMETERS = frozenset(
+    {
+        "dbname",
+        "host",
+        "hostaddr",
+        "options",
+        "password",
+        "port",
+        "service",
+        "servicefile",
+        "user",
+    }
+)
 DEFAULT_DEVELOPMENT_SMTP_FROM_ADDRESS = "carlos-test@openo-dev.local"
 MIN_PRODUCTION_SECRET_LENGTH = 32
 MAX_CLINIC_ID_LENGTH = 64
 MAX_CONFIG_CLINIC_ID_LENGTH = 20
 CLINIC_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+STAFF_ASSERTION_KEY_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 # A conservative day count guarantees at least 25 complete calendar years,
 # including every leap-day distribution, before an event becomes eligible.
 DEFAULT_AUDIT_RETENTION_DAYS = 25 * 366
@@ -93,7 +109,7 @@ def _reject_duplicate_keyring_members(
     parsed: dict[str, object] = {}
     for key, value in pairs:
         if key in parsed:
-            raise ValueError("unlock-secret keyring contains a duplicate JSON member")
+            raise ValueError("keyring contains a duplicate JSON member")
         parsed[key] = value
     return parsed
 
@@ -150,6 +166,45 @@ def parse_encryption_keyring(
     return normalized_keyring
 
 
+def validate_ed25519_public_key(value: str, *, variable_name: str) -> str:
+    try:
+        padding = "=" * (-len(value) % 4)
+        decoded = urlsafe_b64decode(value + padding)
+    except (Base64DecodeError, ValueError) as exc:
+        raise ValueError(f"{variable_name} must be base64url") from exc
+    if len(decoded) != 32 or urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii") != value:
+        raise ValueError(f"{variable_name} must encode one 32-byte Ed25519 public key")
+    return value
+
+
+def parse_staff_assertion_public_keyring(encoded_keyring: str) -> dict[str, str]:
+    variable_name = "PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING"
+    try:
+        parsed_keyring = json.loads(
+            encoded_keyring,
+            object_pairs_hook=_reject_duplicate_keyring_members,
+        )
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{variable_name} must be a JSON object") from exc
+    if not isinstance(parsed_keyring, dict) or not parsed_keyring:
+        raise ValueError(f"{variable_name} must be a non-empty JSON object")
+
+    normalized_keyring: dict[str, str] = {}
+    for key_id, public_key in parsed_keyring.items():
+        if not isinstance(key_id, str) or not STAFF_ASSERTION_KEY_ID_PATTERN.fullmatch(key_id):
+            raise ValueError(
+                "staff assertion key IDs must contain 1 to 64 ASCII letters, numbers, dots, "
+                "underscores, or hyphens"
+            )
+        if not isinstance(public_key, str):
+            raise ValueError(f"each {variable_name} value must be a string")
+        normalized_keyring[key_id] = validate_ed25519_public_key(
+            public_key,
+            variable_name=f"{variable_name}[{key_id}]",
+        )
+    return normalized_keyring
+
+
 class Settings(BaseSettings):
     """Runtime configuration for the patient portal service."""
 
@@ -171,6 +226,8 @@ class Settings(BaseSettings):
     # Used only by the offline pruning command. Keeping DELETE credentials out of the web and
     # outbox processes lets the runtime role remain append-only for audit events.
     maintenance_database_url: str | None = None
+    database_schema_owner_role: str = "portal_schema_owner"
+    database_maintenance_role: str = "portal_audit_maintenance"
     database_pool_size: int = Field(default=DEFAULT_DATABASE_POOL_SIZE, ge=1, le=100)
     database_max_overflow: int = Field(default=DEFAULT_DATABASE_MAX_OVERFLOW, ge=0, le=100)
     database_pool_timeout_seconds: int = Field(
@@ -219,9 +276,10 @@ class Settings(BaseSettings):
     # Without it, rotating the shared service token means restarting both systems in lockstep,
     # which in practice means the token never gets rotated.
     internal_api_token_previous: SecretStr | None = None
-    # Raw Ed25519 public key encoded as unpadded base64url. CARLOS retains the private key and
-    # signs short-lived provider assertions; the portal never receives signing capability.
+    # The singular key keeps local development fixtures compatible. Staging/production require
+    # the keyed JSON ring so callers can rotate signing keys without a lockstep restart.
     internal_staff_assertion_public_key: str | None = Field(default=None, max_length=64)
+    internal_staff_assertion_public_keyring: str | None = Field(default=None, max_length=8192)
     smtp_host: str | None = Field(default=None, max_length=253)
     smtp_port: int = Field(default=25, ge=1, le=65535)
     smtp_from_address: str | None = Field(default=None, max_length=254)
@@ -320,6 +378,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_prefix="PATIENT_PORTAL_",
+        # Validation failures can be rendered by an ASGI server before application logging is
+        # configured. Do not let Pydantic include rejected raw inputs such as database URLs (and
+        # their embedded passwords) in that startup traceback.
+        hide_input_in_errors=True,
         # Most PATIENT_PORTAL_* typos fail safe, because a missing required secret aborts
         # startup. Mistyping *both* TRUSTED_CLIENT_IP_HEADER and TRUSTED_PROXY_CIDRS does not:
         # validate_proxy_policy is satisfied by two Nones, so the portal starts believing
@@ -443,6 +505,7 @@ class Settings(BaseSettings):
         "sms_sender_id",
         "trusted_proxy_cidrs",
         "internal_staff_assertion_public_key",
+        "internal_staff_assertion_public_keyring",
         "unlock_secret_active_key_id",
         "service_name",
         "clinic_name",
@@ -454,6 +517,14 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return value.strip() or None
         return value
+
+    @field_validator("database_schema_owner_role", "database_maintenance_role")
+    @classmethod
+    def validate_database_role_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or len(normalized.encode()) > 63:
+            raise ValueError("database role names must contain between 1 and 63 UTF-8 bytes")
+        return normalized
 
     @field_validator("service_name", "clinic_name", "smtp_host", "sms_sender_id")
     @classmethod
@@ -469,19 +540,10 @@ class Settings(BaseSettings):
     def validate_internal_staff_assertion_public_key(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        try:
-            padding = "=" * (-len(value) % 4)
-            decoded = urlsafe_b64decode(value + padding)
-        except (Base64DecodeError, ValueError) as exc:
-            raise ValueError(
-                "PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY must be base64url"
-            ) from exc
-        if len(decoded) != 32 or urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii") != value:
-            raise ValueError(
-                "PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY must encode one "
-                "32-byte Ed25519 public key"
-            )
-        return value
+        return validate_ed25519_public_key(
+            value,
+            variable_name="PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY",
+        )
 
     @field_validator("smtp_from_address")
     @classmethod
@@ -683,6 +745,23 @@ class Settings(BaseSettings):
             raise ValueError("PATIENT_PORTAL_OUTBOX_ACTIVE_KEY_ID must exist in the keyring")
         return normalized_keyring
 
+    @property
+    def resolved_internal_staff_assertion_public_keys(self) -> dict[str, str]:
+        if self.internal_staff_assertion_public_keyring is None:
+            return (
+                {"legacy": self.internal_staff_assertion_public_key}
+                if self.internal_staff_assertion_public_key is not None
+                else {}
+            )
+        if self.internal_staff_assertion_public_key is not None:
+            raise ValueError(
+                "configure either PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY or "
+                "PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING, not both"
+            )
+        return parse_staff_assertion_public_keyring(
+            self.internal_staff_assertion_public_keyring
+        )
+
     def validate_secret_policy(self) -> None:
         secret_fields = {
             "identity_proof_secret": "PATIENT_PORTAL_IDENTITY_PROOF_SECRET",
@@ -746,10 +825,21 @@ class Settings(BaseSettings):
             _validate_distinct_secret_values(configured_secrets)
 
     def validate_internal_api_rotation_policy(self) -> None:
-        if self.internal_api_token is not None and self.internal_staff_assertion_public_key is None:
+        public_keys = self.resolved_internal_staff_assertion_public_keys
+        if self.internal_api_token is not None and not public_keys:
             raise ValueError(
-                "PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY must be set when "
+                "PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY or "
+                "PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING must be set when "
                 "PATIENT_PORTAL_INTERNAL_API_TOKEN is configured"
+            )
+        if (
+            not self.is_development
+            and self.internal_api_token is not None
+            and self.internal_staff_assertion_public_keyring is None
+        ):
+            raise ValueError(
+                "PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING must be set outside "
+                "development so request binding and overlap-safe key rotation are enforced"
             )
         if self.internal_api_token_previous is None:
             return
@@ -862,17 +952,58 @@ class Settings(BaseSettings):
             self.database_url,
             environment_name="PATIENT_PORTAL_DATABASE_URL",
         )
+        runtime_role = self.database_url_username(
+            self.database_url,
+            environment_name="PATIENT_PORTAL_DATABASE_URL",
+        )
+        if runtime_role in {
+            self.database_schema_owner_role,
+            self.database_maintenance_role,
+        } or self.database_schema_owner_role == self.database_maintenance_role:
+            raise ValueError(
+                "production database runtime, schema-owner, and maintenance roles must differ"
+            )
         if self.maintenance_database_url is not None:
             self.validate_database_transport_url(
                 self.maintenance_database_url,
                 environment_name="PATIENT_PORTAL_MAINTENANCE_DATABASE_URL",
             )
+            if (
+                self.database_url_username(
+                    self.maintenance_database_url,
+                    environment_name="PATIENT_PORTAL_MAINTENANCE_DATABASE_URL",
+                )
+                != self.database_maintenance_role
+            ):
+                raise ValueError(
+                    "PATIENT_PORTAL_MAINTENANCE_DATABASE_URL must use "
+                    "PATIENT_PORTAL_DATABASE_MAINTENANCE_ROLE"
+                )
+
+    @staticmethod
+    def database_url_username(database_url: str, *, environment_name: str) -> str | None:
+        try:
+            return make_url(database_url).username
+        except (ArgumentError, ValueError) as exc:
+            raise ValueError(f"{environment_name} must be a valid SQLAlchemy database URL") from exc
 
     @staticmethod
     def validate_database_transport_url(database_url: str, *, environment_name: str) -> None:
         parsed_url = urlsplit(database_url)
         if parsed_url.scheme != "postgresql+psycopg":
             raise ValueError(f"production {environment_name} must use postgresql+psycopg")
+        query_parameters = {
+            parameter.casefold()
+            for parameter in parse_qs(parsed_url.query, keep_blank_values=True)
+        }
+        restricted_overrides = sorted(
+            query_parameters & PRODUCTION_DATABASE_RESTRICTED_QUERY_PARAMETERS
+        )
+        if restricted_overrides:
+            raise ValueError(
+                f"production {environment_name} must not set restricted libpq connection "
+                f"parameters in the URL query ({','.join(restricted_overrides)})"
+            )
         database_host = parsed_url.hostname
         if database_host is None or database_host.casefold() == "localhost":
             return
@@ -973,9 +1104,67 @@ class Settings(BaseSettings):
         return self
 
 
+class OutboxSettings(Settings):
+    """Production settings limited to what the outbound-delivery worker needs.
+
+    The worker shares application code and a database role with the web process, but it must not
+    receive identity-proof, audit-hash, internal-API, SMS, or unlock-secret credentials. A dedicated
+    model lets its environment file omit those values instead of copying the complete web secret
+    bundle into a second long-lived process.
+    """
+
+    @model_validator(mode="after")
+    def reject_unsafe_runtime_policy(self) -> "OutboxSettings":
+        forbidden_credentials = {
+            "maintenance_database_url": "PATIENT_PORTAL_MAINTENANCE_DATABASE_URL",
+            "identity_proof_secret": "PATIENT_PORTAL_IDENTITY_PROOF_SECRET",
+            "audit_hash_secret": "PATIENT_PORTAL_AUDIT_HASH_SECRET",
+            "unlock_secret_encryption_secret": (
+                "PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_SECRET"
+            ),
+            "unlock_secret_encryption_keyring": (
+                "PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_KEYRING"
+            ),
+            "internal_health_token": "PATIENT_PORTAL_INTERNAL_HEALTH_TOKEN",
+            "internal_api_token": "PATIENT_PORTAL_INTERNAL_API_TOKEN",
+            "internal_api_token_previous": "PATIENT_PORTAL_INTERNAL_API_TOKEN_PREVIOUS",
+            "dev_admin_token": "PATIENT_PORTAL_DEV_ADMIN_TOKEN",
+            "sms_webhook_url": "PATIENT_PORTAL_SMS_WEBHOOK_URL",
+            "sms_webhook_token": "PATIENT_PORTAL_SMS_WEBHOOK_TOKEN",
+        }
+        present_credentials = sorted(
+            environment_name
+            for field_name, environment_name in forbidden_credentials.items()
+            if not self.is_development and getattr(self, field_name) is not None
+        )
+        if present_credentials:
+            raise ValueError(
+                "outbox settings must not include web-only credentials: "
+                + ",".join(present_credentials)
+            )
+        # Reuse the common parser, length, blank-value, active-key, and secret-reuse checks without
+        # requiring the unrelated services enforced by validate_required_production_services().
+        self.validate_secret_policy()
+        if not self.is_development and not self.resolved_outbox_keyring:
+            raise ValueError(
+                "PATIENT_PORTAL_OUTBOX_ENCRYPTION_SECRET or "
+                "PATIENT_PORTAL_OUTBOX_ENCRYPTION_KEYRING must be set outside development"
+            )
+        self.validate_smtp_policy()
+        self.validate_database_transport_policy()
+        self.validate_clinic_policy()
+        self.validate_session_policy()
+        return self
+
+
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+@lru_cache
+def get_outbox_settings() -> OutboxSettings:
+    return OutboxSettings()
 
 
 class MigrationDatabaseSettings(BaseSettings):
@@ -1004,6 +1193,7 @@ class MigrationDatabaseSettings(BaseSettings):
         env_file=".env",
         env_prefix="PATIENT_PORTAL_",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
     @field_validator("environment", mode="before")
@@ -1015,6 +1205,13 @@ class MigrationDatabaseSettings(BaseSettings):
     def validate_transport(self) -> "MigrationDatabaseSettings":
         if self.environment == "production":
             Settings.validate_database_transport_url(
+                self.database_url,
+                environment_name="PATIENT_PORTAL_DATABASE_URL",
+            )
+            # Transport parsing alone does not reject every malformed SQLAlchemy URL (for example,
+            # a nonnumeric port on localhost). Reject it before Alembic can render the raw URL in a
+            # startup traceback.
+            Settings.database_url_username(
                 self.database_url,
                 environment_name="PATIENT_PORTAL_DATABASE_URL",
             )

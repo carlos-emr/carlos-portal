@@ -1,0 +1,541 @@
+#!/bin/sh
+set -eu
+
+repository_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+compose_file=${PORTAL_COMPOSE_FILE:-"$repository_root/compose.production.yaml"}
+compose_override_file=${PORTAL_COMPOSE_OVERRIDE_FILE:-}
+export PORTAL_ENV_FILE=${PORTAL_ENV_FILE:-"$repository_root/deploy/production.env"}
+export PORTAL_OUTBOX_ENV_FILE=${PORTAL_OUTBOX_ENV_FILE:-"$repository_root/deploy/outbox.env"}
+export PORTAL_MIGRATION_ENV_FILE=${PORTAL_MIGRATION_ENV_FILE:-"$repository_root/deploy/migration.env"}
+export PORTAL_DATABASE_ADMIN_ENV_FILE=${PORTAL_DATABASE_ADMIN_ENV_FILE:-"$repository_root/deploy/database-admin.env"}
+export PORTAL_MAINTENANCE_ENV_FILE=${PORTAL_MAINTENANCE_ENV_FILE:-"$repository_root/deploy/maintenance.env"}
+export PORTAL_BIND_ADDRESS=${PORTAL_BIND_ADDRESS:-127.0.0.1}
+export PORTAL_TRUSTED_PROXY_CIDR=${PORTAL_TRUSTED_PROXY_CIDR:-172.30.80.1/32}
+deployment_lock_file=${PORTAL_DEPLOY_LOCK_FILE:-/var/lock/carlos-patient-portal-deploy.lock}
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/production-deploy COMMAND
+
+Commands:
+  validate          Validate files, the immutable image reference, and Compose configuration
+  migrate           Upgrade PostgreSQL with the schema-owner role
+  apply-db-policy   Reapply least-privilege and append-only audit grants
+  preflight         Verify production policy, PostgreSQL TLS/schema, and runtime privileges
+  deploy            Migrate, apply grants, pass preflight, start services, and verify readiness
+  readiness         Query the authenticated readiness endpoint from inside the web container
+  outbox-status     Report queued, leased, delivered, and terminal outbound work
+  export-audit      Export JSONL; accepts optional AFTER_ID and BATCH_SIZE
+  cleanup-auth      Delete expired auth data; accepts optional RETENTION_DAYS
+  prune-audit       Prune one approved retention batch with the maintenance role
+  status            Show the deployment processes
+  rollback          Restart web/worker with PORTAL_ROLLBACK_IMAGE; never downgrades the database
+EOF
+}
+
+compose() {
+  if [ -n "$compose_override_file" ]; then
+    docker compose --file "$compose_file" --file "$compose_override_file" "$@"
+  else
+    docker compose --file "$compose_file" "$@"
+  fi
+}
+
+require_file() {
+  if [ ! -f "$1" ]; then
+    printf 'Required file is missing: %s\n' "$1" >&2
+    exit 1
+  fi
+}
+
+require_private_file() {
+  require_file "$1"
+  if find "$1" -prune -perm /077 -print | grep -q .; then
+    printf 'Secret environment file must not be accessible by group or others: %s\n' "$1" >&2
+    exit 1
+  fi
+}
+
+is_digest_reference() {
+  case "$1" in
+    *@sha256:*) digest=${1##*@sha256:} ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$digest" | grep -Eq '^[0-9a-f]{64}$'
+}
+
+require_host_cidr() {
+  case "$PORTAL_TRUSTED_PROXY_CIDR" in
+    *:*/128) ;;
+    *.*.*.*/*)
+      case "$PORTAL_TRUSTED_PROXY_CIDR" in
+        */32) ;;
+        *)
+          printf '%s\n' 'PORTAL_TRUSTED_PROXY_CIDR must use /32 for IPv4.' >&2
+          exit 1
+          ;;
+      esac
+      ;;
+    *)
+      printf '%s\n' 'PORTAL_TRUSTED_PROXY_CIDR must identify one exact IPv4 /32 or IPv6 /128 host.' >&2
+      exit 1
+      ;;
+  esac
+  case "$PORTAL_TRUSTED_PROXY_CIDR" in
+    *','*|*\**|*[!0-9a-fA-F:./]*)
+      printf '%s\n' 'PORTAL_TRUSTED_PROXY_CIDR must contain one numeric host CIDR, never a wildcard or list.' >&2
+      exit 1
+      ;;
+  esac
+}
+
+require_image() {
+  if [ -z "${PORTAL_IMAGE:-}" ]; then
+    printf '%s\n' 'PORTAL_IMAGE must name the release image.' >&2
+    exit 1
+  fi
+  if ! is_digest_reference "$PORTAL_IMAGE" \
+    && [ "${PORTAL_ALLOW_MUTABLE_IMAGE:-}" != "true" ]; then
+    printf '%s\n' 'PORTAL_IMAGE must use an immutable @sha256 digest.' >&2
+    printf '%s\n' 'Set PORTAL_ALLOW_MUTABLE_IMAGE=true only for a local deployment rehearsal.' >&2
+    exit 1
+  fi
+}
+
+acquire_deployment_lock() {
+  command -v flock >/dev/null 2>&1 || {
+    printf '%s\n' 'flock is required for mutating production operations.' >&2
+    exit 1
+  }
+  exec 9>>"$deployment_lock_file"
+  if ! flock --nonblock 9; then
+    printf 'Another portal operation holds the deployment lock: %s\n' \
+      "$deployment_lock_file" >&2
+    exit 1
+  fi
+}
+
+validate() {
+  command -v docker >/dev/null 2>&1 || {
+    printf '%s\n' 'Docker with the Compose v2 plugin is required.' >&2
+    exit 1
+  }
+  if [ "$PORTAL_BIND_ADDRESS" != "127.0.0.1" ]; then
+    printf '%s\n' 'PORTAL_BIND_ADDRESS must be 127.0.0.1 in production.' >&2
+    exit 1
+  fi
+  require_host_cidr
+  require_image
+  if [ -n "$compose_override_file" ]; then
+    require_file "$compose_override_file"
+  fi
+  require_private_file "$PORTAL_ENV_FILE"
+  require_private_file "$PORTAL_OUTBOX_ENV_FILE"
+  require_private_file "$PORTAL_MIGRATION_ENV_FILE"
+  require_private_file "$PORTAL_DATABASE_ADMIN_ENV_FILE"
+  require_private_file "$PORTAL_MAINTENANCE_ENV_FILE"
+  if [ -z "${PORTAL_DB_CA_FILE:-}" ]; then
+    printf '%s\n' 'PORTAL_DB_CA_FILE must name the PostgreSQL CA certificate.' >&2
+    exit 1
+  fi
+  require_file "${PORTAL_DB_CA_FILE:-}"
+  compose --profile operations config --quiet
+}
+
+verify_database_artifacts() {
+  command -v sha256sum >/dev/null 2>&1 || {
+    printf '%s\n' 'sha256sum is required to validate the database artifacts.' >&2
+    exit 1
+  }
+  host_policy_output=$(sha256sum \
+    "$repository_root/carlos_patient_portal/deploy/postgresql-audit-roles.sql")
+  host_policy_hash=${host_policy_output%% *}
+  host_identity_output=$(sha256sum \
+    "$repository_root/carlos_patient_portal/deploy/postgresql-database-identity.sql")
+  host_identity_hash=${host_identity_output%% *}
+  image_artifact_hashes=$(compose --profile operations run --rm migrate \
+    carlos-patient-portal-deployment-probe database-artifacts-sha256)
+  image_policy_hash=
+  image_identity_hash=
+  IFS='|' read -r image_policy_hash image_identity_hash <<EOF
+$image_artifact_hashes
+EOF
+  if [ "$host_policy_hash" != "$image_policy_hash" ]; then
+    printf '%s\n' \
+      'The host database policy does not match the policy packaged in PORTAL_IMAGE.' >&2
+    printf '%s\n' 'Use the deployment tooling from the same reviewed release as the image.' >&2
+    exit 1
+  fi
+  if [ "$host_identity_hash" != "$image_identity_hash" ]; then
+    printf '%s\n' \
+      'The host database identity query does not match the query packaged in PORTAL_IMAGE.' >&2
+    printf '%s\n' 'Use the deployment tooling from the same reviewed release as the image.' >&2
+    exit 1
+  fi
+}
+
+verify_outbox_configuration() {
+  web_outbox_configuration=$(compose --profile operations run --rm preflight \
+    carlos-patient-portal-deployment-probe runtime-outbox-configuration-sha256)
+  worker_outbox_configuration=$(compose --profile operations run --rm --no-deps \
+    --entrypoint carlos-patient-portal-deployment-probe outbox \
+    outbox-configuration-sha256)
+  for configuration_fingerprint in \
+    "$web_outbox_configuration" \
+    "$worker_outbox_configuration"; do
+    if ! printf '%s' "$configuration_fingerprint" | grep -Eq '^[0-9a-f]{64}$'; then
+      printf '%s\n' 'Invalid outbox configuration fingerprint returned by PORTAL_IMAGE.' >&2
+      exit 1
+    fi
+  done
+  if [ "$web_outbox_configuration" != "$worker_outbox_configuration" ]; then
+    printf '%s\n' \
+      'Web and outbox configuration disagree on shared branding/encryption/reset settings, including SMTP delivery.' >&2
+    exit 1
+  fi
+}
+
+verify_runtime_outbox_database_match() {
+  web_database_probe=$(compose --profile operations run --rm preflight \
+    carlos-patient-portal-deployment-probe runtime)
+  worker_database_probe=$(compose --profile operations run --rm --no-deps \
+    --entrypoint carlos-patient-portal-deployment-probe outbox outbox)
+  for database_probe in "$web_database_probe" "$worker_database_probe"; do
+    if ! printf '%s' "$database_probe" \
+      | grep -Eq '^[0-9a-f]+\|[0-9a-f]+\|[0-9a-f]+\|[0-9a-f]{64}\|tls\|safe$'; then
+      printf '%s\n' 'Invalid database identity returned by PORTAL_IMAGE.' >&2
+      exit 1
+    fi
+  done
+  if [ "$web_database_probe" != "$worker_database_probe" ]; then
+    printf '%s\n' \
+      'Web and outbox configuration resolve to different database targets or roles.' >&2
+    exit 1
+  fi
+}
+
+verify_portal_database_probe() {
+  probe_label=$1
+  expected_role_digest=$2
+  probe_output=$3
+  probe_system_identifier=
+  probe_database_oid=
+  probe_database_name=
+  probe_role_digest=
+  probe_tls=
+  probe_session_policy=
+  IFS='|' read -r \
+    probe_system_identifier \
+    probe_database_oid \
+    probe_database_name \
+    probe_role_digest \
+    probe_tls \
+    probe_session_policy <<EOF
+$probe_output
+EOF
+  if [ -z "$probe_system_identifier" ] \
+    || [ -z "$probe_database_oid" ] \
+    || [ -z "$probe_database_name" ] \
+    || [ -z "$probe_role_digest" ] \
+    || [ -z "$probe_tls" ] \
+    || [ -z "$probe_session_policy" ]; then
+    printf 'Invalid database identity returned by the %s connection.\n' "$probe_label" >&2
+    exit 1
+  fi
+  if [ "$probe_system_identifier" != "$deployment_system_identifier" ] \
+    || [ "$probe_database_oid" != "$deployment_database_oid" ] \
+    || [ "$probe_database_name" != "$deployment_database_name" ]; then
+    printf '%s connection targets a different PostgreSQL database.\n' "$probe_label" >&2
+    exit 1
+  fi
+  if [ "$probe_role_digest" != "$expected_role_digest" ]; then
+    printf '%s connection does not use the role declared by database policy.\n' \
+      "$probe_label" >&2
+    exit 1
+  fi
+  if [ "$probe_tls" != "tls" ]; then
+    printf '%s connection does not use TLS.\n' "$probe_label" >&2
+    exit 1
+  fi
+  if [ "$probe_session_policy" != "safe" ]; then
+    printf '%s connection does not enforce the deployment session policy.\n' \
+      "$probe_label" >&2
+    exit 1
+  fi
+}
+
+verify_database_admin_target() {
+  database_admin_probe=$(compose --profile operations run --rm database-policy \
+    /bin/sh -euc '
+      role_digest() {
+        printf "%s" "$1" | sha256sum | cut -d " " -f 1
+      }
+      identity=$(psql "$DATABASE_ADMIN_URL" \
+        --no-psqlrc \
+        --quiet \
+        --tuples-only \
+        --no-align \
+        --set ON_ERROR_STOP=1 \
+        --file /policy/postgresql-database-identity.sql)
+      printf "%s|%s|%s|%s\n" \
+        "$identity" \
+        "$(role_digest "$PORTAL_SCHEMA_OWNER_ROLE")" \
+        "$(role_digest "$PORTAL_RUNTIME_ROLE")" \
+        "$(role_digest "$PORTAL_MAINTENANCE_ROLE")"
+    ')
+  deployment_system_identifier=
+  deployment_database_oid=
+  deployment_database_name=
+  database_admin_direct=
+  database_admin_tls=
+  database_admin_session_policy=
+  owner_role_digest=
+  runtime_role_digest=
+  maintenance_role_digest=
+  IFS='|' read -r \
+    deployment_system_identifier \
+    deployment_database_oid \
+    deployment_database_name \
+    database_admin_direct \
+    database_admin_tls \
+    database_admin_session_policy \
+    owner_role_digest \
+    runtime_role_digest \
+    maintenance_role_digest <<EOF
+$database_admin_probe
+EOF
+  if [ -z "$deployment_system_identifier" ] \
+    || [ -z "$deployment_database_oid" ] \
+    || [ -z "$deployment_database_name" ] \
+    || [ -z "$database_admin_tls" ] \
+    || [ -z "$database_admin_session_policy" ] \
+    || [ -z "$owner_role_digest" ] \
+    || [ -z "$runtime_role_digest" ] \
+    || [ -z "$maintenance_role_digest" ]; then
+    printf '%s\n' 'Invalid database identity returned by the database-admin connection.' >&2
+    exit 1
+  fi
+  if [ "$database_admin_direct" != "direct" ]; then
+    printf '%s\n' 'Database admin must connect directly without SET ROLE.' >&2
+    exit 1
+  fi
+  if [ "$database_admin_tls" != "tls" ]; then
+    printf '%s\n' 'Database admin connection does not use TLS.' >&2
+    exit 1
+  fi
+  if [ "$database_admin_session_policy" != "safe" ]; then
+    printf '%s\n' \
+      'Database admin connection does not enforce the deployment session policy.' >&2
+    exit 1
+  fi
+}
+
+verify_migration_database_target() {
+  migration_probe=$(compose --profile operations run --rm migrate \
+    carlos-patient-portal-deployment-probe migration)
+  verify_portal_database_probe "Migration" "$owner_role_digest" "$migration_probe"
+}
+
+verify_portal_database_targets() {
+  migration_probe=$(compose --profile operations run --rm migrate \
+    carlos-patient-portal-deployment-probe migration)
+  runtime_probe=$(compose --profile operations run --rm preflight \
+    carlos-patient-portal-deployment-probe runtime)
+  outbox_probe=$(compose --profile operations run --rm --no-deps \
+    --entrypoint carlos-patient-portal-deployment-probe outbox outbox)
+  maintenance_probe=$(compose --profile operations run --rm \
+    --entrypoint carlos-patient-portal-deployment-probe \
+    audit-maintenance maintenance)
+  verify_portal_database_probe "Migration" "$owner_role_digest" "$migration_probe"
+  verify_portal_database_probe "Runtime" "$runtime_role_digest" "$runtime_probe"
+  verify_portal_database_probe "Outbox" "$runtime_role_digest" "$outbox_probe"
+  verify_portal_database_probe "Maintenance" "$maintenance_role_digest" "$maintenance_probe"
+}
+
+verify_database_targets() {
+  verify_database_admin_target
+  verify_portal_database_targets
+}
+
+readiness_once() {
+  compose exec -T web python -c \
+    'from urllib.request import Request, urlopen; from carlos_patient_portal.config import get_settings; token=get_settings().internal_health_token.get_secret_value(); request=Request("http://127.0.0.1:8090/internal/readiness", headers={"Authorization": "Bearer "+token}); response=urlopen(request, timeout=5); print(response.read().decode())'
+}
+
+wait_for_readiness() {
+  attempt=1
+  while [ "$attempt" -le 30 ]; do
+    if readiness_once; then
+      return 0
+    fi
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+  printf '%s\n' 'Portal did not become ready within 60 seconds.' >&2
+  compose logs --tail 100 web >&2
+  return 1
+}
+
+command_name=${1:-}
+case "$command_name" in
+  export-audit)
+    if [ "$#" -gt 3 ]; then
+      printf '%s\n' 'export-audit accepts only optional AFTER_ID and BATCH_SIZE arguments.' >&2
+      exit 2
+    fi
+    ;;
+  cleanup-auth)
+    if [ "$#" -gt 2 ]; then
+      printf '%s\n' 'cleanup-auth accepts only an optional RETENTION_DAYS argument.' >&2
+      exit 2
+    fi
+    ;;
+  validate|migrate|apply-db-policy|preflight|deploy|readiness|outbox-status|prune-audit|status|rollback)
+    if [ "$#" -ne 1 ]; then
+      printf '%s accepts no additional arguments.\n' "$command_name" >&2
+      exit 2
+    fi
+    ;;
+esac
+
+case "$command_name" in
+  migrate|apply-db-policy|deploy|export-audit|cleanup-auth|prune-audit|rollback)
+    acquire_deployment_lock
+    ;;
+esac
+
+case "$command_name" in
+  validate)
+    validate
+    ;;
+  migrate)
+    validate
+    verify_database_artifacts
+    verify_database_targets
+    compose --profile operations run --rm migrate
+    ;;
+  apply-db-policy)
+    validate
+    verify_database_artifacts
+    # The policy is also the repair path for a missing direct CONNECT grant. Validate only the
+    # credential that will mutate the database first; validate every restricted credential after
+    # the admin job has restored the declared grants.
+    verify_database_admin_target
+    compose --profile operations run --rm database-policy
+    verify_portal_database_targets
+    ;;
+  preflight)
+    validate
+    verify_outbox_configuration
+    verify_runtime_outbox_database_match
+    compose --profile operations run --rm preflight
+    ;;
+  deploy)
+    validate
+    verify_outbox_configuration
+    verify_database_artifacts
+    # Only the admin and migration credentials are used before policy reconciliation. Runtime,
+    # worker, and maintenance credentials may legitimately be unable to connect until that job
+    # restores their explicit grants on a new or drifted database.
+    verify_database_admin_target
+    verify_migration_database_target
+    compose --profile operations run --rm migrate
+    compose --profile operations run --rm database-policy
+    verify_portal_database_targets
+    compose --profile operations run --rm preflight
+    compose up --detach --no-build --remove-orphans --wait --wait-timeout 90 web outbox
+    wait_for_readiness
+    ;;
+  readiness)
+    require_image
+    readiness_once
+    ;;
+  outbox-status)
+    validate
+    require_private_file "$PORTAL_MAINTENANCE_ENV_FILE"
+    compose --profile operations run --rm maintenance outbox-status
+    ;;
+  export-audit)
+    validate
+    require_private_file "$PORTAL_MAINTENANCE_ENV_FILE"
+    after_id=${2:-0}
+    batch_size=${3:-1000}
+    case "$after_id:$batch_size" in
+      *[!0-9:]*) printf '%s\n' 'AFTER_ID and BATCH_SIZE must be non-negative integers.' >&2; exit 2 ;;
+    esac
+    compose --profile operations run --rm maintenance \
+      export-audit --after-id "$after_id" --batch-size "$batch_size"
+    ;;
+  cleanup-auth)
+    validate
+    require_private_file "$PORTAL_MAINTENANCE_ENV_FILE"
+    retention_days=${2:-30}
+    case "$retention_days" in
+      *[!0-9]*) printf '%s\n' 'RETENTION_DAYS must be a non-negative integer.' >&2; exit 2 ;;
+    esac
+    compose --profile operations run --rm maintenance \
+      cleanup-transient-auth --retention-days "$retention_days"
+    ;;
+  prune-audit)
+    validate
+    require_private_file "$PORTAL_MAINTENANCE_ENV_FILE"
+    verify_database_artifacts
+    verify_database_targets
+    compose --profile operations run --rm audit-maintenance prune-audit
+    ;;
+  status)
+    require_image
+    compose ps
+    ;;
+  rollback)
+    if [ -z "${PORTAL_ROLLBACK_IMAGE:-}" ]; then
+      printf '%s\n' 'PORTAL_ROLLBACK_IMAGE must name the previous immutable image digest.' >&2
+      exit 1
+    fi
+    if ! is_digest_reference "$PORTAL_ROLLBACK_IMAGE"; then
+      printf '%s\n' 'PORTAL_ROLLBACK_IMAGE must use an immutable @sha256 digest.' >&2
+      exit 1
+    fi
+    PORTAL_IMAGE=$PORTAL_ROLLBACK_IMAGE
+    export PORTAL_IMAGE
+    validate
+    # The release that isolated worker settings also introduced assertion keyrings. Probe the
+    # candidate before its preflight so a rollback across that boundary can supply the old singular
+    # public-key setting and full worker environment that the older image requires.
+    isolated_outbox_settings=true
+    if compose --profile operations run --rm --no-deps --entrypoint python outbox \
+      -c 'import sys; import carlos_patient_portal.config as c; sys.exit(0 if hasattr(c, "get_outbox_settings") else 42)' \
+      >/dev/null 2>&1; then
+      :
+    else
+      capability_status=$?
+      if [ "$capability_status" -ne 42 ]; then
+        printf '%s\n' 'Could not inspect rollback image outbox settings support.' >&2
+        exit "$capability_status"
+      fi
+      if [ -z "${PORTAL_LEGACY_STAFF_ASSERTION_PUBLIC_KEY:-}" ]; then
+        printf '%s\n' \
+          'PORTAL_LEGACY_STAFF_ASSERTION_PUBLIC_KEY is required for this rollback image.' >&2
+        exit 1
+      fi
+      printf '%s\n' \
+        'Rollback image predates isolated outbox settings and assertion keyrings; using compatibility settings.' >&2
+      PORTAL_OUTBOX_ENV_FILE=$PORTAL_ENV_FILE
+      export PORTAL_OUTBOX_ENV_FILE
+      isolated_outbox_settings=false
+    fi
+    # Run the rollback image's packaged schema and runtime-policy checks before replacing either
+    # healthy service. /health is only a liveness probe and cannot catch schema incompatibility.
+    compose --profile operations run --rm preflight
+    if [ "$isolated_outbox_settings" = true ]; then
+      verify_outbox_configuration
+      verify_runtime_outbox_database_match
+    fi
+    compose up --detach --no-build --wait --wait-timeout 90 web outbox
+    wait_for_readiness
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

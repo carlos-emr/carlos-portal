@@ -78,6 +78,8 @@ from carlos_patient_portal.staff_identity import (
     CarlosStaffPermissionError,
     StaffPrincipal,
     authenticate_carlos_staff,
+    consume_staff_assertion,
+    staff_request_hash,
 )
 from carlos_patient_portal.unlock_secrets import (
     UnlockSecretDecryptionError,
@@ -346,16 +348,15 @@ def register_internal_failure_audit(app: FastAPI, runtime: InternalRuntime) -> N
     """Record every failed /internal/carlos/** request as a staff-action audit event."""
 
     def record_failed_internal_action(request: Request, status_code: int) -> None:
-        principal: StaffPrincipal | None = None
-        try:
-            principal = authenticate_carlos_staff(
-                runtime.settings,
-                authorization=request.headers.get("Authorization"),
-                staff_assertion=request.headers.get("X-CARLOS-Staff-Assertion"),
-            )
-        except CarlosServiceAuthenticationError:
-            # Never attribute a failed request to an unverified assertion.
-            principal = None
+        # Authentication consumes a request-bound nonce. Re-verifying here would either consume it
+        # twice or require a replay bypass in the audit path, so the dependency records only a
+        # successfully authenticated principal on request.state. Authentication failures remain
+        # deliberately unattributed.
+        principal: StaffPrincipal | None = getattr(
+            request.state,
+            "carlos_staff_principal",
+            None,
+        )
         reason = (
             "authentication_failed"
             if principal is None
@@ -427,16 +428,31 @@ def build_internal_dependencies(runtime: InternalRuntime) -> InternalRouteDepend
             with session.begin():
                 yield session
 
-    def get_staff_principal(
+    async def get_staff_principal(
+        request: Request,
         authorization: Annotated[str | None, Header()] = None,
         staff_assertion: Annotated[str | None, Header(alias="X-CARLOS-Staff-Assertion")] = None,
     ) -> StaffPrincipal:
         try:
-            return authenticate_carlos_staff(
+            body = await request.body()
+            principal = authenticate_carlos_staff(
                 runtime.settings,
                 authorization=authorization,
                 staff_assertion=staff_assertion,
+                expected_request_hash=staff_request_hash(
+                    request.method,
+                    request.scope.get("raw_path", request.url.path.encode("utf-8")),
+                    request.scope.get("query_string", b""),
+                    body,
+                ),
             )
+            await run_in_threadpool(
+                consume_staff_assertion,
+                runtime.session_factory,
+                principal,
+            )
+            request.state.carlos_staff_principal = principal
+            return principal
         except CarlosServiceAuthenticationError as exc:
             raise HTTPException(status_code=404, detail="not found") from exc
 
@@ -702,6 +718,20 @@ def register_internal_account_routes(
         )
         if account is None:
             raise HTTPException(status_code=404, detail=INTERNAL_ACCOUNT_NOT_FOUND_DETAIL)
+        record_audit_event(
+            session,
+            event_type=AUDIT_EVENT_STAFF_ACTION,
+            outcome=AUDIT_OUTCOME_SUCCESS,
+            actor_type=AUDIT_ACTOR_TYPE_STAFF,
+            actor=principal.display_name,
+            actor_id=principal.provider_id,
+            clinic_id=principal.clinic_id,
+            demographic_no=demographic_no,
+            account_id=account.id,
+            resource_type="portal_account",
+            resource_id=str(account.id),
+            reason="status_viewed",
+        )
         return {
             "id": account.id,
             "clinic_id": account.clinic_id,
@@ -949,6 +979,18 @@ def register_internal_contact_review_routes(
             offset=offset,
         )
         total = count_pending_contact_reviews(session, clinic_id=principal.clinic_id)
+        record_audit_event(
+            session,
+            event_type=AUDIT_EVENT_STAFF_ACTION,
+            outcome=AUDIT_OUTCOME_SUCCESS,
+            actor_type=AUDIT_ACTOR_TYPE_STAFF,
+            actor=principal.display_name,
+            actor_id=principal.provider_id,
+            clinic_id=principal.clinic_id,
+            resource_type="contact_review",
+            resource_id=f"offset:{offset}:limit:{limit}",
+            reason="pending_list_viewed",
+        )
         return {
             "items": [
                 {

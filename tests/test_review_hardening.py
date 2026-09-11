@@ -36,7 +36,7 @@ from carlos_patient_portal.unlock_secrets import (
     create_unlock_secret,
     decrypt_unlock_secret_payload,
 )
-from tests.support import TEST_STAFF_ASSERTION_PUBLIC_KEY, upgrade_to_head
+from tests.support import TEST_STAFF_ASSERTION_PUBLIC_KEYRING, upgrade_to_head
 
 SECRET_LENGTH = MIN_PRODUCTION_SECRET_LENGTH
 
@@ -65,7 +65,7 @@ def production_settings_values(**overrides: object) -> dict[str, object]:
         "unlock_secret_encryption_secret": "u" * SECRET_LENGTH,
         "internal_health_token": "h" * SECRET_LENGTH,
         "internal_api_token": "c" * SECRET_LENGTH,
-        "internal_staff_assertion_public_key": TEST_STAFF_ASSERTION_PUBLIC_KEY,
+        "internal_staff_assertion_public_keyring": TEST_STAFF_ASSERTION_PUBLIC_KEYRING,
         "smtp_host": "mail.internal",
         "smtp_from_address": "portal@example.test",
         "smtp_starttls": True,

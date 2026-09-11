@@ -41,6 +41,7 @@ from carlos_patient_portal.runtime import (
     PortalOperationalMetrics,
     auth_policy_from_settings,
 )
+from carlos_patient_portal.staff_identity import staff_request_hash
 from carlos_patient_portal.token_keys import PortalTokenKeys
 from tests.support import (
     OUTBOX_ENCRYPTION_SECRET,
@@ -54,6 +55,22 @@ from tests.support import (
     migrated_staging_app,
     seeded_invite_request,
 )
+
+
+def create_staging_invite(client: TestClient):
+    path = "/internal/carlos/patients/1234/invites"
+    body = json.dumps(seeded_invite_request(), separators=(",", ":")).encode()
+    return client.post(
+        path,
+        headers={
+            **carlos_staff_headers(
+                "portal.invite.manage",
+                request_hash=staff_request_hash("POST", path.encode(), b"", body),
+            ),
+            "Content-Type": "application/json",
+        },
+        content=body,
+    )
 
 
 def queue_reset(
@@ -821,11 +838,7 @@ def test_password_reset_route_resolves_every_identity_through_the_outbox() -> No
 
     # /dev/admin is development-only, so the account is seeded the way a real staging
     # deployment would: through the authenticated internal API.
-    invite = client.post(
-        "/internal/carlos/patients/1234/invites",
-        headers=carlos_staff_headers("portal.invite.manage"),
-        json=seeded_invite_request(),
-    )
+    invite = create_staging_invite(client)
     assert invite.status_code == 201, invite.text
     activation = client.post(
         "/auth/activate",
@@ -928,11 +941,7 @@ def test_password_reset_hit_and_miss_enqueue_identical_account_neutral_work() ->
         outbox_encryption_secret=OUTBOX_ENCRYPTION_SECRET,
     )
     client = TestClient(app, base_url="https://portal.example.test")
-    invite = client.post(
-        "/internal/carlos/patients/1234/invites",
-        headers=carlos_staff_headers("portal.invite.manage"),
-        json=seeded_invite_request(),
-    )
+    invite = create_staging_invite(client)
     assert invite.status_code == 201
     assert client.post(
         "/auth/activate",

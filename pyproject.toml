@@ -32,12 +32,16 @@ dependencies = [
 carlos-patient-portal-migrate = "carlos_patient_portal.cli:migrate"
 carlos-patient-portal-maintenance = "carlos_patient_portal.cli:maintenance"
 carlos-patient-portal-outbox-worker = "carlos_patient_portal.cli:outbox_worker"
+carlos-patient-portal-preflight = "carlos_patient_portal.cli:production_preflight"
+carlos-patient-portal-deployment-probe = "carlos_patient_portal.cli:deployment_probe"
 
 [project.optional-dependencies]
 dev = [
-  "httpx2>=2.9,<3",
+  # 2.9.1 carries CVE-2026-84378/84379/84380/84382; all are fixed by 2.12.0.
+  "httpx2>=2.12,<3",
   "pip-audit>=2.10,<3",
-  "pip-tools>=7,<8",
+  # 7.6.1 restores compatibility with pip 26.
+  "pip-tools>=7.6.1,<8",
   "pytest>=9.0.3,<10",
   "pytest-cov>=7,<8",
   "ruff>=0.8,<1",

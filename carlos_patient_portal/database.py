@@ -37,6 +37,7 @@ DEFAULT_DATABASE_CONNECT_TIMEOUT_SECONDS = 5
 DEFAULT_DATABASE_STATEMENT_TIMEOUT_MS = 15_000
 DEFAULT_DATABASE_LOCK_TIMEOUT_MS = 5_000
 DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 5_000
+POSTGRESQL_SEARCH_PATH = "pg_catalog,public"
 MIGRATIONS_DIRECTORY = Path(__file__).resolve().parent / "migrations"
 
 
@@ -80,7 +81,8 @@ def create_portal_engine(
             connect_timeout=connect_timeout_seconds,
             options=(
                 f"-c statement_timeout={statement_timeout_ms} "
-                f"-c lock_timeout={lock_timeout_ms}"
+                f"-c lock_timeout={lock_timeout_ms} "
+                f"-c search_path={POSTGRESQL_SEARCH_PATH}"
             ),
         )
     engine = create_engine(database_url, connect_args=connect_args, **engine_options)

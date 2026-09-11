@@ -1,6 +1,10 @@
+import json
+from base64 import urlsafe_b64encode
 from datetime import date, timedelta
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -30,12 +34,17 @@ from carlos_patient_portal.models import (
     PatientPortalInvite,
     PatientPortalPasswordResetToken,
     PatientPortalSession,
+    PatientPortalStaffAssertionUse,
     PatientPortalUnlockSecret,
     utc_now,
 )
+from carlos_patient_portal.staff_identity import staff_request_hash
 from tests.support import (
+    TEST_STAFF_ASSERTION_KEY_ID,
     TEST_STAFF_ASSERTION_PUBLIC_KEY,
+    TEST_STAFF_ASSERTION_PUBLIC_KEYRING,
     carlos_staff_headers,
+    migrated_staging_app,
     sign_staff_assertion,
     upgrade_to_head,
 )
@@ -94,19 +103,20 @@ def apply_contact_change(
 
 
 def internal_app(**overrides: object):
+    settings_values = {
+        "environment": "development",
+        "clinic_id": "clinic-a",
+        "clinic_name": "Clinic A",
+        "database_url": "sqlite+pysqlite:///:memory:",
+        "internal_api_token": INTERNAL_API_TOKEN,
+        "internal_staff_assertion_public_key": TEST_STAFF_ASSERTION_PUBLIC_KEY,
+        "identity_proof_secret": IDENTITY_PROOF_SECRET,
+        "audit_hash_secret": AUDIT_HASH_SECRET,
+        "unlock_secret_encryption_secret": UNLOCK_SECRET,
+        **overrides,
+    }
     app = create_app(
-        Settings(
-            environment="development",
-            clinic_id="clinic-a",
-            clinic_name="Clinic A",
-            database_url="sqlite+pysqlite:///:memory:",
-            internal_api_token=INTERNAL_API_TOKEN,
-            internal_staff_assertion_public_key=TEST_STAFF_ASSERTION_PUBLIC_KEY,
-            identity_proof_secret=IDENTITY_PROOF_SECRET,
-            audit_hash_secret=AUDIT_HASH_SECRET,
-            unlock_secret_encryption_secret=UNLOCK_SECRET,
-            **overrides,
-        )
+        Settings(**settings_values)
     )
     upgrade_to_head(app.state.database_engine)
     return app
@@ -118,6 +128,30 @@ def carlos_headers(
     token: str = INTERNAL_API_TOKEN,
 ) -> dict[str, str]:
     return carlos_staff_headers(*permissions, clinic_id=clinic_id, token=token)
+
+
+def bound_carlos_headers(
+    *permissions: str,
+    method: str,
+    path: str,
+    body: bytes = b"",
+    key_id: str = TEST_STAFF_ASSERTION_KEY_ID,
+    signing_key: Ed25519PrivateKey | None = None,
+) -> dict[str, str]:
+    request_hash = staff_request_hash(method, path.encode(), b"", body)
+    assertion_options: dict[str, object] = {}
+    if signing_key is not None:
+        assertion_options["signing_key"] = signing_key
+    return {
+        "Authorization": f"Bearer {INTERNAL_API_TOKEN}",
+        "X-CARLOS-Staff-Assertion": sign_staff_assertion(
+            *permissions,
+            clinic_id="clinic-a",
+            key_id=key_id,
+            request_hash=request_hash,
+            **assertion_options,
+        ),
+    }
 
 
 def invite_request(demographic_no: int = 1234) -> dict[str, object]:
@@ -265,6 +299,130 @@ def test_internal_api_rejects_tampered_expired_and_wrong_audience_assertions() -
         assert response.status_code == 404
 
 
+def test_request_bound_staff_assertion_is_consumed_once() -> None:
+    path = "/internal/carlos/contact-reviews"
+    app = internal_app(
+        internal_staff_assertion_public_key=None,
+        internal_staff_assertion_public_keyring=TEST_STAFF_ASSERTION_PUBLIC_KEYRING,
+    )
+    client = TestClient(app)
+    headers = bound_carlos_headers(
+        "portal.contact.review",
+        method="GET",
+        path=path,
+    )
+
+    first = client.get(path, headers=headers)
+    replay = client.get(path, headers=headers)
+
+    assert first.status_code == 200
+    assert replay.status_code == 404
+    with app.state.session_factory() as session:
+        assert len(list(session.scalars(select(PatientPortalStaffAssertionUse)))) == 1
+
+
+def test_staff_request_hash_binds_method_path_query_and_body() -> None:
+    baseline = staff_request_hash("POST", b"/internal/carlos/example", b"page=1", b"{}")
+
+    assert staff_request_hash("GET", b"/internal/carlos/example", b"page=1", b"{}") != baseline
+    assert staff_request_hash("POST", b"/internal/carlos/other", b"page=1", b"{}") != baseline
+    assert staff_request_hash("POST", b"/internal/carlos/example", b"page=2", b"{}") != baseline
+    assert staff_request_hash("POST", b"/internal/carlos/example", b"page=1", b"[]") != baseline
+
+
+def test_request_bound_staff_assertion_rejects_a_changed_body() -> None:
+    path = "/internal/carlos/patients/1234/invites"
+    payload = invite_request()
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    app = internal_app(
+        internal_staff_assertion_public_key=None,
+        internal_staff_assertion_public_keyring=TEST_STAFF_ASSERTION_PUBLIC_KEYRING,
+    )
+    client = TestClient(app)
+    headers = {
+        **bound_carlos_headers(
+            "portal.invite.manage",
+            method="POST",
+            path=path,
+            body=body,
+        ),
+        "Content-Type": "application/json",
+    }
+    changed_body = json.dumps(
+        {**payload, "email": "attacker@example.test"},
+        separators=(",", ":"),
+    ).encode()
+
+    changed = client.post(path, headers=headers, content=changed_body)
+    original = client.post(path, headers=headers, content=body)
+
+    assert changed.status_code == 404
+    assert original.status_code == 201
+
+
+def test_staff_assertion_keyring_accepts_overlapping_rotation_keys() -> None:
+    alternate_private_key = Ed25519PrivateKey.from_private_bytes(bytes(range(33, 65)))
+    alternate_public_key = (
+        urlsafe_b64encode(
+            alternate_private_key.public_key().public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            )
+        )
+        .rstrip(b"=")
+        .decode("ascii")
+    )
+    keyring = json.dumps(
+        {
+            TEST_STAFF_ASSERTION_KEY_ID: TEST_STAFF_ASSERTION_PUBLIC_KEY,
+            "next-2026": alternate_public_key,
+        }
+    )
+    path = "/internal/carlos/contact-reviews"
+    client = TestClient(
+        internal_app(
+            internal_staff_assertion_public_key=None,
+            internal_staff_assertion_public_keyring=keyring,
+        )
+    )
+
+    current = client.get(
+        path,
+        headers=bound_carlos_headers(
+            "portal.contact.review",
+            method="GET",
+            path=path,
+        ),
+    )
+    next_key = client.get(
+        path,
+        headers=bound_carlos_headers(
+            "portal.contact.review",
+            method="GET",
+            path=path,
+            key_id="next-2026",
+            signing_key=alternate_private_key,
+        ),
+    )
+
+    assert current.status_code == 200
+    assert next_key.status_code == 200
+
+
+def test_non_development_rejects_legacy_unbound_staff_assertions() -> None:
+    client = TestClient(
+        migrated_staging_app(),
+        base_url="https://portal.example.test",
+    )
+
+    response = client.get(
+        "/internal/carlos/contact-reviews",
+        headers=carlos_staff_headers("portal.contact.review"),
+    )
+
+    assert response.status_code == 404
+
+
 def test_internal_mutations_reject_unknown_or_blank_fields_and_publish_schemas() -> None:
     client = TestClient(internal_app())
     invite_payload = {**invite_request(), "unexpected": "value"}
@@ -383,6 +541,83 @@ def test_internal_invite_list_resend_and_revoke_lifecycle() -> None:
     assert revoked.json()["status"] == "revoked"
     assert rejected_resend.status_code == 409
     assert missing_revoke.status_code == 404
+
+
+def test_internal_invite_rejects_scope_conflicts_and_superseded_revocation(
+    monkeypatch,
+) -> None:
+    client = TestClient(internal_app())
+    headers = carlos_headers("portal.invite.manage")
+
+    scope_mismatch = client.post(
+        "/internal/carlos/patients/1234/invites",
+        headers=headers,
+        json=invite_request(demographic_no=5678),
+    )
+    created = client.post(
+        "/internal/carlos/patients/1234/invites",
+        headers=headers,
+        json=invite_request(),
+    )
+    resent = client.post(
+        f"/internal/carlos/invites/{created.json()['id']}/resend",
+        headers=headers,
+    )
+    superseded_revoke = client.post(
+        f"/internal/carlos/invites/{created.json()['id']}/revoke",
+        headers=headers,
+    )
+
+    assert scope_mismatch.status_code == 400
+    assert created.status_code == 201
+    assert resent.status_code == 200
+    assert superseded_revoke.status_code == 409
+    assert superseded_revoke.json()["detail"] == "superseded invite cannot be revoked"
+
+    def reject_concurrent_invite(*args, **kwargs):
+        raise internal_routes.PendingInviteExistsError()
+
+    monkeypatch.setattr(internal_routes, "create_invite", reject_concurrent_invite)
+    concurrent = client.post(
+        "/internal/carlos/patients/5678/invites",
+        headers=headers,
+        json=invite_request(demographic_no=5678),
+    )
+    assert concurrent.status_code == 409
+    assert concurrent.json()["detail"] == "pending invite already exists"
+
+
+def test_internal_resource_lookups_hide_missing_records() -> None:
+    client = TestClient(internal_app())
+
+    unlock = client.post(
+        "/internal/carlos/patients/1234/unlock",
+        headers=carlos_headers("portal.account.unlock"),
+    )
+    account = client.get(
+        "/internal/carlos/patients/1234/portal-account",
+        headers=carlos_headers("portal.account.manage"),
+    )
+    publish_secret = client.post(
+        "/internal/carlos/unlock-secrets/999999/publish",
+        headers=carlos_headers("portal.secret.manage"),
+    )
+    revoke_secret = client.post(
+        "/internal/carlos/unlock-secrets/999999/revoke",
+        headers=carlos_headers("portal.secret.manage"),
+        json={"reason": "message_recalled"},
+    )
+    review = client.post(
+        "/internal/carlos/contact-reviews/999999/decision",
+        headers=carlos_headers("portal.contact.review"),
+        json={"approve": True, "revision": "missing-revision"},
+    )
+
+    assert unlock.status_code == 404
+    assert account.status_code == 404
+    assert publish_secret.status_code == 404
+    assert revoke_secret.status_code == 404
+    assert review.status_code == 404
 
 
 def test_internal_unlock_secret_is_idempotent_scoped_and_target_audited() -> None:
@@ -908,6 +1143,17 @@ def test_internal_staff_can_disable_and_reenable_portal_access() -> None:
         "status": "active",
         "force_password_reset": True,
     }
+    with app.state.session_factory() as session:
+        status_read = session.scalar(
+            select(PatientPortalAuditEvent).where(
+                PatientPortalAuditEvent.event_type == AUDIT_EVENT_STAFF_ACTION,
+                PatientPortalAuditEvent.reason == "status_viewed",
+            )
+        )
+        assert status_read is not None
+        assert status_read.actor_id == "provider-42"
+        assert status_read.demographic_no == 1234
+        assert status_read.account_id == initial.json()["id"]
 
 
 def test_internal_contact_review_is_clinic_scoped_and_applies_staff_decision() -> None:
@@ -970,9 +1216,18 @@ def test_internal_contact_review_is_clinic_scoped_and_applies_staff_decision() -
     assert replay.status_code == 200
     with app.state.session_factory() as session:
         account = session.scalar(select(PatientPortalAccount))
+        list_audit = session.scalar(
+            select(PatientPortalAuditEvent).where(
+                PatientPortalAuditEvent.event_type == AUDIT_EVENT_STAFF_ACTION,
+                PatientPortalAuditEvent.reason == "pending_list_viewed",
+            )
+        )
         assert account is not None
         assert account.email == "updated.patient@example.com"
         assert account.phone_number == "+16135550199"
+        assert list_audit is not None
+        assert list_audit.actor_id == "provider-42"
+        assert list_audit.resource_id == "offset:0:limit:50"
 
 
 def test_internal_contact_review_rejection_retains_current_contact() -> None:

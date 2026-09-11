@@ -10,12 +10,14 @@
  *   PORTAL_TEST_USER=CarlosPatient
  *   PORTAL_TEST_PASSWORD=the seeded development password
  *   PORTAL_MAIL_COMMAND=/scripts/mail
+ *   PORTAL_BROWSER_FIXTURE_FILE=/tmp/patient-portal-browser-fixtures.json
  *   PORTAL_SCREENSHOT_DIR=/tmp
  *   CHROME_PATH=/path/to/chrome-or-chromium
  *   ALLOW_NON_LOCAL_BASE_URL=true only for an intentional non-production test target
  */
 
 const { execFileSync } = require('node:child_process');
+const { readFileSync } = require('node:fs');
 const { isIP } = require('node:net');
 const path = require('node:path');
 const { chromium } = require('playwright');
@@ -30,6 +32,21 @@ const mailCommand = process.env.PORTAL_MAIL_COMMAND || '/scripts/mail';
 const useDevelopmentMfaCode = process.env.PORTAL_USE_DEVELOPMENT_MFA_CODE === 'true';
 const screenshotDir = path.resolve(process.env.PORTAL_SCREENSHOT_DIR || '/tmp');
 const chromePath = process.env.CHROME_PATH || '';
+const fixturePath = process.env.PORTAL_BROWSER_FIXTURE_FILE
+  || '/tmp/patient-portal-browser-fixtures.json';
+const browserFixtures = JSON.parse(readFileSync(fixturePath, 'utf8'));
+const activationFixture = browserFixtures.activation;
+
+assert(
+  activationFixture
+    && activationFixture.inviteCode
+    && activationFixture.email
+    && activationFixture.dateOfBirth
+    && activationFixture.healthCardNumber
+    && activationFixture.username
+    && activationFixture.password,
+  `activation fixture is incomplete in ${fixturePath}`
+);
 
 function validateBaseUrl(rawBaseUrl) {
   const parsed = new URL(rawBaseUrl);
@@ -122,6 +139,8 @@ function screenshotPath(name) {
 (async () => {
   const badResponses = [];
   const browserIssues = [];
+  let expectedAuthConsoleErrors = 0;
+  let expectedAuthFailures = 0;
   let expectedRevealFailures = 0;
   const browser = await chromium.launch({
     headless: true,
@@ -189,9 +208,18 @@ function screenshotPath(name) {
   }
 
   page.on('response', (response) => {
-    const isExpectedMfaCooldown = response.status() === 429
-      && new URL(response.url()).pathname === portalPathname('/auth/mfa/resend');
     const responsePath = new URL(response.url()).pathname;
+    const isExpectedMfaCooldown = response.status() === 429
+      && responsePath === portalPathname('/auth/mfa/resend');
+    const isExpectedAuthFailure = response.status() === 401
+      && expectedAuthFailures > 0
+      && [
+        portalPathname('/auth/login'),
+        portalPathname('/auth/mfa/verify'),
+      ].includes(responsePath);
+    if (isExpectedAuthFailure) {
+      expectedAuthFailures -= 1;
+    }
     const isExpectedRevealFailure = response.status() === 503
       && expectedRevealFailures > 0
       && responsePath.startsWith(portalPathname('/portal/email-passwords/'))
@@ -199,11 +227,22 @@ function screenshotPath(name) {
     if (isExpectedRevealFailure) {
       expectedRevealFailures -= 1;
     }
-    if (response.status() >= 400 && !isExpectedMfaCooldown && !isExpectedRevealFailure) {
+    if (
+      response.status() >= 400
+      && !isExpectedMfaCooldown
+      && !isExpectedAuthFailure
+      && !isExpectedRevealFailure
+    ) {
       badResponses.push({ status: response.status(), url: response.url() });
     }
   });
   page.on('console', (message) => {
+    const isExpectedAuthFailureConsoleError = message.text().includes(
+      'Failed to load resource: the server responded with a status of 401'
+    ) && expectedAuthConsoleErrors > 0;
+    if (isExpectedAuthFailureConsoleError) {
+      expectedAuthConsoleErrors -= 1;
+    }
     const isExpectedMfaCooldownConsoleError = message.text().includes(
       'Failed to load resource: the server responded with a status of 429'
     );
@@ -212,6 +251,7 @@ function screenshotPath(name) {
     );
     if (
       message.type() === 'error'
+      && !isExpectedAuthFailureConsoleError
       && !isExpectedMfaCooldownConsoleError
       && !isExpectedRevealFailureConsoleError
     ) {
@@ -226,6 +266,13 @@ function screenshotPath(name) {
     if (!useDevelopmentMfaCode) {
       runMailCommand('clear');
     }
+    await page.goto(portalUrl('/portal/email-passwords'), {
+      waitUntil: 'networkidle',
+      timeout: 30000,
+    });
+    await page.waitForURL((url) => url.pathname === portalPathname('/'));
+    await page.getByRole('heading', { name: 'Sign in' }).waitFor();
+
     await page.goto(portalUrl('/'), { waitUntil: 'networkidle', timeout: 30000 }); // nosemgrep: javascript.playwright.security.audit.playwright-goto-injection.playwright-goto-injection -- portalUrl requires a root-relative path and validateBaseUrl restricts targets to local/private hosts by default
 
     await page.getByRole('heading', { name: 'Sign in' }).waitFor();
@@ -317,7 +364,64 @@ function screenshotPath(name) {
       path: screenshotPath('patient-portal-activation-mobile'),
       fullPage: true,
     });
-    await page.getByRole('link', { name: 'Back to sign in' }).click();
+    assert(
+      await page.locator('select[name="mfa_delivery_method"] option[value="sms"]:disabled').count()
+        === 1,
+      'activation SMS option must reflect the unavailable test sender'
+    );
+    await page.locator('input[name="invite_code"]').fill(activationFixture.inviteCode);
+    await page.locator('input[name="email"]').fill(activationFixture.email);
+    await page.locator('input[name="date_of_birth"]').fill(activationFixture.dateOfBirth);
+    await page.locator('input[name="health_card_number"]').fill(
+      activationFixture.healthCardNumber
+    );
+    await page.locator('input[name="username"]').fill(activationFixture.username);
+    await page.locator('input[name="password"]').fill(activationFixture.password);
+    await page.locator('input[name="password_confirmation"]').fill(
+      activationFixture.password
+    );
+    const activationResponsePromise = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === portalPathname('/auth/activate')
+        && response.request().method() === 'POST'
+    );
+    await page.getByRole('button', { name: 'Activate account' }).click();
+    const activationResponse = await activationResponsePromise;
+    assert(activationResponse.status() === 201, `activation returned ${activationResponse.status()}`);
+    await page.getByRole('heading', { name: 'Account activated' }).waitFor();
+    const activationResultText = await page.locator('body').innerText();
+    assert(
+      !activationResultText.includes(activationFixture.inviteCode)
+        && !activationResultText.includes(activationFixture.healthCardNumber)
+        && !activationResultText.includes(activationFixture.password),
+      'activation result echoed a proof value or credential'
+    );
+    await page.getByRole('link', { name: 'Sign in' }).click();
+    await page.locator('input[name="username"]').fill(activationFixture.username);
+    await page.locator('input[name="password"]').fill(activationFixture.password);
+    await Promise.all([
+      page.waitForURL((url) => url.pathname === portalPathname('/auth/login')),
+      page.getByRole('button', { name: 'Sign in' }).click(),
+    ]);
+    await page.getByRole('heading', { name: 'Verification code' }).waitFor();
+    const activationMfaCode = await page.locator('[data-development-mfa-code]').getAttribute(
+      'data-development-mfa-code'
+    );
+    assert(activationMfaCode, 'activated account MFA code was not available');
+    await page.locator('input[name="code"]').fill(activationMfaCode);
+    await Promise.all([
+      page.waitForURL((url) => url.pathname === portalPathname('/portal')),
+      page.getByRole('button', { name: 'Verify' }).click(),
+    ]);
+    assert(
+      (await page.locator('.signed-in-user').textContent() || '').trim()
+        === activationFixture.username.toLowerCase(),
+      'activated account did not reach its authenticated portal session'
+    );
+    await Promise.all([
+      page.waitForURL((url) => url.pathname === portalPathname('/')),
+      page.getByRole('button', { name: 'Logout' }).click(),
+    ]);
+    await page.getByRole('heading', { name: 'Sign in' }).waitFor();
 
     await page.getByRole('link', { name: 'Forgot username or password?' }).click();
     await page.getByRole('heading', { name: 'Reset your password' }).waitFor();
@@ -335,6 +439,23 @@ function screenshotPath(name) {
     });
     await page.getByRole('link', { name: 'Back to sign in' }).click();
     await page.setViewportSize({ width: 1440, height: 1000 });
+
+    await page.locator('input[name="username"]').fill('no-such-playwright-user');
+    await page.locator('input[name="password"]').fill('incorrect-playwright-password');
+    expectedAuthConsoleErrors += 1;
+    expectedAuthFailures += 1;
+    const invalidLoginResponsePromise = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === portalPathname('/auth/login')
+        && response.request().method() === 'POST'
+    );
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    const invalidLoginResponse = await invalidLoginResponsePromise;
+    assert(
+      invalidLoginResponse.status() === 401,
+      `invalid sign-in returned ${invalidLoginResponse.status()}`
+    );
+    await page.getByRole('alert').filter({ hasText: 'Incorrect Username or Password' }).waitFor();
+    await page.getByRole('heading', { name: 'Sign in' }).waitFor();
 
     await page.locator('input[name="username"]').fill(testUser);
     await page.locator('input[name="password"]').fill(testPassword);
@@ -398,6 +519,25 @@ function screenshotPath(name) {
     await page.getByRole('alert').filter({ hasText: 'A code was sent recently.' }).waitFor();
     await page.getByRole('heading', { name: 'Verification code' }).waitFor();
 
+    const incorrectMfaCode = capturedMail.code === '000000' ? '111111' : '000000';
+    await page.locator('input[name="code"]').fill(incorrectMfaCode);
+    expectedAuthConsoleErrors += 1;
+    expectedAuthFailures += 1;
+    const invalidMfaResponsePromise = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === portalPathname('/auth/mfa/verify')
+        && response.request().method() === 'POST'
+    );
+    await page.getByRole('button', { name: 'Verify' }).click();
+    const invalidMfaResponse = await invalidMfaResponsePromise;
+    assert(
+      invalidMfaResponse.status() === 401,
+      `invalid MFA verification returned ${invalidMfaResponse.status()}`
+    );
+    await page.getByRole('alert').filter({
+      hasText: 'The code was not accepted. Try again or request a new code.',
+    }).waitFor();
+    await page.getByRole('heading', { name: 'Verification code' }).waitFor();
+
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.locator('input[name="code"]').fill(capturedMail.code);
     await Promise.all([
@@ -407,6 +547,19 @@ function screenshotPath(name) {
 
     await page.getByRole('heading', { name: 'Patient portal' }).waitFor();
     await page.locator('.signed-in-user').filter({ hasText: expectedUser }).waitFor();
+    const sessionCookie = (await context.cookies()).find(
+      (cookie) => cookie.name === 'carlos_portal_session'
+    );
+    assert(sessionCookie, 'authenticated browser has no portal session cookie');
+    assert(sessionCookie.httpOnly, 'portal session cookie must be HttpOnly');
+    assert(sessionCookie.sameSite === 'Strict', 'portal session cookie must use SameSite=Strict');
+    assert(sessionCookie.path === portalPathname('/portal'), 'portal session cookie path is too broad');
+    const authenticatedResponse = await page.reload({ waitUntil: 'networkidle' });
+    assert(authenticatedResponse, 'authenticated page reload returned no response');
+    assert(
+      authenticatedResponse.headers()['cache-control'] === 'no-store',
+      'authenticated portal response must disable browser caching'
+    );
     await page.screenshot({
       path: screenshotPath('patient-portal-live-desktop'),
       fullPage: true,
@@ -684,7 +837,27 @@ function screenshotPath(name) {
       page.getByRole('button', { name: 'Logout' }).click(),
     ]);
     await page.getByRole('heading', { name: 'Sign in' }).waitFor();
+    assert(
+      !(await context.cookies()).some((cookie) => cookie.name === 'carlos_portal_session'),
+      'logout did not clear the portal session cookie'
+    );
 
+    // Reinsert the exact old browser credential to prove logout revoked it server-side as well as
+    // deleting it from this browser. A copied or restored cookie must not reopen the portal.
+    await context.addCookies([sessionCookie]);
+    await page.goto(portalUrl('/portal/email-passwords'), {
+      waitUntil: 'networkidle',
+      timeout: 30000,
+    });
+    await page.waitForURL((url) => url.pathname === portalPathname('/'));
+    await page.getByRole('heading', { name: 'Sign in' }).waitFor();
+    assert(
+      !(await context.cookies()).some((cookie) => cookie.name === 'carlos_portal_session'),
+      'rejected replay cookie was not cleared'
+    );
+
+    assert(expectedAuthFailures === 0, 'expected browser authentication failures were not observed');
+    assert(expectedAuthConsoleErrors === 0, 'expected authentication console errors were not observed');
     assert(badResponses.length === 0, `unexpected HTTP errors: ${JSON.stringify(badResponses)}`);
     assert(browserIssues.length === 0, `browser errors: ${JSON.stringify(browserIssues)}`);
     console.log('Patient portal Playwright smoke test passed');

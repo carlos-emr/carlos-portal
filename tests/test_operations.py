@@ -3,6 +3,7 @@ import logging
 import os
 import sqlite3
 import stat
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.exc import SQLAlchemyError
@@ -23,6 +24,7 @@ from carlos_patient_portal.maintenance import (
 from tests.support import (
     OUTBOX_ENCRYPTION_SECRET,
     development_settings,
+    production_settings,
     staging_settings,
     upgrade_to_head,
 )
@@ -40,6 +42,115 @@ def test_alembic_config_escapes_percent_interpolation(monkeypatch: pytest.Monkey
     config = cli.build_alembic_config()
 
     assert config.get_main_option("sqlalchemy.url") == database_url
+
+
+@pytest.mark.parametrize(
+    ("entrypoint", "arguments", "failure_message"),
+    (
+        (cli.migrate, [], "migration configuration is invalid"),
+        (
+            cli.deployment_probe,
+            ["migration"],
+            "deployment probe configuration is invalid",
+        ),
+        (cli.maintenance, ["outbox-status"], "maintenance configuration is invalid"),
+        (cli.outbox_worker, ["--once"], "outbox configuration is invalid"),
+    ),
+)
+def test_configuration_cli_hides_rejected_url_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    entrypoint,
+    arguments: list[str],
+    failure_message: str,
+) -> None:
+    sentinel_password = "SENTINEL-DATABASE-PASSWORD"
+    for name in list(os.environ):
+        if name.startswith("PATIENT_PORTAL_"):
+            monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PATIENT_PORTAL_ENVIRONMENT", "production")
+    monkeypatch.setenv(
+        "PATIENT_PORTAL_DATABASE_URL",
+        f"invalid://user:{sentinel_password}",
+    )
+    cli.get_settings.cache_clear()
+    cli.get_outbox_settings.cache_clear()
+
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            entrypoint(arguments)
+    finally:
+        cli.get_settings.cache_clear()
+        cli.get_outbox_settings.cache_clear()
+
+    assert exc_info.value.code == 2
+    stderr = capsys.readouterr().err
+    assert failure_message in stderr
+    assert sentinel_password not in stderr
+
+
+def test_outbox_configuration_digest_covers_shared_worker_policy() -> None:
+    settings = staging_settings()
+    changed_ttl = staging_settings(password_reset_token_ttl_seconds=7200)
+    changed_clinic = staging_settings(clinic_id="another-clinic")
+    changed_clinic_name = staging_settings(clinic_name="Another Clinic")
+    changed_service_name = staging_settings(service_name="Another Portal")
+    changed_smtp_host = staging_settings(smtp_host="other-mail.internal")
+    smtp_settings = staging_settings(
+        smtp_username="relay-user",
+        smtp_password="y" * 32,
+    )
+    changed_smtp_password = staging_settings(
+        smtp_username="relay-user",
+        smtp_password="z" * 32,
+    )
+
+    digest = cli._outbox_configuration_digest(settings)
+
+    assert len(digest) == 64
+    assert digest != cli._outbox_configuration_digest(changed_ttl)
+    assert digest != cli._outbox_configuration_digest(changed_clinic)
+    assert digest != cli._outbox_configuration_digest(changed_clinic_name)
+    assert digest != cli._outbox_configuration_digest(changed_service_name)
+    assert digest != cli._outbox_configuration_digest(changed_smtp_host)
+    assert cli._outbox_configuration_digest(smtp_settings) != cli._outbox_configuration_digest(
+        changed_smtp_password
+    )
+
+
+@pytest.mark.parametrize(
+    ("probe", "selected_loader", "rejected_loader"),
+    (
+        (
+            "runtime-outbox-configuration-sha256",
+            "get_settings",
+            "get_outbox_settings",
+        ),
+        (
+            "outbox-configuration-sha256",
+            "get_outbox_settings",
+            "get_settings",
+        ),
+    ),
+)
+def test_outbox_configuration_probe_loads_the_matching_service_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    probe: str,
+    selected_loader: str,
+    rejected_loader: str,
+) -> None:
+    settings = staging_settings()
+    monkeypatch.setattr(cli, selected_loader, lambda: settings)
+
+    def reject_wrong_environment() -> None:
+        raise AssertionError("loaded the other service's environment")
+
+    monkeypatch.setattr(cli, rejected_loader, reject_wrong_environment)
+
+    cli.deployment_probe([probe])
+
+    assert capsys.readouterr().out.strip() == cli._outbox_configuration_digest(settings)
 
 
 def test_sqlite_backup_rejects_prefix_lookalike_backend() -> None:
@@ -243,6 +354,121 @@ def test_audit_pruning_rejects_same_role_with_different_query_options(
     assert "separate roles" in capsys.readouterr().err
 
 
+def test_audit_pruning_rejects_a_different_database_target(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runtime_database_url = f"sqlite+pysqlite:///{tmp_path / 'runtime.db'}"
+    maintenance_database_url = f"sqlite+pysqlite:///{tmp_path / 'other-clinic.db'}"
+    settings = Settings(
+        environment="development",
+        database_url=runtime_database_url,
+        maintenance_database_url=maintenance_database_url,
+    )
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+
+    with pytest.raises(SystemExit):
+        cli.maintenance(["prune-audit"])
+
+    assert "must target the same database" in capsys.readouterr().err
+
+
+def test_audit_pruning_compares_live_targets_after_url_query_parsing(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    settings = Settings(
+        environment="development",
+        database_url=(
+            "postgresql+psycopg://runtime@declared:5432/portal?dbname=runtime_actual"
+        ),
+        maintenance_database_url=(
+            "postgresql+psycopg://maintenance@declared:5432/portal"
+            "?dbname=maintenance_actual"
+        ),
+    )
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+
+    class FakeEngine:
+        def __init__(self, database_name: str) -> None:
+            self.database_name = database_name
+            self.dialect = SimpleNamespace(name="postgresql")
+
+        def dispose(self) -> None:
+            pass
+
+    def fake_create_portal_engine(database_url: str, **_: object) -> FakeEngine:
+        database_name = "maintenance_actual" if "maintenance@" in database_url else "runtime_actual"
+        return FakeEngine(database_name)
+
+    def fake_identity(
+        engine: FakeEngine,
+        *,
+        configured_username: str | None,
+        expected_search_path: str,
+    ) -> tuple[str, str, str, str, bool, bool]:
+        assert configured_username is not None
+        assert expected_search_path == "pg_catalog,public"
+        return ("cluster", "42", engine.database_name, configured_username, True, True)
+
+    monkeypatch.setattr(cli, "create_portal_engine", fake_create_portal_engine)
+    monkeypatch.setattr(cli, "create_session_factory", lambda engine: engine)
+    monkeypatch.setattr(cli, "_postgresql_connection_identity", fake_identity)
+
+    with pytest.raises(SystemExit):
+        cli.maintenance(["prune-audit"])
+
+    assert "connect to different databases" in capsys.readouterr().err
+
+
+def test_production_audit_pruning_requires_tls_on_both_live_connections(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    settings = production_settings(
+        database_url="postgresql+psycopg://runtime@localhost:5432/portal",
+        maintenance_database_url=(
+            "postgresql+psycopg://maintenance@localhost:5432/portal"
+        ),
+        database_maintenance_role="maintenance",
+    )
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+
+    class FakeEngine:
+        dialect = SimpleNamespace(name="postgresql")
+
+        def dispose(self) -> None:
+            pass
+
+    def fake_identity(
+        engine: FakeEngine,
+        *,
+        configured_username: str | None,
+        expected_search_path: str,
+    ) -> tuple[str, str, str, str, bool, bool]:
+        del engine
+        assert configured_username is not None
+        assert expected_search_path == "pg_catalog,public"
+        return (
+            "cluster",
+            "42",
+            "portal",
+            configured_username,
+            configured_username == "maintenance",
+            True,
+        )
+
+    monkeypatch.setattr(cli, "create_portal_engine", lambda *args, **kwargs: FakeEngine())
+    monkeypatch.setattr(cli, "create_session_factory", lambda engine: engine)
+    monkeypatch.setattr(cli, "_postgresql_connection_identity", fake_identity)
+
+    with pytest.raises(SystemExit):
+        cli.maintenance(["prune-audit"])
+
+    assert "requires TLS for both database connections" in capsys.readouterr().err
+
+
 def test_audit_export_cli_emits_ordered_jsonl(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -272,6 +498,28 @@ def test_audit_export_cli_emits_ordered_jsonl(
     assert exported["clinic_id"] == "clinic-a"
 
 
+def test_outbox_status_uses_the_reduced_worker_settings(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = f"sqlite+pysqlite:///{tmp_path / 'outbox-status.db'}"
+    settings = development_settings(database_url=database_url)
+    engine = create_portal_engine(database_url)
+    upgrade_to_head(engine)
+    engine.dispose()
+
+    def reject_web_settings() -> Settings:
+        raise AssertionError("outbox status must not load the web secret bundle")
+
+    monkeypatch.setattr(cli, "get_settings", reject_web_settings)
+    monkeypatch.setattr(cli, "get_outbox_settings", lambda: settings)
+
+    cli.maintenance(["outbox-status"])
+
+    assert capsys.readouterr().out == "outbox is empty\n"
+
+
 def test_outbox_worker_survives_a_transient_database_fault(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -297,7 +545,7 @@ def test_outbox_worker_survives_a_transient_database_fault(
         database_url=f"sqlite+pysqlite:///{tmp_path / 'worker.db'}",
         outbox_encryption_secret=OUTBOX_ENCRYPTION_SECRET,
     )
-    monkeypatch.setattr(cli, "get_settings", lambda: worker_settings)
+    monkeypatch.setattr(cli, "get_outbox_settings", lambda: worker_settings)
     monkeypatch.setattr(cli, "build_portal_email_sender", lambda _settings: object())
     monkeypatch.setattr(cli, "process_one_delivery", flaky_delivery)
     monkeypatch.setattr(cli, "sleep", lambda _seconds: None)
@@ -328,7 +576,7 @@ def test_outbox_worker_uses_the_active_key_from_a_keyring(
     def capture_delivery(*args: object, **kwargs: object) -> None:
         delivery_arguments.update(kwargs)
 
-    monkeypatch.setattr(cli, "get_settings", lambda: worker_settings)
+    monkeypatch.setattr(cli, "get_outbox_settings", lambda: worker_settings)
     monkeypatch.setattr(cli, "build_portal_email_sender", lambda _settings: object())
     monkeypatch.setattr(cli, "process_one_delivery", capture_delivery)
 

@@ -1,0 +1,39 @@
+services:
+  database:
+    image: ${PORTAL_TEST_POSTGRES_IMAGE:?Set PORTAL_TEST_POSTGRES_IMAGE}
+    environment:
+      POSTGRES_DB: carlos_portal
+      POSTGRES_PASSWORD: database-admin-test-password
+      # The bootstrap identity remains the only superuser. The policy connects as a separately
+      # created non-superuser database owner.
+      POSTGRES_USER: portal_cluster_admin
+    volumes:
+      - type: bind
+        source: ${PORTAL_TEST_SERVER_CERT_FILE:?Set PORTAL_TEST_SERVER_CERT_FILE}
+        target: /run/postgresql-test-tls/server.crt
+        read_only: true
+      - type: bind
+        source: ${PORTAL_TEST_SERVER_KEY_FILE:?Set PORTAL_TEST_SERVER_KEY_FILE}
+        target: /run/postgresql-test-tls/server.key
+        read_only: true
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/postgresql-test-tls/server.crt
+      - -c
+      - ssl_key_file=/run/postgresql-test-tls/server.key
+      - -c
+      - password_encryption=scram-sha-256
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U portal_cluster_admin -d carlos_portal
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      portal:
+        aliases:
+          - production-test-database

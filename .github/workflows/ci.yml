@@ -29,7 +29,7 @@ jobs:
         python-version: ["3.11", "3.12"]
     services:
       postgres:
-        image: postgres:16@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20
+        image: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
         env:
           POSTGRES_DB: carlos_portal
           POSTGRES_PASSWORD: carlos_portal
@@ -73,12 +73,21 @@ jobs:
         if: matrix.python-version == '3.12'
         run: |
           npm ci
+          # Playwright downloads its own pinned Chromium. Avoid allowing the
+          # runner's unrelated Chrome apt source to break OS dependency setup.
+          { grep -rlZF 'https://dl.google.com/linux/chrome' /etc/apt/sources.list.d \
+              || test "$?" -eq 1; } \
+            | sudo xargs -0r rm -f
           npx playwright install --with-deps chromium
 
       - name: Audit dependencies
         run: |
           python -m pip_audit --strict --require-hashes --progress-spinner off -r requirements-runtime.lock
           python -m pip_audit --strict --require-hashes --progress-spinner off -r requirements.lock
+
+      - name: Audit browser dependencies
+        if: matrix.python-version == '3.12'
+        run: npm audit --audit-level=high
 
       - name: Run Ruff
         run: python -m ruff check .
@@ -167,6 +176,7 @@ jobs:
           PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_SECRET: "ci-unlock-secret-key-0000000000001"
           PYTHONPATH: "."
           PORTAL_BASE_URL: "http://127.0.0.1:8090"
+          PORTAL_BROWSER_FIXTURE_FILE: "/tmp/patient-portal-browser-fixtures.json"
           PORTAL_USE_DEVELOPMENT_MFA_CODE: "true"
           PORTAL_SCREENSHOT_DIR: "/tmp/patient-portal-playwright"
         run: |
@@ -207,3 +217,20 @@ jobs:
           python -m pip install --require-hashes -r requirements-runtime.lock
           python -m pip install --no-deps dist/*.whl
           python -m pip check
+
+      - name: Build production container
+        if: matrix.python-version == '3.12'
+        run: |
+          docker build \
+            --build-arg "OCI_REVISION=$GITHUB_SHA" \
+            --tag "carlos-patient-portal:$GITHUB_SHA" \
+            .
+          test "$(docker image inspect --format '{{.Config.User}}' "carlos-patient-portal:$GITHUB_SHA")" = "10001:10001"
+          docker run --rm --entrypoint python "carlos-patient-portal:$GITHUB_SHA" \
+            -c 'import carlos_patient_portal; print(carlos_patient_portal.__file__)'
+
+      - name: Run production stack smoke test
+        if: matrix.python-version == '3.12'
+        env:
+          PORTAL_IMAGE: carlos-patient-portal:${{ github.sha }}
+        run: tests/production_stack_smoke.sh
