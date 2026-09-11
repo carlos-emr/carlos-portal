@@ -650,7 +650,7 @@ if "$repository_root/scripts/production-deploy" preflight \
   printf '%s\n' 'preflight accepted an elevated runtime database role' >&2
   exit 1
 fi
-grep -F 'production database runtime, schema-owner, and maintenance roles must differ' \
+grep -F 'deployment probe configuration is invalid' \
   "$test_root/elevated.log"
 PORTAL_ENV_FILE="$test_root/production.env"
 
