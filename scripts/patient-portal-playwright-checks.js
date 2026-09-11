@@ -169,28 +169,29 @@ function sleep(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
-function readCapturedMfaCode() {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+function readCapturedMfaCode(expectedRecipient) {
+  const expectedSubject = 'Your CARLOS Patient Portal verification code';
+  for (let attempt = 0; attempt < 40; attempt += 1) {
     try {
       const message = runMailCommand('read', 'latest');
       const codeMatch = message.match(/(?:^|\r?\n)(\d{6})(?:\r?\n|$)/);
       const recipientMatch = message.match(/^Envelope-To:\s*(\S+)\s*$/m);
       const subjectMatch = message.match(/^Subject:\s*(.+)\s*$/m);
-      if (codeMatch && recipientMatch && subjectMatch) {
-        return {
-          code: codeMatch[1],
-          recipient: recipientMatch[1],
-          subject: subjectMatch[1],
-        };
+      if (
+        codeMatch
+        && recipientMatch?.[1] === expectedRecipient
+        && subjectMatch?.[1] === expectedSubject
+      ) {
+        return codeMatch[1];
       }
     } catch (error) {
-      if (attempt === 19) {
+      if (attempt === 39) {
         throw error;
       }
     }
     sleep(250);
   }
-  throw new Error('Captured MFA email did not arrive within five seconds');
+  throw new Error('Expected captured MFA email did not arrive within ten seconds');
 }
 
 async function readBrowserMfaCode(page, expectedRecipient) {
@@ -202,16 +203,7 @@ async function readBrowserMfaCode(page, expectedRecipient) {
     return code;
   }
 
-  const capturedMail = readCapturedMfaCode();
-  assert(
-    capturedMail.recipient === expectedRecipient,
-    `unexpected MFA recipient ${capturedMail.recipient}`
-  );
-  assert(
-    capturedMail.subject === 'Your CARLOS Patient Portal verification code',
-    `unexpected MFA subject ${capturedMail.subject}`
-  );
-  return capturedMail.code;
+  return readCapturedMfaCode(expectedRecipient);
 }
 
 function screenshotPath(name) {
