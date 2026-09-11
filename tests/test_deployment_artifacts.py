@@ -160,6 +160,8 @@ def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
     assert "compose --profile operations run --rm migrate" in script
     assert "compose --profile operations run --rm database-policy" in script
     assert "compose --profile operations run --rm preflight" in script
+    assert "--entrypoint carlos-patient-portal-maintenance outbox outbox-status" in script
+    assert "run --rm maintenance outbox-status" not in script
     assert "verify_database_artifacts" in script
     assert "verify_database_targets" in script
     assert "verify_outbox_configuration" in script
