@@ -181,6 +181,7 @@ jobs:
           PORTAL_USE_DEVELOPMENT_MFA_CODE: "true"
           PORTAL_SCREENSHOT_DIR: "/tmp/patient-portal-playwright"
         run: |
+          npm run test:patient-portal-mail-capture
           mkdir -p "$PORTAL_SCREENSHOT_DIR"
           rm -f /tmp/patient-portal-browser.db
           python -m alembic -c alembic.ini upgrade head

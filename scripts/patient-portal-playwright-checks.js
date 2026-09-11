@@ -25,6 +25,7 @@ const { isIP } = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { readCapturedMfaCode } = require('./patient-portal-mail-capture');
 
 const allowNonLocalBaseUrl = (
   process.env.PORTAL_ALLOW_NON_LOCAL_BASE_URL
@@ -169,31 +170,6 @@ function sleep(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
-function readCapturedMfaCode(expectedRecipient) {
-  const expectedSubject = 'Your CARLOS Patient Portal verification code';
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    try {
-      const message = runMailCommand('read', 'latest');
-      const codeMatch = message.match(/(?:^|\r?\n)(\d{6})(?:\r?\n|$)/);
-      const recipientMatch = message.match(/^Envelope-To:\s*(\S+)\s*$/m);
-      const subjectMatch = message.match(/^Subject:\s*(.+)\s*$/m);
-      if (
-        codeMatch
-        && recipientMatch?.[1] === expectedRecipient
-        && subjectMatch?.[1] === expectedSubject
-      ) {
-        return codeMatch[1];
-      }
-    } catch (error) {
-      if (attempt === 39) {
-        throw error;
-      }
-    }
-    sleep(250);
-  }
-  throw new Error('Expected captured MFA email did not arrive within ten seconds');
-}
-
 async function readBrowserMfaCode(page, expectedRecipient) {
   if (useDevelopmentMfaCode) {
     const code = await page.locator('[data-development-mfa-code]').getAttribute(
@@ -203,7 +179,11 @@ async function readBrowserMfaCode(page, expectedRecipient) {
     return code;
   }
 
-  return readCapturedMfaCode(expectedRecipient);
+  return readCapturedMfaCode({
+    expectedRecipient,
+    readLatest: () => runMailCommand('read', 'latest'),
+    wait: sleep,
+  });
 }
 
 function screenshotPath(name) {
