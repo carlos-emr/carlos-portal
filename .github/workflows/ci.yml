@@ -166,13 +166,14 @@ jobs:
           PORTAL_TEST_POSTGRES_URL: "postgresql+psycopg://carlos_portal:carlos_portal@127.0.0.1:5432/carlos_portal"
         run: python -m pytest -q tests/test_postgresql_integration.py
 
-      - name: Run patient portal Playwright smoke test
+      - name: Run patient portal Playwright browser checks
         if: matrix.python-version == '3.12'
         env:
           PATIENT_PORTAL_ENVIRONMENT: development
           PATIENT_PORTAL_DATABASE_URL: "sqlite+pysqlite:////tmp/patient-portal-browser.db"
           PATIENT_PORTAL_IDENTITY_PROOF_SECRET: "ci-identity-proof-secret-0000000001"
           PATIENT_PORTAL_AUDIT_HASH_SECRET: "ci-audit-hash-secret-00000000000001"
+          PATIENT_PORTAL_SESSION_SECRET: "ci-session-secret-playwright-only-000001"
           PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_SECRET: "ci-unlock-secret-key-0000000000001"
           PYTHONPATH: "."
           PORTAL_BASE_URL: "http://127.0.0.1:8090"
@@ -180,6 +181,7 @@ jobs:
           PORTAL_USE_DEVELOPMENT_MFA_CODE: "true"
           PORTAL_SCREENSHOT_DIR: "/tmp/patient-portal-playwright"
         run: |
+          npm run test:patient-portal-mail-capture
           mkdir -p "$PORTAL_SCREENSHOT_DIR"
           rm -f /tmp/patient-portal-browser.db
           python -m alembic -c alembic.ini upgrade head

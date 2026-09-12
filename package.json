@@ -1,7 +1,11 @@
 {
   "name": "carlos-patient-portal-browser-tests",
   "private": true,
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
+    "test:patient-portal-mail-capture": "node --test tests/patient-portal-mail-capture.test.js",
     "test:patient-portal-playwright": "node scripts/patient-portal-playwright-checks.js"
   },
   "devDependencies": {
