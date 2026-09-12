@@ -66,6 +66,18 @@ test('accepts CRLF line endings in captured MFA mail', () => {
   assert.equal(code, '222222');
 });
 
+test('matches recipients using portal email normalization', () => {
+  const code = readCapturedMfaCode({
+    expectedRecipient: '  Expected.Patient@Example.COM  ',
+    readLatest: () => capturedMessage('expected.patient@example.com', '222222'),
+    wait: () => {},
+    maxAttempts: 1,
+    pollIntervalMs: 0,
+  });
+
+  assert.equal(code, '222222');
+});
+
 test('fails when no matching MFA mail arrives', () => {
   let reads = 0;
   let waits = 0;

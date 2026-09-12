@@ -323,8 +323,9 @@ and logs out. It reads MFA codes through `/scripts/mail` by default; set
 `PORTAL_USE_DEVELOPMENT_MFA_CODE=true` when the server exposes development codes in the page.
 Override `PORTAL_BASE_URL`, `PORTAL_TEST_USER`, `PORTAL_TEST_PASSWORD`, `PORTAL_EXPECTED_USER`,
 `PORTAL_EXPECTED_EMAIL`, `PORTAL_MAIL_COMMAND`, `PORTAL_BROWSER_FIXTURE_FILE`, or
-`PORTAL_SCREENSHOT_DIR` when the local setup differs from the defaults. The test refuses public
-hosts unless `PORTAL_ALLOW_NON_LOCAL_BASE_URL=true` is deliberately set.
+`PORTAL_SCREENSHOT_DIR` when the local setup differs from the defaults. Set `PORTAL_CHROME_PATH` to
+use a particular Chrome or Chromium executable. The test refuses public hosts unless
+`PORTAL_ALLOW_NON_LOCAL_BASE_URL=true` is deliberately set.
 
 `PATIENT_PORTAL_CLINIC_ID` and `PATIENT_PORTAL_CLINIC_NAME` have development placeholders.
 Non-development startup rejects those placeholders. The configured clinic is enforced on login

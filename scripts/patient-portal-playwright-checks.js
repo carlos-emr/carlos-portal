@@ -15,12 +15,12 @@
  *   PORTAL_USE_DEVELOPMENT_MFA_CODE=true to read codes rendered by a development server
  *   PORTAL_BROWSER_FIXTURE_FILE=/tmp/patient-portal-browser-fixtures.json
  *   PORTAL_SCREENSHOT_DIR=/tmp
- *   CHROME_PATH=/path/to/chrome-or-chromium
+ *   PORTAL_CHROME_PATH=/path/to/chrome-or-chromium
  *   PORTAL_ALLOW_NON_LOCAL_BASE_URL=true only for an intentional non-production test target
  */
 
 const { execFileSync } = require('node:child_process');
-const { readFileSync } = require('node:fs');
+const { mkdirSync, readFileSync } = require('node:fs');
 const { isIP } = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
@@ -40,12 +40,14 @@ const changedPassword = ['Orbit', 'Lantern', 'Meadow', '49!'].join('-');
 const mailCommand = process.env.PORTAL_MAIL_COMMAND || '/scripts/mail';
 const useDevelopmentMfaCode = process.env.PORTAL_USE_DEVELOPMENT_MFA_CODE === 'true';
 const screenshotDir = path.resolve(process.env.PORTAL_SCREENSHOT_DIR || os.tmpdir());
-const chromePath = process.env.CHROME_PATH || '';
+const chromePath = process.env.PORTAL_CHROME_PATH || process.env.CHROME_PATH || '';
 const fixturePath = process.env.PORTAL_BROWSER_FIXTURE_FILE
   || path.join(os.tmpdir(), 'patient-portal-browser-fixtures.json');
 const browserFixtures = JSON.parse(readFileSync(fixturePath, 'utf8'));
 const activationFixture = browserFixtures.activation;
 const passwordResetFixture = browserFixtures.passwordReset;
+
+mkdirSync(screenshotDir, { recursive: true });
 
 assert(
   activationFixture

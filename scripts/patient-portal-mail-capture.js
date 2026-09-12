@@ -10,6 +10,7 @@ function readCapturedMfaCode({
   pollIntervalMs = 250,
   expectedSubject = DEFAULT_MFA_EMAIL_SUBJECT,
 }) {
+  const normalizedExpectedRecipient = expectedRecipient.trim().toLowerCase();
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
       const message = readLatest();
@@ -18,7 +19,7 @@ function readCapturedMfaCode({
       const subjectMatch = message.match(/^Subject:\s*(.+)\s*$/m);
       if (
         codeMatch
-        && recipientMatch?.[1] === expectedRecipient
+        && recipientMatch?.[1].toLowerCase() === normalizedExpectedRecipient
         && subjectMatch?.[1].trim() === expectedSubject
       ) {
         return codeMatch[1];
