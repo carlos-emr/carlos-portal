@@ -65,6 +65,8 @@ The portal leans on two PostgreSQL features that MariaDB does not offer equivale
 - **Partial unique indexes** (`WHERE status = 'pending'` or `WHERE status = 'prepared'`), used to
   enforce one pending and one delivery-prepared invite per patient, one pending reset token per
   account, one pending contact review per account, and one pending email-change request per account.
+  A first prepared invite also reserves the pending-invite slot, preventing races with legacy
+  invite creation while allowing a prepared resend beside its original pending invite.
   These are correctness invariants held by the database rather than by application code, and
   MariaDB has no partial-index equivalent — they would become application-level checks with a race
   window.

@@ -1,23 +1,52 @@
 """Seed the isolated development database used by the Playwright CI smoke test."""
 
+import json
+import os
+import tempfile
 from datetime import date, timedelta
+from pathlib import Path
 
 from carlos_patient_portal.accounts import ActivationRateLimit, activate_patient_account
+from carlos_patient_portal.auth import request_password_reset
 from carlos_patient_portal.config import get_settings
 from carlos_patient_portal.database import create_portal_engine, create_session_factory
 from carlos_patient_portal.identity import IdentityProof
 from carlos_patient_portal.invites import create_invite
+from carlos_patient_portal.runtime import auth_policy_from_settings
+from carlos_patient_portal.token_keys import PortalTokenKeys
 from carlos_patient_portal.unlock_secrets import create_unlock_secret
 
 DEVELOPMENT_PASSWORD = "-".join(("Nectar", "Sparrow", "Quartz", "87!"))
+ACTIVATION_PASSWORD = "-".join(("Cedar", "River", "Comet", "62!"))
+ACTIVATION_EMAIL = "activation.patient@example.com"
+ACTIVATION_DATE_OF_BIRTH = date(1975, 9, 14)
+ACTIVATION_HEALTH_CARD_NUMBER = "EFGH 9876-5432"
+ACTIVATION_USERNAME = "PlaywrightActivate"
+RESET_OLD_PASSWORD = "-".join(("Willow", "Harbour", "Flint", "38!"))
+RESET_NEW_PASSWORD = "-".join(("Maple", "Voyage", "Star", "74!"))
+RESET_EMAIL = "reset.patient@example.com"
+RESET_DATE_OF_BIRTH = date(1968, 2, 29)
+RESET_HEALTH_CARD_NUMBER = "IJKL 2468-1357"
+RESET_USERNAME = "PlaywrightReset"
 
 
 def main() -> None:
     settings = get_settings()
+    if settings.session_secret is None:
+        raise RuntimeError(
+            "PATIENT_PORTAL_SESSION_SECRET is required to seed browser reset fixtures"
+        )
+    token_keys = PortalTokenKeys.derive(settings.session_secret.get_secret_value())
     keyring = settings.resolved_unlock_secret_keyring
     encryption_secret = keyring[settings.unlock_secret_active_key_id]
     engine = create_portal_engine(settings.database_url)
     session_factory = create_session_factory(engine)
+    fixture_path = Path(
+        os.environ.get(
+            "PORTAL_BROWSER_FIXTURE_FILE",
+            str(Path(tempfile.gettempdir()) / "patient-portal-browser-fixtures.json"),
+        )
+    )
     try:
         with session_factory() as session:
             with session.begin():
@@ -82,6 +111,97 @@ def main() -> None:
                         label=label,
                         source_reference=f"ci-message-{index}",
                     )
+                _, activation_invite_token = create_invite(
+                    session,
+                    5678,
+                    "CI browser activation",
+                    clinic_id=settings.clinic_id,
+                    actor_id="ci-seed",
+                    identity_proof=IdentityProof(
+                        email=ACTIVATION_EMAIL,
+                        date_of_birth=ACTIVATION_DATE_OF_BIRTH,
+                        health_card_number=ACTIVATION_HEALTH_CARD_NUMBER,
+                    ),
+                    proof_secret=settings.identity_proof_secret.get_secret_value(),
+                )
+                _, reset_invite_token = create_invite(
+                    session,
+                    9012,
+                    "CI browser password reset",
+                    clinic_id=settings.clinic_id,
+                    actor_id="ci-seed",
+                    identity_proof=IdentityProof(
+                        email=RESET_EMAIL,
+                        date_of_birth=RESET_DATE_OF_BIRTH,
+                        health_card_number=RESET_HEALTH_CARD_NUMBER,
+                    ),
+                    proof_secret=settings.identity_proof_secret.get_secret_value(),
+                )
+                activate_patient_account(
+                    session,
+                    invite_code=reset_invite_token,
+                    identity_proof=IdentityProof(
+                        email=RESET_EMAIL,
+                        date_of_birth=RESET_DATE_OF_BIRTH,
+                        health_card_number=RESET_HEALTH_CARD_NUMBER,
+                    ),
+                    username=RESET_USERNAME,
+                    password=RESET_OLD_PASSWORD,
+                    proof_secret=settings.identity_proof_secret.get_secret_value(),
+                    client_reference_hash="1" * 64,
+                    rate_limit=ActivationRateLimit(
+                        failure_window=timedelta(hours=1),
+                        max_failures_per_invite=10,
+                        max_failures_per_client=50,
+                    ),
+                    expected_clinic_id=settings.clinic_id,
+                )
+                reset_result = request_password_reset(
+                    session,
+                    username=RESET_USERNAME,
+                    email=RESET_EMAIL,
+                    client_reference_hash="2" * 64,
+                    policy=auth_policy_from_settings(settings),
+                    reset_token_secret=token_keys.password_reset,
+                    clinic_id=settings.clinic_id,
+                )
+                if reset_result.reset_token is None:
+                    raise RuntimeError("browser password-reset token was not created")
+        fixture_path.parent.mkdir(parents=True, exist_ok=True)
+        fixture_payload = json.dumps(
+            {
+                "activation": {
+                    "inviteCode": activation_invite_token,
+                    "email": ACTIVATION_EMAIL,
+                    "dateOfBirth": ACTIVATION_DATE_OF_BIRTH.isoformat(),
+                    "healthCardNumber": ACTIVATION_HEALTH_CARD_NUMBER,
+                    "username": ACTIVATION_USERNAME,
+                    "password": ACTIVATION_PASSWORD,
+                },
+                "passwordReset": {
+                    "email": RESET_EMAIL,
+                    "username": RESET_USERNAME,
+                    "oldPassword": RESET_OLD_PASSWORD,
+                    "newPassword": RESET_NEW_PASSWORD,
+                    "token": reset_result.reset_token,
+                },
+            }
+        )
+        # The fixture contains one-time invite/reset tokens and test passwords. Write it under a
+        # random 0600 name and atomically replace the predictable path, avoiding both symlink
+        # following and a brief readable window if an old path had permissive mode bits.
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=fixture_path.parent,
+            prefix=f".{fixture_path.name}.",
+        )
+        temporary_path = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as fixture_file:
+                fixture_file.write(fixture_payload)
+            os.replace(temporary_path, fixture_path)
+        except BaseException:
+            temporary_path.unlink(missing_ok=True)
+            raise
     finally:
         engine.dispose()
 

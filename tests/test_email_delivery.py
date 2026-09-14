@@ -12,7 +12,7 @@ from carlos_patient_portal.email_delivery import (
     SmtpPortalEmailSender,
     build_portal_email_sender,
 )
-from tests.support import TEST_STAFF_ASSERTION_PUBLIC_KEY
+from tests.support import TEST_STAFF_ASSERTION_PUBLIC_KEYRING
 
 
 class RecordingSmtp:
@@ -204,7 +204,7 @@ def test_non_development_smtp_configuration_requires_from_address() -> None:
             environment="staging",
             smtp_host="mail.internal",
             internal_api_token="c" * 32,
-            internal_staff_assertion_public_key=TEST_STAFF_ASSERTION_PUBLIC_KEY,
+            internal_staff_assertion_public_keyring=TEST_STAFF_ASSERTION_PUBLIC_KEYRING,
             outbox_encryption_secret="o" * 32,
             sms_webhook_url="https://sms.example.test/messages",
             sms_webhook_token="sms-webhook-token-value-32-characters",
@@ -224,7 +224,7 @@ def test_non_development_smtp_requires_https_public_base_url() -> None:
             smtp_from_address="portal@example.test",
             smtp_starttls=True,
             internal_api_token="c" * 32,
-            internal_staff_assertion_public_key=TEST_STAFF_ASSERTION_PUBLIC_KEY,
+            internal_staff_assertion_public_keyring=TEST_STAFF_ASSERTION_PUBLIC_KEYRING,
             outbox_encryption_secret="o" * 32,
             sms_webhook_url="https://sms.example.test/messages",
             sms_webhook_token="sms-webhook-token-value-32-characters",
@@ -242,7 +242,7 @@ def test_non_development_smtp_requires_https_public_base_url() -> None:
             smtp_from_address="portal@example.test",
             smtp_starttls=True,
             internal_api_token="c" * 32,
-            internal_staff_assertion_public_key=TEST_STAFF_ASSERTION_PUBLIC_KEY,
+            internal_staff_assertion_public_keyring=TEST_STAFF_ASSERTION_PUBLIC_KEYRING,
             outbox_encryption_secret="o" * 32,
             sms_webhook_url="https://sms.example.test/messages",
             sms_webhook_token="sms-webhook-token-value-32-characters",
@@ -262,7 +262,7 @@ def test_non_development_smtp_requires_https_public_base_url() -> None:
         smtp_from_address="portal@example.test",
         smtp_starttls=True,
         internal_api_token="c" * 32,
-        internal_staff_assertion_public_key=TEST_STAFF_ASSERTION_PUBLIC_KEY,
+        internal_staff_assertion_public_keyring=TEST_STAFF_ASSERTION_PUBLIC_KEYRING,
         outbox_encryption_secret="o" * 32,
         sms_webhook_url="https://sms.example.test/messages",
         sms_webhook_token="sms-webhook-token-value-32-characters",
@@ -284,7 +284,7 @@ def test_non_development_smtp_requires_transport_encryption() -> None:
             smtp_host="mail.internal",
             smtp_from_address="portal@example.test",
             internal_api_token="c" * 32,
-            internal_staff_assertion_public_key=TEST_STAFF_ASSERTION_PUBLIC_KEY,
+            internal_staff_assertion_public_keyring=TEST_STAFF_ASSERTION_PUBLIC_KEYRING,
             outbox_encryption_secret="o" * 32,
             sms_webhook_url="https://sms.example.test/messages",
             sms_webhook_token="sms-webhook-token-value-32-characters",

@@ -68,6 +68,7 @@ python -m pip install --no-build-isolation --no-deps -e .
 export PORTAL_DEMO_DIRECTORY="$(mktemp -d)"
 export PATIENT_PORTAL_ENVIRONMENT=development
 export PATIENT_PORTAL_DATABASE_URL="sqlite+pysqlite:///${PORTAL_DEMO_DIRECTORY}/portal.db"
+export PATIENT_PORTAL_SESSION_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 export PATIENT_PORTAL_IDENTITY_PROOF_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 export PATIENT_PORTAL_AUDIT_HASH_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 export PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
@@ -108,6 +109,12 @@ pip install --no-deps dist/carlos_patient_portal-0.1.0-py3-none-any.whl
 carlos-patient-portal-migrate
 ```
 
+The repository also ships a digest-pinned production container, separate web/migration/outbox
+services, least-privilege database-policy job, and deploy/rollback automation. See
+[`deploy/README.md`](deploy/README.md) for the production deployment path.
+Real patient information additionally requires the per-clinic evidence gates in
+[`deploy/REAL_DATA_READINESS.md`](deploy/REAL_DATA_READINESS.md).
+
 Refresh the lock files after dependency changes with:
 
 ```bash
@@ -137,8 +144,8 @@ Python Packaging Advisory Database. Keep both generated locks in the same depend
   PYSEC-2026-3552, 3553, and 3554; only 50.0.0 fixes all three, so the floor is 50.0.0. The portal
   uses it for AES-256-GCM and HKDF in `unlock_secrets`, so treat advisories against it as
   release-blocking rather than routine.
-- The CI PostgreSQL service uses a digest-pinned `postgres:16` image. Update the tag and digest
-  together after reviewing upstream PostgreSQL image changes.
+- The CI PostgreSQL service uses a digest-pinned `postgres:16.15-bookworm` image. Update the tag and
+  digest together after reviewing upstream PostgreSQL image changes.
 
 ## Run
 
@@ -310,11 +317,15 @@ account and starting the portal:
 npm run test:patient-portal-playwright
 ```
 
-The test clears the local capture inbox, signs in as the configurable development patient, retrieves
-the MFA code through `/scripts/mail`, verifies the dashboard on desktop and mobile viewports, and
-logs out. Override `PORTAL_BASE_URL`, `PORTAL_TEST_USER`, `PORTAL_TEST_PASSWORD`,
-`PORTAL_MAIL_COMMAND`, or `PORTAL_SCREENSHOT_DIR` when the local setup differs from the defaults.
-The test refuses public hosts unless `ALLOW_NON_LOCAL_BASE_URL=true` is deliberately set.
+The test clears the local capture inbox, exercises account activation and password recovery, signs
+in as the configurable development patient, verifies the dashboard on desktop and mobile viewports,
+and logs out. It reads MFA codes through `/scripts/mail` by default; set
+`PORTAL_USE_DEVELOPMENT_MFA_CODE=true` when the server exposes development codes in the page.
+Override `PORTAL_BASE_URL`, `PORTAL_TEST_USER`, `PORTAL_TEST_PASSWORD`, `PORTAL_EXPECTED_USER`,
+`PORTAL_EXPECTED_EMAIL`, `PORTAL_MAIL_COMMAND`, `PORTAL_BROWSER_FIXTURE_FILE`, or
+`PORTAL_SCREENSHOT_DIR` when the local setup differs from the defaults. Set `PORTAL_CHROME_PATH` to
+use a particular Chrome or Chromium executable. The test refuses public hosts unless
+`PORTAL_ALLOW_NON_LOCAL_BASE_URL=true` is deliberately set.
 
 `PATIENT_PORTAL_CLINIC_ID` and `PATIENT_PORTAL_CLINIC_NAME` have development placeholders.
 Non-development startup rejects those placeholders. The configured clinic is enforced on login
@@ -328,7 +339,7 @@ hyphens, and 20 characters or fewer.
 Non-development deployments must set `PATIENT_PORTAL_INTERNAL_HEALTH_TOKEN`,
 `PATIENT_PORTAL_SESSION_SECRET`, `PATIENT_PORTAL_IDENTITY_PROOF_SECRET`,
 `PATIENT_PORTAL_AUDIT_HASH_SECRET`, `PATIENT_PORTAL_INTERNAL_API_TOKEN`,
-`PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY`, SMTP, SMS, either
+`PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING`, SMTP, SMS, either
 `PATIENT_PORTAL_OUTBOX_ENCRYPTION_SECRET` or `PATIENT_PORTAL_OUTBOX_ENCRYPTION_KEYRING`, and either
 `PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_SECRET` or
 `PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_KEYRING`.
@@ -344,6 +355,30 @@ curl -H "Authorization: Bearer $PATIENT_PORTAL_INTERNAL_HEALTH_TOKEN" \
 curl -H "Authorization: Bearer $PATIENT_PORTAL_INTERNAL_HEALTH_TOKEN" \
   http://127.0.0.1:8090/internal/metrics
 ```
+
+Before a deployment may receive real patient information, run the installed preflight after
+migrations and `postgresql-audit-roles.sql`:
+
+```bash
+carlos-patient-portal-preflight
+```
+
+It exits unsuccessfully unless production policy is active, the live database is PostgreSQL over
+TLS, the packaged schema head is applied, the runtime role has no inherited privileges, database or
+schema ownership, database administration, or schema creation, the migration revision is read-only,
+the PostgreSQL search path is pinned to `pg_catalog,public`, temporary-object creation is disabled,
+and relation, column, sequence, function, grant-option, and `PUBLIC` ACLs across user schemas match
+the explicit application allowlist. Explicit user-schema ACLs and implicit object ownership for
+undeclared database roles also fail the gate. Output is secret-free JSON so the result can be
+attached to the deployment change record. The gate also verifies that the declared schema-owner,
+database-owner, and audit-maintenance roles have not gained elevated attributes, and that the
+runtime, schema-owner, and maintenance roles retain explicit database connection access while the
+maintenance role keeps only its intended audit-table read/delete access.
+
+The production deployment wrapper additionally refuses to mutate PostgreSQL unless the migration,
+runtime, audit-maintenance, and database-policy credentials resolve to the same physical cluster and
+database under their declared roles. It also verifies that the host policy SQL exactly matches the
+copy packaged in the immutable application image.
 
 Expose `/internal/health/db` and `/internal/readiness` only to trusted infrastructure such as a load
 balancer or orchestrator health probe.
@@ -490,7 +525,7 @@ rollback from dropping encryption context or lifecycle evidence. Preserve or tra
 under an approved retention and key-management procedure before retrying a downgrade.
 Migration `0002_staff_identity_audit` preflights FHIR audit events before changing schema, and
 `0004_invite_issuance_history` similarly refuses to discard superseded invite history.
-Migration `0011_atomic_invite_delivery` refuses to downgrade while an invite is prepared, because
+Migration `0012_atomic_invite_delivery` refuses to downgrade while an invite is prepared, because
 downgrading would discard the only encrypted copy of a token CARLOS may still be retrying into its
 durable email queue.
 
@@ -515,6 +550,8 @@ Apply [`deploy/postgresql-audit-roles.sql`](carlos_patient_portal/deploy/postgre
 after migrations. The web/outbox runtime role can select and append audit events but cannot update,
 delete, or truncate them. Configure `PATIENT_PORTAL_MAINTENANCE_DATABASE_URL` with the separate
 audit-maintenance role only in the offline prune job; destructive pruning refuses the runtime URL.
+For PostgreSQL, the pruning command compares the live runtime and maintenance database identities
+after connection parameters are resolved, and production pruning requires TLS on both sessions.
 Checkpoint each successful JSONL export by its final `id` and ship it to an access-controlled,
 append-only centralized sink before advancing the checkpoint.
 
@@ -578,18 +615,33 @@ The remaining secrets have deliberately different rotation behavior:
   over to the new token, then clear `_PREVIOUS` and restart the portal again. Both values are
   accepted while `_PREVIOUS` is set, so leaving it configured permanently defeats the rotation;
   treat clearing it as part of the same change.
+- Rotate CARLOS assertion keys by adding the new public key under a new `kid` in
+  `PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING`, restarting the portal, moving the
+  caller to that `kid`, then removing the old member after every assertion issued under it has
+  expired. Never reuse a `kid` for different key material. The portal accepts both keys during the
+  overlap and selects exactly the key named by the signed assertion.
 
 ## CARLOS Internal API
 
 Set `PATIENT_PORTAL_INTERNAL_API_TOKEN` to enable the production staff/service contract. Requests
 must include its Bearer token and an `X-CARLOS-Staff-Assertion`. Configure
-`PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY` with CARLOS's raw Ed25519 public key encoded as
-unpadded base64url. CARLOS signs a compact `<payload>.<signature>` assertion for the authenticated
-provider. The JSON payload must contain exactly `iss`, `aud`, `iat`, `exp`, `jti`, `provider_id`,
-`provider_name`, `clinic_id`, and `permissions`; use issuer `carlos`, audience
+`PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING` as a JSON object mapping stable key IDs to
+raw Ed25519 public keys encoded as unpadded base64url. CARLOS signs a compact
+`<payload>.<signature>` assertion for the authenticated provider. The JSON payload must contain
+exactly `iss`, `aud`, `iat`, `exp`, `jti`, `kid`, `request_hash`, `provider_id`, `provider_name`,
+`clinic_id`, and `permissions`; use issuer `carlos`, audience
 `carlos-patient-portal-internal-api`, a canonical UUID `jti`, and a lifetime no longer than 120
-seconds. The portal verifies the signature, expiry, clinic, and permission before handling a staff
-request. CARLOS must keep the Ed25519 private key outside the portal deployment.
+seconds. Assertions without `kid` and `request_hash` are accepted only in development. The portal
+verifies the signature, expiry, clinic, request binding, one-time nonce, and permission before
+handling a staff request. CARLOS must keep every Ed25519 private key outside the portal deployment.
+
+`request_hash` is the lowercase SHA-256 hexadecimal digest of four length-framed byte strings:
+uppercase HTTP method, raw URL path, raw query string without `?`, and exact request body. For each
+component, hash its unsigned eight-byte big-endian length followed by its bytes. Empty query/body
+components still contribute an eight-byte zero length. Generate a fresh assertion and UUID for
+every attempt; the portal stores the consumed UUID before executing the operation, so retries must
+be signed again. This binds a staff credential to one exact request and makes replay protection
+effective across every portal worker through PostgreSQL.
 
 The service token still authenticates CARLOS as a workload, while the signed assertion binds the
 specific provider and permissions. Keep `/internal/carlos/` reachable only from CARLOS application
@@ -624,15 +676,19 @@ CARLOS invitation delivery uses a two-phase contract. The prepare endpoints are:
 - `POST /internal/carlos/invites/{id}/resend/prepare` for a replacement.
 
 Both require a stable `delivery_operation_id`; retrying the same operation returns the same token
-while it is prepared.
+while it is prepared and unexpired. An expired preparation returns `409` without disclosing its
+token; revoke it or let transient cleanup remove it before starting a new operation.
 A prepared token is encrypted with the portal outbox keyring and cannot activate an account. For a
 resend, the old pending token remains valid. After CARLOS has durably committed the email job, it
 calls `POST /internal/carlos/invites/{id}/commit-delivery` with the same operation id and the unique
 email `delivery_reference`. That transaction activates the new token, erases its recoverable
-ciphertext, and supersedes the old token. Exact commit retries are idempotent; changing either
+ciphertext, and supersedes the old token. Its audit event identifies the staff member committing
+delivery. Exact commit retries are idempotent; changing either
 identifier or reusing one delivery reference for another invite is a conflict. The legacy immediate
 create/resend endpoints remain available for existing development and API clients, but CARLOS must
-not use them for patient email delivery.
+not use them for patient email delivery. A database constraint reserves the pending-invite slot
+for a first preparation, preventing concurrent legacy creation from stranding that delivery.
+Prepared resends can still coexist with the pending invite they replace.
 
 Invite retention is state-specific: accepted invite records are retained with the long-term audit
 record; expired prepared, pending, revoked, and superseded records are eligible for transient

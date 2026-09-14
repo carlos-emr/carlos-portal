@@ -1,0 +1,198 @@
+name: carlos-patient-portal
+
+# PostgreSQL is intentionally external. Production data belongs in a managed, encrypted service
+# with PITR; this stack owns only the portal processes. Every application service runs the exact
+# image digest supplied in PORTAL_IMAGE.
+x-portal-service: &portal-service
+  image: ${PORTAL_IMAGE:?Set PORTAL_IMAGE to an immutable registry digest}
+  env_file:
+    - ${PORTAL_ENV_FILE:-deploy/production.env}
+  environment:
+    # Keep Uvicorn and the application on one exact proxy trust boundary. A wildcard here lets
+    # Uvicorn consume an attacker-supplied leading X-Forwarded-For value before the application can
+    # validate the immediate peer. Settings rejects non-CIDR values such as "*" fail closed.
+    PATIENT_PORTAL_TRUSTED_PROXY_CIDRS: ${PORTAL_TRUSTED_PROXY_CIDR:-172.30.80.1/32}
+    # Empty for current releases. The rollback wrapper sets this public (not private) key only
+    # while crossing back to an image that predates assertion keyrings.
+    PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY: ${PORTAL_LEGACY_STAFF_ASSERTION_PUBLIC_KEY:-}
+  volumes:
+    - type: bind
+      source: ${PORTAL_DB_CA_FILE:?Set PORTAL_DB_CA_FILE to the PostgreSQL CA certificate}
+      target: /run/secrets/postgresql-ca.pem
+      read_only: true
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  networks:
+    - portal
+  logging:
+    driver: local
+    options:
+      max-size: 10m
+      max-file: "5"
+
+services:
+  web:
+    <<: *portal-service
+    command:
+      - uvicorn
+      - carlos_patient_portal.main:create_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8090"
+      - --workers
+      - ${PORTAL_WEB_WORKERS:-2}
+      - --no-access-log
+      - --proxy-headers
+      # Trust only the host nginx bridge address. This must match the CIDR injected into the
+      # application above; production-deploy rejects a non-host CIDR before Compose runs.
+      - --forwarded-allow-ips=${PORTAL_TRUSTED_PROXY_CIDR:-172.30.80.1/32}
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ports:
+      - ${PORTAL_BIND_ADDRESS:-127.0.0.1}:${PORTAL_BIND_PORT:-8090}:8090
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "from urllib.request import urlopen; urlopen('http://127.0.0.1:8090/health', timeout=3).read()"
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 4
+
+  outbox:
+    <<: *portal-service
+    env_file:
+      - ${PORTAL_OUTBOX_ENV_FILE:-deploy/outbox.env}
+    # The worker does not accept client traffic and must not inherit proxy configuration. The sole
+    # explicit value is a public-key compatibility bridge used only by a legacy rollback image.
+    environment:
+      PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY: ${PORTAL_LEGACY_STAFF_ASSERTION_PUBLIC_KEY:-}
+    command:
+      - carlos-patient-portal-outbox-worker
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test:
+        - CMD
+        - carlos-patient-portal-maintenance
+        - outbox-status
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
+      retries: 3
+
+  # One-shot operations are profiles, so `docker compose up` can never rerun a migration or grant
+  # elevated database access by accident. scripts/production-deploy invokes them explicitly.
+  migrate:
+    <<: *portal-service
+    profiles:
+      - operations
+    env_file:
+      - ${PORTAL_MIGRATION_ENV_FILE:-deploy/migration.env}
+    environment:
+      PGCONNECT_TIMEOUT: ${PORTAL_MIGRATION_CONNECT_TIMEOUT_SECONDS:-10}
+      # pg_catalog remains implicitly first for lookups; public is the first creation target.
+      PGOPTIONS: >-
+        -c lock_timeout=${PORTAL_MIGRATION_LOCK_TIMEOUT_MS:-10000}
+        -c statement_timeout=${PORTAL_MIGRATION_STATEMENT_TIMEOUT_MS:-900000}
+        -c search_path=public
+    command:
+      - carlos-patient-portal-migrate
+    restart: "no"
+
+  # Runs with the restricted application role after migrations/grants and fails unless the live
+  # connection uses TLS, the schema is current, and the audit table is append-only.
+  preflight:
+    <<: *portal-service
+    profiles:
+      - operations
+    command:
+      - carlos-patient-portal-preflight
+    restart: "no"
+
+  # General operator commands use the runtime role and never receive the deletion credential.
+  maintenance:
+    <<: *portal-service
+    profiles:
+      - operations
+    entrypoint:
+      - carlos-patient-portal-maintenance
+    command:
+      - --help
+    restart: "no"
+
+  # Only the offline prune process receives the audit-deletion credential.
+  audit-maintenance:
+    <<: *portal-service
+    profiles:
+      - operations
+    env_file:
+      - ${PORTAL_ENV_FILE:-deploy/production.env}
+      - ${PORTAL_MAINTENANCE_ENV_FILE:-deploy/maintenance.env}
+    entrypoint:
+      - carlos-patient-portal-maintenance
+    command:
+      - --help
+    restart: "no"
+
+  database-policy:
+    image: postgres:16.15-bookworm@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
+    profiles:
+      - operations
+    env_file:
+      - ${PORTAL_DATABASE_ADMIN_ENV_FILE:-deploy/database-admin.env}
+    environment:
+      PGCONNECT_TIMEOUT: ${PORTAL_DATABASE_POLICY_CONNECT_TIMEOUT_SECONDS:-10}
+      PGOPTIONS: >-
+        -c lock_timeout=${PORTAL_DATABASE_POLICY_LOCK_TIMEOUT_MS:-10000}
+        -c statement_timeout=${PORTAL_DATABASE_POLICY_STATEMENT_TIMEOUT_MS:-60000}
+        -c search_path=pg_catalog,public
+    volumes:
+      - type: bind
+        source: ${PORTAL_DB_CA_FILE:?Set PORTAL_DB_CA_FILE to the PostgreSQL CA certificate}
+        target: /run/secrets/postgresql-ca.pem
+        read_only: true
+      - type: bind
+        source: ./carlos_patient_portal/deploy/postgresql-audit-roles.sql
+        target: /policy/postgresql-audit-roles.sql
+        read_only: true
+      - type: bind
+        source: ./carlos_patient_portal/deploy/postgresql-database-identity.sql
+        target: /policy/postgresql-database-identity.sql
+        read_only: true
+    command:
+      - /bin/sh
+      - -euc
+      - >-
+        exec psql "$$DATABASE_ADMIN_URL"
+        -v owner_role="$$PORTAL_SCHEMA_OWNER_ROLE"
+        -v runtime_role="$$PORTAL_RUNTIME_ROLE"
+        -v maintenance_role="$$PORTAL_MAINTENANCE_ROLE"
+        -f /policy/postgresql-audit-roles.sql
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - portal
+    restart: "no"
+
+networks:
+  portal:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${PORTAL_DOCKER_SUBNET:-172.30.80.0/24}

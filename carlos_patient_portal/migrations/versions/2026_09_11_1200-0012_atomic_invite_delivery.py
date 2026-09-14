@@ -7,8 +7,8 @@
 
 """Stage invite tokens until CARLOS has durably recorded their delivery.
 
-Revision ID: 0011_atomic_invite_delivery
-Revises: 0010_durable_reset_request_queue
+Revision ID: 0012_atomic_invite_delivery
+Revises: 0011_staff_assertion_replay
 Create Date: 2026-09-11 12:00:00+00:00
 """
 
@@ -18,8 +18,8 @@ import sqlalchemy as sa
 from alembic import context, op
 
 _ALEMBIC_REVISION_IDENTIFIERS: dict[str, str | Sequence[str] | None] = {
-    "revision": "0011_atomic_invite_delivery",
-    "down_revision": "0010_durable_reset_request_queue",
+    "revision": "0012_atomic_invite_delivery",
+    "down_revision": "0011_staff_assertion_replay",
     "branch_labels": None,
     "depends_on": None,
 }
@@ -87,6 +87,18 @@ def upgrade() -> None:
         unique=True,
     )
     op.create_index(
+        "ux_pp_invites_first_delivery_per_patient",
+        "patient_portal_invites",
+        ["clinic_id", "demographic_no"],
+        unique=True,
+        sqlite_where=sa.text(
+            "status = 'pending' or (status = 'prepared' and supersedes_invite_id is null)"
+        ),
+        postgresql_where=sa.text(
+            "status = 'pending' or (status = 'prepared' and supersedes_invite_id is null)"
+        ),
+    )
+    op.create_index(
         "ux_pp_invites_one_prepared_per_patient",
         "patient_portal_invites",
         ["clinic_id", "demographic_no"],
@@ -99,13 +111,14 @@ def upgrade() -> None:
 def downgrade() -> None:
     if context.is_offline_mode():
         raise RuntimeError(
-            "migration 0011 downgrade requires an online connection to check prepared invites"
+            "migration 0012 downgrade requires an online connection to check prepared invites"
         )
     prepared = op.get_bind().scalar(
         sa.text("select count(*) from patient_portal_invites where status = 'prepared'")
     )
     if prepared:
         raise RuntimeError("cannot downgrade while prepared invite deliveries exist")
+    op.drop_index("ux_pp_invites_first_delivery_per_patient", table_name="patient_portal_invites")
     op.drop_index("ux_pp_invites_one_prepared_per_patient", table_name="patient_portal_invites")
     op.drop_index("ux_pp_invites_clinic_delivery_reference", table_name="patient_portal_invites")
     op.drop_index("ux_pp_invites_clinic_delivery_operation", table_name="patient_portal_invites")

@@ -22,6 +22,7 @@ import logging
 from argparse import ArgumentParser
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
+from hashlib import sha256
 from pathlib import Path
 from statistics import median
 from time import monotonic, sleep
@@ -29,10 +30,19 @@ from time import monotonic, sleep
 from alembic import command
 from alembic.config import Config
 from argon2 import PasswordHasher
-from sqlalchemy.engine import make_url
+from pydantic import ValidationError
+from pydantic_settings import SettingsError
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.pool import NullPool
 
-from carlos_patient_portal.config import get_migration_database_url, get_settings
+from carlos_patient_portal.config import (
+    Settings,
+    get_migration_database_url,
+    get_outbox_settings,
+    get_settings,
+)
 from carlos_patient_portal.database import (
     create_portal_engine,
     create_session_factory,
@@ -55,6 +65,7 @@ from carlos_patient_portal.maintenance import (
     restore_sqlite_database,
     summarize_outbox,
 )
+from carlos_patient_portal.preflight import PreflightCheck, collect_production_preflight
 from carlos_patient_portal.runtime import auth_policy_from_settings
 from carlos_patient_portal.token_keys import PortalTokenKeys
 from carlos_patient_portal.unlock_secrets import reencrypt_unlock_secrets
@@ -85,7 +96,270 @@ def migrate(argv: Sequence[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
 
-    command.upgrade(build_alembic_config(), args.revision)
+    try:
+        alembic_config = build_alembic_config()
+    except (SettingsError, ValidationError, SQLAlchemyError, ValueError):
+        # Pydantic's default traceback can include the rejected environment input. Database URLs
+        # are plain strings rather than SecretStr, so never let a malformed credential reach logs.
+        parser.error("migration configuration is invalid")
+    command.upgrade(alembic_config, args.revision)
+
+
+def _configuration_failure_checks(
+    exc: ValidationError | SettingsError,
+) -> list[PreflightCheck]:
+    if isinstance(exc, SettingsError):
+        return [
+            PreflightCheck(
+                "configuration",
+                "fail",
+                f"production configuration could not be loaded ({type(exc).__name__})",
+            )
+        ]
+    messages = []
+    for error in exc.errors(include_input=False, include_url=False):
+        location = ".".join(str(part) for part in error["loc"])
+        messages.append(f"{location}: {error['msg']}")
+    return [
+        PreflightCheck(
+            "configuration",
+            "fail",
+            "; ".join(messages) or "production configuration is invalid",
+        )
+    ]
+
+
+def production_preflight(argv: Sequence[str] | None = None) -> None:
+    """Validate the live runtime configuration and database before accepting patient data."""
+    parser = ArgumentParser(
+        prog="carlos-patient-portal-preflight",
+        description="Fail-closed real-data readiness checks for the CARLOS patient portal.",
+    )
+    parser.parse_args(argv)
+    try:
+        settings = get_settings()
+    except (SettingsError, ValidationError) as exc:
+        checks = _configuration_failure_checks(exc)
+    else:
+        checks = collect_production_preflight(settings)
+    passed = all(check.passed for check in checks)
+    print(
+        json.dumps(
+            {
+                "status": "ok" if passed else "failed",
+                "checks": [check.as_dict() for check in checks],
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    )
+    if not passed:
+        raise SystemExit(1)
+
+
+def _postgresql_connection_identity(
+    engine: Engine,
+    *,
+    configured_username: str | None,
+    expected_search_path: str,
+) -> tuple[str, str, str, str, bool, bool]:
+    with engine.connect() as connection:
+        values = connection.execute(
+            text(
+                """
+                SELECT
+                  control_record.system_identifier::text AS system_identifier,
+                  database_record.oid::text AS database_oid,
+                  current_database() AS database_name,
+                  session_user AS session_role,
+                  current_user AS current_role,
+                  regexp_replace(current_setting('search_path'), '\\s', '', 'g')
+                    AS search_path,
+                  (
+                    SELECT setting::bigint > 0
+                    FROM pg_settings
+                    WHERE name = 'lock_timeout'
+                  ) AS lock_timeout_bounded,
+                  (
+                    SELECT setting::bigint > 0
+                    FROM pg_settings
+                    WHERE name = 'statement_timeout'
+                  ) AS statement_timeout_bounded
+                FROM pg_control_system() control_record
+                JOIN pg_database database_record
+                  ON database_record.datname = current_database()
+                """
+            )
+        ).mappings().one()
+        driver_connection = connection.connection.driver_connection
+        postgres_connection = getattr(driver_connection, "pgconn", None)
+        tls_enabled = bool(getattr(postgres_connection, "ssl_in_use", False))
+    if (
+        configured_username is None
+        or values["session_role"] != configured_username
+        or values["current_role"] != configured_username
+    ):
+        raise SystemExit("database probe requires a direct session using the URL's login role")
+    return (
+        str(values["system_identifier"]),
+        str(values["database_oid"]),
+        str(values["database_name"]),
+        str(values["current_role"]),
+        tls_enabled,
+        (
+            values["search_path"] == expected_search_path
+            and values["lock_timeout_bounded"] is True
+            and values["statement_timeout_bounded"] is True
+        ),
+    )
+
+
+def _database_deployment_identity(
+    engine: Engine,
+    *,
+    configured_username: str | None,
+    expected_search_path: str,
+) -> str:
+    values = _postgresql_connection_identity(
+        engine,
+        configured_username=configured_username,
+        expected_search_path=expected_search_path,
+    )
+    fields = (
+        values[0],
+        values[1],
+        values[2],
+        sha256(values[3].encode()).hexdigest(),
+        "tls" if values[4] else "plaintext",
+        "safe" if values[5] else "unsafe",
+    )
+    return (
+        "|".join(str(field).encode().hex() for field in fields[:3])
+        + f"|{fields[3]}|{fields[4]}|{fields[5]}"
+    )
+
+
+def _outbox_configuration_digest(settings: Settings) -> str:
+    session_secret = settings.secret_value("session_secret")
+    if session_secret is None:
+        raise SystemExit("outbox compatibility probe requires PATIENT_PORTAL_SESSION_SECRET")
+    compatibility_values = {
+        "clinic_id": settings.clinic_id,
+        "clinic_name": settings.clinic_name,
+        "public_base_url": settings.public_base_url,
+        "password_reset_key": PortalTokenKeys.derive(session_secret).password_reset,
+        "password_reset_request_cooldown_seconds": (
+            settings.password_reset_request_cooldown_seconds
+        ),
+        "password_reset_token_ttl_seconds": settings.password_reset_token_ttl_seconds,
+        "outbox_active_key_id": settings.outbox_active_key_id,
+        "outbox_keyring": settings.resolved_outbox_keyring,
+        "service_name": settings.service_name,
+        # A worker pointed at a different relay can disclose portal messages even when every
+        # encryption and database setting matches. Treat the complete SMTP destination and
+        # credential tuple as shared deployment policy too; only its digest leaves the container.
+        "smtp_host": settings.smtp_host,
+        "smtp_port": settings.smtp_port,
+        "smtp_from_address": settings.resolved_smtp_from_address,
+        "smtp_starttls": settings.smtp_starttls,
+        "smtp_username": settings.smtp_username,
+        "smtp_password": settings.secret_value("smtp_password"),
+        "smtp_timeout_seconds": settings.smtp_timeout_seconds,
+    }
+    encoded_values = json.dumps(
+        compatibility_values,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    return sha256(encoded_values).hexdigest()
+
+
+def deployment_probe(argv: Sequence[str] | None = None) -> None:
+    """Emit secret-free release-policy or live-database identity for deployment orchestration."""
+    parser = ArgumentParser(
+        prog="carlos-patient-portal-deployment-probe",
+        description="Compare immutable deployment artifacts and PostgreSQL targets.",
+    )
+    parser.add_argument(
+        "probe",
+        choices=(
+            "migration",
+            "runtime",
+            "outbox",
+            "maintenance",
+            "database-artifacts-sha256",
+            "outbox-configuration-sha256",
+            "runtime-outbox-configuration-sha256",
+        ),
+    )
+    args = parser.parse_args(argv)
+    if args.probe == "database-artifacts-sha256":
+        deploy_path = Path(__file__).resolve().parent / "deploy"
+        print(
+            "|".join(
+                sha256((deploy_path / artifact).read_bytes()).hexdigest()
+                for artifact in (
+                    "postgresql-audit-roles.sql",
+                    "postgresql-database-identity.sql",
+                )
+            )
+        )
+        return
+    if args.probe in {
+        "outbox-configuration-sha256",
+        "runtime-outbox-configuration-sha256",
+    }:
+        try:
+            outbox_settings = (
+                get_outbox_settings()
+                if args.probe == "outbox-configuration-sha256"
+                else get_settings()
+            )
+        except (SettingsError, ValidationError):
+            parser.error("deployment probe configuration is invalid")
+        print(_outbox_configuration_digest(outbox_settings))
+        return
+
+    settings = None
+    try:
+        if args.probe == "migration":
+            database_url = get_migration_database_url()
+            # Alembic uses the URL and libpq environment directly. Do the same here so URL-level
+            # options such as `role` cannot disappear during the probe and reappear for migration.
+            database_engine = create_engine(database_url, poolclass=NullPool)
+        else:
+            settings = get_outbox_settings() if args.probe == "outbox" else get_settings()
+            if args.probe == "maintenance":
+                if settings.maintenance_database_url is None:
+                    parser.error("PATIENT_PORTAL_MAINTENANCE_DATABASE_URL is required")
+                database_url = settings.maintenance_database_url
+            else:
+                database_url = settings.database_url
+            database_engine = create_portal_engine(
+                database_url,
+                pool_size=settings.database_pool_size,
+                max_overflow=settings.database_max_overflow,
+                pool_timeout_seconds=settings.database_pool_timeout_seconds,
+                connect_timeout_seconds=settings.database_connect_timeout_seconds,
+                statement_timeout_ms=settings.database_statement_timeout_ms,
+                lock_timeout_ms=settings.database_lock_timeout_ms,
+                sqlite_busy_timeout_ms=settings.sqlite_busy_timeout_ms,
+            )
+        configured_username = make_url(database_url).username
+    except (SettingsError, ValidationError, SQLAlchemyError, ValueError):
+        parser.error("deployment probe configuration is invalid")
+    try:
+        print(
+            _database_deployment_identity(
+                database_engine,
+                configured_username=configured_username,
+                expected_search_path=(
+                    "public" if args.probe == "migration" else "pg_catalog,public"
+                ),
+            )
+        )
+    finally:
+        database_engine.dispose()
 
 
 def maintenance(argv: Sequence[str] | None = None) -> None:
@@ -178,7 +452,13 @@ def maintenance(argv: Sequence[str] | None = None) -> None:
     benchmark_parser.add_argument("--operations", type=int, default=8)
 
     args = parser.parse_args(argv)
-    settings = get_settings()
+    # The outbox container deliberately has a reduced secret set. Its health check uses this
+    # read-only subcommand, so loading the full web settings here would make a healthy worker look
+    # unhealthy unless it were given credentials it must not receive.
+    try:
+        settings = get_outbox_settings() if args.command == "outbox-status" else get_settings()
+    except (SettingsError, ValidationError):
+        parser.error("maintenance configuration is invalid")
 
     if args.command == "backup-sqlite":
         backup_path = backup_sqlite_database(
@@ -236,14 +516,16 @@ def maintenance(argv: Sequence[str] | None = None) -> None:
             )
         runtime_url = make_url(settings.database_url)
         maintenance_url = make_url(settings.maintenance_database_url)
-        same_database_and_role = (
+        same_database = (
             runtime_url.get_backend_name() == maintenance_url.get_backend_name()
-            and runtime_url.host == maintenance_url.host
-            and runtime_url.port == maintenance_url.port
+            and (runtime_url.host or "").casefold()
+            == (maintenance_url.host or "").casefold()
+            and (runtime_url.port or 5432) == (maintenance_url.port or 5432)
             and runtime_url.database == maintenance_url.database
-            and runtime_url.username == maintenance_url.username
         )
-        if same_database_and_role:
+        if not same_database:
+            parser.error("maintenance and runtime database URLs must target the same database")
+        if runtime_url.username == maintenance_url.username:
             parser.error("maintenance and runtime database URLs must use separate roles")
         database_url = settings.maintenance_database_url
     database_engine = create_portal_engine(
@@ -256,8 +538,39 @@ def maintenance(argv: Sequence[str] | None = None) -> None:
         lock_timeout_ms=settings.database_lock_timeout_ms,
         sqlite_busy_timeout_ms=settings.sqlite_busy_timeout_ms,
     )
+    runtime_database_engine = None
+    if (
+        args.command == "prune-audit"
+        and not args.dry_run
+        and database_engine.dialect.name == "postgresql"
+    ):
+        runtime_database_engine = create_portal_engine(
+            settings.database_url,
+            pool_size=settings.database_pool_size,
+            max_overflow=settings.database_max_overflow,
+            pool_timeout_seconds=settings.database_pool_timeout_seconds,
+            connect_timeout_seconds=settings.database_connect_timeout_seconds,
+            statement_timeout_ms=settings.database_statement_timeout_ms,
+            lock_timeout_ms=settings.database_lock_timeout_ms,
+            sqlite_busy_timeout_ms=settings.sqlite_busy_timeout_ms,
+        )
     session_factory = create_session_factory(database_engine)
     try:
+        if runtime_database_engine is not None:
+            runtime_identity = _postgresql_connection_identity(
+                runtime_database_engine,
+                configured_username=make_url(settings.database_url).username,
+                expected_search_path="pg_catalog,public",
+            )
+            maintenance_identity = _postgresql_connection_identity(
+                database_engine,
+                configured_username=make_url(database_url).username,
+                expected_search_path="pg_catalog,public",
+            )
+            if runtime_identity[:3] != maintenance_identity[:3]:
+                parser.error("maintenance and runtime URLs connect to different databases")
+            if settings.is_production and (not runtime_identity[4] or not maintenance_identity[4]):
+                parser.error("production audit pruning requires TLS for both database connections")
         with session_scope(session_factory) as session:
             if args.command == "rotate-unlock-secrets":
                 rotated_count = reencrypt_unlock_secrets(
@@ -323,6 +636,8 @@ def maintenance(argv: Sequence[str] | None = None) -> None:
             )
             print(f"deleted {deleted_count} audit events older than retention")
     finally:
+        if runtime_database_engine is not None:
+            runtime_database_engine.dispose()
         database_engine.dispose()
 
 
@@ -349,7 +664,10 @@ def outbox_worker(argv: Sequence[str] | None = None) -> None:
     if args.max_deliveries < 0:
         parser.error("--max-deliveries must not be negative")
 
-    settings = get_settings()
+    try:
+        settings = get_outbox_settings()
+    except (SettingsError, ValidationError):
+        parser.error("outbox configuration is invalid")
     outbox_encryption_keys = settings.resolved_outbox_keyring
     if not outbox_encryption_keys:
         parser.error(

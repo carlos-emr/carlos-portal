@@ -197,6 +197,11 @@ def _disclose_prepared_token(
     *,
     encryption_keys: Mapping[str, str],
 ) -> str:
+    comparable_expiry = invite.expires_at
+    if comparable_expiry.tzinfo is None:
+        comparable_expiry = comparable_expiry.replace(tzinfo=UTC)
+    if comparable_expiry <= utc_now():
+        raise InvitePreparationConflictError()
     key_id = invite.invite_token_key_id
     if key_id is None or key_id not in encryption_keys:
         raise InvitePreparationKeyUnavailableError()
@@ -632,8 +637,12 @@ def activate_prepared_invite(
     delivery_operation_id: str,
     delivery_reference: str,
     clinic_id: str,
+    actor: str,
+    actor_id: str | None = None,
 ) -> PatientPortalInvite:
     """Atomically activate a prepared invite after CARLOS durably records its email job."""
+    normalized_actor = normalize_staff_actor(actor)
+    normalized_actor_id = normalize_staff_actor_id(actor_id, normalized_actor)
     invite = get_invite(session, invite_id, clinic_id=clinic_id, lock=True)
     if invite.delivery_operation_id != delivery_operation_id:
         raise InvitePreparationConflictError()
@@ -696,8 +705,8 @@ def activate_prepared_invite(
         ),
         outcome=AUDIT_OUTCOME_SUCCESS,
         actor_type=AUDIT_ACTOR_TYPE_STAFF,
-        actor=invite.created_by,
-        actor_id=invite.created_by_id,
+        actor=normalized_actor,
+        actor_id=normalized_actor_id,
         clinic_id=invite.clinic_id,
         demographic_no=invite.demographic_no,
         invite_id=invite.id,

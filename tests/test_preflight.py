@@ -1,0 +1,371 @@
+import json
+
+import pytest
+from pydantic_settings import SettingsError
+
+from carlos_patient_portal import cli, database
+from carlos_patient_portal.config import Settings
+from carlos_patient_portal.database import create_portal_engine
+from carlos_patient_portal.preflight import (
+    EXPECTED_SEQUENCE_PRIVILEGES,
+    EXPECTED_TABLE_PRIVILEGES,
+    collect_production_preflight,
+    database_preflight_checks,
+    evaluate_declared_database_roles,
+    evaluate_runtime_database_allowlist,
+    evaluate_runtime_role_policy,
+)
+from tests.support import production_settings
+
+
+def compliant_runtime_role() -> dict[str, bool]:
+    return {
+        "audit_select": True,
+        "audit_insert": True,
+        "audit_sequence_usage": True,
+        "audit_sequence_select": True,
+        "schema_usage": True,
+        "alembic_select": True,
+        "alembic_insert": False,
+        "alembic_update": False,
+        "alembic_delete": False,
+        "alembic_truncate": False,
+        "alembic_references": False,
+        "alembic_trigger": False,
+        "alembic_owner": False,
+        "audit_update": False,
+        "audit_delete": False,
+        "audit_truncate": False,
+        "audit_references": False,
+        "audit_trigger": False,
+        "audit_owner": False,
+        "schema_create": False,
+        "nonpublic_schema_usage": False,
+        "public_schema_privilege": False,
+        "search_path_unsafe": False,
+        "database_connect": True,
+        "database_create": False,
+        "database_temporary": False,
+        "database_owner": False,
+        "role_membership": False,
+        "schema_object_owner": False,
+        "schema_function_execute": False,
+        "table_dangerous_privilege": False,
+        "sequence_update": False,
+        "session_role_changed": False,
+        "role_elevated": False,
+        "unexpected_acl_grantee": False,
+        "unexpected_object_owner": False,
+    }
+
+
+def compliant_declared_database_roles() -> dict[str, bool]:
+    return {
+        "declared_roles_valid": True,
+        "schema_owner_database_connect": True,
+        "schema_owner_database_create": False,
+        "schema_owner_schema_usage": True,
+        "schema_owner_schema_create": True,
+        "maintenance_database_connect": True,
+        "maintenance_database_create": False,
+        "maintenance_database_temporary": False,
+        "maintenance_schema_usage": True,
+        "maintenance_schema_create": False,
+        "maintenance_nonpublic_schema_usage": False,
+        "maintenance_role_membership": False,
+        "maintenance_object_owner": False,
+        "maintenance_audit_select": True,
+        "maintenance_audit_delete": True,
+        "maintenance_audit_dangerous": False,
+        "maintenance_unexpected_table_privilege": False,
+        "maintenance_grant_option": False,
+        "maintenance_column_privilege": False,
+        "maintenance_sequence_privilege": False,
+        "maintenance_function_execute": False,
+    }
+
+
+def compliant_runtime_data_privileges() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    table_values = [
+        {
+            "schema": "public",
+            "name": table_name,
+            **{
+                f"can_{privilege}": privilege in expected
+                for privilege in ("select", "insert", "update", "delete")
+            },
+            "grant_option": False,
+            "public_privilege": False,
+            "unexpected_column_acl": False,
+        }
+        for table_name, expected in EXPECTED_TABLE_PRIVILEGES.items()
+    ]
+    sequence_values = [
+        {
+            "schema": "public",
+            "name": sequence_name,
+            "can_usage": "usage" in expected,
+            "can_select": "select" in expected,
+            "grant_option": False,
+            "public_privilege": False,
+        }
+        for sequence_name, expected in EXPECTED_SEQUENCE_PRIVILEGES.items()
+    ]
+    return table_values, sequence_values
+
+
+def test_runtime_role_policy_accepts_only_append_only_audit_access() -> None:
+    check = evaluate_runtime_role_policy(compliant_runtime_role())
+
+    assert check.passed
+    assert check.detail == (
+        "runtime role is non-admin; schema revision and audit evidence are protected"
+    )
+
+
+@pytest.mark.parametrize(
+    "privilege",
+    compliant_runtime_role(),
+)
+def test_runtime_role_policy_reports_each_privilege_violation(privilege: str) -> None:
+    values = compliant_runtime_role()
+    values[privilege] = not values[privilege]
+
+    check = evaluate_runtime_role_policy(values)
+
+    assert not check.passed
+    assert privilege in check.detail
+
+
+def test_declared_database_role_policy_accepts_only_maintenance_audit_deletion() -> None:
+    check = evaluate_declared_database_roles(compliant_declared_database_roles())
+
+    assert check.passed
+
+
+@pytest.mark.parametrize("privilege", compliant_declared_database_roles())
+def test_declared_database_role_policy_reports_each_violation(privilege: str) -> None:
+    values = compliant_declared_database_roles()
+    values[privilege] = not values[privilege]
+
+    check = evaluate_declared_database_roles(values)
+
+    assert not check.passed
+    assert privilege in check.detail
+
+
+def test_runtime_database_allowlist_accepts_only_the_exact_policy() -> None:
+    tables, sequences = compliant_runtime_data_privileges()
+
+    check = evaluate_runtime_database_allowlist(tables, sequences)
+
+    assert check.passed
+
+
+@pytest.mark.parametrize("object_kind", ["table", "sequence"])
+def test_runtime_database_allowlist_rejects_privileges_on_unknown_objects(
+    object_kind: str,
+) -> None:
+    tables, sequences = compliant_runtime_data_privileges()
+    if object_kind == "table":
+        tables.append(
+            {
+                "name": "unexpected_patient_data",
+                "can_select": True,
+                "can_insert": False,
+                "can_update": True,
+                "can_delete": False,
+            }
+        )
+    else:
+        sequences.append(
+            {
+                "name": "unexpected_patient_data_id_seq",
+                "can_usage": True,
+                "can_select": True,
+            }
+        )
+
+    check = evaluate_runtime_database_allowlist(tables, sequences)
+
+    assert not check.passed
+    assert "unexpected_patient_data" in check.detail
+
+
+def test_runtime_database_allowlist_rejects_missing_required_access() -> None:
+    tables, sequences = compliant_runtime_data_privileges()
+    tables[0]["can_select"] = False
+
+    check = evaluate_runtime_database_allowlist(tables, sequences)
+
+    assert not check.passed
+    assert str(tables[0]["name"]) in check.detail
+
+
+def test_runtime_database_allowlist_rejects_access_outside_public() -> None:
+    tables, sequences = compliant_runtime_data_privileges()
+    tables.append(
+        {
+            "schema": "privilege_escape",
+            "name": "audit_update_escape",
+            "can_select": False,
+            "can_insert": False,
+            "can_update": True,
+            "can_delete": False,
+            "grant_option": False,
+            "public_privilege": False,
+            "unexpected_column_acl": False,
+        }
+    )
+
+    check = evaluate_runtime_database_allowlist(tables, sequences)
+
+    assert not check.passed
+    assert "table:privilege_escape.audit_update_escape" in check.detail
+
+
+@pytest.mark.parametrize(
+    ("object_kind", "field", "violation"),
+    [
+        ("table", "grant_option", "table_grant_option"),
+        ("table", "public_privilege", "public_table"),
+        ("table", "unexpected_column_acl", "column_acl"),
+        ("sequence", "grant_option", "sequence_grant_option"),
+        ("sequence", "public_privilege", "public_sequence"),
+    ],
+)
+def test_runtime_database_allowlist_rejects_acl_escape_hatches(
+    object_kind: str,
+    field: str,
+    violation: str,
+) -> None:
+    tables, sequences = compliant_runtime_data_privileges()
+    values = tables[0] if object_kind == "table" else sequences[0]
+    values[field] = True
+
+    check = evaluate_runtime_database_allowlist(tables, sequences)
+
+    assert not check.passed
+    assert violation in check.detail
+
+
+def test_postgresql_engine_pins_the_catalog_and_application_search_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    sentinel_engine = object()
+
+    def capture_create_engine(
+        database_url: str,
+        **engine_options: object,
+    ) -> object:
+        captured["database_url"] = database_url
+        captured.update(engine_options)
+        return sentinel_engine
+
+    monkeypatch.setattr(database, "create_engine", capture_create_engine)
+
+    engine = database.create_portal_engine("postgresql+psycopg://portal@database/portal")
+
+    assert engine is sentinel_engine
+    assert captured["connect_args"] == {
+        "connect_timeout": 5,
+        "options": (
+            "-c statement_timeout=15000 -c lock_timeout=5000 "
+            "-c search_path=pg_catalog,public"
+        ),
+    }
+
+
+def test_database_preflight_rejects_sqlite_before_running_postgresql_queries() -> None:
+    engine = create_portal_engine("sqlite+pysqlite:///:memory:")
+    try:
+        checks = database_preflight_checks(engine)
+    finally:
+        engine.dispose()
+
+    assert [(check.name, check.status) for check in checks] == [("database_backend", "fail")]
+
+
+def test_real_data_preflight_rejects_development_policy_and_database() -> None:
+    settings = Settings(environment="development", database_url="sqlite+pysqlite:///:memory:")
+
+    checks = collect_production_preflight(settings)
+
+    assert [(check.name, check.status) for check in checks] == [
+        ("environment", "fail"),
+        ("database_backend", "fail"),
+    ]
+
+
+def test_preflight_cli_emits_machine_readable_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    settings = Settings(environment="development", database_url="sqlite+pysqlite:///:memory:")
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli.production_preflight([])
+
+    assert exit_info.value.code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "failed"
+    assert payload["checks"][0]["name"] == "environment"
+
+
+def test_preflight_cli_omits_configuration_inputs_from_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def invalid_production_settings() -> Settings:
+        return Settings(
+            environment="production",
+            session_secret="must-not-appear-in-preflight-output",
+        )
+
+    monkeypatch.setattr(cli, "get_settings", invalid_production_settings)
+
+    with pytest.raises(SystemExit):
+        cli.production_preflight([])
+
+    output = capsys.readouterr().out
+    assert "must-not-appear-in-preflight-output" not in output
+    assert json.loads(output)["checks"][0]["name"] == "configuration"
+
+
+def test_preflight_cli_omits_settings_source_values_from_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def invalid_environment_file() -> Settings:
+        raise SettingsError("raw-environment-secret-must-not-appear")
+
+    monkeypatch.setattr(cli, "get_settings", invalid_environment_file)
+
+    with pytest.raises(SystemExit):
+        cli.production_preflight([])
+
+    output = capsys.readouterr().out
+    assert "raw-environment-secret-must-not-appear" not in output
+    assert "SettingsError" in output
+
+
+def test_preflight_cli_reports_a_malformed_database_url_as_json(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "get_settings",
+        lambda: production_settings(database_url="postgresql+psycopg:malformed"),
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli.production_preflight([])
+
+    assert exit_info.value.code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "failed"
+    assert payload["checks"][0]["name"] == "configuration"
+    assert "valid SQLAlchemy database URL" in payload["checks"][0]["detail"]
