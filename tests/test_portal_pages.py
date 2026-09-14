@@ -97,7 +97,7 @@ def test_index_renders_sign_in_shell() -> None:
     assert text["username_placeholder"] == "username"
     assert text["password_placeholder"] == "password"
     assert "CARLOS Patient Portal" in response.text
-    assert 'src="http://testserver/static/carlos-logo.png"' in response.text
+    assert 'src="http://testserver/static/carlos-birdman.png"' in response.text
     assert f'placeholder="{text["username_placeholder"]}"' in response.text
     assert f'placeholder="{text["password_placeholder"]}"' in response.text
     assert f">{text['forgot_username_password']}</a>" in response.text
@@ -231,7 +231,7 @@ def test_accept_language_ignores_invalid_weights(weight: str) -> None:
 
 def test_static_logo_asset_is_served() -> None:
     app = main.create_app(development_settings())
-    response = TestClient(app).get("/static/carlos-logo.png")
+    response = TestClient(app).get("/static/carlos-birdman.png")
 
     assert response.status_code == 200
     assert "image/png" in response.headers["content-type"]

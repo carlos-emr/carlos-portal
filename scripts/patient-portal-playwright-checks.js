@@ -355,7 +355,7 @@ function screenshotPath(name) {
     );
     assert(logoLoaded, 'CARLOS logo did not load');
     assert(
-      await page.locator('link[rel="icon"][href$="/static/carlos-logo.png"]').count() === 1,
+      await page.locator('link[rel="icon"][href$="/static/carlos-birdman.png"]').count() === 1,
       'CARLOS favicon is not declared'
     );
     // Four links plus a span for the active locale — the switcher navigates now rather than
