@@ -160,6 +160,11 @@ def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
     assert "compose --profile operations run --rm migrate" in script
     assert "compose --profile operations run --rm database-policy" in script
     assert "compose --profile operations run --rm preflight" in script
+    outbox_status_case = script.split("  outbox-status)", 1)[1].split("    ;;", 1)[0]
+    assert "--entrypoint carlos-patient-portal-maintenance outbox outbox-status" in (
+        outbox_status_case
+    )
+    assert "run --rm maintenance" not in outbox_status_case
     assert "verify_database_artifacts" in script
     assert "verify_database_targets" in script
     assert "verify_outbox_configuration" in script
@@ -262,6 +267,7 @@ def test_production_stack_smoke_covers_success_replay_and_fail_closed_role() -> 
     assert "migration accepted a different PostgreSQL database target" in smoke
     assert "audit pruning accepted a different PostgreSQL database target" in smoke
     assert "audit pruning accepted a role other than the declared maintenance role" in smoke
+    assert smoke.count("deployment probe configuration is invalid") == 2
     assert "database policy accepted an unexpected member of privileged roles" in smoke
     assert "preflight accepted patient data owned by an undeclared database role" in smoke
     smoke_override = (

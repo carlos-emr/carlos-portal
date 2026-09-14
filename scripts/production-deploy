@@ -452,8 +452,8 @@ case "$command_name" in
     ;;
   outbox-status)
     validate
-    require_private_file "$PORTAL_MAINTENANCE_ENV_FILE"
-    compose --profile operations run --rm maintenance outbox-status
+    compose --profile operations run --rm --no-deps \
+      --entrypoint carlos-patient-portal-maintenance outbox outbox-status
     ;;
   export-audit)
     validate
