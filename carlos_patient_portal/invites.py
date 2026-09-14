@@ -593,7 +593,6 @@ def prepare_resend_invite(
             or existing.supersedes_invite_id != invite_id
         ):
             raise InvitePreparationConflictError()
-        return existing, _disclose_prepared_token(existing, encryption_keys=encryption_keys)
 
     invite = get_invite(session, invite_id, clinic_id=normalized_clinic_id, lock=True)
     if invite.status != INVITE_STATUS_PENDING:
@@ -602,6 +601,8 @@ def prepare_resend_invite(
         if invite.status == INVITE_STATUS_ACCEPTED:
             raise AcceptedInviteError()
         raise SupersededInviteError()
+    if existing is not None:
+        return existing, _disclose_prepared_token(existing, encryption_keys=encryption_keys)
     if invite.proof_salt is None:
         raise InvitePreparationConflictError()
     proof_hashes = {
@@ -725,6 +726,8 @@ def resend_invite(
     actor_id: str | None = None,
 ) -> tuple[PatientPortalInvite, str]:
     invite = get_invite(session, invite_id, clinic_id=clinic_id, lock=True)
+    if invite.status == INVITE_STATUS_PREPARED:
+        raise InvitePreparationConflictError()
     if invite.status == INVITE_STATUS_REVOKED:
         raise RevokedInviteError()
     if invite.status == INVITE_STATUS_ACCEPTED:

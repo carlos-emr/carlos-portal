@@ -689,11 +689,16 @@ create/resend endpoints remain available for existing development and API client
 not use them for patient email delivery. A database constraint reserves the pending-invite slot
 for a first preparation, preventing concurrent legacy creation from stranding that delivery.
 Prepared resends can still coexist with the pending invite they replace.
+Prepare retries recheck that the original invite is still pending before returning its token.
+The legacy resend endpoints reject prepared invites with `409` until delivery is committed.
 
 Invite retention is state-specific: accepted invite records are retained with the long-term audit
 record; expired prepared, pending, revoked, and superseded records are eligible for transient
-cleanup only after the configured cleanup delay. Cleanup rechecks status and expiry in the delete
-statement so a concurrent state transition cannot delete a renewed record.
+cleanup only after the configured cleanup delay. An original invite is retained while a prepared
+resend still references it, preserving the original's revocation and acceptance checks. Once the
+prepared resend is committed, revoked, or removed by cleanup, the original becomes eligible again.
+Cleanup locks invite candidates and rechecks status, expiry, and prepared replacements in the
+delete statement so a concurrent preparation cannot lose its original invite.
 
 ## Development Invite API
 

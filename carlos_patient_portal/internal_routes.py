@@ -787,6 +787,8 @@ def register_internal_invite_routes(
             )
         except InviteNotFoundError as exc:
             raise HTTPException(status_code=404, detail="invite not found") from exc
+        except InvitePreparationConflictError as exc:
+            raise HTTPException(status_code=409, detail="invite delivery is not committed") from exc
         except (RevokedInviteError, AcceptedInviteError, SupersededInviteError) as exc:
             raise HTTPException(status_code=409, detail="invite cannot be resent") from exc
         return invite_payload(invite, invite_token=invite_token)
