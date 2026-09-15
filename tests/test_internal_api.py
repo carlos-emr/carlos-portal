@@ -23,6 +23,7 @@ from carlos_patient_portal.main import create_app
 from carlos_patient_portal.models import (
     AUDIT_EVENT_ACCOUNT_UNLOCK,
     AUDIT_EVENT_INVITE_CREATE,
+    AUDIT_EVENT_INVITE_RESEND,
     AUDIT_EVENT_STAFF_ACTION,
     AUDIT_EVENT_UNLOCK_SECRET_CREATE,
     AUDIT_EVENT_UNLOCK_SECRET_PUBLISH,
@@ -43,6 +44,7 @@ from tests.support import (
     TEST_STAFF_ASSERTION_KEY_ID,
     TEST_STAFF_ASSERTION_PUBLIC_KEY,
     TEST_STAFF_ASSERTION_PUBLIC_KEYRING,
+    activation_request,
     carlos_staff_headers,
     migrated_staging_app,
     sign_staff_assertion,
@@ -541,6 +543,298 @@ def test_internal_invite_list_resend_and_revoke_lifecycle() -> None:
     assert revoked.json()["status"] == "revoked"
     assert rejected_resend.status_code == 409
     assert missing_revoke.status_code == 404
+
+
+def test_internal_prepared_invite_is_idempotent_and_inactive_until_delivery_commit() -> None:
+    app = internal_app()
+    client = TestClient(app)
+    headers = carlos_headers("portal.invite.manage")
+    request = {**invite_request(), "delivery_operation_id": "invite-email:operation-1"}
+
+    prepared = client.post(
+        "/internal/carlos/patients/1234/invites/prepare",
+        headers=headers,
+        json=request,
+    )
+    repeated = client.post(
+        "/internal/carlos/patients/1234/invites/prepare",
+        headers=headers,
+        json=request,
+    )
+
+    assert prepared.status_code == 201
+    assert repeated.status_code == 201
+    assert prepared.json()["status"] == "prepared"
+    assert repeated.json()["id"] == prepared.json()["id"]
+    assert repeated.json()["invite_token"] == prepared.json()["invite_token"]
+    assert prepared.json()["delivery_reference"] is None
+    assert (
+        client.post(
+            "/auth/activate",
+            json=activation_request(prepared.json()["invite_token"]),
+        ).status_code
+        == 400
+    )
+
+    commit_body = {
+        "delivery_operation_id": request["delivery_operation_id"],
+        "delivery_reference": "email-outbox:42",
+    }
+    committed = client.post(
+        f"/internal/carlos/invites/{prepared.json()['id']}/commit-delivery",
+        headers=headers,
+        json=commit_body,
+    )
+    repeated_commit = client.post(
+        f"/internal/carlos/invites/{prepared.json()['id']}/commit-delivery",
+        headers=headers,
+        json=commit_body,
+    )
+
+    assert committed.status_code == 200
+    assert committed.json()["status"] == "pending"
+    assert committed.json()["delivery_reference"] == "email-outbox:42"
+    assert repeated_commit.status_code == 200
+    with app.state.session_factory() as session:
+        persisted = session.get(PatientPortalInvite, prepared.json()["id"])
+        assert persisted is not None
+        assert persisted.encrypted_invite_token is None
+        assert persisted.invite_token_nonce is None
+        assert persisted.invite_token_key_id is None
+
+
+def test_internal_prepared_resend_keeps_old_invite_valid_until_delivery_commit() -> None:
+    app = internal_app()
+    client = TestClient(app)
+    headers = carlos_headers("portal.invite.manage")
+    created = client.post(
+        "/internal/carlos/patients/1234/invites",
+        headers=headers,
+        json=invite_request(),
+    )
+    old_id = created.json()["id"]
+    prepared = client.post(
+        f"/internal/carlos/invites/{old_id}/resend/prepare",
+        headers=headers,
+        json={"delivery_operation_id": "invite-email:operation-2"},
+    )
+
+    assert prepared.status_code == 201
+    assert prepared.json()["status"] == "prepared"
+    assert prepared.json()["supersedes_invite_id"] == old_id
+    with app.state.session_factory() as session:
+        assert session.get(PatientPortalInvite, old_id).status == "pending"
+
+    committed = client.post(
+        f"/internal/carlos/invites/{prepared.json()['id']}/commit-delivery",
+        headers=headers,
+        json={
+            "delivery_operation_id": "invite-email:operation-2",
+            "delivery_reference": "email-outbox:43",
+        },
+    )
+
+    assert committed.status_code == 200
+    with app.state.session_factory() as session:
+        assert session.get(PatientPortalInvite, old_id).status == "superseded"
+        assert session.get(PatientPortalInvite, prepared.json()["id"]).status == "pending"
+
+
+def test_internal_invite_delivery_commit_rejects_mismatched_operation_or_reference() -> None:
+    app = internal_app()
+    client = TestClient(app)
+    headers = carlos_headers("portal.invite.manage")
+    prepared = client.post(
+        "/internal/carlos/patients/1234/invites/prepare",
+        headers=headers,
+        json={**invite_request(), "delivery_operation_id": "invite-email:operation-3"},
+    )
+    path = f"/internal/carlos/invites/{prepared.json()['id']}/commit-delivery"
+
+    wrong_operation = client.post(
+        path,
+        headers=headers,
+        json={
+            "delivery_operation_id": "invite-email:wrong",
+            "delivery_reference": "email-outbox:44",
+        },
+    )
+    committed = client.post(
+        path,
+        headers=headers,
+        json={
+            "delivery_operation_id": "invite-email:operation-3",
+            "delivery_reference": "email-outbox:44",
+        },
+    )
+    wrong_replay = client.post(
+        path,
+        headers=headers,
+        json={
+            "delivery_operation_id": "invite-email:operation-3",
+            "delivery_reference": "email-outbox:45",
+        },
+    )
+
+    assert wrong_operation.status_code == 409
+    assert committed.status_code == 200
+    assert wrong_replay.status_code == 409
+
+
+def test_internal_invite_delivery_reference_cannot_activate_two_invites() -> None:
+    app = internal_app()
+    client = TestClient(app)
+    headers = carlos_headers("portal.invite.manage")
+    first = client.post(
+        "/internal/carlos/patients/1234/invites/prepare",
+        headers=headers,
+        json={**invite_request(), "delivery_operation_id": "invite-email:first"},
+    )
+    second = client.post(
+        "/internal/carlos/patients/5678/invites/prepare",
+        headers=headers,
+        json={
+            **invite_request(5678),
+            "email": "second.patient@example.com",
+            "delivery_operation_id": "invite-email:second",
+        },
+    )
+    reference = "email-outbox:shared"
+
+    first_commit = client.post(
+        f"/internal/carlos/invites/{first.json()['id']}/commit-delivery",
+        headers=headers,
+        json={
+            "delivery_operation_id": "invite-email:first",
+            "delivery_reference": reference,
+        },
+    )
+    second_commit = client.post(
+        f"/internal/carlos/invites/{second.json()['id']}/commit-delivery",
+        headers=headers,
+        json={
+            "delivery_operation_id": "invite-email:second",
+            "delivery_reference": reference,
+        },
+    )
+
+    assert first_commit.status_code == 200
+    assert second_commit.status_code == 409
+    with app.state.session_factory() as session:
+        assert session.get(PatientPortalInvite, second.json()["id"]).status == "prepared"
+
+
+@pytest.mark.parametrize("resend", [False, True])
+def test_internal_expired_preparation_retry_conflicts_without_disclosing_token(resend) -> None:
+    app = internal_app()
+    client = TestClient(app)
+    headers = carlos_headers("portal.invite.manage")
+    request = {"delivery_operation_id": "expired-preparation"}
+    if resend:
+        original = client.post(
+            "/internal/carlos/patients/1234/invites", headers=headers, json=invite_request()
+        )
+        path = f"/internal/carlos/invites/{original.json()['id']}/resend/prepare"
+    else:
+        path = "/internal/carlos/patients/1234/invites/prepare"
+        request.update(invite_request())
+    prepared = client.post(path, headers=headers, json=request)
+    assert prepared.status_code == 201
+    with app.state.session_factory.begin() as session:
+        invite = session.get(PatientPortalInvite, prepared.json()["id"])
+        invite.created_at = utc_now() - timedelta(days=8)
+        invite.expires_at = utc_now() - timedelta(seconds=1)
+
+    repeated = client.post(path, headers=headers, json=request)
+
+    assert repeated.status_code == 409
+    assert repeated.json() == {"detail": "invite preparation conflicts"}
+    assert prepared.json()["invite_token"] not in repeated.text
+    with app.state.session_factory() as session:
+        assert session.get(PatientPortalInvite, prepared.json()["id"]).status == "prepared"
+        if resend:
+            assert session.get(PatientPortalInvite, original.json()["id"]).status == "pending"
+
+
+@pytest.mark.parametrize("resend", [False, True])
+def test_internal_delivery_commit_audits_committing_staff_once(resend) -> None:
+    app = internal_app()
+    client = TestClient(app)
+    prepare_headers = carlos_headers("portal.invite.manage")
+    request = {"delivery_operation_id": "audited-delivery"}
+    if resend:
+        original = client.post(
+            "/internal/carlos/patients/1234/invites", headers=prepare_headers, json=invite_request()
+        )
+        path = f"/internal/carlos/invites/{original.json()['id']}/resend/prepare"
+    else:
+        path = "/internal/carlos/patients/1234/invites/prepare"
+        request.update(invite_request())
+    prepared = client.post(path, headers=prepare_headers, json=request)
+    assert prepared.status_code == 201
+    invite_id = prepared.json()["id"]
+    commit_headers = carlos_staff_headers(
+        "portal.invite.manage",
+        clinic_id="clinic-a",
+        token=INTERNAL_API_TOKEN,
+        provider_id="committing-provider",
+        provider_name="Committing Staff",
+    )
+    commit_request = {
+        "delivery_operation_id": request["delivery_operation_id"],
+        "delivery_reference": "email:audited-delivery",
+    }
+    for _ in range(2):
+        committed = client.post(
+            f"/internal/carlos/invites/{invite_id}/commit-delivery",
+            headers=commit_headers,
+            json=commit_request,
+        )
+        assert committed.status_code == 200
+    with app.state.session_factory() as session:
+        events = list(session.scalars(select(PatientPortalAuditEvent).where(
+            PatientPortalAuditEvent.invite_id == invite_id,
+            PatientPortalAuditEvent.resource_type == "delivery_reference",
+        )))
+        assert len(events) == 1
+        assert events[0].event_type == (
+            AUDIT_EVENT_INVITE_RESEND if resend else AUDIT_EVENT_INVITE_CREATE
+        )
+        assert events[0].actor == "Committing Staff"
+        assert events[0].actor_id == "committing-provider"
+        assert session.get(PatientPortalInvite, invite_id).created_by_id != events[0].actor_id
+
+
+@pytest.mark.parametrize("prepare_first", [False, True])
+def test_internal_first_preparation_and_legacy_invite_are_mutually_exclusive(prepare_first) -> None:
+    app = internal_app()
+    client = TestClient(app)
+    headers = carlos_headers("portal.invite.manage")
+    legacy_path = "/internal/carlos/patients/1234/invites"
+    prepare_path = f"{legacy_path}/prepare"
+    legacy_request = invite_request()
+    prepare_request = {**legacy_request, "delivery_operation_id": "exclusive-first-invite"}
+    operations = [(legacy_path, legacy_request), (prepare_path, prepare_request)]
+    if prepare_first:
+        operations.reverse()
+    first = client.post(operations[0][0], headers=headers, json=operations[0][1])
+    second = client.post(operations[1][0], headers=headers, json=operations[1][1])
+    assert first.status_code == 201
+    assert second.status_code == 409
+    if prepare_first:
+        committed = client.post(
+            f"/internal/carlos/invites/{first.json()['id']}/commit-delivery",
+            headers=headers,
+            json={
+                "delivery_operation_id": prepare_request["delivery_operation_id"],
+                "delivery_reference": "email:exclusive-first-invite",
+            },
+        )
+        assert committed.status_code == 200
+    with app.state.session_factory() as session:
+        invites = list(session.scalars(select(PatientPortalInvite)))
+        assert len(invites) == 1
+        assert invites[0].status == "pending"
 
 
 def test_internal_invite_rejects_scope_conflicts_and_superseded_revocation(
@@ -1393,8 +1687,11 @@ def test_internal_contact_review_feed_pages_beyond_one_hundred_requests() -> Non
 # ever validated. That ordering is itself asserted below.
 INTERNAL_ROUTE_PERMISSIONS = (
     ("POST", "/internal/carlos/patients/1234/invites", "portal.invite.manage"),
+    ("POST", "/internal/carlos/patients/1234/invites/prepare", "portal.invite.manage"),
     ("GET", "/internal/carlos/patients/1234/invites", "portal.invite.manage"),
     ("POST", "/internal/carlos/invites/1/resend", "portal.invite.manage"),
+    ("POST", "/internal/carlos/invites/1/resend/prepare", "portal.invite.manage"),
+    ("POST", "/internal/carlos/invites/1/commit-delivery", "portal.invite.manage"),
     ("POST", "/internal/carlos/invites/1/revoke", "portal.invite.manage"),
     ("POST", "/internal/carlos/patients/1234/unlock", "portal.account.unlock"),
     ("GET", "/internal/carlos/patients/1234/portal-account", "portal.account.manage"),
@@ -1425,9 +1722,12 @@ def test_internal_openapi_contract_is_stable() -> None:
     assert paths == {
         "/internal/carlos/contact-reviews": ["get"],
         "/internal/carlos/contact-reviews/{review_request_id}/decision": ["post"],
+        "/internal/carlos/invites/{invite_id}/commit-delivery": ["post"],
         "/internal/carlos/invites/{invite_id}/resend": ["post"],
+        "/internal/carlos/invites/{invite_id}/resend/prepare": ["post"],
         "/internal/carlos/invites/{invite_id}/revoke": ["post"],
         "/internal/carlos/patients/{demographic_no}/invites": ["get", "post"],
+        "/internal/carlos/patients/{demographic_no}/invites/prepare": ["post"],
         "/internal/carlos/patients/{demographic_no}/portal-account": ["get"],
         "/internal/carlos/patients/{demographic_no}/portal-account/access": ["post"],
         "/internal/carlos/patients/{demographic_no}/unlock": ["post"],
