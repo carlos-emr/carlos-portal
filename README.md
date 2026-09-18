@@ -677,7 +677,13 @@ CARLOS invitation delivery uses a two-phase contract. The prepare endpoints are:
 
 Both require a stable `delivery_operation_id`; retrying the same operation returns the same token
 while it is prepared and unexpired. An expired preparation returns `409` without disclosing its
-token; revoke it or let transient cleanup remove it before starting a new operation.
+token. Only one invite per patient can be prepared at a time. A different operation for the same
+patient returns `409` with `another invite delivery is being prepared` while the existing
+preparation can still be committed; revoke that prepared invite (it is listed with status
+`prepared`) to abandon it deliberately. A preparation that can no longer be committed, because it
+expired or because its original invite was resent, revoked, or accepted, does not block: the next
+prepare or legacy create for the patient revokes it, erases its ciphertext, and audits the
+revocation with reason `preparation_abandoned`.
 A prepared token is encrypted with the portal outbox keyring and cannot activate an account. For a
 resend, the old pending token remains valid. After CARLOS has durably committed the email job, it
 calls `POST /internal/carlos/invites/{id}/commit-delivery` with the same operation id and the unique

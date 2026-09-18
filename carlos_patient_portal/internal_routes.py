@@ -52,6 +52,7 @@ from carlos_patient_portal.invites import (
     AccountAlreadyExistsError,
     InviteNotFoundError,
     InvitePreparationConflictError,
+    InvitePreparationInProgressError,
     InvitePreparationKeyUnavailableError,
     PendingInviteExistsError,
     RevokedInviteError,
@@ -137,6 +138,7 @@ INTERNAL_CREATE_INVITE_RESPONSES = {
     **INTERNAL_CONFLICT_RESPONSES,
     status.HTTP_400_BAD_REQUEST: {"description": "The demographic scope does not match."},
 }
+INVITE_PREPARATION_IN_PROGRESS = "another invite delivery is being prepared"
 INTERNAL_PREPARE_INVITE_RESPONSES = {
     **INTERNAL_CONFLICT_RESPONSES,
     status.HTTP_503_SERVICE_UNAVAILABLE: {
@@ -626,6 +628,8 @@ def register_internal_invite_routes(
             raise HTTPException(status_code=409, detail="pending invite already exists") from exc
         except InvitePreparationKeyUnavailableError as exc:
             raise HTTPException(status_code=503, detail="invite preparation unavailable") from exc
+        except InvitePreparationInProgressError as exc:
+            raise HTTPException(status_code=409, detail=INVITE_PREPARATION_IN_PROGRESS) from exc
         except InvitePreparationConflictError as exc:
             raise HTTPException(status_code=409, detail="invite preparation conflicts") from exc
         return invite_payload(invite, invite_token=invite_token)
@@ -663,6 +667,8 @@ def register_internal_invite_routes(
             raise HTTPException(status_code=409, detail="invite cannot be resent") from exc
         except InvitePreparationKeyUnavailableError as exc:
             raise HTTPException(status_code=503, detail="invite preparation unavailable") from exc
+        except InvitePreparationInProgressError as exc:
+            raise HTTPException(status_code=409, detail=INVITE_PREPARATION_IN_PROGRESS) from exc
         except InvitePreparationConflictError as exc:
             raise HTTPException(status_code=409, detail="invite preparation conflicts") from exc
         return invite_payload(invite, invite_token=invite_token)
@@ -730,6 +736,8 @@ def register_internal_invite_routes(
             raise HTTPException(status_code=409, detail="portal account already exists") from exc
         except PendingInviteExistsError as exc:
             raise HTTPException(status_code=409, detail="pending invite already exists") from exc
+        except InvitePreparationInProgressError as exc:
+            raise HTTPException(status_code=409, detail=INVITE_PREPARATION_IN_PROGRESS) from exc
         return invite_payload(invite, invite_token=invite_token)
 
     @app.get(

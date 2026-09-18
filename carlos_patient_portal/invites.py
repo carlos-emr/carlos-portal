@@ -94,6 +94,10 @@ class InvitePreparationConflictError(Exception):
     """Raised when a delivery operation cannot safely prepare or activate an invite."""
 
 
+class InvitePreparationInProgressError(InvitePreparationConflictError):
+    """Raised when another delivery operation still holds the patient's preparation slot."""
+
+
 class InvitePreparationKeyUnavailableError(Exception):
     """Raised when a prepared token's encryption key is no longer configured."""
 
@@ -197,10 +201,7 @@ def _disclose_prepared_token(
     *,
     encryption_keys: Mapping[str, str],
 ) -> str:
-    comparable_expiry = invite.expires_at
-    if comparable_expiry.tzinfo is None:
-        comparable_expiry = comparable_expiry.replace(tzinfo=UTC)
-    if comparable_expiry <= utc_now():
+    if _is_expired(invite):
         raise InvitePreparationConflictError()
     key_id = invite.invite_token_key_id
     if key_id is None or key_id not in encryption_keys:
@@ -325,6 +326,16 @@ def create_invite(
         demographic_no=demographic_no,
         actor=normalized_actor,
         actor_id=normalized_actor_id,
+    )
+    # A first preparation reserves the pending slot. Report a live one accurately rather than as
+    # a pending invite, and retire one that can no longer be committed.
+    _release_preparation_slot(
+        session,
+        clinic_id=normalized_clinic_id,
+        demographic_no=demographic_no,
+        actor=normalized_actor,
+        actor_id=normalized_actor_id,
+        first_preparations_only=True,
     )
     if patient_has_account(
         session,
@@ -490,6 +501,90 @@ def _new_prepared_invite(
     return invite, invite_token
 
 
+def _is_expired(invite: PatientPortalInvite) -> bool:
+    comparable_expiry = invite.expires_at
+    if comparable_expiry.tzinfo is None:
+        comparable_expiry = comparable_expiry.replace(tzinfo=UTC)
+    return comparable_expiry <= utc_now()
+
+
+def _preparation_is_abandoned(session: Session, prepared: PatientPortalInvite) -> bool:
+    """Whether a prepared invite can never be committed.
+
+    Commit rejects an expired preparation and a resend whose original is no longer pending, and
+    no transition returns an invite to pending, so both states are permanent. The caller holds
+    the preparation's row lock, which excludes a concurrent commit; the original is read without
+    a lock to keep the prepared-then-original lock order used by commit and prepare retries.
+    """
+    if _is_expired(prepared):
+        return True
+    if prepared.supersedes_invite_id is None:
+        return False
+    original_status = session.scalar(
+        select(PatientPortalInvite.status).where(
+            PatientPortalInvite.id == prepared.supersedes_invite_id
+        )
+    )
+    return original_status != INVITE_STATUS_PENDING
+
+
+def _release_preparation_slot(
+    session: Session,
+    *,
+    clinic_id: str,
+    demographic_no: int,
+    actor: str,
+    actor_id: str,
+    delivery_operation_id: str | None = None,
+    first_preparations_only: bool = False,
+) -> None:
+    """Retire an abandoned preparation that would otherwise block a new invite for the patient.
+
+    Only one invite per patient may be prepared, and a first preparation also reserves the
+    pending slot. An abandoned preparation would hold those slots until transient cleanup, long
+    after it stopped being committable, so it is revoked here instead. A preparation that can
+    still be committed belongs to a live delivery and is never displaced.
+    """
+    statement = select(PatientPortalInvite).where(
+        PatientPortalInvite.clinic_id == clinic_id,
+        PatientPortalInvite.demographic_no == demographic_no,
+        PatientPortalInvite.status == INVITE_STATUS_PREPARED,
+    )
+    if delivery_operation_id is not None:
+        statement = statement.where(
+            PatientPortalInvite.delivery_operation_id != delivery_operation_id
+        )
+    if first_preparations_only:
+        statement = statement.where(PatientPortalInvite.supersedes_invite_id.is_(None))
+    blocking = session.scalar(statement.with_for_update())
+    if blocking is None:
+        return
+    if not _preparation_is_abandoned(session, blocking):
+        raise InvitePreparationInProgressError()
+    now = utc_now()
+    blocking.status = INVITE_STATUS_REVOKED
+    blocking.revoked_at = now
+    blocking.revoked_by = actor
+    blocking.revoked_by_id = actor_id
+    blocking.encrypted_invite_token = None
+    blocking.invite_token_nonce = None
+    blocking.invite_token_key_id = None
+    blocking.updated_at = now
+    session.flush()
+    record_audit_event(
+        session,
+        event_type=AUDIT_EVENT_INVITE_REVOKE,
+        outcome=AUDIT_OUTCOME_SUCCESS,
+        actor_type=AUDIT_ACTOR_TYPE_STAFF,
+        actor=actor,
+        actor_id=actor_id,
+        clinic_id=clinic_id,
+        demographic_no=demographic_no,
+        invite_id=blocking.id,
+        reason="preparation_abandoned",
+    )
+
+
 def prepare_create_invite(
     session: Session,
     demographic_no: int,
@@ -545,6 +640,14 @@ def prepare_create_invite(
     )
     if pending is not None:
         raise PendingInviteExistsError()
+    _release_preparation_slot(
+        session,
+        clinic_id=normalized_clinic_id,
+        demographic_no=demographic_no,
+        actor=normalized_actor,
+        actor_id=normalized_actor_id,
+        delivery_operation_id=delivery_operation_id,
+    )
     try:
         with session.begin_nested():
             return _new_prepared_invite(
@@ -593,6 +696,25 @@ def prepare_resend_invite(
             or existing.supersedes_invite_id != invite_id
         ):
             raise InvitePreparationConflictError()
+    else:
+        # Resolve the patient without locking the original: a blocking preparation must be
+        # locked first, matching the prepared-then-original order used by commit.
+        demographic_no = session.scalar(
+            select(PatientPortalInvite.demographic_no).where(
+                PatientPortalInvite.id == invite_id,
+                PatientPortalInvite.clinic_id == normalized_clinic_id,
+            )
+        )
+        if demographic_no is None:
+            raise InviteNotFoundError()
+        _release_preparation_slot(
+            session,
+            clinic_id=normalized_clinic_id,
+            demographic_no=demographic_no,
+            actor=normalized_actor,
+            actor_id=normalized_actor_id,
+            delivery_operation_id=delivery_operation_id,
+        )
 
     invite = get_invite(session, invite_id, clinic_id=normalized_clinic_id, lock=True)
     if invite.status != INVITE_STATUS_PENDING:
@@ -651,10 +773,7 @@ def activate_prepared_invite(
         if invite.delivery_reference != delivery_reference:
             raise InvitePreparationConflictError()
         return invite
-    comparable_expiry = invite.expires_at
-    if comparable_expiry.tzinfo is None:
-        comparable_expiry = comparable_expiry.replace(tzinfo=UTC)
-    if invite.status != INVITE_STATUS_PREPARED or comparable_expiry <= utc_now():
+    if invite.status != INVITE_STATUS_PREPARED or _is_expired(invite):
         raise InvitePreparationConflictError()
 
     old_invite: PatientPortalInvite | None = None

@@ -125,6 +125,11 @@ def register_dev_admin_routes(
                     status_code=409,
                     detail="pending invite already exists",
                 ) from exc
+            except InvitePreparationConflictError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail="another invite delivery is being prepared",
+                ) from exc
             return invite_response_payload(invite, invite_token)
 
         @app.get(
