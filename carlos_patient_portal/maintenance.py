@@ -29,10 +29,11 @@ from urllib.parse import quote
 
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.engine import make_url
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from carlos_patient_portal.models import (
     INVITE_STATUS_PENDING,
+    INVITE_STATUS_PREPARED,
     INVITE_STATUS_REVOKED,
     INVITE_STATUS_SUPERSEDED,
     OUTBOX_STATUS_DELIVERED,
@@ -182,6 +183,15 @@ def cleanup_transient_auth_rows(
     dry_run: bool = False,
 ) -> TransientCleanupResult:
     normalized_batch_size = normalize_prune_batch_size(batch_size)
+    prepared_replacement = aliased(PatientPortalInvite)
+    has_prepared_replacement = (
+        select(prepared_replacement.id)
+        .where(
+            prepared_replacement.supersedes_invite_id == PatientPortalInvite.id,
+            prepared_replacement.status == INVITE_STATUS_PREPARED,
+        )
+        .exists()
+    )
     settled_outbox_predicate = and_(
         PatientPortalOutboundDelivery.status.in_(
             (OUTBOX_STATUS_DELIVERED, OUTBOX_STATUS_FAILED)
@@ -245,8 +255,12 @@ def cleanup_transient_auth_rows(
             PatientPortalInvite,
             and_(
                 PatientPortalInvite.expires_at < before,
+                # SET NULL on the self-reference must not turn a prepared resend into a
+                # first invite and bypass the original invite's revocation/status checks.
+                ~has_prepared_replacement,
                 PatientPortalInvite.status.in_(
                     (
+                        INVITE_STATUS_PREPARED,
                         INVITE_STATUS_PENDING,
                         INVITE_STATUS_REVOKED,
                         INVITE_STATUS_SUPERSEDED,
@@ -271,14 +285,18 @@ def cleanup_transient_auth_rows(
         predicates,
         strict=True,
     ):
+        candidates = (
+            select(model.id).where(predicate).order_by(model.id).limit(normalized_batch_size)
+        )
+        if model is PatientPortalInvite and not dry_run:
+            # Preparation locks its original invite before inserting the replacement. Lock
+            # deletion candidates too, so a new preparation cannot appear between selection
+            # and DELETE. The DELETE rechecks the child predicate using a fresh snapshot.
+            candidates = candidates.with_for_update(skip_locked=True)
         record_ids = (
             outbound_delivery_ids
             if field_name == "outbound_deliveries"
-            else list(
-                session.scalars(
-                    select(model.id).where(predicate).order_by(model.id).limit(normalized_batch_size)
-                )
-            )
+            else list(session.scalars(candidates))
         )
         if dry_run or not record_ids:
             counts[field_name] = len(record_ids)

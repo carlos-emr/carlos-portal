@@ -25,6 +25,7 @@ from carlos_patient_portal.models import (
     ACCOUNT_STATUS_ACTIVE,
     INVITE_STATUS_ACCEPTED,
     INVITE_STATUS_PENDING,
+    INVITE_STATUS_PREPARED,
     INVITE_STATUS_REVOKED,
     INVITE_STATUS_SUPERSEDED,
     PatientPortalAccount,
@@ -382,11 +383,24 @@ def test_transient_cleanup_retains_accepted_invites_and_rechecks_status() -> Non
                 ),
                 revoked_at=created_at if invite_status == INVITE_STATUS_REVOKED else None,
                 revoked_by="CarlosDoc" if invite_status == INVITE_STATUS_REVOKED else None,
+                delivery_operation_id=(
+                    "expired-preparation" if invite_status == INVITE_STATUS_PREPARED else None
+                ),
+                encrypted_invite_token=(
+                    b"expired-ciphertext" if invite_status == INVITE_STATUS_PREPARED else None
+                ),
+                invite_token_nonce=(
+                    b"012345678901" if invite_status == INVITE_STATUS_PREPARED else None
+                ),
+                invite_token_key_id=(
+                    "primary" if invite_status == INVITE_STATUS_PREPARED else None
+                ),
             )
             for demographic_no, invite_status in (
                 (1234, INVITE_STATUS_ACCEPTED),
                 (1235, INVITE_STATUS_PENDING),
                 (1236, INVITE_STATUS_REVOKED),
+                (1237, INVITE_STATUS_PREPARED),
             )
         ]
         session.add_all(invites)
@@ -400,7 +414,7 @@ def test_transient_cleanup_retains_accepted_invites_and_rechecks_status() -> Non
         session.commit()
         remaining_statuses = set(session.scalars(select(PatientPortalInvite.status)))
 
-    assert result.invites == 2
+    assert result.invites == 3
     assert remaining_statuses == {INVITE_STATUS_ACCEPTED}
 
 

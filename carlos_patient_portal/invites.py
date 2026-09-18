@@ -17,10 +17,15 @@
 #
 # CARLOS EMR Project
 
-from datetime import timedelta
+from collections.abc import Mapping
+from datetime import UTC, timedelta
 from hashlib import sha256
-from secrets import token_urlsafe
+from secrets import compare_digest, token_bytes, token_urlsafe
 
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from sqlalchemy import desc, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -36,13 +41,16 @@ from carlos_patient_portal.models import (
     AUDIT_EVENT_INVITE_CREATE,
     AUDIT_EVENT_INVITE_RESEND,
     AUDIT_EVENT_INVITE_REVOKE,
+    AUDIT_EVENT_STAFF_ACTION,
     AUDIT_OUTCOME_SUCCESS,
     IDENTITY_PROOF_HASH_VERSION,
     INVITE_STATUS_ACCEPTED,
     INVITE_STATUS_PENDING,
+    INVITE_STATUS_PREPARED,
     INVITE_STATUS_REVOKED,
     INVITE_STATUS_SUPERSEDED,
     MAX_CLINIC_ID_LENGTH,
+    OUTBOX_NONCE_LENGTH,
     PatientPortalAccount,
     PatientPortalInvite,
     utc_now,
@@ -54,6 +62,8 @@ DEFAULT_INVITE_LIST_LIMIT = 10
 MAX_INVITE_LIST_LIMIT = 100
 MAX_ACTOR_LENGTH = 128
 PROOF_SALT_BYTES = 16
+INVITE_PREPARATION_KEY_INFO = b"carlos-patient-portal:invite-preparation:v1"
+INVITE_PREPARATION_AAD = "carlos-patient-portal.invite-preparation.v1"
 
 
 class AccountAlreadyExistsError(Exception):
@@ -78,6 +88,18 @@ class AcceptedInviteError(Exception):
 
 class SupersededInviteError(Exception):
     """Raised when a superseded invite cannot be issued again."""
+
+
+class InvitePreparationConflictError(Exception):
+    """Raised when a delivery operation cannot safely prepare or activate an invite."""
+
+
+class InvitePreparationInProgressError(InvitePreparationConflictError):
+    """Raised when another delivery operation still holds the patient's preparation slot."""
+
+
+class InvitePreparationKeyUnavailableError(Exception):
+    """Raised when a prepared token's encryption key is no longer configured."""
 
 
 def create_invite_token() -> str:
@@ -138,6 +160,81 @@ def hash_invite_token(token: str) -> str:
     row and fails with a clean "details could not be verified" rather than "no such invite".
     """
     return sha256(token.encode("utf-8")).hexdigest()
+
+
+def _invite_preparation_key(secret: str) -> bytes:
+    normalized = secret.strip()
+    if not normalized:
+        raise ValueError("invite preparation encryption secret must not be blank")
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=INVITE_PREPARATION_KEY_INFO,
+    ).derive(normalized.encode("utf-8"))
+
+
+def _invite_preparation_aad(invite: PatientPortalInvite) -> bytes:
+    return (
+        f"{INVITE_PREPARATION_AAD}:{invite.clinic_id}:"
+        f"{invite.demographic_no}:{invite.delivery_operation_id}"
+    ).encode()
+
+
+def _protect_prepared_token(
+    invite: PatientPortalInvite,
+    token: str,
+    *,
+    encryption_secret: str,
+    encryption_key_id: str,
+) -> None:
+    nonce = token_bytes(OUTBOX_NONCE_LENGTH)
+    invite.encrypted_invite_token = AESGCM(_invite_preparation_key(encryption_secret)).encrypt(
+        nonce, token.encode(), _invite_preparation_aad(invite)
+    )
+    invite.invite_token_nonce = nonce
+    invite.invite_token_key_id = encryption_key_id
+
+
+def _disclose_prepared_token(
+    invite: PatientPortalInvite,
+    *,
+    encryption_keys: Mapping[str, str],
+) -> str:
+    if _is_expired(invite):
+        raise InvitePreparationConflictError()
+    key_id = invite.invite_token_key_id
+    if key_id is None or key_id not in encryption_keys:
+        raise InvitePreparationKeyUnavailableError()
+    if invite.encrypted_invite_token is None or invite.invite_token_nonce is None:
+        raise InvitePreparationConflictError()
+    try:
+        token = AESGCM(_invite_preparation_key(encryption_keys[key_id])).decrypt(
+            invite.invite_token_nonce,
+            invite.encrypted_invite_token,
+            _invite_preparation_aad(invite),
+        )
+        return token.decode("utf-8")
+    except (InvalidTag, UnicodeDecodeError, ValueError):
+        raise InvitePreparationKeyUnavailableError() from None
+
+
+def _same_identity_proof(
+    invite: PatientPortalInvite,
+    identity_proof: IdentityProof,
+    proof_secret: str,
+) -> bool:
+    if invite.proof_salt is None:
+        return False
+    candidate = build_identity_hashes(identity_proof, proof_secret, invite.proof_salt)
+    return all(
+        compare_digest(candidate[name], getattr(invite, name) or "")
+        for name in (
+            "proof_email_hash",
+            "proof_date_of_birth_hash",
+            "proof_health_card_hash",
+        )
+    )
 
 
 def patient_has_account(
@@ -230,6 +327,16 @@ def create_invite(
         actor=normalized_actor,
         actor_id=normalized_actor_id,
     )
+    # A first preparation reserves the pending slot. Report a live one accurately rather than as
+    # a pending invite, and retire one that can no longer be committed.
+    _release_preparation_slot(
+        session,
+        clinic_id=normalized_clinic_id,
+        demographic_no=demographic_no,
+        actor=normalized_actor,
+        actor_id=normalized_actor_id,
+        first_preparations_only=True,
+    )
     if patient_has_account(
         session,
         clinic_id=normalized_clinic_id,
@@ -318,6 +425,471 @@ def list_invites(
     return list(session.scalars(statement.offset(offset).limit(limit)))
 
 
+def _prepared_for_operation(
+    session: Session,
+    *,
+    clinic_id: str,
+    delivery_operation_id: str,
+    lock: bool = False,
+) -> PatientPortalInvite | None:
+    statement = select(PatientPortalInvite).where(
+        PatientPortalInvite.clinic_id == clinic_id,
+        PatientPortalInvite.delivery_operation_id == delivery_operation_id,
+    )
+    if lock:
+        statement = statement.with_for_update()
+    return session.scalar(statement)
+
+
+def _new_prepared_invite(
+    session: Session,
+    *,
+    clinic_id: str,
+    demographic_no: int,
+    actor: str,
+    actor_id: str,
+    delivery_operation_id: str,
+    proof_hashes: dict[str, str],
+    proof_salt: str,
+    proof_hash_version: str,
+    encryption_secret: str,
+    encryption_key_id: str,
+    supersedes_invite_id: int | None,
+) -> tuple[PatientPortalInvite, str]:
+    invite_token = create_invite_token()
+    now = utc_now()
+    invite = PatientPortalInvite(
+        clinic_id=clinic_id,
+        demographic_no=demographic_no,
+        token_hash=hash_invite_token(invite_token),
+        status=INVITE_STATUS_PREPARED,
+        created_by=actor,
+        created_by_id=actor_id,
+        created_at=now,
+        updated_at=now,
+        sent_count=1,
+        last_sent_at=now,
+        last_sent_by=actor,
+        last_sent_by_id=actor_id,
+        expires_at=now + DEFAULT_INVITE_TTL,
+        proof_salt=proof_salt,
+        proof_hash_version=proof_hash_version,
+        supersedes_invite_id=supersedes_invite_id,
+        delivery_operation_id=delivery_operation_id,
+        **proof_hashes,
+    )
+    _protect_prepared_token(
+        invite,
+        invite_token,
+        encryption_secret=encryption_secret,
+        encryption_key_id=encryption_key_id,
+    )
+    session.add(invite)
+    session.flush()
+    record_audit_event(
+        session,
+        event_type=AUDIT_EVENT_STAFF_ACTION,
+        outcome=AUDIT_OUTCOME_SUCCESS,
+        actor_type=AUDIT_ACTOR_TYPE_STAFF,
+        actor=actor,
+        actor_id=actor_id,
+        clinic_id=clinic_id,
+        demographic_no=demographic_no,
+        invite_id=invite.id,
+        resource_type="invite_preparation",
+        reason="delivery_pending",
+    )
+    return invite, invite_token
+
+
+def _is_expired(invite: PatientPortalInvite) -> bool:
+    comparable_expiry = invite.expires_at
+    if comparable_expiry.tzinfo is None:
+        comparable_expiry = comparable_expiry.replace(tzinfo=UTC)
+    return comparable_expiry <= utc_now()
+
+
+def _preparation_is_abandoned(session: Session, prepared: PatientPortalInvite) -> bool:
+    """Whether a prepared invite can never be committed.
+
+    Commit rejects an expired preparation and a resend whose original is no longer pending, and
+    no transition returns an invite to pending, so both states are permanent. The caller holds
+    the preparation's row lock, which excludes a concurrent commit; the original is read without
+    a lock to keep the prepared-then-original lock order used by commit and prepare retries.
+    """
+    if _is_expired(prepared):
+        return True
+    if prepared.supersedes_invite_id is None:
+        return False
+    original_status = session.scalar(
+        select(PatientPortalInvite.status).where(
+            PatientPortalInvite.id == prepared.supersedes_invite_id
+        )
+    )
+    return original_status != INVITE_STATUS_PENDING
+
+
+def _release_preparation_slot(
+    session: Session,
+    *,
+    clinic_id: str,
+    demographic_no: int,
+    actor: str,
+    actor_id: str,
+    delivery_operation_id: str | None = None,
+    first_preparations_only: bool = False,
+) -> None:
+    """Retire an abandoned preparation that would otherwise block a new invite for the patient.
+
+    Only one invite per patient may be prepared, and a first preparation also reserves the
+    pending slot. An abandoned preparation would hold those slots until transient cleanup, long
+    after it stopped being committable, so it is revoked here instead. A preparation that can
+    still be committed belongs to a live delivery and is never displaced.
+    """
+    statement = select(PatientPortalInvite).where(
+        PatientPortalInvite.clinic_id == clinic_id,
+        PatientPortalInvite.demographic_no == demographic_no,
+        PatientPortalInvite.status == INVITE_STATUS_PREPARED,
+    )
+    if delivery_operation_id is not None:
+        statement = statement.where(
+            PatientPortalInvite.delivery_operation_id != delivery_operation_id
+        )
+    if first_preparations_only:
+        statement = statement.where(PatientPortalInvite.supersedes_invite_id.is_(None))
+    blocking = session.scalar(statement.with_for_update())
+    if blocking is None:
+        return
+    if not _preparation_is_abandoned(session, blocking):
+        raise InvitePreparationInProgressError()
+    now = utc_now()
+    blocking.status = INVITE_STATUS_REVOKED
+    blocking.revoked_at = now
+    blocking.revoked_by = actor
+    blocking.revoked_by_id = actor_id
+    blocking.encrypted_invite_token = None
+    blocking.invite_token_nonce = None
+    blocking.invite_token_key_id = None
+    blocking.updated_at = now
+    session.flush()
+    record_audit_event(
+        session,
+        event_type=AUDIT_EVENT_INVITE_REVOKE,
+        outcome=AUDIT_OUTCOME_SUCCESS,
+        actor_type=AUDIT_ACTOR_TYPE_STAFF,
+        actor=actor,
+        actor_id=actor_id,
+        clinic_id=clinic_id,
+        demographic_no=demographic_no,
+        invite_id=blocking.id,
+        reason="preparation_abandoned",
+    )
+
+
+def _preparation_insert_conflict(
+    session: Session,
+    *,
+    clinic_id: str,
+    demographic_no: int,
+    delivery_operation_id: str,
+) -> InvitePreparationConflictError:
+    """Classify a rejected insert: a concurrent operation may have just taken the slot."""
+    concurrent = session.scalar(
+        select(PatientPortalInvite.id).where(
+            PatientPortalInvite.clinic_id == clinic_id,
+            PatientPortalInvite.demographic_no == demographic_no,
+            PatientPortalInvite.status == INVITE_STATUS_PREPARED,
+            PatientPortalInvite.delivery_operation_id != delivery_operation_id,
+        )
+    )
+    if concurrent is not None:
+        return InvitePreparationInProgressError()
+    return InvitePreparationConflictError()
+
+
+def prepare_create_invite(
+    session: Session,
+    demographic_no: int,
+    actor: str,
+    *,
+    delivery_operation_id: str,
+    identity_proof: IdentityProof,
+    proof_secret: str,
+    encryption_secret: str,
+    encryption_key_id: str,
+    encryption_keys: Mapping[str, str],
+    clinic_id: str = "default",
+    actor_id: str | None = None,
+) -> tuple[PatientPortalInvite, str]:
+    """Prepare a first invite without making it usable or replacing another token.
+
+    Repeating the same operation returns the same one-time token while it remains prepared. This
+    lets CARLOS recover when the HTTP response is lost before its durable email transaction is
+    committed.
+    """
+    validate_demographic_no(demographic_no)
+    normalized_clinic_id = normalize_clinic_id(clinic_id)
+    normalized_actor = normalize_staff_actor(actor)
+    normalized_actor_id = normalize_staff_actor_id(actor_id, normalized_actor)
+    if not proof_secret or not proof_secret.strip():
+        raise ValueError("proof_secret must not be blank")
+    proof_salt = create_proof_salt()
+    proof_hashes = build_identity_hashes(identity_proof, proof_secret, proof_salt)
+
+    existing = _prepared_for_operation(
+        session,
+        clinic_id=normalized_clinic_id,
+        delivery_operation_id=delivery_operation_id,
+        lock=True,
+    )
+    if existing is not None:
+        if (
+            existing.status != INVITE_STATUS_PREPARED
+            or existing.demographic_no != demographic_no
+            or existing.created_by_id != normalized_actor_id
+            or existing.supersedes_invite_id is not None
+            or not _same_identity_proof(existing, identity_proof, proof_secret)
+        ):
+            raise InvitePreparationConflictError()
+        return existing, _disclose_prepared_token(existing, encryption_keys=encryption_keys)
+
+    if patient_has_account(session, clinic_id=normalized_clinic_id, demographic_no=demographic_no):
+        raise AccountAlreadyExistsError()
+    pending = session.scalar(
+        select(PatientPortalInvite.id).where(
+            PatientPortalInvite.clinic_id == normalized_clinic_id,
+            PatientPortalInvite.demographic_no == demographic_no,
+            PatientPortalInvite.status == INVITE_STATUS_PENDING,
+        )
+    )
+    if pending is not None:
+        raise PendingInviteExistsError()
+    _release_preparation_slot(
+        session,
+        clinic_id=normalized_clinic_id,
+        demographic_no=demographic_no,
+        actor=normalized_actor,
+        actor_id=normalized_actor_id,
+        delivery_operation_id=delivery_operation_id,
+    )
+    try:
+        with session.begin_nested():
+            return _new_prepared_invite(
+                session,
+                clinic_id=normalized_clinic_id,
+                demographic_no=demographic_no,
+                actor=normalized_actor,
+                actor_id=normalized_actor_id,
+                delivery_operation_id=delivery_operation_id,
+                proof_hashes=proof_hashes,
+                proof_salt=proof_salt,
+                proof_hash_version=IDENTITY_PROOF_HASH_VERSION,
+                encryption_secret=encryption_secret,
+                encryption_key_id=encryption_key_id,
+                supersedes_invite_id=None,
+            )
+    except IntegrityError as exc:
+        raise _preparation_insert_conflict(
+            session,
+            clinic_id=normalized_clinic_id,
+            demographic_no=demographic_no,
+            delivery_operation_id=delivery_operation_id,
+        ) from exc
+
+
+def prepare_resend_invite(
+    session: Session,
+    invite_id: int,
+    actor: str,
+    *,
+    delivery_operation_id: str,
+    encryption_secret: str,
+    encryption_key_id: str,
+    encryption_keys: Mapping[str, str],
+    clinic_id: str = "default",
+    actor_id: str | None = None,
+) -> tuple[PatientPortalInvite, str]:
+    """Prepare a replacement while leaving the currently delivered token valid."""
+    normalized_clinic_id = normalize_clinic_id(clinic_id)
+    normalized_actor = normalize_staff_actor(actor)
+    normalized_actor_id = normalize_staff_actor_id(actor_id, normalized_actor)
+    existing = _prepared_for_operation(
+        session,
+        clinic_id=normalized_clinic_id,
+        delivery_operation_id=delivery_operation_id,
+        lock=True,
+    )
+    if existing is not None:
+        if (
+            existing.status != INVITE_STATUS_PREPARED
+            or existing.created_by_id != normalized_actor_id
+            or existing.supersedes_invite_id != invite_id
+        ):
+            raise InvitePreparationConflictError()
+    else:
+        # Resolve the patient without locking the original: a blocking preparation must be
+        # locked first, matching the prepared-then-original order used by commit.
+        demographic_no = session.scalar(
+            select(PatientPortalInvite.demographic_no).where(
+                PatientPortalInvite.id == invite_id,
+                PatientPortalInvite.clinic_id == normalized_clinic_id,
+            )
+        )
+        if demographic_no is None:
+            raise InviteNotFoundError()
+        _release_preparation_slot(
+            session,
+            clinic_id=normalized_clinic_id,
+            demographic_no=demographic_no,
+            actor=normalized_actor,
+            actor_id=normalized_actor_id,
+            delivery_operation_id=delivery_operation_id,
+        )
+
+    invite = get_invite(session, invite_id, clinic_id=normalized_clinic_id, lock=True)
+    if invite.status != INVITE_STATUS_PENDING:
+        if invite.status == INVITE_STATUS_REVOKED:
+            raise RevokedInviteError()
+        if invite.status == INVITE_STATUS_ACCEPTED:
+            raise AcceptedInviteError()
+        raise SupersededInviteError()
+    if existing is not None:
+        return existing, _disclose_prepared_token(existing, encryption_keys=encryption_keys)
+    if invite.proof_salt is None or invite.proof_hash_version is None:
+        raise InvitePreparationConflictError()
+    proof_hashes = {
+        "proof_email_hash": invite.proof_email_hash,
+        "proof_date_of_birth_hash": invite.proof_date_of_birth_hash,
+        "proof_health_card_hash": invite.proof_health_card_hash,
+    }
+    if not all(proof_hashes.values()):
+        raise InvitePreparationConflictError()
+    try:
+        with session.begin_nested():
+            return _new_prepared_invite(
+                session,
+                clinic_id=normalized_clinic_id,
+                demographic_no=invite.demographic_no,
+                actor=normalized_actor,
+                actor_id=normalized_actor_id,
+                delivery_operation_id=delivery_operation_id,
+                proof_hashes=proof_hashes,
+                proof_salt=invite.proof_salt,
+                # The copied hashes keep the version they were computed with.
+                proof_hash_version=invite.proof_hash_version,
+                encryption_secret=encryption_secret,
+                encryption_key_id=encryption_key_id,
+                supersedes_invite_id=invite.id,
+            )
+    except IntegrityError as exc:
+        raise _preparation_insert_conflict(
+            session,
+            clinic_id=normalized_clinic_id,
+            demographic_no=invite.demographic_no,
+            delivery_operation_id=delivery_operation_id,
+        ) from exc
+
+
+def activate_prepared_invite(
+    session: Session,
+    invite_id: int,
+    *,
+    delivery_operation_id: str,
+    delivery_reference: str,
+    clinic_id: str,
+    actor: str,
+    actor_id: str | None = None,
+) -> PatientPortalInvite:
+    """Atomically activate a prepared invite after CARLOS durably records its email job."""
+    normalized_actor = normalize_staff_actor(actor)
+    normalized_actor_id = normalize_staff_actor_id(actor_id, normalized_actor)
+    invite = get_invite(session, invite_id, clinic_id=clinic_id, lock=True)
+    if invite.delivery_operation_id != delivery_operation_id:
+        raise InvitePreparationConflictError()
+    if invite.status == INVITE_STATUS_PENDING:
+        if invite.delivery_reference != delivery_reference:
+            raise InvitePreparationConflictError()
+        return invite
+    if invite.status != INVITE_STATUS_PREPARED or _is_expired(invite):
+        raise InvitePreparationConflictError()
+
+    old_invite: PatientPortalInvite | None = None
+    if invite.supersedes_invite_id is not None:
+        old_invite = get_invite(
+            session,
+            invite.supersedes_invite_id,
+            clinic_id=clinic_id,
+            lock=True,
+        )
+        if old_invite.status != INVITE_STATUS_PENDING:
+            raise InvitePreparationConflictError()
+    else:
+        old_invite = session.scalar(
+            select(PatientPortalInvite)
+            .where(
+                PatientPortalInvite.clinic_id == invite.clinic_id,
+                PatientPortalInvite.demographic_no == invite.demographic_no,
+                PatientPortalInvite.status == INVITE_STATUS_PENDING,
+                PatientPortalInvite.id != invite.id,
+            )
+            .with_for_update()
+        )
+        if old_invite is not None:
+            raise InvitePreparationConflictError()
+
+    try:
+        with session.begin_nested():
+            now = utc_now()
+            if old_invite is not None:
+                old_invite.status = INVITE_STATUS_SUPERSEDED
+                old_invite.updated_at = now
+                session.flush()
+            invite.status = INVITE_STATUS_PENDING
+            invite.delivery_reference = delivery_reference
+            invite.encrypted_invite_token = None
+            invite.invite_token_nonce = None
+            invite.invite_token_key_id = None
+            invite.updated_at = now
+            session.flush()
+    except IntegrityError as exc:
+        raise InvitePreparationConflictError() from exc
+    record_audit_event(
+        session,
+        event_type=(
+            AUDIT_EVENT_INVITE_RESEND
+            if invite.supersedes_invite_id is not None
+            else AUDIT_EVENT_INVITE_CREATE
+        ),
+        outcome=AUDIT_OUTCOME_SUCCESS,
+        actor_type=AUDIT_ACTOR_TYPE_STAFF,
+        actor=normalized_actor,
+        actor_id=normalized_actor_id,
+        clinic_id=invite.clinic_id,
+        demographic_no=invite.demographic_no,
+        invite_id=invite.id,
+        resource_type="delivery_reference",
+        resource_id=delivery_reference,
+    )
+    if old_invite is not None:
+        # Invite rows are pruned long before audit events, so the replaced invite is recorded
+        # here as the immediate resend path records it, not left to supersedes_invite_id.
+        record_audit_event(
+            session,
+            event_type=AUDIT_EVENT_STAFF_ACTION,
+            outcome=AUDIT_OUTCOME_SUCCESS,
+            actor_type=AUDIT_ACTOR_TYPE_STAFF,
+            actor=normalized_actor,
+            actor_id=normalized_actor_id,
+            clinic_id=invite.clinic_id,
+            demographic_no=invite.demographic_no,
+            invite_id=invite.id,
+            resource_type="superseded_invite",
+            resource_id=str(old_invite.id),
+            reason="delivery_committed",
+        )
+    return invite
+
+
 def resend_invite(
     session: Session,
     invite_id: int,
@@ -327,6 +899,8 @@ def resend_invite(
     actor_id: str | None = None,
 ) -> tuple[PatientPortalInvite, str]:
     invite = get_invite(session, invite_id, clinic_id=clinic_id, lock=True)
+    if invite.status == INVITE_STATUS_PREPARED:
+        raise InvitePreparationConflictError()
     if invite.status == INVITE_STATUS_REVOKED:
         raise RevokedInviteError()
     if invite.status == INVITE_STATUS_ACCEPTED:
@@ -401,6 +975,11 @@ def revoke_invite(
         invite.revoked_at = now
         invite.revoked_by = normalized_actor
         invite.revoked_by_id = normalized_actor_id
+        # A revoked preparation must not retain a recoverable one-time credential. The database
+        # constraint also makes this erasure part of the state transition rather than cleanup.
+        invite.encrypted_invite_token = None
+        invite.invite_token_nonce = None
+        invite.invite_token_key_id = None
         invite.updated_at = now
         session.flush()
         record_audit_event(

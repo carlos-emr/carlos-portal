@@ -39,6 +39,7 @@ from carlos_patient_portal.invites import (
     AcceptedInviteError,
     AccountAlreadyExistsError,
     InviteNotFoundError,
+    InvitePreparationConflictError,
     PendingInviteExistsError,
     RevokedInviteError,
     SupersededInviteError,
@@ -124,6 +125,11 @@ def register_dev_admin_routes(
                     status_code=409,
                     detail="pending invite already exists",
                 ) from exc
+            except InvitePreparationConflictError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail="another invite delivery is being prepared",
+                ) from exc
             return invite_response_payload(invite, invite_token)
 
         @app.get(
@@ -184,6 +190,10 @@ def register_dev_admin_routes(
                 )
             except InviteNotFoundError as exc:
                 raise HTTPException(status_code=404, detail="invite not found") from exc
+            except InvitePreparationConflictError as exc:
+                raise HTTPException(
+                    status_code=409, detail="invite delivery is not committed"
+                ) from exc
             except RevokedInviteError as exc:
                 raise HTTPException(status_code=409, detail="invite has been revoked") from exc
             except AcceptedInviteError as exc:

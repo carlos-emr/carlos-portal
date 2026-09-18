@@ -1,12 +1,12 @@
 import os
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
+from datetime import date, timedelta
 from threading import Barrier, Event, Lock
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, inspect, select, text
+from sqlalchemy import event, func, inspect, select, text
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
@@ -29,7 +29,18 @@ from carlos_patient_portal.delivery_outbox import (
     enqueue_contact_change_delivery,
     process_one_delivery,
 )
+from carlos_patient_portal.identity import IdentityProof
+from carlos_patient_portal.invites import (
+    InviteNotFoundError,
+    InvitePreparationConflictError,
+    PendingInviteExistsError,
+    activate_prepared_invite,
+    create_invite,
+    prepare_create_invite,
+    prepare_resend_invite,
+)
 from carlos_patient_portal.main import auth_policy_from_settings, create_app
+from carlos_patient_portal.maintenance import cleanup_transient_auth_rows
 from carlos_patient_portal.models import (
     ACCOUNT_STATUS_ACTIVE,
     CONTACT_REVIEW_STATUS_PENDING,
@@ -39,6 +50,7 @@ from carlos_patient_portal.models import (
     PatientPortalAccount,
     PatientPortalContactReviewRequest,
     PatientPortalEmailChangeRequest,
+    PatientPortalInvite,
     PatientPortalOutboundDelivery,
     PatientPortalSession,
     PatientPortalStaffAssertionUse,
@@ -1149,3 +1161,184 @@ def test_postgresql_outbox_claim_compiles_to_for_update_skip_locked() -> None:
 
     assert "FOR UPDATE SKIP LOCKED" in compiled
     assert "FOR UPDATE SKIP LOCKED" not in str(statement.compile(dialect=sqlite.dialect()))
+
+
+def test_postgresql_first_preparation_racing_legacy_create_cannot_strand_delivery() -> None:
+    assert POSTGRES_URL is not None
+    clean_postgresql_database()
+    engine = create_portal_engine(POSTGRES_URL)
+    insert_barrier = Barrier(2)
+    proof = IdentityProof(
+        email="invite.race@example.com",
+        date_of_birth=date(1980, 5, 20),
+        health_card_number="ABCD 1234-5678",
+    )
+
+    def synchronize_invite_inserts(connection, cursor, statement, parameters, context, executemany):
+        if statement.startswith("INSERT INTO patient_portal_invites "):
+            # Both requests have finished their application checks before either can insert.
+            # The database must reject one, even though neither could see a conflicting row.
+            insert_barrier.wait(timeout=10)
+
+    def create_from_worker(prepared):
+        try:
+            with Session(engine) as session, session.begin():
+                session.execute(text("SET LOCAL statement_timeout = '15s'"))
+                arguments = {
+                    "clinic_id": "postgres-clinic",
+                    "actor_id": "preparing-provider",
+                    "identity_proof": proof,
+                    "proof_secret": "p" * 32,
+                }
+                if prepared:
+                    invite, _ = prepare_create_invite(
+                        session, 1234, "Preparing Staff",
+                        delivery_operation_id="concurrent-first-delivery",
+                        encryption_secret="e" * 32,
+                        encryption_key_id="test-key",
+                        encryption_keys={"test-key": "e" * 32},
+                        **arguments,
+                    )
+                else:
+                    invite, _ = create_invite(session, 1234, "Preparing Staff", **arguments)
+                result = (invite.status, invite.id)
+            return result
+        except (InvitePreparationConflictError, PendingInviteExistsError):
+            return ("conflict", None)
+
+    event.listen(engine, "before_cursor_execute", synchronize_invite_inserts)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(create_from_worker, [True, False]))
+        assert sum(status == "conflict" for status, _ in results) == 1
+        with Session(engine) as session, session.begin():
+            invites = list(session.scalars(select(PatientPortalInvite)))
+            assert len(invites) == 1
+            winner = invites[0]
+            if winner.status == "prepared":
+                activate_prepared_invite(
+                    session,
+                    winner.id,
+                    delivery_operation_id="concurrent-first-delivery",
+                    delivery_reference="email:concurrent-first-delivery",
+                    clinic_id="postgres-clinic",
+                    actor="Committing Staff",
+                    actor_id="committing-provider",
+                )
+            assert winner.status == "pending"
+    finally:
+        event.remove(engine, "before_cursor_execute", synchronize_invite_inserts)
+        engine.dispose()
+
+
+@pytest.fixture
+def expired_postgres_invite():
+    assert POSTGRES_URL is not None
+    clean_postgresql_database()
+    engine = create_portal_engine(POSTGRES_URL)
+    try:
+        with Session(engine) as session, session.begin():
+            original, _ = create_invite(
+                session, 1234, "Preparing Staff",
+                clinic_id="postgres-clinic",
+                identity_proof=IdentityProof(
+                    email="cleanup.race@example.com",
+                    date_of_birth=date(1980, 5, 20),
+                    health_card_number="ABCD 1234-5678",
+                ),
+                proof_secret="p" * 32,
+            )
+            original.created_at = utc_now() - timedelta(days=70)
+            original.expires_at = utc_now() - timedelta(days=60)
+            original_id = original.id
+        yield engine, original_id, utc_now() - timedelta(days=30)
+    finally:
+        engine.dispose()
+
+
+def prepare_cleanup_race_resend(session, original_id):
+    return prepare_resend_invite(
+        session, original_id, "Preparing Staff",
+        clinic_id="postgres-clinic",
+        delivery_operation_id="cleanup-race-resend",
+        encryption_secret="e" * 32,
+        encryption_key_id="test-key",
+        encryption_keys={"test-key": "e" * 32},
+    )
+
+
+def test_postgresql_cleanup_skips_original_locked_by_uncommitted_preparation(
+    expired_postgres_invite,
+) -> None:
+    engine, original_id, cutoff = expired_postgres_invite
+    with Session(engine) as preparing, preparing.begin():
+        replacement, _ = prepare_cleanup_race_resend(preparing, original_id)
+        replacement_id = replacement.id
+        # The child is invisible to this other transaction, but its parent is locked.
+        with Session(engine) as cleaning, cleaning.begin():
+            cleaning.execute(text("SET LOCAL statement_timeout = '3s'"))
+            assert cleanup_transient_auth_rows(cleaning, before=cutoff).invites == 0
+    with Session(engine) as session, session.begin():
+        assert cleanup_transient_auth_rows(session, before=cutoff).invites == 0
+        assert session.get(PatientPortalInvite, original_id) is not None
+        assert session.get(PatientPortalInvite, replacement_id).supersedes_invite_id == original_id
+
+
+def test_postgresql_cleanup_locks_original_before_a_new_preparation(
+    expired_postgres_invite,
+) -> None:
+    engine, original_id, cutoff = expired_postgres_invite
+    cleanup_selected = Event()
+    preparation_started = Event()
+    allow_delete = Event()
+
+    def pause_after_candidate_lock(connection, cursor, statement, parameters, context, executemany):
+        if (
+            connection.info.get("invite_review_worker") == "cleanup"
+            and "FOR UPDATE SKIP LOCKED" in statement
+        ):
+            cleanup_selected.set()
+            assert allow_delete.wait(timeout=10)
+
+    def observe_preparation(connection, cursor, statement, parameters, context, executemany):
+        if (
+            connection.info.get("invite_review_worker") == "prepare"
+            and "FOR UPDATE" in statement
+        ):
+            preparation_started.set()
+
+    def clean_from_worker():
+        with Session(engine) as session, session.begin():
+            session.connection().info["invite_review_worker"] = "cleanup"
+            session.execute(text("SET LOCAL statement_timeout = '10s'"))
+            return cleanup_transient_auth_rows(session, before=cutoff).invites
+
+    def prepare_from_worker():
+        try:
+            with Session(engine) as session, session.begin():
+                session.connection().info["invite_review_worker"] = "prepare"
+                session.execute(text("SET LOCAL statement_timeout = '10s'"))
+                prepare_cleanup_race_resend(session, original_id)
+            return "prepared"
+        except InviteNotFoundError:
+            return "missing"
+
+    event.listen(engine, "after_cursor_execute", pause_after_candidate_lock)
+    event.listen(engine, "before_cursor_execute", observe_preparation)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            cleanup = executor.submit(clean_from_worker)
+            try:
+                assert cleanup_selected.wait(timeout=10)
+                preparation = executor.submit(prepare_from_worker)
+                assert preparation_started.wait(timeout=10)
+            finally:
+                allow_delete.set()
+            assert cleanup.result(timeout=15) == 1
+            assert preparation.result(timeout=15) == "missing"
+        with Session(engine) as session:
+            assert list(session.scalars(select(PatientPortalInvite))) == []
+    finally:
+        allow_delete.set()
+        event.remove(engine, "after_cursor_execute", pause_after_candidate_lock)
+        event.remove(engine, "before_cursor_execute", observe_preparation)
