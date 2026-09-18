@@ -17,9 +17,13 @@ def test_invite_delivery_migration_follows_main_and_guards_prepared_tokens(tmp_p
     config.set_main_option("script_location", "carlos_patient_portal:migrations")
     database_url = f"sqlite+pysqlite:///{tmp_path / 'invite-delivery.db'}"
     config.set_main_option("sqlalchemy.url", database_url)
-    assert ScriptDirectory.from_config(config).get_heads() == ["0012_atomic_invite_delivery"]
+    scripts = ScriptDirectory.from_config(config)
+    assert len(scripts.get_heads()) == 1
+    assert scripts.get_revision("0012_atomic_invite_delivery").down_revision == (
+        "0011_staff_assertion_replay"
+    )
     command.upgrade(config, "0011_staff_assertion_replay")
-    command.upgrade(config, "head")
+    command.upgrade(config, "0012_atomic_invite_delivery")
     engine = create_engine(database_url)
     try:
         assert "patient_portal_staff_assertion_uses" in inspect(engine).get_table_names()
@@ -51,7 +55,7 @@ def test_invite_delivery_migration_follows_main_and_guards_prepared_tokens(tmp_p
         assert "delivery_operation_id" not in {
             column["name"] for column in inspect(engine).get_columns("patient_portal_invites")
         }
-        command.upgrade(config, "head")
+        command.upgrade(config, "0012_atomic_invite_delivery")
         with engine.connect() as connection:
             assert connection.scalar(text("select version_num from alembic_version")) == (
                 "0012_atomic_invite_delivery"

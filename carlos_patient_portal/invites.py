@@ -451,6 +451,7 @@ def _new_prepared_invite(
     delivery_operation_id: str,
     proof_hashes: dict[str, str],
     proof_salt: str,
+    proof_hash_version: str,
     encryption_secret: str,
     encryption_key_id: str,
     supersedes_invite_id: int | None,
@@ -472,7 +473,7 @@ def _new_prepared_invite(
         last_sent_by_id=actor_id,
         expires_at=now + DEFAULT_INVITE_TTL,
         proof_salt=proof_salt,
-        proof_hash_version=IDENTITY_PROOF_HASH_VERSION,
+        proof_hash_version=proof_hash_version,
         supersedes_invite_id=supersedes_invite_id,
         delivery_operation_id=delivery_operation_id,
         **proof_hashes,
@@ -585,6 +586,27 @@ def _release_preparation_slot(
     )
 
 
+def _preparation_insert_conflict(
+    session: Session,
+    *,
+    clinic_id: str,
+    demographic_no: int,
+    delivery_operation_id: str,
+) -> InvitePreparationConflictError:
+    """Classify a rejected insert: a concurrent operation may have just taken the slot."""
+    concurrent = session.scalar(
+        select(PatientPortalInvite.id).where(
+            PatientPortalInvite.clinic_id == clinic_id,
+            PatientPortalInvite.demographic_no == demographic_no,
+            PatientPortalInvite.status == INVITE_STATUS_PREPARED,
+            PatientPortalInvite.delivery_operation_id != delivery_operation_id,
+        )
+    )
+    if concurrent is not None:
+        return InvitePreparationInProgressError()
+    return InvitePreparationConflictError()
+
+
 def prepare_create_invite(
     session: Session,
     demographic_no: int,
@@ -609,6 +631,8 @@ def prepare_create_invite(
     normalized_clinic_id = normalize_clinic_id(clinic_id)
     normalized_actor = normalize_staff_actor(actor)
     normalized_actor_id = normalize_staff_actor_id(actor_id, normalized_actor)
+    if not proof_secret or not proof_secret.strip():
+        raise ValueError("proof_secret must not be blank")
     proof_salt = create_proof_salt()
     proof_hashes = build_identity_hashes(identity_proof, proof_secret, proof_salt)
 
@@ -659,12 +683,18 @@ def prepare_create_invite(
                 delivery_operation_id=delivery_operation_id,
                 proof_hashes=proof_hashes,
                 proof_salt=proof_salt,
+                proof_hash_version=IDENTITY_PROOF_HASH_VERSION,
                 encryption_secret=encryption_secret,
                 encryption_key_id=encryption_key_id,
                 supersedes_invite_id=None,
             )
     except IntegrityError as exc:
-        raise InvitePreparationConflictError() from exc
+        raise _preparation_insert_conflict(
+            session,
+            clinic_id=normalized_clinic_id,
+            demographic_no=demographic_no,
+            delivery_operation_id=delivery_operation_id,
+        ) from exc
 
 
 def prepare_resend_invite(
@@ -725,7 +755,7 @@ def prepare_resend_invite(
         raise SupersededInviteError()
     if existing is not None:
         return existing, _disclose_prepared_token(existing, encryption_keys=encryption_keys)
-    if invite.proof_salt is None:
+    if invite.proof_salt is None or invite.proof_hash_version is None:
         raise InvitePreparationConflictError()
     proof_hashes = {
         "proof_email_hash": invite.proof_email_hash,
@@ -745,12 +775,19 @@ def prepare_resend_invite(
                 delivery_operation_id=delivery_operation_id,
                 proof_hashes=proof_hashes,
                 proof_salt=invite.proof_salt,
+                # The copied hashes keep the version they were computed with.
+                proof_hash_version=invite.proof_hash_version,
                 encryption_secret=encryption_secret,
                 encryption_key_id=encryption_key_id,
                 supersedes_invite_id=invite.id,
             )
     except IntegrityError as exc:
-        raise InvitePreparationConflictError() from exc
+        raise _preparation_insert_conflict(
+            session,
+            clinic_id=normalized_clinic_id,
+            demographic_no=invite.demographic_no,
+            delivery_operation_id=delivery_operation_id,
+        ) from exc
 
 
 def activate_prepared_invite(
@@ -833,6 +870,23 @@ def activate_prepared_invite(
         resource_type="delivery_reference",
         resource_id=delivery_reference,
     )
+    if old_invite is not None:
+        # Invite rows are pruned long before audit events, so the replaced invite is recorded
+        # here as the immediate resend path records it, not left to supersedes_invite_id.
+        record_audit_event(
+            session,
+            event_type=AUDIT_EVENT_STAFF_ACTION,
+            outcome=AUDIT_OUTCOME_SUCCESS,
+            actor_type=AUDIT_ACTOR_TYPE_STAFF,
+            actor=normalized_actor,
+            actor_id=normalized_actor_id,
+            clinic_id=invite.clinic_id,
+            demographic_no=invite.demographic_no,
+            invite_id=invite.id,
+            resource_type="superseded_invite",
+            resource_id=str(old_invite.id),
+            reason="delivery_committed",
+        )
     return invite
 
 

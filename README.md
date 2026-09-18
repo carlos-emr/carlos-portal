@@ -298,7 +298,9 @@ carlos-patient-portal-outbox-worker
 
 Restart the web and worker processes with the same keyring. Retain the old member until no pending
 or processing outbox row and no prepared invite carries its key ID; removing it sooner makes those
-deliveries or prepare retries fail with `encryption_key_unavailable`. Once the old rows have drained,
+deliveries or prepare retries fail with `encryption_key_unavailable`. A prepared invite stops
+disclosing its token when it expires, so seven days after the rotation no prepare retry can still
+need the old member. Once the old rows have drained,
 remove the old member and restart both processes again.
 
 Production SMS uses an authenticated HTTPS JSON webhook configured with
@@ -689,8 +691,12 @@ resend, the old pending token remains valid. After CARLOS has durably committed 
 calls `POST /internal/carlos/invites/{id}/commit-delivery` with the same operation id and the unique
 email `delivery_reference`. That transaction activates the new token, erases its recoverable
 ciphertext, and supersedes the old token. Its audit event identifies the staff member committing
-delivery. Exact commit retries are idempotent; changing either
-identifier or reusing one delivery reference for another invite is a conflict. The legacy immediate
+delivery, and a committed resend also audits the invite it superseded, because invite rows are
+pruned long before audit events. Exact commit retries are idempotent while the invite is still
+pending; changing either identifier or reusing one delivery reference for another invite is a
+conflict. A commit retry also returns `409` once the committed invite has been revoked,
+superseded, or accepted: its token is no longer deliverable, so CARLOS must not release that email
+job. The legacy immediate
 create/resend endpoints remain available for existing development and API clients, but CARLOS must
 not use them for patient email delivery. A database constraint reserves the pending-invite slot
 for a first preparation, preventing concurrent legacy creation from stranding that delivery.

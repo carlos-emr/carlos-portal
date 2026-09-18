@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from carlos_patient_portal import invites
 from carlos_patient_portal.maintenance import cleanup_transient_auth_rows
 from carlos_patient_portal.models import (
     AUDIT_EVENT_INVITE_REVOKE,
@@ -11,8 +12,18 @@ from carlos_patient_portal.models import (
     PatientPortalInvite,
     utc_now,
 )
-from tests.support import DEV_ADMIN_TOKEN, activation_request, dev_admin_headers
-from tests.test_internal_api import carlos_headers, internal_app, invite_request
+from tests.support import (
+    DEV_ADMIN_TOKEN,
+    activation_request,
+    carlos_staff_headers,
+    dev_admin_headers,
+)
+from tests.test_internal_api import (
+    INTERNAL_API_TOKEN,
+    carlos_headers,
+    internal_app,
+    invite_request,
+)
 
 
 @pytest.mark.parametrize("endpoint", ["internal", "development"])
@@ -281,3 +292,169 @@ def test_legacy_create_reports_live_first_preparation_and_retires_expired_one(
             assert created.status_code == 409
             assert created.json() == {"detail": IN_PROGRESS_DETAIL}
             assert preparation.status == "prepared"
+
+
+def test_prepared_resend_keeps_the_hash_version_of_the_copied_proof(monkeypatch) -> None:
+    app = internal_app()
+    client = TestClient(app)
+    headers = carlos_headers("portal.invite.manage")
+    original = client.post(
+        "/internal/carlos/patients/1234/invites", headers=headers, json=invite_request()
+    )
+    assert original.status_code == 201
+    # A later hash version must not relabel hashes that were computed with the original one.
+    monkeypatch.setattr(invites, "IDENTITY_PROOF_HASH_VERSION", "v2")
+
+    prepared = client.post(
+        f"/internal/carlos/invites/{original.json()['id']}/resend/prepare",
+        headers=headers,
+        json={"delivery_operation_id": "hash-version-resend"},
+    )
+
+    assert prepared.status_code == 201
+    with app.state.session_factory() as session:
+        replacement = session.get(PatientPortalInvite, prepared.json()["id"])
+        source = session.get(PatientPortalInvite, original.json()["id"])
+        assert replacement.proof_hash_version == source.proof_hash_version == "v1"
+        assert replacement.proof_email_hash == source.proof_email_hash
+
+
+@pytest.mark.parametrize("resend", [False, True])
+def test_delivery_commit_audits_the_superseded_invite_once(resend) -> None:
+    app = internal_app()
+    client = TestClient(app)
+    headers = carlos_headers("portal.invite.manage")
+    request = {"delivery_operation_id": "audited-supersession"}
+    original_id = None
+    if resend:
+        original = client.post(
+            "/internal/carlos/patients/1234/invites", headers=headers, json=invite_request()
+        )
+        original_id = original.json()["id"]
+        path = f"/internal/carlos/invites/{original_id}/resend/prepare"
+    else:
+        path = "/internal/carlos/patients/1234/invites/prepare"
+        request.update(invite_request())
+    prepared = client.post(path, headers=headers, json=request)
+    assert prepared.status_code == 201
+    for _ in range(2):
+        committed = client.post(
+            f"/internal/carlos/invites/{prepared.json()['id']}/commit-delivery",
+            headers=headers,
+            json={
+                "delivery_operation_id": "audited-supersession",
+                "delivery_reference": "email:audited-supersession",
+            },
+        )
+        assert committed.status_code == 200
+
+    with app.state.session_factory() as session:
+        events = list(
+            session.scalars(
+                select(PatientPortalAuditEvent).where(
+                    PatientPortalAuditEvent.invite_id == prepared.json()["id"],
+                    PatientPortalAuditEvent.resource_type == "superseded_invite",
+                )
+            )
+        )
+    if resend:
+        assert [(event.resource_id, event.reason) for event in events] == [
+            (str(original_id), "delivery_committed")
+        ]
+    else:
+        assert events == []
+
+
+@pytest.mark.parametrize("resend", [False, True])
+def test_preparation_losing_an_insert_race_reports_the_concurrent_operation(
+    monkeypatch, resend
+) -> None:
+    app = internal_app()
+    client = TestClient(app, raise_server_exceptions=False)
+    headers = carlos_headers("portal.invite.manage")
+    if resend:
+        original = client.post(
+            "/internal/carlos/patients/1234/invites", headers=headers, json=invite_request()
+        )
+        path = f"/internal/carlos/invites/{original.json()['id']}/resend/prepare"
+        request = {}
+    else:
+        path = "/internal/carlos/patients/1234/invites/prepare"
+        request = invite_request()
+    winner = client.post(path, headers=headers, json={**request, "delivery_operation_id": "won"})
+    assert winner.status_code == 201
+    # The loser passed its slot check before the winner inserted; only the database rejects it.
+    monkeypatch.setattr(invites, "_release_preparation_slot", lambda *args, **kwargs: None)
+
+    loser = client.post(path, headers=headers, json={**request, "delivery_operation_id": "lost"})
+
+    assert loser.status_code == 409
+    assert loser.json() == {"detail": IN_PROGRESS_DETAIL}
+    with app.state.session_factory() as session:
+        prepared = list(
+            session.scalars(
+                select(PatientPortalInvite).where(PatientPortalInvite.status == "prepared")
+            )
+        )
+        assert [invite.delivery_operation_id for invite in prepared] == ["won"]
+
+
+def _prepare(client, resend: bool, operation: str):
+    headers = carlos_headers("portal.invite.manage")
+    if resend:
+        original = client.post(
+            "/internal/carlos/patients/1234/invites", headers=headers, json=invite_request()
+        )
+        path = f"/internal/carlos/invites/{original.json()['id']}/resend/prepare"
+        request = {"delivery_operation_id": operation}
+    else:
+        path = "/internal/carlos/patients/1234/invites/prepare"
+        request = {**invite_request(), "delivery_operation_id": operation}
+    prepared = client.post(path, headers=headers, json=request)
+    assert prepared.status_code == 201
+    return path, request, prepared
+
+
+@pytest.mark.parametrize("resend", [False, True])
+def test_prepare_retry_discloses_the_token_only_to_the_preparing_staff_member(resend) -> None:
+    app = internal_app()
+    client = TestClient(app)
+    path, request, prepared = _prepare(client, resend, "creator-bound-preparation")
+    other_staff = carlos_staff_headers(
+        "portal.invite.manage",
+        clinic_id="clinic-a",
+        token=INTERNAL_API_TOKEN,
+        provider_id="another-provider",
+        provider_name="Another Staff",
+    )
+
+    repeated = client.post(path, headers=other_staff, json=request)
+
+    assert repeated.status_code == 409
+    assert prepared.json()["invite_token"] not in repeated.text
+    with app.state.session_factory() as session:
+        assert session.get(PatientPortalInvite, prepared.json()["id"]).status == "prepared"
+
+
+@pytest.mark.parametrize("resend", [False, True])
+def test_prepare_retry_without_the_encryption_key_is_unavailable(resend) -> None:
+    app = internal_app()
+    client = TestClient(app)
+    path, request, prepared = _prepare(client, resend, "retired-key-preparation")
+    with app.state.session_factory.begin() as session:
+        session.get(PatientPortalInvite, prepared.json()["id"]).invite_token_key_id = "retired"
+
+    repeated = client.post(path, headers=carlos_headers("portal.invite.manage"), json=request)
+
+    assert repeated.status_code == 503
+    assert repeated.json() == {"detail": "invite preparation unavailable"}
+    # The token CARLOS already holds stays committable; only its recovery needs the key.
+    committed = client.post(
+        f"/internal/carlos/invites/{prepared.json()['id']}/commit-delivery",
+        headers=carlos_headers("portal.invite.manage"),
+        json={
+            "delivery_operation_id": "retired-key-preparation",
+            "delivery_reference": "email:retired-key-preparation",
+        },
+    )
+    assert committed.status_code == 200
