@@ -458,3 +458,114 @@ def test_prepare_retry_without_the_encryption_key_is_unavailable(resend) -> None
         },
     )
     assert committed.status_code == 200
+
+
+@pytest.mark.parametrize("resend", [False, True])
+def test_same_operation_retry_that_loses_the_insert_race_recovers_the_token(
+    monkeypatch, resend
+) -> None:
+    app = internal_app()
+    client = TestClient(app, raise_server_exceptions=False)
+    path, request, prepared = _prepare(client, resend, "in-flight-retry")
+    find_prepared = invites._prepared_for_operation
+    lookups = []
+
+    def miss_the_uncommitted_winner(*args, **kwargs):
+        # The retry looked the operation up before the first request committed its row; only
+        # the database rejects its insert.
+        lookups.append(kwargs)
+        return None if len(lookups) == 1 else find_prepared(*args, **kwargs)
+
+    monkeypatch.setattr(invites, "_prepared_for_operation", miss_the_uncommitted_winner)
+
+    retried = client.post(path, headers=carlos_headers("portal.invite.manage"), json=request)
+
+    assert retried.status_code == 201
+    assert retried.json()["id"] == prepared.json()["id"]
+    assert retried.json()["invite_token"] == prepared.json()["invite_token"]
+    with app.state.session_factory() as session:
+        assert len(list(session.scalars(select(PatientPortalInvite.id)))) == (2 if resend else 1)
+
+
+@pytest.mark.parametrize("resend", [False, True])
+def test_delivery_commit_starts_the_invite_lifetime_and_records_the_send(resend) -> None:
+    app = internal_app()
+    client = TestClient(app)
+    _, request, prepared = _prepare(client, resend, "late-commit")
+    prepared_at = utc_now() - timedelta(days=6)
+    with app.state.session_factory.begin() as session:
+        invite = session.get(PatientPortalInvite, prepared.json()["id"])
+        invite.created_at = prepared_at
+        invite.last_sent_at = prepared_at
+        invite.expires_at = prepared_at + timedelta(days=7)
+    committing_staff = carlos_staff_headers(
+        "portal.invite.manage",
+        clinic_id="clinic-a",
+        token=INTERNAL_API_TOKEN,
+        provider_id="committing-provider",
+        provider_name="Committing Staff",
+    )
+
+    committed = client.post(
+        f"/internal/carlos/invites/{prepared.json()['id']}/commit-delivery",
+        headers=committing_staff,
+        json={
+            "delivery_operation_id": request["delivery_operation_id"],
+            "delivery_reference": "email:late-commit",
+        },
+    )
+
+    assert committed.status_code == 200
+    with app.state.session_factory() as session:
+        invite = session.get(PatientPortalInvite, prepared.json()["id"])
+        remaining = invite.expires_at - utc_now().replace(tzinfo=invite.expires_at.tzinfo)
+        assert timedelta(days=6, hours=23) < remaining <= timedelta(days=7)
+        assert invite.last_sent_at > prepared_at.replace(tzinfo=invite.last_sent_at.tzinfo) + (
+            timedelta(days=5)
+        )
+        assert invite.last_sent_by == "Committing Staff"
+        assert invite.last_sent_by_id == "committing-provider"
+        assert invite.sent_count == 1
+
+
+@pytest.mark.parametrize("resend", [False, True])
+def test_each_prepare_retry_audits_the_token_disclosure(resend) -> None:
+    app = internal_app()
+    client = TestClient(app)
+    path, request, prepared = _prepare(client, resend, "audited-retry")
+    headers = carlos_headers("portal.invite.manage")
+
+    for _ in range(2):
+        assert client.post(path, headers=headers, json=request).status_code == 201
+
+    with app.state.session_factory() as session:
+        events = list(
+            session.scalars(
+                select(PatientPortalAuditEvent)
+                .where(
+                    PatientPortalAuditEvent.invite_id == prepared.json()["id"],
+                    PatientPortalAuditEvent.resource_type == "invite_preparation",
+                )
+                .order_by(PatientPortalAuditEvent.id)
+            )
+        )
+    assert [(event.reason, event.actor_id) for event in events] == [
+        ("delivery_pending", "provider-42"),
+        ("token_redisclosed", "provider-42"),
+        ("token_redisclosed", "provider-42"),
+    ]
+
+
+def test_prepare_retry_with_different_identity_details_conflicts_without_the_token() -> None:
+    app = internal_app()
+    client = TestClient(app)
+    path, request, prepared = _prepare(client, False, "changed-identity-retry")
+
+    repeated = client.post(
+        path,
+        headers=carlos_headers("portal.invite.manage"),
+        json={**request, "email": "someone.else@example.com"},
+    )
+
+    assert repeated.status_code == 409
+    assert prepared.json()["invite_token"] not in repeated.text

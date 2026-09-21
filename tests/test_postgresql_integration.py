@@ -1342,3 +1342,118 @@ def test_postgresql_cleanup_locks_original_before_a_new_preparation(
         allow_delete.set()
         event.remove(engine, "after_cursor_execute", pause_after_candidate_lock)
         event.remove(engine, "before_cursor_execute", observe_preparation)
+
+
+def test_postgresql_same_operation_first_preparations_racing_return_one_token() -> None:
+    assert POSTGRES_URL is not None
+    clean_postgresql_database()
+    engine = create_portal_engine(POSTGRES_URL)
+    insert_barrier = Barrier(2)
+
+    def synchronize_invite_inserts(connection, cursor, statement, parameters, context, executemany):
+        if statement.startswith("INSERT INTO patient_portal_invites "):
+            # Neither request found the operation: the retry arrived while the first request
+            # was still in flight. Only the database can reject the second insert.
+            insert_barrier.wait(timeout=10)
+
+    def prepare_from_worker(_):
+        with Session(engine) as session, session.begin():
+            session.execute(text("SET LOCAL statement_timeout = '15s'"))
+            invite, invite_token = prepare_create_invite(
+                session, 1234, "Preparing Staff",
+                clinic_id="postgres-clinic",
+                actor_id="preparing-provider",
+                delivery_operation_id="in-flight-first-retry",
+                identity_proof=IdentityProof(
+                    email="retry.race@example.com",
+                    date_of_birth=date(1980, 5, 20),
+                    health_card_number="ABCD 1234-5678",
+                ),
+                proof_secret="p" * 32,
+                encryption_secret="e" * 32,
+                encryption_key_id="test-key",
+                encryption_keys={"test-key": "e" * 32},
+            )
+            return invite.id, invite_token
+
+    event.listen(engine, "before_cursor_execute", synchronize_invite_inserts)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first, retry = executor.map(prepare_from_worker, range(2))
+        assert first == retry
+        with Session(engine) as session:
+            assert list(session.scalars(select(PatientPortalInvite.status))) == ["prepared"]
+    finally:
+        event.remove(engine, "before_cursor_execute", synchronize_invite_inserts)
+        engine.dispose()
+
+
+def test_postgresql_same_operation_resend_preparations_racing_return_one_token() -> None:
+    assert POSTGRES_URL is not None
+    clean_postgresql_database()
+    engine = create_portal_engine(POSTGRES_URL)
+    first_at_insert = Event()
+    retry_waiting_for_original = Event()
+
+    def hold_first_insert(connection, cursor, statement, parameters, context, executemany):
+        worker = connection.info.get("invite_retry_worker")
+        if worker == "first" and statement.startswith("INSERT INTO patient_portal_invites "):
+            # Hold the uncommitted insert until the retry has looked the operation up, found
+            # nothing, and queued behind this request's lock on the original invite.
+            first_at_insert.set()
+            assert retry_waiting_for_original.wait(timeout=10)
+        elif worker == "retry" and "FOR UPDATE" in statement:
+            where = statement.split("WHERE")[-1]
+            if "patient_portal_invites.id = " in where and "demographic_no" not in where:
+                retry_waiting_for_original.set()
+
+    def prepare_from_worker(worker):
+        with Session(engine) as session, session.begin():
+            session.connection().info["invite_retry_worker"] = worker
+            session.execute(text("SET LOCAL statement_timeout = '15s'"))
+            invite, invite_token = prepare_resend_invite(
+                session, original_id, "Preparing Staff",
+                clinic_id="postgres-clinic",
+                actor_id="preparing-provider",
+                delivery_operation_id="in-flight-resend-retry",
+                encryption_secret="e" * 32,
+                encryption_key_id="test-key",
+                encryption_keys={"test-key": "e" * 32},
+            )
+            return invite.id, invite_token
+
+    try:
+        with Session(engine) as session, session.begin():
+            original, _ = create_invite(
+                session, 1234, "Preparing Staff",
+                clinic_id="postgres-clinic",
+                actor_id="preparing-provider",
+                identity_proof=IdentityProof(
+                    email="retry.race@example.com",
+                    date_of_birth=date(1980, 5, 20),
+                    health_card_number="ABCD 1234-5678",
+                ),
+                proof_secret="p" * 32,
+            )
+            original_id = original.id
+        event.listen(engine, "before_cursor_execute", hold_first_insert)
+        try:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                first = executor.submit(prepare_from_worker, "first")
+                try:
+                    assert first_at_insert.wait(timeout=10)
+                    retry = executor.submit(prepare_from_worker, "retry")
+                    assert retry_waiting_for_original.wait(timeout=10)
+                finally:
+                    retry_waiting_for_original.set()
+                assert first.result(timeout=15) == retry.result(timeout=15)
+            with Session(engine) as session:
+                statuses = session.scalars(
+                    select(PatientPortalInvite.status).order_by(PatientPortalInvite.id)
+                )
+                assert list(statuses) == ["pending", "prepared"]
+        finally:
+            retry_waiting_for_original.set()
+            event.remove(engine, "before_cursor_execute", hold_first_insert)
+    finally:
+        engine.dispose()
