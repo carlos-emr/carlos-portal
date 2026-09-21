@@ -17,6 +17,7 @@ from tests.support import (
     activation_request,
     carlos_staff_headers,
     dev_admin_headers,
+    parse_response_datetime,
 )
 from tests.test_internal_api import (
     INTERNAL_API_TOKEN,
@@ -485,6 +486,48 @@ def test_same_operation_retry_that_loses_the_insert_race_recovers_the_token(
     assert retried.json()["invite_token"] == prepared.json()["invite_token"]
     with app.state.session_factory() as session:
         assert len(list(session.scalars(select(PatientPortalInvite.id)))) == (2 if resend else 1)
+        redisclosures = session.scalars(
+            select(PatientPortalAuditEvent.invite_id).where(
+                PatientPortalAuditEvent.reason == "token_redisclosed"
+            )
+        )
+        assert list(redisclosures) == [prepared.json()["id"]]
+
+
+@pytest.mark.parametrize("resend", [False, True])
+def test_retry_that_loses_the_insert_race_still_refuses_another_staff_member(
+    monkeypatch, resend
+) -> None:
+    app = internal_app()
+    client = TestClient(app, raise_server_exceptions=False)
+    path, request, prepared = _prepare(client, resend, "in-flight-other-staff")
+    find_prepared = invites._prepared_for_operation
+    lookups = []
+
+    def miss_the_uncommitted_winner(*args, **kwargs):
+        lookups.append(kwargs)
+        return None if len(lookups) == 1 else find_prepared(*args, **kwargs)
+
+    monkeypatch.setattr(invites, "_prepared_for_operation", miss_the_uncommitted_winner)
+    other_staff = carlos_staff_headers(
+        "portal.invite.manage",
+        clinic_id="clinic-a",
+        token=INTERNAL_API_TOKEN,
+        provider_id="another-provider",
+        provider_name="Another Staff",
+    )
+
+    raced = client.post(path, headers=other_staff, json=request)
+
+    assert raced.status_code == 409
+    assert prepared.json()["invite_token"] not in raced.text
+    with app.state.session_factory() as session:
+        redisclosures = session.scalars(
+            select(PatientPortalAuditEvent.id).where(
+                PatientPortalAuditEvent.reason == "token_redisclosed"
+            )
+        )
+        assert list(redisclosures) == []
 
 
 @pytest.mark.parametrize("resend", [False, True])
@@ -516,16 +559,37 @@ def test_delivery_commit_starts_the_invite_lifetime_and_records_the_send(resend)
     )
 
     assert committed.status_code == 200
+    remaining = parse_response_datetime(committed.json()["expires_at"]) - utc_now()
+    assert timedelta(days=6, hours=23) < remaining <= timedelta(days=7)
+    sent_ago = utc_now() - parse_response_datetime(committed.json()["last_issued_at"])
+    assert sent_ago < timedelta(minutes=5)
     with app.state.session_factory() as session:
         invite = session.get(PatientPortalInvite, prepared.json()["id"])
-        remaining = invite.expires_at - utc_now().replace(tzinfo=invite.expires_at.tzinfo)
-        assert timedelta(days=6, hours=23) < remaining <= timedelta(days=7)
-        assert invite.last_sent_at > prepared_at.replace(tzinfo=invite.last_sent_at.tzinfo) + (
-            timedelta(days=5)
-        )
         assert invite.last_sent_by == "Committing Staff"
         assert invite.last_sent_by_id == "committing-provider"
         assert invite.sent_count == 1
+
+
+def test_exact_delivery_commit_retry_does_not_extend_the_invite_lifetime() -> None:
+    app = internal_app()
+    client = TestClient(app)
+    headers = carlos_headers("portal.invite.manage")
+    _, request, prepared = _prepare(client, False, "repeated-commit")
+    commit_path = f"/internal/carlos/invites/{prepared.json()['id']}/commit-delivery"
+    commit_body = {
+        "delivery_operation_id": request["delivery_operation_id"],
+        "delivery_reference": "email:repeated-commit",
+    }
+    assert client.post(commit_path, headers=headers, json=commit_body).status_code == 200
+    with app.state.session_factory.begin() as session:
+        invite = session.get(PatientPortalInvite, prepared.json()["id"])
+        invite.expires_at = utc_now() + timedelta(days=2)
+
+    repeated = client.post(commit_path, headers=headers, json=commit_body)
+
+    assert repeated.status_code == 200
+    remaining = parse_response_datetime(repeated.json()["expires_at"]) - utc_now()
+    assert timedelta(days=1, hours=23) < remaining <= timedelta(days=2)
 
 
 @pytest.mark.parametrize("resend", [False, True])

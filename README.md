@@ -679,9 +679,10 @@ CARLOS invitation delivery uses a two-phase contract. The prepare endpoints are:
 
 Both require a stable `delivery_operation_id`; retrying the same operation returns the same token
 while it is prepared and unexpired, including a retry that overlaps the original request. Each
-retry that returns the token is audited with reason `token_redisclosed`.
-An expired preparation returns `409` without disclosing its
-token. Only one invite per patient can be prepared at a time. A different operation for the same
+retry that returns the token is audited with reason `token_redisclosed`. An expired preparation
+returns `409` without disclosing its token. The `expires_at` in a prepare response is the deadline
+for committing delivery, not the patient's deadline, so CARLOS must not quote it in the email.
+Only one invite per patient can be prepared at a time. A different operation for the same
 patient returns `409` with `another invite delivery is being prepared` while the existing
 preparation can still be committed; revoke that prepared invite (it is listed with status
 `prepared`) to abandon it deliberately. A preparation that can no longer be committed, because it
@@ -693,7 +694,8 @@ resend, the old pending token remains valid. After CARLOS has durably committed 
 calls `POST /internal/carlos/invites/{id}/commit-delivery` with the same operation id and the unique
 email `delivery_reference`. That transaction activates the new token, erases its recoverable
 ciphertext, and supersedes the old token. The invite's seven-day lifetime and its recorded send
-time start at this commit, not at preparation. Its audit event identifies the staff member committing
+time start at this commit, not at preparation, and the commit response carries the patient-facing
+`expires_at`. Its audit event identifies the staff member committing
 delivery, and a committed resend also audits the invite it superseded, because invite rows are
 pruned long before audit events. Exact commit retries are idempotent while the invite is still
 pending; changing either identifier or reusing one delivery reference for another invite is a

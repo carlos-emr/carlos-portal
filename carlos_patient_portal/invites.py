@@ -522,6 +522,11 @@ def _retry_first_preparation(
     proof_secret: str,
     encryption_keys: Mapping[str, str],
 ) -> tuple[PatientPortalInvite, str]:
+    """Answer a repeated first preparation, whether it was found up front or lost the insert.
+
+    Only the staff member who prepared the invite, repeating the same patient and identity
+    details, gets the token back.
+    """
     if (
         existing.status != INVITE_STATUS_PREPARED
         or existing.demographic_no != demographic_no
@@ -543,6 +548,7 @@ def _retry_first_preparation(
 
 
 def _require_resend_retry(existing: PatientPortalInvite, *, invite_id: int, actor_id: str) -> None:
+    """Reject a repeated resend preparation from another staff member or for another invite."""
     if (
         existing.status != INVITE_STATUS_PREPARED
         or existing.created_by_id != actor_id
