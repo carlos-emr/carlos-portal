@@ -20,7 +20,7 @@
 from collections.abc import Mapping
 from datetime import UTC, timedelta
 from hashlib import sha256
-from secrets import compare_digest, token_bytes, token_urlsafe
+from secrets import token_bytes, token_urlsafe
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
@@ -35,6 +35,7 @@ from carlos_patient_portal.identity import (
     IdentityProof,
     build_identity_hashes,
     reject_control_characters,
+    verify_identity_proof,
 )
 from carlos_patient_portal.models import (
     AUDIT_ACTOR_TYPE_STAFF,
@@ -217,24 +218,6 @@ def _disclose_prepared_token(
         return token.decode("utf-8")
     except (InvalidTag, UnicodeDecodeError, ValueError):
         raise InvitePreparationKeyUnavailableError() from None
-
-
-def _same_identity_proof(
-    invite: PatientPortalInvite,
-    identity_proof: IdentityProof,
-    proof_secret: str,
-) -> bool:
-    if invite.proof_salt is None:
-        return False
-    candidate = build_identity_hashes(identity_proof, proof_secret, invite.proof_salt)
-    return all(
-        compare_digest(candidate[name], getattr(invite, name) or "")
-        for name in (
-            "proof_email_hash",
-            "proof_date_of_birth_hash",
-            "proof_health_card_hash",
-        )
-    )
 
 
 def patient_has_account(
@@ -502,6 +485,78 @@ def _new_prepared_invite(
     return invite, invite_token
 
 
+def _redisclose_prepared_token(
+    session: Session,
+    prepared: PatientPortalInvite,
+    *,
+    actor: str,
+    actor_id: str,
+    encryption_keys: Mapping[str, str],
+) -> str:
+    """Return a prepared token to a retry of its own operation and audit the disclosure."""
+    invite_token = _disclose_prepared_token(prepared, encryption_keys=encryption_keys)
+    record_audit_event(
+        session,
+        event_type=AUDIT_EVENT_STAFF_ACTION,
+        outcome=AUDIT_OUTCOME_SUCCESS,
+        actor_type=AUDIT_ACTOR_TYPE_STAFF,
+        actor=actor,
+        actor_id=actor_id,
+        clinic_id=prepared.clinic_id,
+        demographic_no=prepared.demographic_no,
+        invite_id=prepared.id,
+        resource_type="invite_preparation",
+        reason="token_redisclosed",
+    )
+    return invite_token
+
+
+def _retry_first_preparation(
+    session: Session,
+    existing: PatientPortalInvite,
+    *,
+    demographic_no: int,
+    actor: str,
+    actor_id: str,
+    identity_proof: IdentityProof,
+    proof_secret: str,
+    encryption_keys: Mapping[str, str],
+) -> tuple[PatientPortalInvite, str]:
+    """Answer a repeated first preparation, whether it was found up front or lost the insert.
+
+    Only the staff member who prepared the invite, repeating the same patient and identity
+    details, gets the token back.
+    """
+    if (
+        existing.status != INVITE_STATUS_PREPARED
+        or existing.demographic_no != demographic_no
+        or existing.created_by_id != actor_id
+        or existing.supersedes_invite_id is not None
+        or not verify_identity_proof(
+            identity_proof,
+            proof_secret,
+            salt=existing.proof_salt,
+            email_hash=existing.proof_email_hash,
+            date_of_birth_hash=existing.proof_date_of_birth_hash,
+            health_card_hash=existing.proof_health_card_hash,
+        )
+    ):
+        raise InvitePreparationConflictError()
+    return existing, _redisclose_prepared_token(
+        session, existing, actor=actor, actor_id=actor_id, encryption_keys=encryption_keys
+    )
+
+
+def _require_resend_retry(existing: PatientPortalInvite, *, invite_id: int, actor_id: str) -> None:
+    """Reject a repeated resend preparation from another staff member or for another invite."""
+    if (
+        existing.status != INVITE_STATUS_PREPARED
+        or existing.created_by_id != actor_id
+        or existing.supersedes_invite_id != invite_id
+    ):
+        raise InvitePreparationConflictError()
+
+
 def _is_expired(invite: PatientPortalInvite) -> bool:
     comparable_expiry = invite.expires_at
     if comparable_expiry.tzinfo is None:
@@ -643,15 +698,16 @@ def prepare_create_invite(
         lock=True,
     )
     if existing is not None:
-        if (
-            existing.status != INVITE_STATUS_PREPARED
-            or existing.demographic_no != demographic_no
-            or existing.created_by_id != normalized_actor_id
-            or existing.supersedes_invite_id is not None
-            or not _same_identity_proof(existing, identity_proof, proof_secret)
-        ):
-            raise InvitePreparationConflictError()
-        return existing, _disclose_prepared_token(existing, encryption_keys=encryption_keys)
+        return _retry_first_preparation(
+            session,
+            existing,
+            demographic_no=demographic_no,
+            actor=normalized_actor,
+            actor_id=normalized_actor_id,
+            identity_proof=identity_proof,
+            proof_secret=proof_secret,
+            encryption_keys=encryption_keys,
+        )
 
     if patient_has_account(session, clinic_id=normalized_clinic_id, demographic_no=demographic_no):
         raise AccountAlreadyExistsError()
@@ -689,6 +745,25 @@ def prepare_create_invite(
                 supersedes_invite_id=None,
             )
     except IntegrityError as exc:
+        # A retry sent while the first request was still in flight finds no row above and
+        # loses the insert instead. It is still a retry, so it recovers the same token.
+        raced = _prepared_for_operation(
+            session,
+            clinic_id=normalized_clinic_id,
+            delivery_operation_id=delivery_operation_id,
+            lock=True,
+        )
+        if raced is not None:
+            return _retry_first_preparation(
+                session,
+                raced,
+                demographic_no=demographic_no,
+                actor=normalized_actor,
+                actor_id=normalized_actor_id,
+                identity_proof=identity_proof,
+                proof_secret=proof_secret,
+                encryption_keys=encryption_keys,
+            )
         raise _preparation_insert_conflict(
             session,
             clinic_id=normalized_clinic_id,
@@ -720,12 +795,7 @@ def prepare_resend_invite(
         lock=True,
     )
     if existing is not None:
-        if (
-            existing.status != INVITE_STATUS_PREPARED
-            or existing.created_by_id != normalized_actor_id
-            or existing.supersedes_invite_id != invite_id
-        ):
-            raise InvitePreparationConflictError()
+        _require_resend_retry(existing, invite_id=invite_id, actor_id=normalized_actor_id)
     else:
         # Resolve the patient without locking the original: a blocking preparation must be
         # locked first, matching the prepared-then-original order used by commit.
@@ -754,7 +824,13 @@ def prepare_resend_invite(
             raise AcceptedInviteError()
         raise SupersededInviteError()
     if existing is not None:
-        return existing, _disclose_prepared_token(existing, encryption_keys=encryption_keys)
+        return existing, _redisclose_prepared_token(
+            session,
+            existing,
+            actor=normalized_actor,
+            actor_id=normalized_actor_id,
+            encryption_keys=encryption_keys,
+        )
     if invite.proof_salt is None or invite.proof_hash_version is None:
         raise InvitePreparationConflictError()
     proof_hashes = {
@@ -782,6 +858,23 @@ def prepare_resend_invite(
                 supersedes_invite_id=invite.id,
             )
     except IntegrityError as exc:
+        # A retry sent while the first request was still in flight loses the insert; recover
+        # its token. This request already holds the original's lock, so the prepared row is
+        # read unlocked: locking it here would invert the prepared-then-original order.
+        raced = _prepared_for_operation(
+            session,
+            clinic_id=normalized_clinic_id,
+            delivery_operation_id=delivery_operation_id,
+        )
+        if raced is not None:
+            _require_resend_retry(raced, invite_id=invite_id, actor_id=normalized_actor_id)
+            return raced, _redisclose_prepared_token(
+                session,
+                raced,
+                actor=normalized_actor,
+                actor_id=normalized_actor_id,
+                encryption_keys=encryption_keys,
+            )
         raise _preparation_insert_conflict(
             session,
             clinic_id=normalized_clinic_id,
@@ -846,6 +939,12 @@ def activate_prepared_invite(
                 session.flush()
             invite.status = INVITE_STATUS_PENDING
             invite.delivery_reference = delivery_reference
+            # The email is released now, so the patient's lifetime and the recorded send start
+            # here rather than when the token was prepared.
+            invite.expires_at = now + DEFAULT_INVITE_TTL
+            invite.last_sent_at = now
+            invite.last_sent_by = normalized_actor
+            invite.last_sent_by_id = normalized_actor_id
             invite.encrypted_invite_token = None
             invite.invite_token_nonce = None
             invite.invite_token_key_id = None
