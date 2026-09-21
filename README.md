@@ -297,9 +297,11 @@ carlos-patient-portal-outbox-worker
 ```
 
 Restart the web and worker processes with the same keyring. Retain the old member until no pending
-or processing outbox row carries its key ID; removing it sooner makes those deliveries fail with
-`encryption_key_unavailable`. Once the old rows have drained, remove the old member and restart
-both processes again.
+or processing outbox row and no prepared invite carries its key ID; removing it sooner makes those
+deliveries or prepare retries fail with `encryption_key_unavailable`. A prepared invite stops
+disclosing its token when it expires, so seven days after the rotation no prepare retry can still
+need the old member. Once the old rows have drained,
+remove the old member and restart both processes again.
 
 Production SMS uses an authenticated HTTPS JSON webhook configured with
 `PATIENT_PORTAL_SMS_WEBHOOK_URL` and `PATIENT_PORTAL_SMS_WEBHOOK_TOKEN`. The provider adapter receives
@@ -525,6 +527,9 @@ rollback from dropping encryption context or lifecycle evidence. Preserve or tra
 under an approved retention and key-management procedure before retrying a downgrade.
 Migration `0002_staff_identity_audit` preflights FHIR audit events before changing schema, and
 `0004_invite_issuance_history` similarly refuses to discard superseded invite history.
+Migration `0012_atomic_invite_delivery` refuses to downgrade while an invite is prepared, because
+downgrading would discard the only encrypted copy of a token CARLOS may still be retrying into its
+durable email queue.
 
 Keep every revision id to 32 characters or fewer. Alembic creates `alembic_version.version_num` as
 `VARCHAR(32)`; SQLite ignores the declared width but PostgreSQL enforces it, so a longer id passes
@@ -647,7 +652,7 @@ The reference nginx policy forwards only the signed assertion to the internal ro
 
 Permissions are deliberately narrow:
 
-- `portal.invite.manage`: create, list, resend, and revoke clinic-scoped invites.
+- `portal.invite.manage`: prepare, commit, create, list, resend, and revoke clinic-scoped invites.
 - `portal.account.unlock`: unlock a patient and require a fresh password reset.
 - `portal.account.manage`: read portal status and disable/re-enable patient access.
 - `portal.secret.manage`: idempotently create, publish, and revoke generated email passphrases.
@@ -667,10 +672,45 @@ source reference returns a conflict.
 The generated OpenAPI contract includes explicit request, response, pagination, one-time plaintext,
 and error models for these routes.
 
+CARLOS invitation delivery uses a two-phase contract. The prepare endpoints are:
+
+- `POST /internal/carlos/patients/{demographic_no}/invites/prepare` for a first invite.
+- `POST /internal/carlos/invites/{id}/resend/prepare` for a replacement.
+
+Both require a stable `delivery_operation_id`; retrying the same operation returns the same token
+while it is prepared and unexpired. An expired preparation returns `409` without disclosing its
+token. Only one invite per patient can be prepared at a time. A different operation for the same
+patient returns `409` with `another invite delivery is being prepared` while the existing
+preparation can still be committed; revoke that prepared invite (it is listed with status
+`prepared`) to abandon it deliberately. A preparation that can no longer be committed, because it
+expired or because its original invite was resent, revoked, or accepted, does not block: the next
+prepare or legacy create for the patient revokes it, erases its ciphertext, and audits the
+revocation with reason `preparation_abandoned`.
+A prepared token is encrypted with the portal outbox keyring and cannot activate an account. For a
+resend, the old pending token remains valid. After CARLOS has durably committed the email job, it
+calls `POST /internal/carlos/invites/{id}/commit-delivery` with the same operation id and the unique
+email `delivery_reference`. That transaction activates the new token, erases its recoverable
+ciphertext, and supersedes the old token. Its audit event identifies the staff member committing
+delivery, and a committed resend also audits the invite it superseded, because invite rows are
+pruned long before audit events. Exact commit retries are idempotent while the invite is still
+pending; changing either identifier or reusing one delivery reference for another invite is a
+conflict. A commit retry also returns `409` once the committed invite has been revoked,
+superseded, or accepted: its token is no longer deliverable, so CARLOS must not release that email
+job. The legacy immediate
+create/resend endpoints remain available for existing development and API clients, but CARLOS must
+not use them for patient email delivery. A database constraint reserves the pending-invite slot
+for a first preparation, preventing concurrent legacy creation from stranding that delivery.
+Prepared resends can still coexist with the pending invite they replace.
+Prepare retries recheck that the original invite is still pending before returning its token.
+The legacy resend endpoints reject prepared invites with `409` until delivery is committed.
+
 Invite retention is state-specific: accepted invite records are retained with the long-term audit
-record; expired pending, revoked, and superseded records are eligible for transient cleanup only
-after the configured cleanup delay. Cleanup rechecks status and expiry in the delete statement so a
-concurrent state transition cannot delete a renewed record.
+record; expired prepared, pending, revoked, and superseded records are eligible for transient
+cleanup only after the configured cleanup delay. An original invite is retained while a prepared
+resend still references it, preserving the original's revocation and acceptance checks. Once the
+prepared resend is committed, revoked, or removed by cleanup, the original becomes eligible again.
+Cleanup locks invite candidates and rechecks status, expiry, and prepared replacements in the
+delete statement so a concurrent preparation cannot lose its original invite.
 
 ## Development Invite API
 
