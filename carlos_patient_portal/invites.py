@@ -352,6 +352,12 @@ def create_invite(
             session.add(invite)
             session.flush()
     except IntegrityError as exc:
+        # Another request took the patient's slot after the checks above: either a pending invite
+        # or a first preparation. Report whichever it was.
+        if _first_preparation_holds_slot(
+            session, clinic_id=normalized_clinic_id, demographic_no=demographic_no
+        ):
+            raise InvitePreparationInProgressError() from exc
         raise PendingInviteExistsError() from exc
     record_audit_event(
         session,
@@ -641,14 +647,34 @@ def _release_preparation_slot(
     )
 
 
+def _first_preparation_holds_slot(session: Session, *, clinic_id: str, demographic_no: int) -> bool:
+    """Whether a first preparation (not a resend) holds the patient's first-delivery slot."""
+    return (
+        session.scalar(
+            select(PatientPortalInvite.id).where(
+                PatientPortalInvite.clinic_id == clinic_id,
+                PatientPortalInvite.demographic_no == demographic_no,
+                PatientPortalInvite.status == INVITE_STATUS_PREPARED,
+                PatientPortalInvite.supersedes_invite_id.is_(None),
+            )
+        )
+        is not None
+    )
+
+
 def _preparation_insert_conflict(
     session: Session,
     *,
     clinic_id: str,
     demographic_no: int,
     delivery_operation_id: str,
-) -> InvitePreparationConflictError:
-    """Classify a rejected insert: a concurrent operation may have just taken the slot."""
+    first_preparation: bool,
+) -> InvitePreparationConflictError | PendingInviteExistsError:
+    """Classify a rejected insert: a concurrent request may have just taken the slot.
+
+    For a first preparation that request may also be a legacy create, which leaves a pending
+    invite. A resend always has a pending original, so only a first preparation checks for one.
+    """
     concurrent = session.scalar(
         select(PatientPortalInvite.id).where(
             PatientPortalInvite.clinic_id == clinic_id,
@@ -659,6 +685,16 @@ def _preparation_insert_conflict(
     )
     if concurrent is not None:
         return InvitePreparationInProgressError()
+    if first_preparation:
+        pending = session.scalar(
+            select(PatientPortalInvite.id).where(
+                PatientPortalInvite.clinic_id == clinic_id,
+                PatientPortalInvite.demographic_no == demographic_no,
+                PatientPortalInvite.status == INVITE_STATUS_PENDING,
+            )
+        )
+        if pending is not None:
+            return PendingInviteExistsError()
     return InvitePreparationConflictError()
 
 
@@ -688,8 +724,6 @@ def prepare_create_invite(
     normalized_actor_id = normalize_staff_actor_id(actor_id, normalized_actor)
     if not proof_secret or not proof_secret.strip():
         raise ValueError("proof_secret must not be blank")
-    proof_salt = create_proof_salt()
-    proof_hashes = build_identity_hashes(identity_proof, proof_secret, proof_salt)
 
     existing = _prepared_for_operation(
         session,
@@ -728,6 +762,9 @@ def prepare_create_invite(
         actor_id=normalized_actor_id,
         delivery_operation_id=delivery_operation_id,
     )
+    # Built only for a new preparation: a retry verifies against the stored proof instead.
+    proof_salt = create_proof_salt()
+    proof_hashes = build_identity_hashes(identity_proof, proof_secret, proof_salt)
     try:
         with session.begin_nested():
             return _new_prepared_invite(
@@ -769,6 +806,7 @@ def prepare_create_invite(
             clinic_id=normalized_clinic_id,
             demographic_no=demographic_no,
             delivery_operation_id=delivery_operation_id,
+            first_preparation=True,
         ) from exc
 
 
@@ -880,6 +918,7 @@ def prepare_resend_invite(
             clinic_id=normalized_clinic_id,
             demographic_no=invite.demographic_no,
             delivery_operation_id=delivery_operation_id,
+            first_preparation=False,
         ) from exc
 
 

@@ -1,10 +1,11 @@
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from carlos_patient_portal import invites
+from carlos_patient_portal.identity import IdentityProof
 from carlos_patient_portal.maintenance import cleanup_transient_auth_rows
 from carlos_patient_portal.models import (
     AUDIT_EVENT_INVITE_REVOKE,
@@ -398,6 +399,62 @@ def test_preparation_losing_an_insert_race_reports_the_concurrent_operation(
             )
         )
         assert [invite.delivery_operation_id for invite in prepared] == ["won"]
+
+
+def test_legacy_create_losing_to_a_first_preparation_names_the_preparation(monkeypatch) -> None:
+    app = internal_app()
+    client = TestClient(app, raise_server_exceptions=False)
+    headers = carlos_headers("portal.invite.manage")
+    prepared = client.post(
+        "/internal/carlos/patients/1234/invites/prepare",
+        headers=headers,
+        json={**invite_request(), "delivery_operation_id": "prepared-first"},
+    )
+    assert prepared.status_code == 201
+    # The legacy create passed its slot check before the preparation inserted.
+    monkeypatch.setattr(invites, "_release_preparation_slot", lambda *args, **kwargs: None)
+
+    legacy = client.post(
+        "/internal/carlos/patients/1234/invites", headers=headers, json=invite_request()
+    )
+
+    assert legacy.status_code == 409
+    assert legacy.json() == {"detail": IN_PROGRESS_DETAIL}
+
+
+def test_first_preparation_losing_to_a_legacy_create_names_the_pending_invite(monkeypatch) -> None:
+    app = internal_app()
+    client = TestClient(app, raise_server_exceptions=False)
+    original = invites._release_preparation_slot
+
+    def legacy_create_lands_after_the_pending_check(session, **kwargs) -> None:
+        original(session, **kwargs)
+        monkeypatch.setattr(invites, "_release_preparation_slot", original)
+        invites.create_invite(
+            session,
+            1234,
+            "Other Staff",
+            identity_proof=IdentityProof(
+                email="example.patient@example.com",
+                date_of_birth=date(1980, 5, 20),
+                health_card_number="ABCD 1234-5678",
+            ),
+            proof_secret="p" * 32,
+            clinic_id="clinic-a",
+        )
+
+    monkeypatch.setattr(
+        invites, "_release_preparation_slot", legacy_create_lands_after_the_pending_check
+    )
+
+    prepared = client.post(
+        "/internal/carlos/patients/1234/invites/prepare",
+        headers=carlos_headers("portal.invite.manage"),
+        json={**invite_request(), "delivery_operation_id": "prepared-second"},
+    )
+
+    assert prepared.status_code == 409
+    assert prepared.json() == {"detail": "pending invite already exists"}
 
 
 def _prepare(client, resend: bool, operation: str):
