@@ -464,8 +464,12 @@ HIDDEN_CHARACTER_TEXT = [
     pytest.param("moved\taway", id="tab"),
     pytest.param("moved\x85away", id="c1-next-line"),
     pytest.param("moved\u2028away", id="line-separator"),
+    pytest.param("moved\u2029away", id="paragraph-separator"),
     pytest.param("moved\u202eyawa", id="right-to-left-override"),
+    pytest.param("moved\u2066away", id="left-to-right-isolate"),
     pytest.param("moved\u200baway", id="zero-width-space"),
+    pytest.param("moved\ufeffaway", id="byte-order-mark"),
+    pytest.param("moved\U000e0041away", id="tag-character"),
 ]
 
 
@@ -491,6 +495,12 @@ HIDDEN_CHARACTER_TEXT = [
             lambda text: {"source_reference": "email-message-1", "label": text},
             id="secret-label",
         ),
+        pytest.param(
+            "/internal/carlos/patients/1234/unlock-secrets",
+            "portal.secret.manage",
+            lambda text: {"source_reference": text, "label": "Email password"},
+            id="secret-source-reference",
+        ),
     ],
 )
 def test_internal_staff_text_refuses_hidden_characters(path, permission, body, text) -> None:
@@ -515,6 +525,26 @@ def test_internal_staff_text_refuses_a_lone_surrogate_while_parsing() -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"][0]["type"] == "string_unicode"
+
+
+def test_internal_staff_text_keeps_script_joiners_and_trims_surrounding_whitespace() -> None:
+    app = internal_app()
+    client = TestClient(app)
+    # Persian needs the zero-width non-joiner, emoji sequences the joiner; both are allowed, as
+    # is a soft hyphen. Surrounding whitespace, a trailing line break included, is trimmed.
+    label = "می\u200cخواهم 👨\u200d👩\u200d👧 co\u00adop"
+
+    created = client.post(
+        "/internal/carlos/patients/1234/unlock-secrets",
+        headers=carlos_headers("portal.secret.manage"),
+        json={"source_reference": "  email-message-joiners\n", "label": label},
+    )
+
+    assert created.status_code == 201
+    with app.state.session_factory() as session:
+        stored = session.get(PatientPortalUnlockSecret, created.json()["id"])
+        assert stored.label == label
+        assert stored.source_reference == "email-message-joiners"
 
 
 def test_internal_access_reason_keeps_plain_non_latin_text_and_refusals_change_nothing() -> None:

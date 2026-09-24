@@ -659,9 +659,12 @@ Permissions are deliberately narrow:
 - `portal.contact.review`: list and approve/reject pending patient contact changes.
 
 Staff-supplied text that the portal stores and shows back (an account-access reason, an unlock-secret
-revocation reason, and an unlock-secret label) is refused with `422` when it contains control, line
-or paragraph separator, or Unicode formatting characters. A line break could make one audit record
-read as two, and an invisible formatting character could make the stored text display differently.
+revocation reason, and an unlock-secret label and source reference) is refused with `422` when it
+contains control characters, line or paragraph separators, or hidden formatting characters such as
+direction overrides and zero-width spaces. A line break could make one audit record read as two, and
+a hidden formatting character could make the stored text display differently. The zero-width
+non-joiner and joiner, which Persian, Indic scripts and emoji sequences need, and the soft hyphen
+are allowed.
 
 A contact-review decision controls only whether CARLOS should copy the verified portal contact into
 the chart. Rejection deliberately does not roll back the patient's proven portal contact. If the
