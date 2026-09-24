@@ -12,6 +12,11 @@ from carlos_patient_portal.config import get_settings
 from carlos_patient_portal.database import create_portal_engine, create_session_factory
 from carlos_patient_portal.identity import IdentityProof
 from carlos_patient_portal.invites import create_invite
+from carlos_patient_portal.models import (
+    BOOKING_PROMPT_STATUS_SENT,
+    PatientPortalBookingPrompt,
+    utc_now,
+)
 from carlos_patient_portal.runtime import auth_policy_from_settings
 from carlos_patient_portal.token_keys import PortalTokenKeys
 from carlos_patient_portal.unlock_secrets import create_unlock_secret
@@ -111,6 +116,25 @@ def main() -> None:
                         label=label,
                         source_reference=f"ci-message-{index}",
                     )
+                # One unread booking prompt for the Messages check. Inserted directly: the browser
+                # run has no outbox worker, and the prompt is what the patient reads.
+                seeded_at = utc_now()
+                session.add(
+                    PatientPortalBookingPrompt(
+                        clinic_id=settings.clinic_id,
+                        demographic_no=account.demographic_no,
+                        account_id=account.id,
+                        operation_id="ci-booking-prompt-1",
+                        urgency="soon",
+                        appointment_type="follow_up",
+                        suggested_by="Dr. Singh",
+                        status=BOOKING_PROMPT_STATUS_SENT,
+                        created_by="CarlosDoc",
+                        created_by_id="provider-42",
+                        created_at=seeded_at,
+                        expires_at=seeded_at + timedelta(days=90),
+                    )
+                )
                 _, activation_invite_token = create_invite(
                     session,
                     5678,

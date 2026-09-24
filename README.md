@@ -657,6 +657,7 @@ Permissions are deliberately narrow:
 - `portal.account.manage`: read portal status and disable/re-enable patient access.
 - `portal.secret.manage`: idempotently create, publish, and revoke generated email passphrases.
 - `portal.contact.review`: list and approve/reject pending patient contact changes.
+- `portal.booking_prompt.manage`: create, list, and withdraw booking prompts.
 
 A contact-review decision controls only whether CARLOS should copy the verified portal contact into
 the chart. Rejection deliberately does not roll back the patient's proven portal contact. If the
@@ -720,6 +721,32 @@ resend still references it, preserving the original's revocation and acceptance 
 prepared resend is committed, revoked, or removed by cleanup, the original becomes eligible again.
 Cleanup locks invite candidates and rechecks status, expiry, and prepared replacements in the
 delete statement so a concurrent preparation cannot lose its original invite.
+
+### Booking prompts
+
+A booking prompt asks a patient to book an appointment, for example "Dr. Singh suggested this
+appointment. Please book as soon as possible." The portal books nothing: the prompt tells the
+patient how to contact the clinic, using `PATIENT_PORTAL_CLINIC_BOOKING_PHONE` when it is set.
+
+- `POST /internal/carlos/patients/{demographic_no}/booking-prompts` creates one from a stable
+  `operation_id`, an `urgency` (`routine`, `soon`, `as_soon_as_possible`), an `appointment_type`
+  (`follow_up`, `annual_exam`, `lab_review`), and an optional `suggested_by` provider name. A retry
+  with the same operation returns the same prompt with `created: false` and sends no second email;
+  the same operation with different values is a `409`. A patient without an active portal account
+  gets a `404` and nothing is stored, so CARLOS can fall back to a phone call.
+- `GET /internal/carlos/patients/{demographic_no}/booking-prompts` lists the patient's latest 100,
+  each with its `state`: `sent`, `read` (with `read_at`), `withdrawn`, or `expired`.
+- `POST /internal/carlos/booking-prompts/{id}/withdraw` withdraws one, for example once the patient
+  has booked by phone. Withdrawing again returns it unchanged.
+
+Prompts are built from those fixed vocabularies, never from staff text, so they carry no clinical
+detail. The patient reads them under **Messages** after signing in; opening one records the read.
+Creating a prompt queues one email through the outbox saying only that a message is waiting, with a
+sign-in link: no provider, appointment type, or urgency. The notice is not sent if the prompt is
+withdrawn, expires, or is read first. Prompts leave the patient's messages after
+`PATIENT_PORTAL_BOOKING_PROMPT_TTL_DAYS` (default 90), and `cleanup-transient-auth` removes them
+once their notices are settled. Creating, listing, delivering, reading, and withdrawing are audited.
+The notice is email only; SMS notices would need the outbox to deliver SMS, which it does not yet.
 
 ## Development Invite API
 

@@ -47,6 +47,11 @@ AUDIT_ACTOR_TYPE_STAFF = "staff"
 # The portal itself, for events no human initiated — a configuration policy recorded at startup.
 AUDIT_ACTOR_TYPE_SYSTEM = "system"
 AUDIT_EVENT_ACTIVATION = "activation"
+AUDIT_EVENT_BOOKING_PROMPT_CREATE = "booking_prompt.create"
+AUDIT_EVENT_BOOKING_PROMPT_DELIVERY = "booking_prompt.delivery"
+AUDIT_EVENT_BOOKING_PROMPT_LIST = "booking_prompt.list"
+AUDIT_EVENT_BOOKING_PROMPT_READ = "booking_prompt.read"
+AUDIT_EVENT_BOOKING_PROMPT_WITHDRAW = "booking_prompt.withdraw"
 AUDIT_EVENT_ACCOUNT_CONTACT_UPDATE = "account.contact_update"
 AUDIT_EVENT_ACCOUNT_DISABLE = "account.disable"
 AUDIT_EVENT_ACCOUNT_EMAIL_CHANGE_CONFIRM = "account.email_change_confirm"
@@ -104,6 +109,16 @@ OUTBOX_STATUS_FAILED = "failed"
 OUTBOX_KIND_PASSWORD_RESET = "password_reset"
 OUTBOX_KIND_PASSWORD_RESET_REQUEST = "password_reset_request"
 OUTBOX_KIND_CONTACT_CHANGE = "contact_change"
+OUTBOX_KIND_BOOKING_PROMPT = "booking_prompt"
+BOOKING_PROMPT_STATUS_SENT = "sent"
+BOOKING_PROMPT_STATUS_READ = "read"
+BOOKING_PROMPT_STATUS_WITHDRAWN = "withdrawn"
+# Not stored: a sent or read prompt past its expiry is reported as expired.
+BOOKING_PROMPT_STATE_EXPIRED = "expired"
+# Fixed vocabularies. A prompt is built from these, never from staff free text, so it carries no
+# clinical detail and can be translated. Changing either list needs a migration for its constraint.
+BOOKING_PROMPT_URGENCIES = ("routine", "soon", "as_soon_as_possible")
+BOOKING_PROMPT_APPOINTMENT_TYPES = ("follow_up", "annual_exam", "lab_review")
 CONTACT_REVIEW_STATUS_PENDING = "pending"
 CONTACT_REVIEW_STATUS_REVIEWED = "reviewed"
 CONTACT_REVIEW_DECISION_APPROVED = "approved"
@@ -144,6 +159,8 @@ UNLOCK_SECRET_NONCE_LENGTH = 12
 OUTBOX_NONCE_LENGTH = 12
 MAX_INVITE_DELIVERY_OPERATION_ID_LENGTH = 64
 MAX_INVITE_DELIVERY_REFERENCE_LENGTH = 128
+MAX_BOOKING_PROMPT_OPERATION_ID_LENGTH = 64
+MAX_BOOKING_PROMPT_ACTOR_LENGTH = 128
 ACCOUNT_FOREIGN_KEY_TARGET = "patient_portal_accounts.id"
 DEMOGRAPHIC_NO_POSITIVE_SQL = "demographic_no > 0"
 EXPIRY_AFTER_CREATION_SQL = "expires_at > created_at"
@@ -721,7 +738,8 @@ class PatientPortalOutboundDelivery(Base):
     __tablename__ = "patient_portal_outbound_deliveries"
     __table_args__ = (
         CheckConstraint(
-            "kind in ('password_reset_request', 'password_reset', 'contact_change')",
+            "kind in ('password_reset_request', 'password_reset', 'contact_change', "
+            "'booking_prompt')",
             name="ck_pp_outbound_delivery_kind",
         ),
         CheckConstraint(
@@ -730,8 +748,15 @@ class PatientPortalOutboundDelivery(Base):
             "(kind = 'contact_change' and account_id is not null and "
             "reset_token_id is null) or "
             "(kind = 'password_reset_request' and account_id is null and "
+            "reset_token_id is null) or "
+            "(kind = 'booking_prompt' and account_id is not null and "
             "reset_token_id is null)",
             name="ck_pp_outbound_delivery_reset_token_kind",
+        ),
+        # Only a booking-prompt notice names a prompt, and it always does.
+        CheckConstraint(
+            "(kind = 'booking_prompt') = (booking_prompt_id is not null)",
+            name="ck_pp_outbound_delivery_booking_prompt_kind",
         ),
         CheckConstraint(
             "status in ('pending', 'processing', 'delivered', 'failed')",
@@ -778,6 +803,9 @@ class PatientPortalOutboundDelivery(Base):
         # completing at all.
         Index("ix_pp_outbound_delivery_reset_token", "reset_token_id"),
         Index("ix_pp_outbound_delivery_account", "account_id"),
+        # Same reason as the reset-token index: cleanup deletes expired prompts, and their notices
+        # go with them through ON DELETE CASCADE.
+        Index("ix_pp_outbound_delivery_booking_prompt", "booking_prompt_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -787,6 +815,10 @@ class PatientPortalOutboundDelivery(Base):
     )
     reset_token_id: Mapped[int | None] = mapped_column(
         ForeignKey("patient_portal_password_reset_tokens.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    booking_prompt_id: Mapped[int | None] = mapped_column(
+        ForeignKey("patient_portal_booking_prompts.id", ondelete="CASCADE"),
         nullable=True,
     )
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -1197,6 +1229,130 @@ class PatientPortalUnlockSecret(Base):
     )
 
 
+class PatientPortalBookingPrompt(Base):
+    """A clinic's request that a patient book an appointment, shown to them after sign-in.
+
+    Built from fixed vocabularies rather than staff text, so it holds no clinical detail. The
+    portal books nothing: the patient is told how to contact the clinic.
+    """
+
+    __tablename__ = "patient_portal_booking_prompts"
+    __table_args__ = (
+        CheckConstraint(
+            f"length(clinic_id) between 1 and {MAX_CLINIC_ID_LENGTH}",
+            name="ck_pp_booking_prompts_clinic_id_length",
+        ),
+        CheckConstraint(
+            DEMOGRAPHIC_NO_POSITIVE_SQL,
+            name="ck_pp_booking_prompts_demographic_no_positive",
+        ),
+        CheckConstraint(
+            f"length(operation_id) between 1 and {MAX_BOOKING_PROMPT_OPERATION_ID_LENGTH}",
+            name="ck_pp_booking_prompts_operation_id_length",
+        ),
+        CheckConstraint(
+            "urgency in ('routine', 'soon', 'as_soon_as_possible')",
+            name="ck_pp_booking_prompts_urgency",
+        ),
+        CheckConstraint(
+            "appointment_type in ('follow_up', 'annual_exam', 'lab_review')",
+            name="ck_pp_booking_prompts_appointment_type",
+        ),
+        CheckConstraint(
+            "status in ('sent', 'read', 'withdrawn')",
+            name="ck_pp_booking_prompts_status",
+        ),
+        CheckConstraint(
+            f"suggested_by is null or "
+            f"length(suggested_by) between 1 and {MAX_BOOKING_PROMPT_ACTOR_LENGTH}",
+            name="ck_pp_booking_prompts_suggested_by_length",
+        ),
+        CheckConstraint(
+            f"length(created_by) between 1 and {MAX_BOOKING_PROMPT_ACTOR_LENGTH}",
+            name="ck_pp_booking_prompts_created_by_length",
+        ),
+        CheckConstraint(
+            EXPIRY_AFTER_CREATION_SQL,
+            name="ck_pp_booking_prompts_expiry_after_creation",
+        ),
+        # Read stays recorded after a withdrawal, so staff can still see the patient saw it.
+        CheckConstraint(
+            "status != 'read' or read_at is not null",
+            name="ck_pp_booking_prompts_read_at_present",
+        ),
+        CheckConstraint(
+            "status != 'sent' or read_at is null",
+            name="ck_pp_booking_prompts_sent_is_unread",
+        ),
+        CheckConstraint(
+            "(status = 'withdrawn' and withdrawn_at is not null and withdrawn_by is not null) or "
+            "(status != 'withdrawn' and withdrawn_at is null and withdrawn_by is null and "
+            "withdrawn_by_id is null)",
+            name="ck_pp_booking_prompts_withdrawn_fields",
+        ),
+        Index(
+            "ux_pp_booking_prompts_clinic_operation",
+            "clinic_id",
+            "operation_id",
+            unique=True,
+        ),
+        Index(
+            "ix_pp_booking_prompts_clinic_patient_created",
+            "clinic_id",
+            "demographic_no",
+            "created_at",
+        ),
+        Index(
+            "ix_pp_booking_prompts_account_status_expires",
+            "account_id",
+            "status",
+            "expires_at",
+        ),
+        Index("ix_pp_booking_prompts_expires", "expires_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    clinic_id: Mapped[str] = mapped_column(String(MAX_CLINIC_ID_LENGTH), nullable=False)
+    demographic_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey(ACCOUNT_FOREIGN_KEY_TARGET, ondelete="CASCADE"),
+        nullable=False,
+    )
+    operation_id: Mapped[str] = mapped_column(
+        String(MAX_BOOKING_PROMPT_OPERATION_ID_LENGTH),
+        nullable=False,
+    )
+    urgency: Mapped[str] = mapped_column(String(32), nullable=False)
+    appointment_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    suggested_by: Mapped[str | None] = mapped_column(
+        String(MAX_BOOKING_PROMPT_ACTOR_LENGTH),
+        nullable=True,
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(MAX_BOOKING_PROMPT_ACTOR_LENGTH), nullable=False)
+    created_by_id: Mapped[str | None] = mapped_column(
+        String(MAX_BOOKING_PROMPT_ACTOR_LENGTH),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    withdrawn_by: Mapped[str | None] = mapped_column(
+        String(MAX_BOOKING_PROMPT_ACTOR_LENGTH),
+        nullable=True,
+    )
+    withdrawn_by_id: Mapped[str | None] = mapped_column(
+        String(MAX_BOOKING_PROMPT_ACTOR_LENGTH),
+        nullable=True,
+    )
+
+
 class PatientPortalAuditEvent(Base):
     """Security-relevant event trail for portal-owned workflows."""
 
@@ -1229,6 +1385,8 @@ class PatientPortalAuditEvent(Base):
                 "'password_reset.request', 'retention.policy_override', 'session.logout', "
                 "'staff.action', "
                 "'fhir.read', 'fhir.search', "
+                "'booking_prompt.create', 'booking_prompt.delivery', 'booking_prompt.list', "
+                "'booking_prompt.read', 'booking_prompt.withdraw', "
                 "'unlock_secret.create', 'unlock_secret.list', 'unlock_secret.read', "
                 "'unlock_secret.publish', 'unlock_secret.revoke')"
             ),

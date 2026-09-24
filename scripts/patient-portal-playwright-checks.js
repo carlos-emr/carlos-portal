@@ -900,6 +900,49 @@ function screenshotPath(name) {
       path: screenshotPath('patient-portal-account-mobile'),
       fullPage: true,
     });
+    await page.getByRole('link', { name: 'Messages', exact: true }).click();
+    await page.waitForURL((url) => url.pathname === portalPathname('/portal/messages'));
+    await page.getByRole('heading', { name: 'Messages' }).waitFor();
+    await assertAccessiblePage(page, 'messages page');
+    const seededPrompt = page.locator('.message-row').filter({
+      hasText: 'Book a follow-up appointment',
+    });
+    assert(
+      await seededPrompt.locator('.message-badge').count() === 1,
+      'the seeded booking prompt should be marked new before it is opened'
+    );
+    await page.screenshot({
+      path: screenshotPath('patient-portal-messages-mobile'),
+      fullPage: true,
+    });
+    await seededPrompt.click();
+    await page.waitForURL((url) => url.pathname.startsWith(portalPathname('/portal/messages/')));
+    await page.getByRole('heading', { name: 'Book a follow-up appointment' }).waitFor();
+    await assertAccessiblePage(page, 'booking prompt');
+    for (const expectedText of [
+      'Dr. Singh suggested this appointment.',
+      'Please book within the next few weeks.',
+      'Appointments cannot be booked in this portal.',
+    ]) {
+      assert(
+        await page.getByText(expectedText, { exact: true }).count() === 1,
+        `booking prompt should say: ${expectedText}`
+      );
+    }
+    assert(
+      await page.locator('.message-detail form, .message-detail button').count() === 0,
+      'a booking prompt must offer no way to book'
+    );
+    await page.screenshot({
+      path: screenshotPath('patient-portal-message-mobile'),
+      fullPage: true,
+    });
+    await page.getByRole('link', { name: 'Back to messages', exact: true }).click();
+    await page.waitForURL((url) => url.pathname === portalPathname('/portal/messages'));
+    assert(
+      await page.locator('.message-badge').count() === 0,
+      'an opened booking prompt should no longer be marked new'
+    );
     await page.getByRole('link', { name: 'Help', exact: true }).click();
     await page.waitForURL((url) => url.pathname === portalPathname('/portal/help'));
     await page.getByRole('heading', { name: 'Help' }).waitFor();

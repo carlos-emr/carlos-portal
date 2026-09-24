@@ -39,6 +39,7 @@ from carlos_patient_portal.models import (
     OUTBOX_STATUS_DELIVERED,
     OUTBOX_STATUS_FAILED,
     PatientPortalAuditEvent,
+    PatientPortalBookingPrompt,
     PatientPortalEmailChangeRequest,
     PatientPortalInvite,
     PatientPortalMfaChallenge,
@@ -64,6 +65,7 @@ class TransientCleanupResult:
     email_change_requests: int
     invites: int
     outbound_deliveries: int
+    booking_prompts: int = 0
 
     @property
     def total(self) -> int:
@@ -74,6 +76,7 @@ class TransientCleanupResult:
             + self.email_change_requests
             + self.invites
             + self.outbound_deliveries
+            + self.booking_prompts
         )
 
 
@@ -209,12 +212,18 @@ def cleanup_transient_auth_rows(
     remaining_linked_delivery = select(PatientPortalOutboundDelivery.id).where(
         PatientPortalOutboundDelivery.reset_token_id == PatientPortalPasswordResetToken.id
     )
+    remaining_prompt_notice = select(PatientPortalOutboundDelivery.id).where(
+        PatientPortalOutboundDelivery.booking_prompt_id == PatientPortalBookingPrompt.id
+    )
     if dry_run and outbound_delivery_ids:
         # A dry run must model the bounded outbox pass that a live invocation performs first.
         # Excluding only that exact candidate set makes the reset forecast agree in both directions:
         # a linked row outside the batch still protects its parent, while a parent whose last linked
         # row is in the batch is reported as removable in this invocation.
         remaining_linked_delivery = remaining_linked_delivery.where(
+            PatientPortalOutboundDelivery.id.not_in(outbound_delivery_ids)
+        )
+        remaining_prompt_notice = remaining_prompt_notice.where(
             PatientPortalOutboundDelivery.id.not_in(outbound_delivery_ids)
         )
     predicates = (
@@ -268,6 +277,16 @@ def cleanup_transient_auth_rows(
                 ),
             ),
         ),
+        (
+            PatientPortalBookingPrompt,
+            and_(
+                # An expired prompt is no longer shown to anyone; its audit events remain. As for
+                # reset tokens, its notice rows cascade with it, so a prompt waits until the
+                # outbox pass has removed every one, and never takes queued work with it.
+                PatientPortalBookingPrompt.expires_at < before,
+                ~remaining_prompt_notice.exists(),
+            ),
+        ),
     )
     # Keyed by field name rather than built positionally: these counts are what the operator reads
     # to decide whether cleanup did what they expected, and a reordering of `predicates` must not be
@@ -281,6 +300,7 @@ def cleanup_transient_auth_rows(
             "reset_records",
             "email_change_requests",
             "invites",
+            "booking_prompts",
         ),
         predicates,
         strict=True,

@@ -22,6 +22,7 @@ from carlos_patient_portal.account_settings import (
     update_account_mfa_method,
 )
 from carlos_patient_portal.auth import create_patient_session, hash_auth_token
+from carlos_patient_portal.booking_prompts import BookingPromptNotice, create_booking_prompt
 from carlos_patient_portal.config import Settings
 from carlos_patient_portal.credentials import hash_password
 from carlos_patient_portal.database import create_portal_engine
@@ -48,6 +49,7 @@ from carlos_patient_portal.models import (
     OUTBOX_STATUS_DELIVERED,
     OUTBOX_STATUS_PENDING,
     PatientPortalAccount,
+    PatientPortalBookingPrompt,
     PatientPortalContactReviewRequest,
     PatientPortalEmailChangeRequest,
     PatientPortalInvite,
@@ -1463,4 +1465,61 @@ def test_postgresql_same_operation_resend_preparations_racing_return_one_token()
             retry_waiting_for_original.set()
             event.remove(engine, "before_cursor_execute", hold_first_insert)
     finally:
+        engine.dispose()
+
+
+def test_postgresql_racing_booking_prompt_retries_create_one_prompt_and_notice() -> None:
+    """A CARLOS retry that overlaps the original must not send the patient two emails."""
+    assert POSTGRES_URL is not None
+    clean_postgresql_database()
+    account_id = insert_postgres_account(username="prompt.race", demographic_no=1234)
+    engine = create_portal_engine(POSTGRES_URL)
+    insert_barrier = Barrier(2)
+
+    def synchronize_prompt_inserts(connection, cursor, statement, parameters, context, executemany):
+        if statement.startswith("INSERT INTO patient_portal_booking_prompts "):
+            # Neither request found the operation; only the unique index can reject one.
+            insert_barrier.wait(timeout=10)
+
+    def create_from_worker(_):
+        with Session(engine) as session, session.begin():
+            session.execute(text("SET LOCAL statement_timeout = '15s'"))
+            result = create_booking_prompt(
+                session,
+                clinic_id="postgres-clinic",
+                demographic_no=1234,
+                operation_id="overlapping-retry",
+                urgency="soon",
+                appointment_type="follow_up",
+                suggested_by="Dr. Singh",
+                created_by="Front Desk",
+                created_by_id="front-desk",
+                ttl=timedelta(days=90),
+                notice=BookingPromptNotice(
+                    sign_in_url="https://portal.example.test/",
+                    encryption_secret="o" * 32,
+                    encryption_key_id="primary",
+                ),
+            )
+            return result.prompt.id, result.created
+
+    event.listen(engine, "before_cursor_execute", synchronize_prompt_inserts)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(create_from_worker, range(2)))
+        assert len({prompt_id for prompt_id, _ in results}) == 1
+        assert sorted(created for _, created in results) == [False, True]
+        with Session(engine) as session:
+            prompts = list(session.scalars(select(PatientPortalBookingPrompt)))
+            notices = list(
+                session.scalars(
+                    select(PatientPortalOutboundDelivery).where(
+                        PatientPortalOutboundDelivery.kind == "booking_prompt"
+                    )
+                )
+            )
+            assert [prompt.account_id for prompt in prompts] == [account_id]
+            assert [notice.booking_prompt_id for notice in notices] == [prompts[0].id]
+    finally:
+        event.remove(engine, "before_cursor_execute", synchronize_prompt_inserts)
         engine.dispose()

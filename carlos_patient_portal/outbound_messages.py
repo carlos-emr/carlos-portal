@@ -89,6 +89,30 @@ def contact_change_email_message(
     )
 
 
+def booking_prompt_email_message(
+    *,
+    service_name: str,
+    clinic_name: str,
+    sign_in_url: str,
+    locale: str = DEFAULT_OUTBOUND_LOCALE,
+) -> OutboundMessage:
+    """Tells the patient a message is waiting, and nothing about what it says.
+
+    Email is not a secure channel, so the provider, the kind of appointment and its urgency are
+    shown only after sign-in.
+    """
+    _require_supported_locale(locale)
+    return OutboundMessage(
+        subject=f"You have a new message in {service_name}",
+        body=(
+            f"{clinic_name} has sent you a message in {service_name}.\n\n"
+            f"Sign in to read it:\n{sign_in_url}\n\n"
+            "The message is only shown after you sign in.\n\n"
+            f"If you were not expecting this, contact {clinic_name}."
+        ),
+    )
+
+
 def email_change_confirmation_email_message(
     *,
     service_name: str,

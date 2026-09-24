@@ -53,10 +53,13 @@ from carlos_patient_portal.models import (
     AUDIT_ACTOR_TYPE_PATIENT,
     AUDIT_ACTOR_TYPE_SYSTEM,
     AUDIT_EVENT_ACCOUNT_CONTACT_UPDATE,
+    AUDIT_EVENT_BOOKING_PROMPT_DELIVERY,
     AUDIT_EVENT_PASSWORD_RESET_DELIVERY,
     AUDIT_OUTCOME_FAILURE,
     AUDIT_OUTCOME_SUCCESS,
+    BOOKING_PROMPT_STATUS_SENT,
     MFA_DELIVERY_METHOD_EMAIL,
+    OUTBOX_KIND_BOOKING_PROMPT,
     OUTBOX_KIND_CONTACT_CHANGE,
     OUTBOX_KIND_PASSWORD_RESET,
     OUTBOX_KIND_PASSWORD_RESET_REQUEST,
@@ -68,6 +71,7 @@ from carlos_patient_portal.models import (
     PASSWORD_RESET_STATUS_PENDING,
     PASSWORD_RESET_STATUS_REVOKED,
     PatientPortalAccount,
+    PatientPortalBookingPrompt,
     PatientPortalOutboundDelivery,
     PatientPortalPasswordResetToken,
     utc_now,
@@ -89,6 +93,9 @@ OUTBOX_MAX_RETRY_DELAY_SECONDS = 15 * 60
 # not, so the terminal handler must not revoke a token whose link is already in the mailbox.
 OUTBOX_FAILURE_AUDIT_UNAVAILABLE = "delivery_audit_unavailable"
 OUTBOX_FAILURE_KEY_UNAVAILABLE = "encryption_key_unavailable"
+# Not a failure: the prompt was withdrawn, expired, or already read before its notice went out, so
+# telling the patient a message is waiting would send them to nothing. Closed without retrying.
+OUTBOX_FAILURE_BOOKING_PROMPT_NOT_NEEDED = "booking_prompt_not_needed"
 # PostgreSQL transaction-scoped advisory lock namespace reserved for reset-request admission. It
 # makes the count-and-insert capacity decision atomic across web workers without adding a singleton
 # quota table. Production is PostgreSQL-only; SQLite is a single-process development convenience.
@@ -112,6 +119,10 @@ class OutboxMetrics(Protocol):
 
     def record_failure(self, category: str) -> None:
         """Increment the counter for one failure category."""
+
+
+class _BookingPromptNoticeNotNeeded(Exception):
+    """The prompt no longer needs a notice; see OUTBOX_FAILURE_BOOKING_PROMPT_NOT_NEEDED."""
 
 
 class OutboxPayloadError(Exception):
@@ -344,6 +355,43 @@ def enqueue_contact_change_delivery(
     return delivery
 
 
+def enqueue_booking_prompt_delivery(
+    session: Session,
+    *,
+    account_id: int,
+    booking_prompt_id: int,
+    recipient: str,
+    sign_in_url: str,
+    encryption_secret: str,
+    encryption_key_id: str = OUTBOX_KEY_ID,
+) -> PatientPortalOutboundDelivery:
+    """Queue the "message waiting" email for a booking prompt; it carries no prompt detail."""
+    message_id = _new_message_id()
+    ciphertext, nonce = _encrypt_payload(
+        {"recipient": recipient, "sign_in_url": sign_in_url},
+        encryption_secret=encryption_secret,
+        kind=OUTBOX_KIND_BOOKING_PROMPT,
+        account_id=account_id,
+        message_id=message_id,
+    )
+    delivery = PatientPortalOutboundDelivery(
+        account_id=account_id,
+        booking_prompt_id=booking_prompt_id,
+        kind=OUTBOX_KIND_BOOKING_PROMPT,
+        status=OUTBOX_STATUS_PENDING,
+        encrypted_payload=ciphertext,
+        encryption_nonce=nonce,
+        encryption_key_id=encryption_key_id,
+        message_id=message_id,
+        attempt_count=0,
+        available_at=utc_now(),
+        created_at=utc_now(),
+    )
+    session.add(delivery)
+    session.flush()
+    return delivery
+
+
 def _claim_delivery(
     session: Session,
     *,
@@ -539,6 +587,79 @@ def _record_reset_delivery_outcome_best_effort(
     return True
 
 
+def _booking_prompt_notice_is_needed(session: Session, booking_prompt_id: int | None) -> bool:
+    """Whether the prompt is still sent-but-unread and live, so a notice would lead somewhere."""
+    return (
+        booking_prompt_id is not None
+        and session.scalar(
+            select(PatientPortalBookingPrompt.id).where(
+                PatientPortalBookingPrompt.id == booking_prompt_id,
+                PatientPortalBookingPrompt.status == BOOKING_PROMPT_STATUS_SENT,
+                PatientPortalBookingPrompt.expires_at > utc_now(),
+            )
+        )
+        is not None
+    )
+
+
+def _record_booking_prompt_delivery(
+    session: Session,
+    delivery: PatientPortalOutboundDelivery,
+    *,
+    outcome: str,
+    reason: str | None = None,
+) -> None:
+    prompt = session.scalar(
+        select(PatientPortalBookingPrompt)
+        .where(PatientPortalBookingPrompt.id == delivery.booking_prompt_id)
+        .with_for_update()
+    )
+    if prompt is None:
+        return
+    if outcome == AUDIT_OUTCOME_SUCCESS:
+        prompt.notified_at = utc_now()
+    record_audit_event(
+        session,
+        event_type=AUDIT_EVENT_BOOKING_PROMPT_DELIVERY,
+        outcome=outcome,
+        actor_type=AUDIT_ACTOR_TYPE_SYSTEM,
+        actor=OUTBOX_AUDIT_ACTOR,
+        clinic_id=prompt.clinic_id,
+        demographic_no=prompt.demographic_no,
+        account_id=prompt.account_id,
+        resource_type="booking_prompt",
+        resource_id=str(prompt.id),
+        reason=reason,
+    )
+    session.flush()
+
+
+def _record_booking_prompt_delivery_best_effort(
+    session: Session,
+    delivery: PatientPortalOutboundDelivery,
+    *,
+    outcome: str,
+    reason: str | None = None,
+) -> bool:
+    """Record a notice's outcome; report whether it was recorded.
+
+    As for a password reset, a sent notice whose outcome could not be written goes back for another
+    attempt rather than closing unrecorded: a duplicate "message waiting" email is the lesser cost.
+    """
+    try:
+        with session.begin_nested():
+            _record_booking_prompt_delivery(session, delivery, outcome=outcome, reason=reason)
+    except SQLAlchemyError as exc:
+        # nosemgrep: python-logger-credential-disclosure -- identifiers and class only
+        logger.error(  # NOSONAR - traceback details can contain database values
+            "Booking-prompt delivery audit write failed for delivery %s: %s",
+            delivery.id,
+            type(exc).__name__,
+        )
+        return False
+    return True
+
+
 def _finish_delivery(
     session: Session,
     *,
@@ -577,6 +698,12 @@ def _finish_delivery(
                 delivery,
                 outcome=AUDIT_OUTCOME_SUCCESS,
             )
+        elif delivery.kind == OUTBOX_KIND_BOOKING_PROMPT:
+            audit_recorded = _record_booking_prompt_delivery_best_effort(
+                session,
+                delivery,
+                outcome=AUDIT_OUTCOME_SUCCESS,
+            )
         if audit_recorded:
             return delivery.status
         # The message left, but its outcome row could not be written. Closing the row here is
@@ -585,6 +712,10 @@ def _finish_delivery(
         delivery.delivered_at = None
         failure_code = OUTBOX_FAILURE_AUDIT_UNAVAILABLE
     delivery.last_failure_code = (failure_code or "delivery_failed")[:64]
+    if failure_code == OUTBOX_FAILURE_BOOKING_PROMPT_NOT_NEEDED:
+        # Nothing was sent and nothing should be; the withdrawal or read is already audited.
+        delivery.status = OUTBOX_STATUS_FAILED
+        return delivery.status
     if failure_code == OUTBOX_FAILURE_KEY_UNAVAILABLE:
         # Retrying cannot help: the key is not in the keyring, and every attempt would spend
         # budget that ends at _mark_terminal_reset_failure. Fail now and leave the token alone:
@@ -611,6 +742,13 @@ def _finish_delivery(
             session.flush()
         elif delivery.kind == OUTBOX_KIND_CONTACT_CHANGE:
             _mark_terminal_contact_change_failure(session, delivery)
+        elif delivery.kind == OUTBOX_KIND_BOOKING_PROMPT:
+            _record_booking_prompt_delivery(
+                session,
+                delivery,
+                outcome=AUDIT_OUTCOME_FAILURE,
+                reason=OUTBOX_FAILURE_KEY_UNAVAILABLE,
+            )
         return delivery.status
     if delivery.attempt_count >= max_attempts:
         delivery.status = OUTBOX_STATUS_FAILED
@@ -623,6 +761,14 @@ def _finish_delivery(
                 _mark_terminal_reset_failure(session, delivery)
         elif delivery.kind == OUTBOX_KIND_CONTACT_CHANGE:
             _mark_terminal_contact_change_failure(session, delivery)
+        elif delivery.kind == OUTBOX_KIND_BOOKING_PROMPT:
+            # The prompt is still in the patient's messages; only the notice is missing.
+            _record_booking_prompt_delivery(
+                session,
+                delivery,
+                outcome=AUDIT_OUTCOME_FAILURE,
+                reason=OUTBOX_REASON_DELIVERY_UNAVAILABLE,
+            )
         return delivery.status
     delivery.status = OUTBOX_STATUS_PENDING
     delivery.available_at = now + timedelta(seconds=_retry_delay_seconds(delivery.attempt_count))
@@ -799,6 +945,7 @@ def process_one_delivery(
             claimed_attempt_count = delivery.attempt_count
             kind = delivery.kind
             reset_token_id = delivery.reset_token_id
+            booking_prompt_id = delivery.booking_prompt_id
             message_id = delivery.message_id
             key_unavailable = False
             try:
@@ -879,9 +1026,27 @@ def process_one_delivery(
                         recipient=recipient,
                         message_id=message_id,
                     )
+                elif kind == OUTBOX_KIND_BOOKING_PROMPT:
+                    with session_factory() as validation_session:
+                        notice_needed = _booking_prompt_notice_is_needed(
+                            validation_session,
+                            booking_prompt_id,
+                        )
+                    if not notice_needed:
+                        raise _BookingPromptNoticeNotNeeded()
+                    sign_in_url = payload.get("sign_in_url")
+                    if not isinstance(sign_in_url, str) or not sign_in_url:
+                        raise OutboxPayloadError("booking prompt payload is invalid")
+                    email_sender.send_booking_prompt_notice(
+                        recipient=recipient,
+                        sign_in_url=sign_in_url,
+                        message_id=message_id,
+                    )
                 else:
                     raise OutboxPayloadError("delivery kind is invalid")
                 succeeded = True
+            except _BookingPromptNoticeNotNeeded:
+                failure_code = OUTBOX_FAILURE_BOOKING_PROMPT_NOT_NEEDED
             except PortalEmailDeliveryError as exc:
                 failure_code = type(exc).__name__
             except OutboxPayloadError:
@@ -916,6 +1081,12 @@ def process_one_delivery(
                 expected_attempt_count=claimed_attempt_count,
                 failure_code=failure_code,
             )
+    if failure_code == OUTBOX_FAILURE_BOOKING_PROMPT_NOT_NEEDED:
+        logger.info(
+            "Booking-prompt notice %s not sent: the prompt was withdrawn, expired or already read",
+            claimed_id,
+        )
+        return DeliveryRunResult(delivery_id=claimed_id, status=final_status)
     if not succeeded:
         # Every field an operator needs to tell one stuck message from a clinic-wide outage,
         # and to find the row afterwards. The previous line carried only the failure code:

@@ -27,6 +27,7 @@ EXPECTED_TABLE_PRIVILEGES = {
     "alembic_version": frozenset({"select"}),
     "patient_portal_accounts": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_audit_events": frozenset({"select", "insert"}),
+    "patient_portal_booking_prompts": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_contact_review_requests": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_email_change_requests": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_invites": ORDINARY_TABLE_PRIVILEGES,
