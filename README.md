@@ -658,6 +658,11 @@ Permissions are deliberately narrow:
 - `portal.secret.manage`: idempotently create, publish, and revoke generated email passphrases.
 - `portal.contact.review`: list and approve/reject pending patient contact changes.
 
+Staff-supplied text that the portal stores and shows back (an account-access reason, an unlock-secret
+revocation reason, and an unlock-secret label) is refused with `422` when it contains control, line
+or paragraph separator, or Unicode formatting characters. A line break could make one audit record
+read as two, and an invisible formatting character could make the stored text display differently.
+
 A contact-review decision controls only whether CARLOS should copy the verified portal contact into
 the chart. Rejection deliberately does not roll back the patient's proven portal contact. If the
 review indicates suspected takeover, staff must separately disable portal access with

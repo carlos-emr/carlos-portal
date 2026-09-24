@@ -18,13 +18,14 @@
 # CARLOS EMR Project
 
 import logging
+import unicodedata
 from collections.abc import Awaitable, Callable, Generator
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Protocol
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Request, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
@@ -171,18 +172,41 @@ class InternalOperationalMetrics(Protocol):
         raise NotImplementedError
 
 
+# Unicode categories refused in staff-supplied text: controls (Cc, which includes line breaks and
+# tabs), formatting characters (Cf, such as a right-to-left override or a zero-width space), and
+# line and paragraph separators (Zl, Zp). Lone surrogate halves never get this far: Pydantic
+# refuses them while parsing the JSON body.
+_HIDDEN_CHARACTER_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+
+
+def _reject_hidden_characters(value: str | None) -> str | None:
+    if value is not None and any(
+        unicodedata.category(character) in _HIDDEN_CHARACTER_CATEGORIES for character in value
+    ):
+        raise ValueError("must not contain control, line-separator or formatting characters")
+    return value
+
+
+# Staff-supplied text the portal stores and shows back: an account-access reason, an unlock-secret
+# revocation reason, and the label a patient sees beside a stored password. A line break can make
+# one audit record or log line read as two, and an invisible formatting character can make stored
+# text display as something other than what was stored. CARLOS checks the same before sending;
+# this covers any other caller. Accented and non-Latin text is unaffected.
+StaffText = AfterValidator(_reject_hidden_characters)
+
+
 class InternalUnlockSecretRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     source_reference: str = Field(min_length=1, max_length=128)
-    label: str | None = Field(default=None, max_length=128)
+    label: Annotated[str | None, Field(default=None, max_length=128), StaffText]
     secret_type: str = Field(default="email", pattern="^email$")
 
 
 class InternalUnlockSecretRevokeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    reason: str | None = Field(default=None, max_length=64)
+    reason: Annotated[str | None, Field(default=None, max_length=64), StaffText]
 
 
 class InternalContactReviewDecision(BaseModel):
@@ -196,7 +220,7 @@ class InternalAccountAccessRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     enabled: bool
-    reason: str = Field(default="staff_action", min_length=1, max_length=64)
+    reason: Annotated[str, Field(default="staff_action", min_length=1, max_length=64), StaffText]
 
 
 class InternalInviteResponse(BaseModel):
