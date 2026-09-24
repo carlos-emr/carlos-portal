@@ -938,7 +938,9 @@ def register_portal_routes(
         # a message in the patient's name. This is the route's write; the assembler stays
         # read-only.
         try:
-            open_booking_prompt(session, prompt_id, account=authenticated_session.account)
+            prompt = open_booking_prompt(
+                session, prompt_id, account=authenticated_session.account
+            )
         except BookingPromptNotFoundError:
             return render_portal_page(
                 request,
@@ -954,7 +956,7 @@ def register_portal_routes(
             session,
             authenticated_session=authenticated_session,
             active_module="messages",
-            selected_message_id=prompt_id,
+            selected_message=prompt,
         )
 
     @app.get("/portal/help")

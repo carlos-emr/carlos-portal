@@ -30,6 +30,7 @@ from carlos_patient_portal.models import (
     OUTBOX_KIND_BOOKING_PROMPT,
     OUTBOX_STATUS_DELIVERED,
     OUTBOX_STATUS_FAILED,
+    PatientPortalAccount,
     PatientPortalAuditEvent,
     PatientPortalBookingPrompt,
     PatientPortalOutboundDelivery,
@@ -200,10 +201,16 @@ def test_prompt_accepts_only_its_fixed_vocabulary(body) -> None:
         assert list(session.scalars(select(PatientPortalBookingPrompt))) == []
 
 
-def test_another_clinic_cannot_list_or_withdraw_the_prompt() -> None:
+def test_another_clinic_cannot_create_list_or_withdraw_prompts() -> None:
     app = booking_app()
     client = TestClient(app)
     activate_seeded_patient_account(app, client)
+    created_elsewhere = client.post(
+        PATH, headers=headers(clinic_id="clinic-b"), json=prompt_request(operation_id="other")
+    )
+    with app.state.session_factory() as session:
+        assert list(session.scalars(select(PatientPortalBookingPrompt))) == []
+        assert list(session.scalars(select(PatientPortalOutboundDelivery))) == []
     prompt_id = client.post(PATH, headers=headers(), json=prompt_request()).json()["id"]
 
     listed = client.get(PATH, headers=headers(clinic_id="clinic-b"))
@@ -213,6 +220,7 @@ def test_another_clinic_cannot_list_or_withdraw_the_prompt() -> None:
     )
 
     # A portal serves one clinic, so another clinic's staff are refused before any lookup.
+    assert created_elsewhere.status_code == 404
     assert listed.status_code == 404
     assert withdrawn.status_code == 404
     with app.state.session_factory() as session:
@@ -299,6 +307,53 @@ def test_notice_is_not_sent_once_it_would_lead_nowhere(change, caplog) -> None:
     assert audit_events(app, AUDIT_EVENT_BOOKING_PROMPT_DELIVERY) == []
 
 
+@pytest.mark.parametrize("change", ["disabled", "staff-locked"])
+def test_notice_is_not_sent_once_staff_stop_the_account(change) -> None:
+    # A disabled account can mean its mailbox is not the patient's; even "you have a message"
+    # would tell that mailbox the patient attends the clinic.
+    app = booking_app()
+    client = TestClient(app)
+    activate_seeded_patient_account(app, client)
+    assert client.post(PATH, headers=headers(), json=prompt_request()).status_code == 201
+    if change == "disabled":
+        disabled = client.post(
+            "/internal/carlos/patients/1234/portal-account/access",
+            headers=carlos_staff_headers(
+                "portal.account.manage", clinic_id="clinic-a", token=INTERNAL_API_TOKEN
+            ),
+            json={"enabled": False, "reason": "not_the_patients_mailbox"},
+        )
+        assert disabled.status_code == 200
+    else:
+        with app.state.session_factory.begin() as session:
+            account = session.scalar(select(PatientPortalAccount))
+            account.locked_at = utc_now()
+            account.locked_by = "Front Desk"
+    sender = RecordingPortalEmailSender()
+
+    result = deliver_next(app, sender)
+
+    assert result is not None
+    assert result.status == OUTBOX_STATUS_FAILED
+    assert sender.messages == []
+
+
+def test_notice_goes_to_the_accounts_current_email() -> None:
+    app = booking_app()
+    client = TestClient(app)
+    activate_seeded_patient_account(app, client)
+    assert client.post(PATH, headers=headers(), json=prompt_request()).status_code == 201
+    with app.state.session_factory.begin() as session:
+        session.scalar(select(PatientPortalAccount)).email = "new.address@example.com"
+    sender = RecordingPortalEmailSender()
+
+    result = deliver_next(app, sender)
+
+    assert result is not None
+    assert result.status == OUTBOX_STATUS_DELIVERED
+    assert [message["recipient"] for message in sender.messages] == ["new.address@example.com"]
+
+
 def test_notice_that_keeps_failing_is_recorded_against_its_prompt() -> None:
     app = booking_app()
     client = TestClient(app)
@@ -352,6 +407,42 @@ def test_patient_reads_the_prompt_and_staff_can_see_it_was_read() -> None:
     assert "message-badge" not in client.get("/portal/messages").text
     assert "1 new" not in client.get("/portal").text
     assert len(audit_events(app, AUDIT_EVENT_BOOKING_PROMPT_LIST)) == 1
+
+
+def test_prompt_without_a_booking_phone_says_to_contact_the_clinic() -> None:
+    app = booking_app()
+    client = TestClient(app)
+    browser_sign_in_seeded_patient(app, client)
+    prompt_id = TestClient(app).post(
+        PATH, headers=headers(), json=prompt_request(suggested_by=None, urgency="routine")
+    ).json()["id"]
+
+    opened = client.get(f"/portal/messages/{prompt_id}")
+
+    assert "To book, contact Maple Clinic." in opened.text
+    assert "Your clinic suggested this appointment." in opened.text
+    assert "Please book at a time that suits you." in opened.text
+
+
+def test_a_prompt_beyond_the_listed_newest_still_opens() -> None:
+    app = booking_app()
+    client = TestClient(app)
+    browser_sign_in_seeded_patient(app, client)
+    staff = TestClient(app)
+    oldest = staff.post(
+        PATH, headers=headers(), json=prompt_request(operation_id="oldest")
+    ).json()["id"]
+    for index in range(50):
+        assert staff.post(
+            PATH, headers=headers(), json=prompt_request(operation_id=f"newer-{index}")
+        ).status_code == 201
+
+    opened = client.get(f"/portal/messages/{oldest}")
+
+    # The list shows the newest 50; the opened one is shown whether or not it is among them.
+    assert opened.status_code == 200
+    assert 'id="message-title"' in opened.text
+    assert f'href="/portal/messages/{oldest}"' not in opened.text
 
 
 def test_withdrawn_and_expired_prompts_leave_the_patients_messages() -> None:
@@ -530,7 +621,13 @@ def test_booking_prompt_migration_keeps_its_audit_record_on_downgrade(tmp_path) 
 
 @pytest.mark.parametrize(
     "value",
-    ["555-123-4567", "+1 (416) 555-0100 ext. 22", "416.555.0100 x3", "  555 123 4567  "],
+    [
+        "555-123-4567",
+        "(416) 555-0100",
+        "+1 (416) 555-0100 ext. 22",
+        "416.555.0100 x3",
+        "  555 123 4567  ",
+    ],
 )
 def test_clinic_booking_phone_accepts_phone_numbers(value) -> None:
     assert development_settings(clinic_booking_phone=value).clinic_booking_phone == value.strip()

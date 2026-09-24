@@ -350,7 +350,7 @@
               {% set prompt = messages.selected %}
               <article class="message-detail" aria-labelledby="message-title">
                 <h2 id="message-title">{{ prompt.title }}</h2>
-                <p class="message-meta">{{ text.message_sent }} {{ prompt.sent_at }}</p>
+                <p class="message-meta">{{ text.message_sent_at.format(sent_at=prompt.sent_at) }}</p>
                 <p>{{ prompt.suggested_by }}</p>
                 <p>{{ prompt.urgency }}</p>
                 <p class="message-contact">{{ prompt.contact }}</p>
@@ -366,7 +366,7 @@
                       {% if prompt.is_new %}
                         <span class="message-badge">{{ text.message_new }}</span>
                       {% endif %}
-                      <span class="message-meta">{{ text.message_sent }} {{ prompt.sent_at }}</span>
+                      <span class="message-meta">{{ text.message_sent_at.format(sent_at=prompt.sent_at) }}</span>
                     </a>
                   </li>
                 {% endfor %}

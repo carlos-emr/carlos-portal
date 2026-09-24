@@ -797,7 +797,7 @@ a.module-tile:focus-visible {
   grid-template-columns: 1fr auto;
   gap: 4px 12px;
   padding: 12px 14px;
-  color: #111827;
+  color: inherit;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 4px;

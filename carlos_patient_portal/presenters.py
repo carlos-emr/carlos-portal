@@ -332,15 +332,16 @@ def assemble_messages(
     base_path: str,
     clinic_name: str,
     booking_phone: str | None,
-    selected_prompt_id: int | None = None,
+    selected_prompt: PatientPortalBookingPrompt | None = None,
     not_found: bool = False,
     timezone_name: str = "UTC",
     locale: str = DEFAULT_LOCALE,
 ) -> MessagesViewModel:
     """Build the messages view state for `dashboard.jinja`. Read-only: opening is the route's."""
     text = portal_text(locale)
-    prompts = tuple(
-        _booking_prompt_view(
+
+    def view(prompt: PatientPortalBookingPrompt) -> BookingPromptViewModel:
+        return _booking_prompt_view(
             prompt,
             text=text,
             href=f"{base_path.rstrip('/')}/{prompt.id}",
@@ -349,9 +350,10 @@ def assemble_messages(
             timezone_name=timezone_name,
             locale=locale,
         )
-        for prompt in list_active_prompts_for_account(session, account.id)
-    )
-    selected = next((prompt for prompt in prompts if prompt.id == selected_prompt_id), None)
+
+    prompts = tuple(view(prompt) for prompt in list_active_prompts_for_account(session, account.id))
+    # Built from the prompt the route opened, not looked up in the capped list above.
+    selected = view(selected_prompt) if selected_prompt is not None else None
     return MessagesViewModel(
         prompts=prompts,
         selected=selected,

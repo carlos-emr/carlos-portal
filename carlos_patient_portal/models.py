@@ -818,7 +818,12 @@ class PatientPortalOutboundDelivery(Base):
         nullable=True,
     )
     booking_prompt_id: Mapped[int | None] = mapped_column(
-        ForeignKey("patient_portal_booking_prompts.id", ondelete="CASCADE"),
+        ForeignKey(
+            "patient_portal_booking_prompts.id",
+            ondelete="CASCADE",
+            # Named as migration 0014 creates it, so its downgrade can drop it by name.
+            name="fk_pp_outbound_delivery_booking_prompt",
+        ),
         nullable=True,
     )
     kind: Mapped[str] = mapped_column(String(32), nullable=False)

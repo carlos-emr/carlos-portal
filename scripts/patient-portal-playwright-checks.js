@@ -930,8 +930,10 @@ function screenshotPath(name) {
       );
     }
     assert(
-      await page.locator('.message-detail form, .message-detail button').count() === 0,
-      'a booking prompt must offer no way to book'
+      await page.locator('.message-detail form, .message-detail button').count() === 0
+        && await page.locator('.message-detail a').count() === 1
+        && await page.locator('.message-detail a').innerText() === 'Back to messages',
+      'a booking prompt must offer no way to book: its only link goes back to the list'
     );
     await page.screenshot({
       path: screenshotPath('patient-portal-message-mobile'),

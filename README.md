@@ -19,8 +19,8 @@ The MVP foundation currently includes:
 - Activation attempt throttling backed by portal audit events and PostgreSQL transaction locks.
 - Patient login with Argon2id password verification, MFA challenge/verify, opaque bearer sessions,
   logout, password reset, lockout, staff unlock, and forced reset after unlock.
-- Authenticated dashboard landing page with Account, Email passwords, and Help modules plus disabled
-  placeholders for future Documents and Messages modules.
+- Authenticated dashboard landing page with Account, Email passwords, Messages (booking prompts from
+  the clinic), and Help modules, plus a disabled placeholder for a future Documents module.
 - Encrypted unlock-secret storage service for generated passphrases used by CARLOS encrypted email
   attachments.
 - Pilot hardening hooks for readiness checks, maintenance mode, coarse request throttling, audit
@@ -743,7 +743,9 @@ Prompts are built from those fixed vocabularies, never from staff text, so they 
 detail. The patient reads them under **Messages** after signing in; opening one records the read.
 Creating a prompt queues one email through the outbox saying only that a message is waiting, with a
 sign-in link: no provider, appointment type, or urgency. The notice is not sent if the prompt is
-withdrawn, expires, or is read first. Prompts leave the patient's messages after
+withdrawn, expires, or is read first, or if staff disable or lock the account; it goes to the
+account's email as it is when sent. A notice skipped this way ends as `failed` with
+`last_failure_code = booking_prompt_not_needed`, not an outage. Prompts leave the patient's messages after
 `PATIENT_PORTAL_BOOKING_PROMPT_TTL_DAYS` (default 90), and `cleanup-transient-auth` removes them
 once their notices are settled. Creating, listing, delivering, reading, and withdrawing are audited.
 The notice is email only; SMS notices would need the outbox to deliver SMS, which it does not yet.

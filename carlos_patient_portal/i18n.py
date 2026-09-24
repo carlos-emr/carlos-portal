@@ -219,7 +219,7 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
         "message_back": "Back to messages",
         "message_new": "New",
         "message_not_found": "That message is no longer available.",
-        "message_sent": "Sent",
+        "message_sent_at": "Sent {sent_at}",
         "messages": "Messages",
         "messages_empty": "You have no messages from your clinic.",
         "messages_new_count": "{count} new",

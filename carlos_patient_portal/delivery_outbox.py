@@ -45,11 +45,13 @@ from carlos_patient_portal.auth import (
     AuthPolicy,
     PasswordResetRequestResult,
     PasswordResetTokenInvalidError,
+    lock_is_staff_initiated,
     record_password_reset_delivery_outcome,
     request_password_reset,
 )
 from carlos_patient_portal.email_delivery import PortalEmailDeliveryError, PortalEmailSender
 from carlos_patient_portal.models import (
+    ACCOUNT_STATUS_ACTIVE,
     AUDIT_ACTOR_TYPE_PATIENT,
     AUDIT_ACTOR_TYPE_SYSTEM,
     AUDIT_EVENT_ACCOUNT_CONTACT_UPDATE,
@@ -587,19 +589,40 @@ def _record_reset_delivery_outcome_best_effort(
     return True
 
 
-def _booking_prompt_notice_is_needed(session: Session, booking_prompt_id: int | None) -> bool:
-    """Whether the prompt is still sent-but-unread and live, so a notice would lead somewhere."""
-    return (
-        booking_prompt_id is not None
-        and session.scalar(
-            select(PatientPortalBookingPrompt.id).where(
-                PatientPortalBookingPrompt.id == booking_prompt_id,
-                PatientPortalBookingPrompt.status == BOOKING_PROMPT_STATUS_SENT,
-                PatientPortalBookingPrompt.expires_at > utc_now(),
-            )
+def _booking_prompt_notice_recipient(
+    session: Session,
+    booking_prompt_id: int | None,
+) -> str | None:
+    """Where the notice should go now, or None when it should not be sent at all.
+
+    Checked at send time, not when queued. Not once the prompt is withdrawn, expired or already
+    read, when the patient would find nothing new. Not once staff have disabled or locked the
+    account: a disabled account can mean its mailbox is not the patient's, and even "you have a
+    message" would tell that mailbox the patient attends the clinic. The address is the account's
+    current email, so a notice queued before a contact change never reaches the old address;
+    password-reset mail is stopped the same way when either happens.
+    """
+    if booking_prompt_id is None:
+        return None
+    account = session.scalar(
+        select(PatientPortalAccount)
+        .join(
+            PatientPortalBookingPrompt,
+            PatientPortalBookingPrompt.account_id == PatientPortalAccount.id,
         )
-        is not None
+        .where(
+            PatientPortalBookingPrompt.id == booking_prompt_id,
+            PatientPortalBookingPrompt.status == BOOKING_PROMPT_STATUS_SENT,
+            PatientPortalBookingPrompt.expires_at > utc_now(),
+        )
     )
+    if (
+        account is None
+        or account.status != ACCOUNT_STATUS_ACTIVE
+        or lock_is_staff_initiated(account)
+    ):
+        return None
+    return account.email
 
 
 def _record_booking_prompt_delivery(
@@ -1027,18 +1050,20 @@ def process_one_delivery(
                         message_id=message_id,
                     )
                 elif kind == OUTBOX_KIND_BOOKING_PROMPT:
+                    # A withdrawal or disable landing between this check and the send still sends
+                    # one notice, as for a password reset; the window is one SMTP round trip.
                     with session_factory() as validation_session:
-                        notice_needed = _booking_prompt_notice_is_needed(
+                        current_recipient = _booking_prompt_notice_recipient(
                             validation_session,
                             booking_prompt_id,
                         )
-                    if not notice_needed:
+                    if current_recipient is None:
                         raise _BookingPromptNoticeNotNeeded()
                     sign_in_url = payload.get("sign_in_url")
                     if not isinstance(sign_in_url, str) or not sign_in_url:
                         raise OutboxPayloadError("booking prompt payload is invalid")
                     email_sender.send_booking_prompt_notice(
-                        recipient=recipient,
+                        recipient=current_recipient,
                         sign_in_url=sign_in_url,
                         message_id=message_id,
                     )

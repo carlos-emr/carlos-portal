@@ -76,6 +76,7 @@ from carlos_patient_portal.models import (
     AUDIT_EVENT_RETENTION_POLICY_OVERRIDE,
     AUDIT_OUTCOME_FAILURE,
     AUDIT_OUTCOME_SUCCESS,
+    PatientPortalBookingPrompt,
 )
 from carlos_patient_portal.presenters import assemble_email_password_dashboard, assemble_messages
 from carlos_patient_portal.routes.activation import register_activation_routes
@@ -776,7 +777,7 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
         email_password_date_to: date | None = None,
         email_password_page: int = 1,
         email_password_filter_error: str | None = None,
-        selected_message_id: int | None = None,
+        selected_message: PatientPortalBookingPrompt | None = None,
         message_not_found: bool = False,
         authenticated_session: AuthenticatedPortalSession | None = None,
     ) -> Response:
@@ -814,7 +815,7 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
                 base_path=request.url_for("portal_messages").path,
                 clinic_name=settings.clinic_name,
                 booking_phone=settings.clinic_booking_phone,
-                selected_prompt_id=selected_message_id,
+                selected_prompt=selected_message,
                 not_found=message_not_found,
                 timezone_name=settings.clinic_timezone,
                 locale=request_locale(request),
