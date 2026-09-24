@@ -246,7 +246,6 @@ def create_booking_prompt(
         session,
         account_id=account.id,
         booking_prompt_id=prompt.id,
-        recipient=account.email,
         sign_in_url=notice.sign_in_url,
         encryption_secret=notice.encryption_secret,
         encryption_key_id=notice.encryption_key_id,

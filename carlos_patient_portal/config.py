@@ -71,9 +71,9 @@ MAX_CLINIC_ID_LENGTH = 64
 MAX_CONFIG_CLINIC_ID_LENGTH = 20
 CLINIC_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 STAFF_ASSERTION_KEY_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
-# Digits with the usual separators, an optional leading +, and an optional extension.
+# At least seven digits with the usual separators, an optional leading +, and an optional extension.
 CLINIC_BOOKING_PHONE_PATTERN = re.compile(
-    r"\+?\(?[0-9][0-9 ().-]{2,24}(?:\s*(?:ext\.?|x)\s*[0-9]{1,6})?",
+    r"(?=(?:[^0-9]*[0-9]){7})\+?\(?[0-9][0-9 ().-]{2,24}(?:\s*(?:ext\.?|x)\s*[0-9]{1,6})?",
     re.IGNORECASE,
 )
 # A conservative day count guarantees at least 25 complete calendar years,

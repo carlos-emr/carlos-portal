@@ -362,15 +362,18 @@ def enqueue_booking_prompt_delivery(
     *,
     account_id: int,
     booking_prompt_id: int,
-    recipient: str,
     sign_in_url: str,
     encryption_secret: str,
     encryption_key_id: str = OUTBOX_KEY_ID,
 ) -> PatientPortalOutboundDelivery:
-    """Queue the "message waiting" email for a booking prompt; it carries no prompt detail."""
+    """Queue the "message waiting" email for a booking prompt.
+
+    The payload holds only the sign-in link: no prompt detail, and no address, because the notice
+    goes to the account's email as it is when sent.
+    """
     message_id = _new_message_id()
     ciphertext, nonce = _encrypt_payload(
-        {"recipient": recipient, "sign_in_url": sign_in_url},
+        {"sign_in_url": sign_in_url},
         encryption_secret=encryption_secret,
         kind=OUTBOX_KIND_BOOKING_PROMPT,
         account_id=account_id,
@@ -784,8 +787,13 @@ def _finish_delivery(
                 _mark_terminal_reset_failure(session, delivery)
         elif delivery.kind == OUTBOX_KIND_CONTACT_CHANGE:
             _mark_terminal_contact_change_failure(session, delivery)
-        elif delivery.kind == OUTBOX_KIND_BOOKING_PROMPT:
-            # The prompt is still in the patient's messages; only the notice is missing.
+        elif (
+            delivery.kind == OUTBOX_KIND_BOOKING_PROMPT
+            and failure_code != OUTBOX_FAILURE_AUDIT_UNAVAILABLE
+        ):
+            # The prompt is still in the patient's messages; only the notice is missing. When the
+            # attempts ran out because the audit store was down, every send succeeded, so this is
+            # not a delivery failure, and a write that would fail again must not reopen the row.
             _record_booking_prompt_delivery(
                 session,
                 delivery,
@@ -1020,7 +1028,11 @@ def process_one_delivery(
         else:
             try:
                 recipient = payload.get("recipient")
-                if not isinstance(recipient, str) or not recipient:
+                # A booking-prompt notice carries no address: it goes to the account's current
+                # email, looked up at send time.
+                if kind != OUTBOX_KIND_BOOKING_PROMPT and (
+                    not isinstance(recipient, str) or not recipient
+                ):
                     raise OutboxPayloadError("recipient is invalid")
                 if kind == OUTBOX_KIND_PASSWORD_RESET:
                     with session_factory() as validation_session:
@@ -1108,7 +1120,8 @@ def process_one_delivery(
             )
     if failure_code == OUTBOX_FAILURE_BOOKING_PROMPT_NOT_NEEDED:
         logger.info(
-            "Booking-prompt notice %s not sent: the prompt was withdrawn, expired or already read",
+            "Booking-prompt notice %s not sent: the prompt was withdrawn, expired or already read, "
+            "or the account was disabled or locked by staff",
             claimed_id,
         )
         return DeliveryRunResult(delivery_id=claimed_id, status=final_status)

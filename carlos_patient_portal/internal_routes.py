@@ -1362,7 +1362,7 @@ def register_internal_booking_prompt_routes(
         except ValueError as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="suggested_by is invalid",
+                detail="booking prompt is invalid",
             ) from exc
         return {**booking_prompt_payload(result.prompt), "created": result.created}
 

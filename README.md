@@ -745,7 +745,8 @@ Creating a prompt queues one email through the outbox saying only that a message
 sign-in link: no provider, appointment type, or urgency. The notice is not sent if the prompt is
 withdrawn, expires, or is read first, or if staff disable or lock the account; it goes to the
 account's email as it is when sent. A notice skipped this way ends as `failed` with
-`last_failure_code = booking_prompt_not_needed`, not an outage. Prompts leave the patient's messages after
+`last_failure_code = booking_prompt_not_needed`, not an outage, and is not sent later: re-enabling
+an account shows its live prompts again, without a new email. Prompts leave the patient's messages after
 `PATIENT_PORTAL_BOOKING_PROMPT_TTL_DAYS` (default 90), and `cleanup-transient-auth` removes them
 once their notices are settled. Creating, listing, delivering, reading, and withdrawing are audited.
 The notice is email only; SMS notices would need the outbox to deliver SMS, which it does not yet.

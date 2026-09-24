@@ -12,7 +12,9 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy.exc import OperationalError
 
+from carlos_patient_portal import delivery_outbox
 from carlos_patient_portal.delivery_outbox import (
     OUTBOX_FAILURE_BOOKING_PROMPT_NOT_NEEDED,
     process_one_delivery,
@@ -354,6 +356,50 @@ def test_notice_goes_to_the_accounts_current_email() -> None:
     assert [message["recipient"] for message in sender.messages] == ["new.address@example.com"]
 
 
+def test_notice_payload_holds_only_the_sign_in_link() -> None:
+    app = booking_app()
+    client = TestClient(app)
+    activate_seeded_patient_account(app, client)
+    assert client.post(PATH, headers=headers(), json=prompt_request()).status_code == 201
+
+    with app.state.session_factory() as session:
+        notice = session.scalar(select(PatientPortalOutboundDelivery))
+        payload = delivery_outbox._decrypt_payload(
+            notice, encryption_secret=OUTBOX_ENCRYPTION_SECRET
+        )
+
+    # No prompt detail, and no address: the notice goes to the account's email when sent.
+    assert payload == {"sign_in_url": "http://testserver/"}
+
+
+def test_sent_notices_are_not_recorded_as_failed_while_the_audit_store_is_down(
+    monkeypatch,
+) -> None:
+    app = booking_app()
+    client = TestClient(app)
+    activate_seeded_patient_account(app, client)
+    assert client.post(PATH, headers=headers(), json=prompt_request()).status_code == 201
+
+    def audit_store_down(*args, **kwargs):
+        raise OperationalError("insert", {}, Exception("audit store unavailable"))
+
+    monkeypatch.setattr(delivery_outbox, "_record_booking_prompt_delivery", audit_store_down)
+    sender = RecordingPortalEmailSender()
+    for _ in range(3):
+        with app.state.session_factory.begin() as session:
+            session.scalar(select(PatientPortalOutboundDelivery)).available_at = utc_now()
+        result = deliver_next(app, sender)
+
+    # Every send succeeded; running out of attempts on the audit write closes the row without
+    # claiming a delivery failure, and without a write that would reopen it for resending.
+    assert result is not None
+    assert result.status == OUTBOX_STATUS_FAILED
+    assert len(sender.messages) == 3
+    with app.state.session_factory() as session:
+        notice = session.scalar(select(PatientPortalOutboundDelivery))
+        assert notice.last_failure_code == "delivery_audit_unavailable"
+
+
 def test_notice_that_keeps_failing_is_recorded_against_its_prompt() -> None:
     app = booking_app()
     client = TestClient(app)
@@ -633,7 +679,9 @@ def test_clinic_booking_phone_accepts_phone_numbers(value) -> None:
     assert development_settings(clinic_booking_phone=value).clinic_booking_phone == value.strip()
 
 
-@pytest.mark.parametrize("value", ["call the clinic", "555<b>1234</b>", "5" * 30, "x123"])
+@pytest.mark.parametrize(
+    "value", ["call the clinic", "555<b>1234</b>", "5" * 30, "x123", "1..", "12)", "9))))))))))"]
+)
 def test_clinic_booking_phone_refuses_anything_else(value) -> None:
     with pytest.raises(ValidationError, match="CLINIC_BOOKING_PHONE"):
         development_settings(clinic_booking_phone=value)
