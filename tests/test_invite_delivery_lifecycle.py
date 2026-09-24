@@ -430,17 +430,18 @@ def test_first_preparation_losing_to_a_legacy_create_names_the_pending_invite(mo
     def legacy_create_lands_after_the_pending_check(session, **kwargs) -> None:
         original(session, **kwargs)
         monkeypatch.setattr(invites, "_release_preparation_slot", original)
+        request = invite_request()
         invites.create_invite(
             session,
             1234,
             "Other Staff",
             identity_proof=IdentityProof(
-                email="example.patient@example.com",
-                date_of_birth=date(1980, 5, 20),
-                health_card_number="ABCD 1234-5678",
+                email=request["email"],
+                date_of_birth=date.fromisoformat(request["date_of_birth"]),
+                health_card_number=request["health_card_number"],
             ),
             proof_secret="p" * 32,
-            clinic_id="clinic-a",
+            clinic_id=kwargs["clinic_id"],
         )
 
     monkeypatch.setattr(

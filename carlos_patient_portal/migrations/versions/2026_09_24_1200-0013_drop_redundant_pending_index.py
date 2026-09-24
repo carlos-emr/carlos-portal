@@ -40,7 +40,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Safe to recreate: the first-delivery index has kept pending invites unique meanwhile.
+    # Safe to recreate: the first-delivery index has kept pending invites unique meanwhile. On
+    # PostgreSQL this is a plain CREATE UNIQUE INDEX, which blocks invite writes while it builds;
+    # the table is small, so run the downgrade in the same maintenance window as the rollback.
     op.create_index(
         "ux_patient_portal_invites_one_pending_per_patient",
         "patient_portal_invites",

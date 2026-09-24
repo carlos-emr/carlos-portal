@@ -35,6 +35,7 @@ from carlos_patient_portal.identity import (
     IdentityProof,
     build_identity_hashes,
     reject_control_characters,
+    validate_identity_proof,
     verify_identity_proof,
 )
 from carlos_patient_portal.models import (
@@ -724,6 +725,8 @@ def prepare_create_invite(
     normalized_actor_id = normalize_staff_actor_id(actor_id, normalized_actor)
     if not proof_secret or not proof_secret.strip():
         raise ValueError("proof_secret must not be blank")
+    # Validate the proof up front, as before; only hashing it waits for a new preparation.
+    validate_identity_proof(identity_proof)
 
     existing = _prepared_for_operation(
         session,
