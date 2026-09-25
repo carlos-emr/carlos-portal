@@ -71,6 +71,11 @@ MAX_CLINIC_ID_LENGTH = 64
 MAX_CONFIG_CLINIC_ID_LENGTH = 20
 CLINIC_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 STAFF_ASSERTION_KEY_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+# At least seven digits with the usual separators, an optional leading +, and an optional extension.
+CLINIC_BOOKING_PHONE_PATTERN = re.compile(
+    r"(?=(?:[^0-9]*[0-9]){7})\+?\(?[0-9][0-9 ().-]{2,24}(?:\s*(?:ext\.?|x)\s*[0-9]{1,6})?",
+    re.IGNORECASE,
+)
 # A conservative day count guarantees at least 25 complete calendar years,
 # including every leap-day distribution, before an event becomes eligible.
 DEFAULT_AUDIT_RETENTION_DAYS = 25 * 366
@@ -213,6 +218,11 @@ class Settings(BaseSettings):
     clinic_id: str = Field(default=DEFAULT_CLINIC_ID, max_length=MAX_CLINIC_ID_LENGTH)
     clinic_name: str = DEFAULT_CLINIC_NAME
     clinic_timezone: str = Field(default="America/Toronto", min_length=1, max_length=64)
+    # Shown with a booking prompt so the patient knows how to book. Without it the prompt says to
+    # contact the clinic.
+    clinic_booking_phone: str | None = Field(default=None, max_length=32)
+    # A booking prompt disappears from the patient's messages after this long.
+    booking_prompt_ttl_days: int = Field(default=90, ge=1, le=366)
     public_base_url: str | None = Field(default=None, max_length=2048)
     # Container/Kubernetes/load-balancer probes reach the service by pod IP or service name, not by
     # the canonical public host. Without these aliases a correctly configured instance answers
@@ -509,6 +519,7 @@ class Settings(BaseSettings):
         "unlock_secret_active_key_id",
         "service_name",
         "clinic_name",
+        "clinic_booking_phone",
         "maintenance_database_url",
         mode="before",
     )
@@ -525,6 +536,16 @@ class Settings(BaseSettings):
         if not normalized or len(normalized.encode()) > 63:
             raise ValueError("database role names must contain between 1 and 63 UTF-8 bytes")
         return normalized
+
+    @field_validator("clinic_booking_phone")
+    @classmethod
+    def validate_clinic_booking_phone(cls, value: str | None) -> str | None:
+        if value is not None and CLINIC_BOOKING_PHONE_PATTERN.fullmatch(value) is None:
+            raise ValueError(
+                "PATIENT_PORTAL_CLINIC_BOOKING_PHONE must be a phone number, optionally with an "
+                "extension, such as 555-123-4567 ext. 2"
+            )
+        return value
 
     @field_validator("service_name", "clinic_name", "smtp_host", "sms_sender_id")
     @classmethod

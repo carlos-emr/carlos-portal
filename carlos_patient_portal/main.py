@@ -53,6 +53,7 @@ from carlos_patient_portal.auth import (
     PortalSessionInvalidError,
     authenticate_session_token,
 )
+from carlos_patient_portal.booking_prompts import count_unread_prompts_for_account
 from carlos_patient_portal.config import (
     DEFAULT_AUDIT_RETENTION_DAYS,
     Settings,
@@ -75,8 +76,9 @@ from carlos_patient_portal.models import (
     AUDIT_EVENT_RETENTION_POLICY_OVERRIDE,
     AUDIT_OUTCOME_FAILURE,
     AUDIT_OUTCOME_SUCCESS,
+    PatientPortalBookingPrompt,
 )
-from carlos_patient_portal.presenters import assemble_email_password_dashboard
+from carlos_patient_portal.presenters import assemble_email_password_dashboard, assemble_messages
 from carlos_patient_portal.routes.activation import register_activation_routes
 from carlos_patient_portal.routes.auth import register_auth_routes, register_logout_route
 from carlos_patient_portal.routes.dev_admin import register_dev_admin_routes
@@ -97,7 +99,7 @@ from carlos_patient_portal.runtime import (
 from carlos_patient_portal.sms_delivery import PortalSmsSender, build_portal_sms_sender
 from carlos_patient_portal.token_keys import PortalTokenKeys
 from carlos_patient_portal.unlock_secrets import load_unlock_secret_words
-from carlos_patient_portal.view_models import EmailPasswordDashboardViewModel
+from carlos_patient_portal.view_models import EmailPasswordDashboardViewModel, MessagesViewModel
 from carlos_patient_portal.web_support import (
     AUTHENTICATION_REQUIRED_DETAIL,
     CONTENT_SECURITY_POLICY,
@@ -775,6 +777,8 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
         email_password_date_to: date | None = None,
         email_password_page: int = 1,
         email_password_filter_error: str | None = None,
+        selected_message: PatientPortalBookingPrompt | None = None,
+        message_not_found: bool = False,
         authenticated_session: AuthenticatedPortalSession | None = None,
     ) -> Response:
         if authenticated_session is None:
@@ -803,6 +807,24 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
                 base_path=request.url_for("portal_email_passwords").path,
                 locale=request_locale(request),
             )
+        messages: MessagesViewModel | None = None
+        if active_module == "messages":
+            messages = assemble_messages(
+                session,
+                authenticated_session.account,
+                base_path=request.url_for("portal_messages").path,
+                clinic_name=settings.clinic_name,
+                booking_phone=settings.clinic_booking_phone,
+                selected_prompt=selected_message,
+                not_found=message_not_found,
+                timezone_name=settings.clinic_timezone,
+                locale=request_locale(request),
+            )
+        new_message_count = (
+            count_unread_prompts_for_account(session, authenticated_session.account.id)
+            if active_module == "dashboard"
+            else 0
+        )
         csrf_token = create_csrf_token(runtime.token_keys.csrf)
         response = templates.TemplateResponse(
             request=request,
@@ -817,6 +839,8 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
                 account_notice=account_notice,
                 account_error=account_error,
                 email_passwords=email_passwords,
+                messages=messages,
+                new_message_count=new_message_count,
             ),
             status_code=status_code,
         )

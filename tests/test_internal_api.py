@@ -1830,6 +1830,9 @@ INTERNAL_ROUTE_PERMISSIONS = (
     ("POST", "/internal/carlos/unlock-secrets/1/revoke", "portal.secret.manage"),
     ("GET", "/internal/carlos/contact-reviews", "portal.contact.review"),
     ("POST", "/internal/carlos/contact-reviews/1/decision", "portal.contact.review"),
+    ("POST", "/internal/carlos/patients/1234/booking-prompts", "portal.booking_prompt.manage"),
+    ("GET", "/internal/carlos/patients/1234/booking-prompts", "portal.booking_prompt.manage"),
+    ("POST", "/internal/carlos/booking-prompts/1/withdraw", "portal.booking_prompt.manage"),
 )
 UNRELATED_PERMISSION = "portal.something.else"
 
@@ -1849,12 +1852,14 @@ def test_internal_openapi_contract_is_stable() -> None:
     }
 
     assert paths == {
+        "/internal/carlos/booking-prompts/{prompt_id}/withdraw": ["post"],
         "/internal/carlos/contact-reviews": ["get"],
         "/internal/carlos/contact-reviews/{review_request_id}/decision": ["post"],
         "/internal/carlos/invites/{invite_id}/commit-delivery": ["post"],
         "/internal/carlos/invites/{invite_id}/resend": ["post"],
         "/internal/carlos/invites/{invite_id}/resend/prepare": ["post"],
         "/internal/carlos/invites/{invite_id}/revoke": ["post"],
+        "/internal/carlos/patients/{demographic_no}/booking-prompts": ["get", "post"],
         "/internal/carlos/patients/{demographic_no}/invites": ["get", "post"],
         "/internal/carlos/patients/{demographic_no}/invites/prepare": ["post"],
         "/internal/carlos/patients/{demographic_no}/portal-account": ["get"],
@@ -1884,7 +1889,8 @@ def test_internal_route_permission_manifest_covers_every_route() -> None:
             method,
             path.replace("/invites/1/", "/invites/{invite_id}/")
             .replace("/unlock-secrets/1/", "/unlock-secrets/{unlock_secret_id}/")
-            .replace("/contact-reviews/1/", "/contact-reviews/{review_request_id}/"),
+            .replace("/contact-reviews/1/", "/contact-reviews/{review_request_id}/")
+            .replace("/booking-prompts/1/", "/booking-prompts/{prompt_id}/"),
         )
         for method, path in declared
     }

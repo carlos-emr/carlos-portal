@@ -776,6 +776,91 @@ a.module-tile:focus-visible {
   color: var(--muted);
 }
 
+.module-tile-heading .message-count {
+  color: #fff;
+  background: var(--carlos-blue);
+  border-color: var(--carlos-blue);
+  font-weight: bold;
+}
+
+.message-list {
+  display: grid;
+  gap: 8px;
+  max-width: 920px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.message-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  padding: 12px 14px;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  text-decoration: none;
+}
+
+.message-row:hover,
+.message-row:focus-visible {
+  border-color: var(--carlos-blue);
+  box-shadow: inset 0 0 0 1px var(--carlos-blue);
+}
+
+.message-row.new .message-title {
+  font-weight: bold;
+}
+
+.message-badge {
+  justify-self: end;
+  padding: 2px 6px;
+  color: #fff;
+  background: var(--carlos-blue);
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: bold;
+}
+
+.message-row .message-meta {
+  grid-column: 1 / -1;
+}
+
+.message-meta {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.message-detail {
+  display: grid;
+  gap: 4px;
+  max-width: 720px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.message-detail h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.message-detail p {
+  margin: 0 0 8px;
+  line-height: 1.45;
+}
+
+.message-contact {
+  font-weight: bold;
+}
+
+.message-detail .secondary-action {
+  justify-self: start;
+}
+
 .pagination-bar {
   display: flex;
   align-items: center;

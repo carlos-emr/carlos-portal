@@ -374,6 +374,20 @@ class RecordingPortalEmailSender:
         if self.fail:
             raise PortalEmailDeliveryError("simulated delivery failure")
 
+    def send_booking_prompt_notice(
+        self, *, recipient: str, sign_in_url: str, message_id: str | None = None
+    ) -> None:
+        message: dict[str, object] = {
+            "recipient": recipient,
+            "sign_in_url": sign_in_url,
+            "type": "booking_prompt_notice",
+        }
+        if message_id is not None:
+            message["message_id"] = message_id
+        self.messages.append(message)
+        if self.fail:
+            raise PortalEmailDeliveryError("simulated delivery failure")
+
     def send_email_change_confirmation(
         self,
         *,

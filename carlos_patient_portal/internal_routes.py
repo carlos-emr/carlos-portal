@@ -20,8 +20,8 @@
 import logging
 from collections.abc import Awaitable, Callable, Generator
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Annotated, Protocol
+from datetime import datetime, timedelta
+from typing import Annotated, Literal, Protocol
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Request, status
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
@@ -44,6 +44,16 @@ from carlos_patient_portal.auth import (
     AccountNotFoundError,
     set_patient_account_access,
     unlock_patient_account,
+)
+from carlos_patient_portal.booking_prompts import (
+    BookingPromptAccountUnavailableError,
+    BookingPromptNotFoundError,
+    BookingPromptNotice,
+    BookingPromptOperationConflictError,
+    booking_prompt_state,
+    create_booking_prompt,
+    list_booking_prompts,
+    withdraw_booking_prompt,
 )
 from carlos_patient_portal.config import Settings
 from carlos_patient_portal.identity import IdentityProof, reject_hidden_characters
@@ -71,11 +81,14 @@ from carlos_patient_portal.models import (
     AUDIT_EVENT_STAFF_ACTION,
     AUDIT_OUTCOME_FAILURE,
     AUDIT_OUTCOME_SUCCESS,
+    MAX_BOOKING_PROMPT_ACTOR_LENGTH,
+    MAX_BOOKING_PROMPT_OPERATION_ID_LENGTH,
     MAX_INVITE_DELIVERY_OPERATION_ID_LENGTH,
     MAX_INVITE_DELIVERY_REFERENCE_LENGTH,
     UNLOCK_SECRET_STATUS_PENDING,
     UNLOCK_SECRET_STATUS_REVOKED,
     PatientPortalAccount,
+    PatientPortalBookingPrompt,
     PatientPortalInvite,
     PatientPortalUnlockSecret,
 )
@@ -108,10 +121,13 @@ PERMISSION_ACCOUNT_UNLOCK = "portal.account.unlock"
 PERMISSION_ACCOUNT_MANAGE = "portal.account.manage"
 PERMISSION_SECRET_MANAGE = "portal.secret.manage"
 PERMISSION_CONTACT_REVIEW = "portal.contact.review"
+PERMISSION_BOOKING_PROMPT_MANAGE = "portal.booking_prompt.manage"
 # Part of the CARLOS/Java boundary: one deliberately generic 404 shared by every account lookup so
 # the contract cannot drift branch by branch.
 INTERNAL_ACCOUNT_NOT_FOUND_DETAIL = "portal account not found"
 UNLOCK_SECRET_NOT_FOUND_DETAIL = "unlock secret not found"
+BOOKING_PROMPT_NOT_FOUND_DETAIL = "booking prompt not found"
+BOOKING_PROMPT_OPERATION_CONFLICT_DETAIL = "operation id was used for a different booking prompt"
 
 
 class InternalErrorResponse(BaseModel):
@@ -340,6 +356,61 @@ class InternalContactReviewDecisionResponse(BaseModel):
     id: int
     status: str
     decision: str | None
+
+
+class InternalBookingPromptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    operation_id: str = Field(
+        min_length=1,
+        max_length=MAX_BOOKING_PROMPT_OPERATION_ID_LENGTH,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+    urgency: Literal["routine", "soon", "as_soon_as_possible"]
+    appointment_type: Literal["follow_up", "annual_exam", "lab_review"]
+    # The provider the patient is told suggested it, for example "Dr. Singh". Checked like a staff
+    # actor name; it is the only variable text in a prompt.
+    suggested_by: str | None = Field(default=None, max_length=MAX_BOOKING_PROMPT_ACTOR_LENGTH)
+
+
+class InternalBookingPromptResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: int
+    demographic_no: int
+    urgency: str
+    appointment_type: str
+    suggested_by: str | None
+    state: Literal["sent", "read", "withdrawn", "expired"]
+    created_by: str
+    created_at: datetime
+    expires_at: datetime
+    notified_at: datetime | None
+    read_at: datetime | None
+    withdrawn_at: datetime | None
+    withdrawn_by: str | None
+
+
+class InternalBookingPromptCreateResponse(InternalBookingPromptResponse):
+    created: bool
+
+
+def booking_prompt_payload(prompt: PatientPortalBookingPrompt) -> dict[str, object]:
+    return {
+        "id": prompt.id,
+        "demographic_no": prompt.demographic_no,
+        "urgency": prompt.urgency,
+        "appointment_type": prompt.appointment_type,
+        "suggested_by": prompt.suggested_by,
+        "state": booking_prompt_state(prompt),
+        "created_by": prompt.created_by,
+        "created_at": prompt.created_at,
+        "expires_at": prompt.expires_at,
+        "notified_at": prompt.notified_at,
+        "read_at": prompt.read_at,
+        "withdrawn_at": prompt.withdrawn_at,
+        "withdrawn_by": prompt.withdrawn_by,
+    }
 
 
 def require_permission(principal: StaffPrincipal, permission: str) -> None:
@@ -1233,6 +1304,123 @@ def register_internal_contact_review_routes(
         }
 
 
+def _booking_prompt_sign_in_url(request: Request, settings: Settings) -> str:
+    """Where the notice sends the patient: the portal's sign-in page, never an internal origin."""
+    if settings.public_base_url is not None:
+        return settings.public_base_url.rstrip("/") + "/"
+    if settings.is_development:
+        return str(request.base_url).rstrip("/") + "/"
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="booking prompts are not configured",
+    )
+
+
+def register_internal_booking_prompt_routes(
+    app: FastAPI,
+    runtime: InternalRuntime,
+    deps: InternalRouteDependencies,
+) -> None:
+    """Booking prompts: create, list, and withdraw (carlos-portal#8)."""
+
+    @app.post(
+        "/internal/carlos/patients/{demographic_no}/booking-prompts",
+        status_code=status.HTTP_201_CREATED,
+        response_model=InternalBookingPromptCreateResponse,
+        responses=INTERNAL_CONFLICT_RESPONSES,
+    )
+    def internal_create_booking_prompt(
+        request: Request,
+        demographic_no: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
+        payload: InternalBookingPromptRequest,
+        principal: Annotated[
+            StaffPrincipal,
+            Depends(deps.staff_principal_requiring(PERMISSION_BOOKING_PROMPT_MANAGE)),
+        ],
+        session: Annotated[Session, deps.session_dependency],
+    ) -> dict[str, object]:
+        notice = BookingPromptNotice(
+            sign_in_url=_booking_prompt_sign_in_url(request, runtime.settings),
+            encryption_secret=runtime.outbox_encryption_secret,
+            encryption_key_id=runtime.outbox_active_key_id,
+        )
+        try:
+            result = create_booking_prompt(
+                session,
+                clinic_id=principal.clinic_id,
+                demographic_no=demographic_no,
+                operation_id=payload.operation_id,
+                urgency=payload.urgency,
+                appointment_type=payload.appointment_type,
+                suggested_by=payload.suggested_by,
+                created_by=principal.display_name,
+                created_by_id=principal.provider_id,
+                ttl=timedelta(days=runtime.settings.booking_prompt_ttl_days),
+                notice=notice,
+            )
+        except BookingPromptAccountUnavailableError as exc:
+            # CARLOS falls back to a phone call; nothing was stored.
+            raise HTTPException(status_code=404, detail=INTERNAL_ACCOUNT_NOT_FOUND_DETAIL) from exc
+        except BookingPromptOperationConflictError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=BOOKING_PROMPT_OPERATION_CONFLICT_DETAIL,
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="booking prompt is invalid",
+            ) from exc
+        return {**booking_prompt_payload(result.prompt), "created": result.created}
+
+    @app.get(
+        "/internal/carlos/patients/{demographic_no}/booking-prompts",
+        response_model=list[InternalBookingPromptResponse],
+        responses=COMMON_INTERNAL_RESPONSES,
+    )
+    def internal_list_booking_prompts(
+        demographic_no: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
+        principal: Annotated[
+            StaffPrincipal,
+            Depends(deps.staff_principal_requiring(PERMISSION_BOOKING_PROMPT_MANAGE)),
+        ],
+        session: Annotated[Session, deps.session_dependency],
+    ) -> list[dict[str, object]]:
+        prompts = list_booking_prompts(
+            session,
+            clinic_id=principal.clinic_id,
+            demographic_no=demographic_no,
+            actor=principal.display_name,
+            actor_id=principal.provider_id,
+        )
+        return [booking_prompt_payload(prompt) for prompt in prompts]
+
+    @app.post(
+        "/internal/carlos/booking-prompts/{prompt_id}/withdraw",
+        response_model=InternalBookingPromptResponse,
+        responses=COMMON_INTERNAL_RESPONSES,
+    )
+    def internal_withdraw_booking_prompt(
+        prompt_id: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
+        principal: Annotated[
+            StaffPrincipal,
+            Depends(deps.staff_principal_requiring(PERMISSION_BOOKING_PROMPT_MANAGE)),
+        ],
+        session: Annotated[Session, deps.session_dependency],
+    ) -> dict[str, object]:
+        try:
+            prompt = withdraw_booking_prompt(
+                session,
+                prompt_id,
+                clinic_id=principal.clinic_id,
+                withdrawn_by=principal.display_name,
+                withdrawn_by_id=principal.provider_id,
+            )
+        except BookingPromptNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=BOOKING_PROMPT_NOT_FOUND_DETAIL) from exc
+        return booking_prompt_payload(prompt)
+
+
 def register_carlos_internal_routes(app: FastAPI, runtime: InternalRuntime) -> None:
     """Register the CARLOS-facing internal API, one registrar per permission domain."""
     if not runtime.settings.is_internal_api_enabled:
@@ -1243,3 +1431,4 @@ def register_carlos_internal_routes(app: FastAPI, runtime: InternalRuntime) -> N
     register_internal_account_routes(app, deps)
     register_internal_unlock_secret_routes(app, runtime, deps)
     register_internal_contact_review_routes(app, deps)
+    register_internal_booking_prompt_routes(app, runtime, deps)

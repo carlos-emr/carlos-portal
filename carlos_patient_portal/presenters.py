@@ -32,11 +32,14 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
+from carlos_patient_portal.booking_prompts import list_active_prompts_for_account
 from carlos_patient_portal.i18n import DEFAULT_LOCALE, format_portal_datetime, portal_text
 from carlos_patient_portal.models import (
+    BOOKING_PROMPT_STATUS_SENT,
     UNLOCK_SECRET_STATUS_ACTIVE,
     UNLOCK_SECRET_TYPE_EMAIL,
     PatientPortalAccount,
+    PatientPortalBookingPrompt,
     PatientPortalUnlockSecret,
 )
 from carlos_patient_portal.unlock_secrets import (
@@ -47,8 +50,10 @@ from carlos_patient_portal.unlock_secrets import (
     list_unlock_secrets,
 )
 from carlos_patient_portal.view_models import (
+    BookingPromptViewModel,
     EmailPasswordDashboardViewModel,
     EmailPasswordRowViewModel,
+    MessagesViewModel,
     ProviderFilterOptionViewModel,
 )
 
@@ -282,4 +287,76 @@ def assemble_email_password_dashboard(
             if normalized_page < total_pages
             else None
         ),
+    )
+
+
+def _booking_prompt_view(
+    prompt: PatientPortalBookingPrompt,
+    *,
+    text: dict[str, str],
+    href: str,
+    clinic_name: str,
+    booking_phone: str | None,
+    timezone_name: str,
+    locale: str,
+) -> BookingPromptViewModel:
+    # Every sentence comes from the catalog; the provider name is the only variable text, and it
+    # is escaped by the template like any other value.
+    return BookingPromptViewModel(
+        id=prompt.id,
+        href=href,
+        title=text[f"booking_prompt_title_{prompt.appointment_type}"],
+        urgency=text[f"booking_prompt_urgency_{prompt.urgency}"],
+        suggested_by=(
+            text["booking_prompt_suggested_by"].format(provider=prompt.suggested_by)
+            if prompt.suggested_by
+            else text["booking_prompt_suggested_by_clinic"]
+        ),
+        contact=(
+            text["booking_prompt_contact_phone"].format(
+                clinic_name=clinic_name,
+                phone=booking_phone,
+            )
+            if booking_phone
+            else text["booking_prompt_contact"].format(clinic_name=clinic_name)
+        ),
+        sent_at=format_portal_datetime(prompt.created_at, locale, timezone_name),
+        is_new=prompt.status == BOOKING_PROMPT_STATUS_SENT,
+    )
+
+
+def assemble_messages(
+    session: Session,
+    account: PatientPortalAccount,
+    *,
+    base_path: str,
+    clinic_name: str,
+    booking_phone: str | None,
+    selected_prompt: PatientPortalBookingPrompt | None = None,
+    not_found: bool = False,
+    timezone_name: str = "UTC",
+    locale: str = DEFAULT_LOCALE,
+) -> MessagesViewModel:
+    """Build the messages view state for `dashboard.jinja`. Read-only: opening is the route's."""
+    text = portal_text(locale)
+
+    def view(prompt: PatientPortalBookingPrompt) -> BookingPromptViewModel:
+        return _booking_prompt_view(
+            prompt,
+            text=text,
+            href=f"{base_path.rstrip('/')}/{prompt.id}",
+            clinic_name=clinic_name,
+            booking_phone=booking_phone,
+            timezone_name=timezone_name,
+            locale=locale,
+        )
+
+    prompts = tuple(view(prompt) for prompt in list_active_prompts_for_account(session, account.id))
+    # Built from the prompt the route opened, not looked up in the capped list above.
+    selected = view(selected_prompt) if selected_prompt is not None else None
+    return MessagesViewModel(
+        prompts=prompts,
+        selected=selected,
+        not_found=not_found,
+        no_online_booking=text["booking_prompt_no_online_booking"],
     )

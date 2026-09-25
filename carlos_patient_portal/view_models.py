@@ -74,3 +74,31 @@ class EmailPasswordDashboardViewModel:
     empty_message: str = ""
     previous_href: str | None = None
     next_href: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class BookingPromptViewModel:
+    """One booking prompt as the patient reads it: fixed wording, no clinical detail."""
+
+    id: int
+    href: str
+    title: str
+    urgency: str
+    suggested_by: str
+    contact: str
+    sent_at: str
+    is_new: bool
+
+
+@dataclass(frozen=True, slots=True)
+class MessagesViewModel:
+    """View state for the messages module of `dashboard.jinja`.
+
+    ``selected`` is the prompt being read, or None on the list. ``not_found`` reports a link to a
+    prompt that was withdrawn, expired, or is not the patient's.
+    """
+
+    prompts: tuple[BookingPromptViewModel, ...] = ()
+    selected: BookingPromptViewModel | None = None
+    not_found: bool = False
+    no_online_booking: str = ""

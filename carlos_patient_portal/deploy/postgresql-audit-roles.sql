@@ -200,6 +200,7 @@ GROUP BY namespace_record.nspname, relation_record.relname
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.patient_portal_accounts,
   public.patient_portal_audit_events,
+  public.patient_portal_booking_prompts,
   public.patient_portal_contact_review_requests,
   public.patient_portal_email_change_requests,
   public.patient_portal_invites,
@@ -213,6 +214,7 @@ TO :"runtime_role";
 GRANT USAGE, SELECT ON SEQUENCE
   public.patient_portal_accounts_id_seq,
   public.patient_portal_audit_events_id_seq,
+  public.patient_portal_booking_prompts_id_seq,
   public.patient_portal_contact_review_requests_id_seq,
   public.patient_portal_email_change_requests_id_seq,
   public.patient_portal_invites_id_seq,

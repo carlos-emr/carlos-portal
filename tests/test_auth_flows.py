@@ -702,7 +702,11 @@ def test_dashboard_shell_navigation_and_cookie_logout() -> None:
     assert "SameSite=strict" in dashboard_response.headers["set-cookie"]
     assert 'data-active-module="dashboard"' in dashboard_response.text
     assert "Documents may be available in a future release." in dashboard_response.text
-    assert "Secure messaging may be available in a future release." in dashboard_response.text
+    assert (
+        "Requests from your clinic, such as a reminder to book an appointment."
+        in dashboard_response.text
+    )
+    assert 'href="/portal/messages"' in dashboard_response.text
     assert 'href="/portal/account"' in dashboard_response.text
     assert 'href="/portal/email-passwords"' in dashboard_response.text
     assert 'href="/portal/help"' in dashboard_response.text

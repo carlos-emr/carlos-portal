@@ -83,7 +83,7 @@ from carlos_patient_portal.schemas import (
     PasswordResetCompleteRequest,
     PasswordResetRequest,
 )
-from carlos_patient_portal.view_models import EmailPasswordDashboardViewModel
+from carlos_patient_portal.view_models import EmailPasswordDashboardViewModel, MessagesViewModel
 
 PACKAGE_DIR = FilePath(__file__).resolve().parent
 
@@ -224,6 +224,7 @@ PORTAL_MODULES = (
         "label_key": "email_passwords",
         "route_name": "portal_email_passwords",
     },
+    {"slug": "messages", "label_key": "messages", "route_name": "portal_messages"},
     {"slug": "help", "label_key": "help", "route_name": "portal_help"},
 )
 
@@ -872,6 +873,8 @@ def portal_template_context(
     account_notice: str | None = None,
     account_error: str | None = None,
     email_passwords: EmailPasswordDashboardViewModel | None = None,
+    messages: MessagesViewModel | None = None,
+    new_message_count: int = 0,
 ) -> dict[str, object]:
     account = authenticated_session.account
     locale = request_locale(request)
@@ -892,8 +895,10 @@ def portal_template_context(
         "email_mfa_available": settings.is_development,
         "text": text,
     }
-    # The only module with its own view state; typed so a rename is a type error, not a blank page.
+    # Modules with their own view state; typed so a rename is a type error, not a blank page.
     context["email_passwords"] = email_passwords
+    context["messages"] = messages
+    context["new_message_count"] = new_message_count
     return context
 
 

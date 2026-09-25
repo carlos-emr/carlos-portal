@@ -25,6 +25,7 @@ from typing import Protocol
 from carlos_patient_portal.config import Settings
 from carlos_patient_portal.outbound_messages import (
     OutboundMessage,
+    booking_prompt_email_message,
     contact_change_email_message,
     email_change_confirmation_email_message,
     email_change_requested_email_message,
@@ -63,6 +64,11 @@ class PortalEmailSender(Protocol):
 
     def send_contact_change_notice(
         self, *, recipient: str, message_id: str | None = None
+    ) -> None:
+        raise NotImplementedError
+
+    def send_booking_prompt_notice(
+        self, *, recipient: str, sign_in_url: str, message_id: str | None = None
     ) -> None:
         raise NotImplementedError
 
@@ -146,6 +152,21 @@ class SmtpPortalEmailSender:
                 contact_change_email_message(
                     service_name=self.service_name,
                     clinic_name=self.clinic_name,
+                ),
+                message_id=message_id,
+            )
+        )
+
+    def send_booking_prompt_notice(
+        self, *, recipient: str, sign_in_url: str, message_id: str | None = None
+    ) -> None:
+        self._send_message(
+            self._build_message(
+                recipient,
+                booking_prompt_email_message(
+                    service_name=self.service_name,
+                    clinic_name=self.clinic_name,
+                    sign_in_url=sign_in_url,
                 ),
                 message_id=message_id,
             )

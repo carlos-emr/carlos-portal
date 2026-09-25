@@ -70,13 +70,16 @@
                 </div>
                 <p>{{ text.dashboard_documents_description }}</p>
               </section>
-              <section class="module-tile disabled" aria-disabled="true">
+              <a class="module-tile" href="{{ url_for('portal_messages') }}">
                 <div class="module-tile-heading">
                   <h2>{{ text.messages }}</h2>
-                  <span>{{ text.future }}</span>
+                  {% if new_message_count %}
+                    <span class="message-count">{{ text.messages_new_count.format(count=new_message_count) }}</span>
+                  {% endif %}
                 </div>
                 <p>{{ text.dashboard_messages_description }}</p>
-              </section>
+                <span>{{ text.view_module }}</span>
+              </a>
             </div>
           {% elif active_module == "account" %}
             <header class="module-header">
@@ -336,6 +339,41 @@
                 <span class="pagination-disabled">{{ text.next }}</span>
               {% endif %}
             </nav>
+          {% elif active_module == "messages" %}
+            <header class="module-header">
+              <h1>{{ text.messages }}</h1>
+            </header>
+            {% if messages.not_found %}
+              <p class="form-error" role="alert">{{ text.message_not_found }}</p>
+            {% endif %}
+            {% if messages.selected %}
+              {% set prompt = messages.selected %}
+              <article class="message-detail" aria-labelledby="message-title">
+                <h2 id="message-title">{{ prompt.title }}</h2>
+                <p class="message-meta">{{ text.message_sent_at.format(sent_at=prompt.sent_at) }}</p>
+                <p>{{ prompt.suggested_by }}</p>
+                <p>{{ prompt.urgency }}</p>
+                <p class="message-contact">{{ prompt.contact }}</p>
+                <p class="message-meta">{{ messages.no_online_booking }}</p>
+                <a class="secondary-action" href="{{ url_for('portal_messages') }}">{{ text.message_back }}</a>
+              </article>
+            {% elif messages.prompts %}
+              <ul class="message-list">
+                {% for prompt in messages.prompts %}
+                  <li>
+                    <a class="message-row{% if prompt.is_new %} new{% endif %}" href="{{ prompt.href }}">
+                      <span class="message-title">{{ prompt.title }}</span>
+                      {% if prompt.is_new %}
+                        <span class="message-badge">{{ text.message_new }}</span>
+                      {% endif %}
+                      <span class="message-meta">{{ text.message_sent_at.format(sent_at=prompt.sent_at) }}</span>
+                    </a>
+                  </li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <p class="empty-state">{{ text.messages_empty }}</p>
+            {% endif %}
           {% else %}
             <header class="module-header">
               <h1>{{ text.help }}</h1>

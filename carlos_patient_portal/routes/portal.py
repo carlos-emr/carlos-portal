@@ -55,6 +55,7 @@ from carlos_patient_portal.account_settings import (
 )
 from carlos_patient_portal.audit import record_audit_event
 from carlos_patient_portal.auth import AuthenticatedPortalSession
+from carlos_patient_portal.booking_prompts import BookingPromptNotFoundError, open_booking_prompt
 from carlos_patient_portal.delivery_outbox import (
     enqueue_contact_change_delivery,
     process_one_delivery,
@@ -915,6 +916,48 @@ def register_portal_routes(
                 content={"detail": "email password unavailable"},
             )
         return JSONResponse(content={"passphrase": passphrase})
+
+    @app.get("/portal/messages")
+    def portal_messages(
+        request: Request,
+        session: Annotated[Session, function_scoped_database_dependency(get_app_database_session)],
+    ) -> Response:
+        return render_portal_page(request, session, active_module="messages")
+
+    @app.get("/portal/messages/{prompt_id}")
+    def portal_message(
+        request: Request,
+        prompt_id: Annotated[int, PathParam(gt=0, le=MAX_DATABASE_ID)],
+        session: Annotated[Session, function_scoped_database_dependency(get_app_database_session)],
+    ) -> Response:
+        authenticated_session = get_portal_cookie_session_or_redirect(request, session)
+        if isinstance(authenticated_session, RedirectResponse):
+            return authenticated_session
+        # Opening records the first read, which CARLOS lists so staff know the patient saw it.
+        # A GET is safe here: the session cookie is SameSite=Strict, so another site cannot open
+        # a message in the patient's name. This is the route's write; the assembler stays
+        # read-only.
+        try:
+            prompt = open_booking_prompt(
+                session, prompt_id, account=authenticated_session.account
+            )
+        except BookingPromptNotFoundError:
+            return render_portal_page(
+                request,
+                session,
+                authenticated_session=authenticated_session,
+                active_module="messages",
+                message_not_found=True,
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+        session.commit()
+        return render_portal_page(
+            request,
+            session,
+            authenticated_session=authenticated_session,
+            active_module="messages",
+            selected_message=prompt,
+        )
 
     @app.get("/portal/help")
     def portal_help(
