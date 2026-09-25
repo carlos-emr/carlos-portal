@@ -1203,8 +1203,9 @@ def test_postgresql_first_preparation_racing_legacy_create_cannot_strand_deliver
                     invite, _ = create_invite(session, 1234, "Preparing Staff", **arguments)
                 result = (invite.status, invite.id)
             return result
-        except (InvitePreparationConflictError, PendingInviteExistsError):
-            return ("conflict", None)
+        except (InvitePreparationConflictError, PendingInviteExistsError) as exc:
+            # The loser names what beat it: a preparation, or a pending invite.
+            return ("conflict", type(exc).__name__)
 
     event.listen(engine, "before_cursor_execute", synchronize_invite_inserts)
     try:
@@ -1215,6 +1216,12 @@ def test_postgresql_first_preparation_racing_legacy_create_cannot_strand_deliver
             invites = list(session.scalars(select(PatientPortalInvite)))
             assert len(invites) == 1
             winner = invites[0]
+            loser_error = next(detail for status, detail in results if status == "conflict")
+            assert loser_error == (
+                "InvitePreparationInProgressError"
+                if winner.status == "prepared"
+                else "PendingInviteExistsError"
+            )
             if winner.status == "prepared":
                 activate_prepared_invite(
                     session,

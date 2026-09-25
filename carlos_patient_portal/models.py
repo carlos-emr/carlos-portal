@@ -958,7 +958,8 @@ class PatientPortalInvite(Base):
         Index(
             # A staged resend may coexist with the pending invite it replaces. A first
             # preparation must instead reserve the pending slot, including against writers
-            # using the legacy immediate-create endpoint.
+            # using the legacy immediate-create endpoint. It also allows only one pending
+            # invite per patient, which a separate index enforced until migration 0013.
             "ux_pp_invites_first_delivery_per_patient",
             "clinic_id",
             "demographic_no",
@@ -969,14 +970,6 @@ class PatientPortalInvite(Base):
             postgresql_where=text(
                 "status = 'pending' or (status = 'prepared' and supersedes_invite_id is null)"
             ),
-        ),
-        Index(
-            "ux_patient_portal_invites_one_pending_per_patient",
-            "clinic_id",
-            "demographic_no",
-            unique=True,
-            sqlite_where=text(PENDING_STATUS_SQL),
-            postgresql_where=text(PENDING_STATUS_SQL),
         ),
     )
 

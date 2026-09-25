@@ -690,6 +690,10 @@ while it is prepared and unexpired, including a retry that overlaps the original
 retry that returns the token is audited with reason `token_redisclosed`. An expired preparation
 returns `409` without disclosing its token. The `expires_at` in a prepare response is the deadline
 for committing delivery, not the patient's deadline, so CARLOS must not quote it in the email.
+A first preparation is refused with `409` `pending invite already exists` while the patient has a
+pending invite, even an expired one; replace that invite through its `resend/prepare` endpoint
+instead. A resend keeps the original invite's identity proof, so correcting the patient's email, date
+of birth, or health card number means revoking the pending invite and preparing a new one.
 Only one invite per patient can be prepared at a time. A different operation for the same
 patient returns `409` with `another invite delivery is being prepared` while the existing
 preparation can still be committed; revoke that prepared invite (it is listed with status

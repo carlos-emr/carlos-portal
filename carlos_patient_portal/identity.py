@@ -138,6 +138,13 @@ def hash_identity_value(secret: str, salt: str, purpose: str, value: str) -> str
     ).hexdigest()
 
 
+def validate_identity_proof(proof: IdentityProof) -> None:
+    """Raise ValueError for a proof `build_identity_hashes` would refuse, without hashing it."""
+    normalize_email(proof.email)
+    normalize_date_of_birth(proof.date_of_birth)
+    normalize_health_card_number(proof.health_card_number)
+
+
 def build_identity_hashes(proof: IdentityProof, secret: str, salt: str) -> dict[str, str]:
     normalized_salt = salt.strip()
     if not normalized_salt:
