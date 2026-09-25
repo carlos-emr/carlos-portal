@@ -173,7 +173,8 @@ class InternalOperationalMetrics(Protocol):
 
 # Staff-supplied text the portal stores and shows back: an account-access reason, an unlock-secret
 # revocation reason, and the label and source reference a patient sees beside a stored password.
-# CARLOS checks the same before sending; this covers any other caller.
+# Only CARLOS calls these routes. For three of these fields this is the only check; for the
+# account-access reason, which CARLOS also checks, it is a backstop where the text is stored.
 StaffText = AfterValidator(reject_hidden_characters)
 
 
