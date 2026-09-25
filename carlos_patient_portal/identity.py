@@ -18,6 +18,7 @@
 # CARLOS EMR Project
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
@@ -54,6 +55,35 @@ CONTROL_CHARACTER_PATTERN = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 def reject_control_characters(value: str, field_name: str) -> None:
     if CONTROL_CHARACTER_PATTERN.search(value) is not None:
         raise ValueError(f"{field_name} must not contain control characters")
+
+
+# Formatting characters that ordinary text needs: the zero-width non-joiner and joiner shape
+# Persian, Indic and other scripts and build emoji sequences, and the soft hyphen marks a break.
+# Every other formatting character is refused, among them the direction overrides and isolates,
+# zero-width spaces, byte-order marks, and tag characters.
+_ALLOWED_FORMAT_CHARACTERS = frozenset({"\u200c", "\u200d", "\u00ad"})
+_HIDDEN_CHARACTER_CATEGORIES = frozenset({"Cc", "Zl", "Zp"})
+
+
+def is_hidden_character(character: str) -> bool:
+    """Whether a character is a control, a line or paragraph separator, or a hidden formatter."""
+    category = unicodedata.category(character)
+    return category in _HIDDEN_CHARACTER_CATEGORIES or (
+        category == "Cf" and character not in _ALLOWED_FORMAT_CHARACTERS
+    )
+
+
+def reject_hidden_characters(value: str | None) -> str | None:
+    """Refuse text a person could not read back as stored.
+
+    For text that is stored and shown back later. A line break can make one audit record or log
+    line read as two, and a hidden formatting character, such as a right-to-left override, can
+    make the text display as something other than what was stored. Broader than
+    `reject_control_characters`, which patient names and HL7 data rely on staying as it is.
+    """
+    if value is not None and any(is_hidden_character(character) for character in value):
+        raise ValueError("must not contain control, line-separator or hidden formatting characters")
+    return value
 
 
 def normalize_email(email: str) -> str:
