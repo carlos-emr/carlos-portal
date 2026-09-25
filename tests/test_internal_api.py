@@ -459,6 +459,135 @@ def test_internal_mutations_reject_unknown_or_blank_fields_and_publish_schemas()
     assert access_operation["responses"]["200"]["content"]["application/json"]["schema"]
 
 
+HIDDEN_CHARACTER_TEXT = [
+    pytest.param("moved\naway", id="line-feed"),
+    pytest.param("moved\taway", id="tab"),
+    pytest.param("moved\x85away", id="c1-next-line"),
+    pytest.param("moved\u2028away", id="line-separator"),
+    pytest.param("moved\u2029away", id="paragraph-separator"),
+    pytest.param("moved\u202eyawa", id="right-to-left-override"),
+    pytest.param("moved\u2066away", id="left-to-right-isolate"),
+    pytest.param("moved\u200baway", id="zero-width-space"),
+    pytest.param("moved\ufeffaway", id="byte-order-mark"),
+    pytest.param("moved\U000e0041away", id="tag-character"),
+]
+
+
+@pytest.mark.parametrize("text", HIDDEN_CHARACTER_TEXT)
+@pytest.mark.parametrize(
+    ("path", "permission", "body"),
+    [
+        pytest.param(
+            "/internal/carlos/patients/1234/portal-account/access",
+            "portal.account.manage",
+            lambda text: {"enabled": False, "reason": text},
+            id="access-reason",
+        ),
+        pytest.param(
+            "/internal/carlos/unlock-secrets/1/revoke",
+            "portal.secret.manage",
+            lambda text: {"reason": text},
+            id="revoke-reason",
+        ),
+        pytest.param(
+            "/internal/carlos/patients/1234/unlock-secrets",
+            "portal.secret.manage",
+            lambda text: {"source_reference": "email-message-1", "label": text},
+            id="secret-label",
+        ),
+        pytest.param(
+            "/internal/carlos/patients/1234/unlock-secrets",
+            "portal.secret.manage",
+            lambda text: {"source_reference": text, "label": "Email password"},
+            id="secret-source-reference",
+        ),
+    ],
+)
+def test_internal_staff_text_refuses_hidden_characters(path, permission, body, text) -> None:
+    client = TestClient(internal_app())
+
+    response = client.post(path, headers=carlos_headers(permission), json=body(text))
+
+    assert response.status_code == 422
+    assert "formatting characters" in response.text
+
+
+def test_internal_staff_text_refuses_a_lone_surrogate_while_parsing() -> None:
+    # A JSON client can send an unpaired surrogate escape; PostgreSQL could not store it. Pydantic
+    # refuses it while parsing, before the hidden-character check, which therefore omits it.
+    client = TestClient(internal_app())
+
+    response = client.post(
+        "/internal/carlos/patients/1234/portal-account/access",
+        headers={**carlos_headers("portal.account.manage"), "Content-Type": "application/json"},
+        content=json.dumps({"enabled": False, "reason": "moved\ud800away"}),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["type"] == "string_unicode"
+
+
+def test_internal_staff_text_keeps_script_joiners_and_trims_surrounding_whitespace() -> None:
+    app = internal_app()
+    client = TestClient(app)
+    # Persian needs the zero-width non-joiner, emoji sequences the joiner; both are allowed, as
+    # is a soft hyphen. Surrounding whitespace, a trailing line break included, is trimmed.
+    label = "می\u200cخواهم 👨\u200d👩\u200d👧 co\u00adop"
+
+    created = client.post(
+        "/internal/carlos/patients/1234/unlock-secrets",
+        headers=carlos_headers("portal.secret.manage"),
+        json={"source_reference": "  email-message-joiners\n", "label": label},
+    )
+
+    assert created.status_code == 201
+    with app.state.session_factory() as session:
+        stored = session.get(PatientPortalUnlockSecret, created.json()["id"])
+        assert stored.label == label
+        assert stored.source_reference == "email-message-joiners"
+
+
+def test_internal_access_reason_keeps_plain_non_latin_text_and_refusals_change_nothing() -> None:
+    app = internal_app()
+    client = TestClient(app)
+    invite = client.post(
+        "/internal/carlos/patients/1234/invites",
+        headers=carlos_headers("portal.invite.manage"),
+        json=invite_request(),
+    )
+    client.post(
+        "/auth/activate",
+        json={
+            "invite_code": invite.json()["invite_token"],
+            "email": "example.patient@example.com",
+            "date_of_birth": "1980-05-20",
+            "health_card_number": "ABCD 1234-5678",
+            "username": "patient.user",
+            "password": PASSWORD,
+        },
+    )
+    headers = carlos_headers("portal.account.manage")
+
+    refused = client.post(
+        "/internal/carlos/patients/1234/portal-account/access",
+        headers=headers,
+        json={"enabled": False, "reason": "moved\u202eyawa"},
+    )
+    still_active = client.get("/internal/carlos/patients/1234/portal-account", headers=headers)
+    disabled = client.post(
+        "/internal/carlos/patients/1234/portal-account/access",
+        headers=headers,
+        json={"enabled": False, "reason": "  Déménagé — 患者の依頼  "},
+    )
+    account = client.get("/internal/carlos/patients/1234/portal-account", headers=headers)
+
+    assert refused.status_code == 422
+    assert still_active.json()["status"] == "active"
+    assert disabled.status_code == 200
+    assert account.json()["status"] == "disabled"
+    assert account.json()["disabled_reason"] == "Déménagé — 患者の依頼"
+
+
 def test_maintenance_mode_blocks_internal_business_mutations() -> None:
     client = TestClient(internal_app(maintenance_mode=True))
 
