@@ -19,6 +19,7 @@ from carlos_patient_portal import credentials, main, web_support
 from carlos_patient_portal.config import (
     DEFAULT_AUDIT_RETENTION_DAYS,
     DEFAULT_DATABASE_URL,
+    DEFAULT_SOURCE_CODE_URL,
     MigrationDatabaseSettings,
     OutboxSettings,
     Settings,
@@ -704,6 +705,74 @@ def test_url_ports_and_unlock_key_ids_fail_during_settings_validation() -> None:
             ),
             unlock_secret_active_key_id="secondary",
         )
+
+
+def test_source_code_url_defaults_to_the_upstream_repository() -> None:
+    assert DEFAULT_SOURCE_CODE_URL == "https://github.com/carlos-emr/carlos-portal"
+    assert development_settings().source_code_url == DEFAULT_SOURCE_CODE_URL
+    assert production_settings().source_code_url == DEFAULT_SOURCE_CODE_URL
+
+
+def test_source_code_url_is_read_from_its_environment_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The name the README tells operators of a modified portal to set must be the one read."""
+    monkeypatch.setenv("PATIENT_PORTAL_SOURCE_CODE_URL", " https://git.example.test/clinic/portal ")
+
+    assert development_settings().source_code_url == "https://git.example.test/clinic/portal"
+
+
+@pytest.mark.parametrize(
+    ("source_code_url", "message"),
+    [
+        ("", "PATIENT_PORTAL_SOURCE_CODE_URL"),
+        ("   ", "PATIENT_PORTAL_SOURCE_CODE_URL"),
+        ("javascript:alert(1)", "PATIENT_PORTAL_SOURCE_CODE_URL"),
+        ("JavaScript://github.com/%0aalert(1)", "PATIENT_PORTAL_SOURCE_CODE_URL"),
+        ("data:text/html,<script>alert(1)</script>", "PATIENT_PORTAL_SOURCE_CODE_URL"),
+        ("//github.com/carlos-emr/carlos-portal", "PATIENT_PORTAL_SOURCE_CODE_URL"),
+        ("github.com/carlos-emr/carlos-portal", "PATIENT_PORTAL_SOURCE_CODE_URL"),
+        ("https://reader:secret@git.example.test/portal", "PATIENT_PORTAL_SOURCE_CODE_URL"),
+        ("https://access-token@git.example.test/portal", "PATIENT_PORTAL_SOURCE_CODE_URL"),
+        ("https://git.example.test/portal?ref=main", "PATIENT_PORTAL_SOURCE_CODE_URL"),
+        ("https://git.example.test/portal#readme", "PATIENT_PORTAL_SOURCE_CODE_URL"),
+        ("https://git.example.test:not-a-port/portal", "valid port"),
+        ("https://git.example.test/por\ntal", "control characters"),
+        ("https://git.example.test/por\ttal", "control characters"),
+        ("https://git.example.test/\x00portal", "control characters"),
+        ("https://git.example.test/portal\x7f", "control characters"),
+    ],
+)
+def test_source_code_url_rejects_unsafe_values(source_code_url: str, message: str) -> None:
+    """Only a plain HTTP(S) link may reach the footer every patient sees.
+
+    Autoescaping keeps a value inside its attribute but does nothing about the scheme, so a
+    `javascript:` link would still run when clicked. Blank is refused because the AGPL offer must
+    be on every page, and credentials must not be published in a link.
+    """
+    with pytest.raises(ValidationError, match=message) as exc_info:
+        development_settings(source_code_url=source_code_url)
+
+    assert "secret" not in str(exc_info.value)
+    assert "access-token" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("settings_factory", [production_settings, staging_settings])
+def test_source_code_url_must_use_https_outside_development(settings_factory) -> None:
+    with pytest.raises(ValidationError, match="SOURCE_CODE_URL must use HTTPS outside development"):
+        settings_factory(source_code_url="http://git.example.test/clinic/portal")
+
+    for accepted_url in (
+        "https://git.example.test/clinic/portal",
+        "HTTPS://git.example.test/clinic/portal",
+    ):
+        assert settings_factory(source_code_url=accepted_url).source_code_url == accepted_url
+
+
+def test_development_source_code_url_may_use_plain_http() -> None:
+    settings = development_settings(source_code_url="http://127.0.0.1:3000/clinic/portal")
+
+    assert settings.source_code_url == "http://127.0.0.1:3000/clinic/portal"
 
 
 def test_health_card_number_rejects_non_ascii_alphanumeric_characters() -> None:

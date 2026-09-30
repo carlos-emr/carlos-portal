@@ -295,6 +295,7 @@ def service_notice_response(
         context={
             "clinic_name": settings.clinic_name,
             "service_name": settings.service_name,
+            "source_code_url": settings.source_code_url,
             "locale": locale,
             "locale_switch_target": locale_switch_targets(request),
             "supported_locales": supported_locale_options(locale),
@@ -706,6 +707,7 @@ def index_template_context(
         "csrf_token": csrf_token,
         "error_message": error_message,
         "service_name": settings.service_name,
+        "source_code_url": settings.source_code_url,
         "supported_locales": supported_locale_options(locale),
         "locale_switch_target": locale_switch_targets(request),
         "text": portal_text(locale),
@@ -739,6 +741,7 @@ def public_auth_template_context(
         "form_values": form_values or {},
         "notice_message": notice_message,
         "service_name": settings.service_name,
+        "source_code_url": settings.source_code_url,
         "supported_locales": supported_locale_options(locale),
         "locale_switch_target": locale_switch_targets(request),
         "text": portal_text(locale),
@@ -823,6 +826,7 @@ def mfa_template_context(
         "mfa_sms_available": (MFA_DELIVERY_METHOD_SMS in delivery.available_delivery_methods),
         "mfa_sms_selected": not is_email,
         "service_name": settings.service_name,
+        "source_code_url": settings.source_code_url,
         "text": text,
     }
 
@@ -879,6 +883,7 @@ def portal_template_context(
         "locale": locale,
         "service_name": settings.service_name,
         "clinic_name": settings.clinic_name,
+        "source_code_url": settings.source_code_url,
         "account": account,
         "password_updated_date": account.password_updated_at.date().isoformat(),
         "active_module": active_module,
