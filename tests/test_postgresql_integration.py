@@ -22,6 +22,12 @@ from carlos_patient_portal.account_settings import (
     update_account_mfa_method,
 )
 from carlos_patient_portal.auth import create_patient_session, hash_auth_token
+from carlos_patient_portal.booking_choices import (
+    BookingChoiceUnavailableError,
+    choose_offered_slot,
+    record_choice_result,
+)
+from carlos_patient_portal.booking_offers import OfferedSlotSpec
 from carlos_patient_portal.booking_prompts import BookingPromptNotice, create_booking_prompt
 from carlos_patient_portal.config import Settings
 from carlos_patient_portal.credentials import hash_password
@@ -49,6 +55,8 @@ from carlos_patient_portal.models import (
     OUTBOX_STATUS_DELIVERED,
     OUTBOX_STATUS_PENDING,
     PatientPortalAccount,
+    PatientPortalBookingChoice,
+    PatientPortalBookingOfferedSlot,
     PatientPortalBookingPrompt,
     PatientPortalContactReviewRequest,
     PatientPortalEmailChangeRequest,
@@ -1522,4 +1530,146 @@ def test_postgresql_racing_booking_prompt_retries_create_one_prompt_and_notice()
             assert [notice.booking_prompt_id for notice in notices] == [prompts[0].id]
     finally:
         event.remove(engine, "before_cursor_execute", synchronize_prompt_inserts)
+        engine.dispose()
+
+
+POSTGRES_BOOKING_NOTICE = BookingPromptNotice(
+    sign_in_url="https://portal.example.test/",
+    encryption_secret="o" * 32,
+    encryption_key_id="primary",
+)
+
+
+def create_postgres_offer(engine, *, operation_id: str) -> tuple[int, list[int]]:
+    """A prompt offering two times, and the portal row ids of those times."""
+    starts_at = utc_now() + timedelta(days=7)
+    with Session(engine) as session, session.begin():
+        created = create_booking_prompt(
+            session,
+            clinic_id="postgres-clinic",
+            demographic_no=1234,
+            operation_id=operation_id,
+            urgency="soon",
+            appointment_type="follow_up",
+            suggested_by=None,
+            created_by="Front Desk",
+            created_by_id="front-desk",
+            ttl=timedelta(days=90),
+            notice=POSTGRES_BOOKING_NOTICE,
+            offered_slots=[
+                OfferedSlotSpec("slot-a", starts_at, 30, "in_person"),
+                OfferedSlotSpec("slot-b", starts_at + timedelta(hours=1), 30, "phone"),
+            ],
+            offer_digest_secret="a" * 32,
+        )
+        prompt_id = created.prompt.id
+        slot_ids = list(
+            session.scalars(
+                select(PatientPortalBookingOfferedSlot.id)
+                .where(PatientPortalBookingOfferedSlot.prompt_id == prompt_id)
+                .order_by(PatientPortalBookingOfferedSlot.position)
+            )
+        )
+    return prompt_id, slot_ids
+
+
+def test_postgresql_two_simultaneous_choices_leave_one_waiting() -> None:
+    """Two picks for one prompt submitted together: one waits for CARLOS, the other is refused."""
+    assert POSTGRES_URL is not None
+    clean_postgresql_database()
+    account_id = insert_postgres_account(username="choice.race", demographic_no=1234)
+    engine = create_portal_engine(POSTGRES_URL)
+    lock_barrier = Barrier(2)
+
+    def synchronize_prompt_locks(connection, cursor, statement, parameters, context, executemany):
+        if (
+            "FROM patient_portal_booking_prompts" in statement
+            and "FOR UPDATE" in statement
+            and connection.info.get("choice_race_worker")
+        ):
+            # Both requests reach the prompt lock together; only the lock can order them.
+            lock_barrier.wait(timeout=10)
+
+    def choose_from_worker(slot_row_id: int) -> str:
+        with Session(engine) as session, session.begin():
+            session.connection().info["choice_race_worker"] = True
+            session.execute(text("SET LOCAL statement_timeout = '15s'"))
+            account = session.get(PatientPortalAccount, account_id)
+            try:
+                choose_offered_slot(session, prompt_id, slot_row_id, account=account)
+            except BookingChoiceUnavailableError:
+                return "refused"
+            return "chosen"
+
+    try:
+        prompt_id, slot_ids = create_postgres_offer(engine, operation_id="choice-race")
+        event.listen(engine, "before_cursor_execute", synchronize_prompt_locks)
+        try:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                outcomes = list(executor.map(choose_from_worker, slot_ids))
+        finally:
+            event.remove(engine, "before_cursor_execute", synchronize_prompt_locks)
+        assert sorted(outcomes) == ["chosen", "refused"]
+        with Session(engine) as session:
+            choices = list(session.scalars(select(PatientPortalBookingChoice)))
+            assert [choice.state for choice in choices] == ["pending"]
+            assert session.get(PatientPortalBookingPrompt, prompt_id).status == "choice_pending"
+    finally:
+        engine.dispose()
+
+
+def test_postgresql_simultaneous_identical_results_record_once_and_notify_once() -> None:
+    """A repeated CARLOS poll cycle racing the first must not book twice or email twice."""
+    assert POSTGRES_URL is not None
+    clean_postgresql_database()
+    account_id = insert_postgres_account(username="result.race", demographic_no=1234)
+    engine = create_portal_engine(POSTGRES_URL)
+    lock_barrier = Barrier(2)
+
+    def synchronize_prompt_locks(connection, cursor, statement, parameters, context, executemany):
+        if (
+            "FROM patient_portal_booking_prompts" in statement
+            and "FOR UPDATE" in statement
+            and connection.info.get("result_race_worker")
+        ):
+            lock_barrier.wait(timeout=10)
+
+    def report_from_worker(_: int) -> bool:
+        with Session(engine) as session, session.begin():
+            session.connection().info["result_race_worker"] = True
+            session.execute(text("SET LOCAL statement_timeout = '15s'"))
+            outcome = record_choice_result(
+                session,
+                prompt_id,
+                clinic_id="postgres-clinic",
+                choice_id=choice_id,
+                result="booked",
+                actor="CARLOS booking sync",
+                actor_id="carlos-booking-sync",
+                notice=POSTGRES_BOOKING_NOTICE,
+            )
+            return outcome.recorded
+
+    try:
+        prompt_id, slot_ids = create_postgres_offer(engine, operation_id="result-race")
+        with Session(engine) as session, session.begin():
+            account = session.get(PatientPortalAccount, account_id)
+            choice_id = choose_offered_slot(session, prompt_id, slot_ids[0], account=account).id
+        event.listen(engine, "before_cursor_execute", synchronize_prompt_locks)
+        try:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                recorded = list(executor.map(report_from_worker, range(2)))
+        finally:
+            event.remove(engine, "before_cursor_execute", synchronize_prompt_locks)
+        assert sorted(recorded) == [False, True]
+        with Session(engine) as session:
+            notices = session.scalar(
+                select(func.count(PatientPortalOutboundDelivery.id)).where(
+                    PatientPortalOutboundDelivery.kind == "booking_prompt_update"
+                )
+            )
+            assert notices == 1
+            assert session.get(PatientPortalBookingPrompt, prompt_id).status == "booked"
+            assert session.scalar(select(func.count(PatientPortalBookingOfferedSlot.id))) == 0
+    finally:
         engine.dispose()

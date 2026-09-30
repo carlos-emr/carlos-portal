@@ -774,6 +774,7 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
         email_password_filter_error: str | None = None,
         selected_message: PatientPortalBookingPrompt | None = None,
         message_not_found: bool = False,
+        message_error: str | None = None,
         authenticated_session: AuthenticatedPortalSession | None = None,
     ) -> Response:
         if authenticated_session is None:
@@ -814,6 +815,9 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
                 not_found=message_not_found,
                 timezone_name=settings.clinic_timezone,
                 locale=request_locale(request),
+                booking_locations=settings.resolved_booking_locations,
+                wait_minutes=settings.booking_choice_wait_minutes,
+                error=message_error,
             )
         new_message_count = (
             count_unread_prompts_for_account(session, authenticated_session.account.id)

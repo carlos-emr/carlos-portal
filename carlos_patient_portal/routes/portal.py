@@ -50,7 +50,21 @@ from carlos_patient_portal.account_settings import (
 )
 from carlos_patient_portal.audit import record_audit_event
 from carlos_patient_portal.auth import AuthenticatedPortalSession
-from carlos_patient_portal.booking_prompts import BookingPromptNotFoundError, open_booking_prompt
+from carlos_patient_portal.booking_choices import (
+    CHOICE_REFUSED_NOT_AVAILABLE,
+    CHOICE_REFUSED_PROMPT_CLOSED,
+    CHOICE_REFUSED_SLOT_UNAVAILABLE,
+    BookingChoiceUnavailableError,
+    BookingSlotUnavailableError,
+    choose_offered_slot,
+    decline_offered_slots,
+    record_patient_booking_refusal,
+)
+from carlos_patient_portal.booking_prompts import (
+    BookingPromptNotFoundError,
+    find_visible_prompt,
+    open_booking_prompt,
+)
 from carlos_patient_portal.delivery_outbox import (
     enqueue_contact_change_delivery,
     process_one_delivery,
@@ -61,6 +75,8 @@ from carlos_patient_portal.models import (
     AUDIT_ACTOR_TYPE_PATIENT,
     AUDIT_EVENT_ACCOUNT_CONTACT_UPDATE,
     AUDIT_EVENT_ACCOUNT_EMAIL_CHANGE_REQUEST,
+    AUDIT_EVENT_BOOKING_PROMPT_CHOICE,
+    AUDIT_EVENT_BOOKING_PROMPT_DECLINE,
     AUDIT_EVENT_UNLOCK_SECRET_LIST,
     AUDIT_EVENT_UNLOCK_SECRET_READ,
     AUDIT_OUTCOME_FAILURE,
@@ -130,6 +146,15 @@ from carlos_patient_portal.web_support import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def parse_offered_slot_id(value: str) -> int | None:
+    """The offered-time row id a radio button submitted, or None for anything else."""
+    normalized = value.strip()
+    if not normalized.isascii() or not normalized.isdigit() or len(normalized) > 19:
+        return None
+    parsed = int(normalized)
+    return parsed if 0 < parsed <= MAX_DATABASE_ID else None
 
 
 def verify_unlock_secret_step_up(
@@ -953,6 +978,149 @@ def register_portal_routes(
             active_module="messages",
             selected_message=prompt,
         )
+
+    def render_booking_refusal(
+        request: Request,
+        session: Session,
+        authenticated_session: AuthenticatedPortalSession,
+        *,
+        prompt_id: int,
+        event_type: str,
+        reason: str,
+        status_code: int,
+    ) -> Response:
+        """Audit a refused pick or decline and show the prompt as it now is, or a 404."""
+        account = authenticated_session.account
+        record_patient_booking_refusal(
+            session,
+            account=account,
+            event_type=event_type,
+            prompt_id=prompt_id,
+            reason=reason,
+        )
+        prompt = (
+            None
+            if reason == CHOICE_REFUSED_NOT_AVAILABLE
+            else find_visible_prompt(session, prompt_id, account=account)
+        )
+        if prompt is None:
+            # The same page as opening a prompt that is withdrawn, expired, or not theirs.
+            return render_portal_page(
+                request,
+                session,
+                authenticated_session=authenticated_session,
+                active_module="messages",
+                message_not_found=True,
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+        return render_portal_page(
+            request,
+            session,
+            authenticated_session=authenticated_session,
+            active_module="messages",
+            selected_message=prompt,
+            message_error=portal_text(request_locale(request))["booking_choice_error"],
+            status_code=status_code,
+        )
+
+    def redirect_to_message(request: Request, prompt_id: int) -> RedirectResponse:
+        # URLPath.path cannot contain the scheme or authority from the request.
+        return RedirectResponse(
+            # nosemgrep: python.fastapi.web.tainted-redirect-fastapi.tainted-redirect-fastapi
+            request.url_for("portal_message", prompt_id=prompt_id).path,
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    @app.post("/portal/messages/{prompt_id}/choice")
+    async def portal_message_choice(
+        request: Request,
+        prompt_id: Annotated[int, PathParam(gt=0, le=MAX_DATABASE_ID)],
+        session: Annotated[Session, function_scoped_database_dependency(get_app_database_session)],
+    ) -> Response:
+        """Record the patient's pick of one offered time; CARLOS books it when it next polls."""
+        form_values = await get_portal_account_form_values(
+            request,
+            csrf_error_detail="the time could not be chosen",
+        )
+        authenticated_session = await authenticate_browser_session(request, session)
+        if isinstance(authenticated_session, RedirectResponse):
+            return authenticated_session
+        offered_slot_id = parse_offered_slot_id(first_form_value_or_empty(form_values, "slot"))
+        refusal: tuple[str, int] | None = None
+        try:
+            await run_in_threadpool(
+                choose_offered_slot,
+                session,
+                prompt_id,
+                offered_slot_id,
+                account=authenticated_session.account,
+            )
+        except BookingPromptNotFoundError:
+            refusal = (CHOICE_REFUSED_NOT_AVAILABLE, status.HTTP_404_NOT_FOUND)
+        except BookingChoiceUnavailableError:
+            refusal = (CHOICE_REFUSED_PROMPT_CLOSED, status.HTTP_409_CONFLICT)
+        except BookingSlotUnavailableError:
+            refusal = (
+                CHOICE_REFUSED_SLOT_UNAVAILABLE,
+                status.HTTP_409_CONFLICT
+                if offered_slot_id is not None
+                else status.HTTP_400_BAD_REQUEST,
+            )
+        if refusal is not None:
+            reason, status_code = refusal
+            return await run_in_threadpool(
+                render_booking_refusal,
+                request,
+                session,
+                authenticated_session,
+                prompt_id=prompt_id,
+                event_type=AUDIT_EVENT_BOOKING_PROMPT_CHOICE,
+                reason=reason,
+                status_code=status_code,
+            )
+        return redirect_to_message(request, prompt_id)
+
+    @app.post("/portal/messages/{prompt_id}/decline")
+    async def portal_message_decline(
+        request: Request,
+        prompt_id: Annotated[int, PathParam(gt=0, le=MAX_DATABASE_ID)],
+        session: Annotated[Session, function_scoped_database_dependency(get_app_database_session)],
+    ) -> Response:
+        """Record that none of the offered times work; the patient is told to contact the clinic."""
+        await get_portal_account_form_values(
+            request,
+            csrf_error_detail="the answer could not be saved",
+        )
+        authenticated_session = await authenticate_browser_session(request, session)
+        if isinstance(authenticated_session, RedirectResponse):
+            return authenticated_session
+        refusal: tuple[str, int] | None = None
+        try:
+            await run_in_threadpool(
+                decline_offered_slots,
+                session,
+                prompt_id,
+                account=authenticated_session.account,
+            )
+        except BookingPromptNotFoundError:
+            refusal = (CHOICE_REFUSED_NOT_AVAILABLE, status.HTTP_404_NOT_FOUND)
+        except BookingChoiceUnavailableError:
+            refusal = (CHOICE_REFUSED_PROMPT_CLOSED, status.HTTP_409_CONFLICT)
+        except BookingSlotUnavailableError:
+            refusal = (CHOICE_REFUSED_SLOT_UNAVAILABLE, status.HTTP_409_CONFLICT)
+        if refusal is not None:
+            reason, status_code = refusal
+            return await run_in_threadpool(
+                render_booking_refusal,
+                request,
+                session,
+                authenticated_session,
+                prompt_id=prompt_id,
+                event_type=AUDIT_EVENT_BOOKING_PROMPT_DECLINE,
+                reason=reason,
+                status_code=status_code,
+            )
+        return redirect_to_message(request, prompt_id)
 
     @app.get("/portal/help")
     def portal_help(

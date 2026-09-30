@@ -346,15 +346,57 @@
             {% if messages.not_found %}
               <p class="form-error" role="alert">{{ text.message_not_found }}</p>
             {% endif %}
+            {% if messages.error %}
+              <p class="form-error" role="alert">{{ messages.error }}</p>
+            {% endif %}
             {% if messages.selected %}
               {% set prompt = messages.selected %}
+              {% set booking = prompt.booking %}
               <article class="message-detail" aria-labelledby="message-title">
                 <h2 id="message-title">{{ prompt.title }}</h2>
                 <p class="message-meta">{{ text.message_sent_at.format(sent_at=prompt.sent_at) }}</p>
                 <p>{{ prompt.suggested_by }}</p>
                 <p>{{ prompt.urgency }}</p>
-                <p class="message-contact">{{ prompt.contact }}</p>
-                <p class="message-meta">{{ messages.no_online_booking }}</p>
+                {% if booking and booking.state == "choose" %}
+                  {% if booking.notice %}
+                    <p class="form-notice booking-status" role="status">{{ booking.notice }}</p>
+                  {% else %}
+                    <p>{{ text.booking_offer_intro }}</p>
+                  {% endif %}
+                  <form class="booking-choice-form" method="post" action="{{ booking.choice_href }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <fieldset class="booking-slots">
+                      <legend>{{ text.booking_slots_legend }}</legend>
+                      {% for slot in booking.slots %}
+                        <label class="booking-slot">
+                          <input type="radio" name="slot" value="{{ slot.id }}" required>
+                          <span class="booking-slot-text">
+                            <span class="booking-slot-when">{{ slot.when }}</span>
+                            <span class="booking-slot-details">{{ slot.details }}</span>
+                          </span>
+                        </label>
+                      {% endfor %}
+                    </fieldset>
+                    <button class="primary-action" type="submit">{{ text.booking_choose }}</button>
+                  </form>
+                  <form class="booking-decline-form" method="post" action="{{ booking.decline_href }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button class="secondary-action" type="submit">{{ text.booking_decline }}</button>
+                  </form>
+                {% elif booking and booking.state in ("pending", "booked") %}
+                  <p class="form-notice booking-status" role="status">{{ booking.notice }}</p>
+                  {% if booking.chosen %}
+                    <p class="message-meta booking-chosen">{{ booking.chosen }}</p>
+                  {% endif %}
+                {% else %}
+                  {% if booking and booking.notice %}
+                    <p class="form-notice booking-status" role="status">{{ booking.notice }}</p>
+                  {% endif %}
+                  <p class="message-contact">{{ prompt.contact }}</p>
+                  {% if not booking or booking.state == "contact" %}
+                    <p class="message-meta">{{ messages.no_online_booking }}</p>
+                  {% endif %}
+                {% endif %}
                 <a class="secondary-action" href="{{ url_for('portal_messages') }}">{{ text.message_back }}</a>
               </article>
             {% elif messages.prompts %}

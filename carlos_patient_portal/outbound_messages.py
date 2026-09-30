@@ -108,6 +108,30 @@ def booking_prompt_email_message(
     )
 
 
+def booking_prompt_update_email_message(
+    *,
+    service_name: str,
+    clinic_name: str,
+    sign_in_url: str,
+    locale: str = DEFAULT_OUTBOUND_LOCALE,
+) -> OutboundMessage:
+    """Tells the patient a message has an update, and nothing about what changed.
+
+    Sent when CARLOS answers a time the patient picked. Whether it was booked, the time, the
+    provider, the kind of visit and where it is are shown only after sign-in.
+    """
+    _require_supported_locale(locale)
+    return OutboundMessage(
+        subject=f"There is an update in {service_name}",
+        body=(
+            f"{clinic_name} has updated a message in {service_name}.\n\n"
+            f"Sign in to read it:\n{sign_in_url}\n\n"
+            "The update is only shown after you sign in.\n\n"
+            f"If you were not expecting this, contact {clinic_name}."
+        ),
+    )
+
+
 def email_change_confirmation_email_message(
     *,
     service_name: str,

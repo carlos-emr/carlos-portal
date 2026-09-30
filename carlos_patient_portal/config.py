@@ -43,6 +43,8 @@ from carlos_patient_portal.database import (
     DEFAULT_DATABASE_STATEMENT_TIMEOUT_MS,
     DEFAULT_SQLITE_BUSY_TIMEOUT_MS,
 )
+from carlos_patient_portal.identity import is_hidden_character
+from carlos_patient_portal.models import MAX_BOOKING_LOCATION_CODE_LENGTH
 
 Environment = Literal["development", "staging", "test", "production"]
 TrustedClientIpHeader = Literal["x-forwarded-for", "x-real-ip"]
@@ -71,6 +73,12 @@ CLINIC_BOOKING_PHONE_PATTERN = re.compile(
     r"(?=(?:[^0-9]*[0-9]){7})\+?\(?[0-9][0-9 ().-]{2,24}(?:\s*(?:ext\.?|x)\s*[0-9]{1,6})?",
     re.IGNORECASE,
 )
+BOOKING_LOCATIONS_VARIABLE = "PATIENT_PORTAL_BOOKING_LOCATIONS"
+BOOKING_LOCATION_CODE_PATTERN = re.compile(
+    rf"[a-z0-9_-]{{1,{MAX_BOOKING_LOCATION_CODE_LENGTH}}}"
+)
+MAX_BOOKING_LOCATION_LABEL_LENGTH = 64
+DEFAULT_BOOKING_CHOICE_WAIT_MINUTES = 15
 # A conservative day count guarantees at least 25 complete calendar years,
 # including every leap-day distribution, before an event becomes eligible.
 DEFAULT_AUDIT_RETENTION_DAYS = 25 * 366
@@ -123,6 +131,38 @@ def _validate_distinct_secret_values(configured_secrets: dict[str, str | None]) 
         if reused_by is not None:
             raise ValueError(f"{field_name} must not reuse the value configured for {reused_by}")
         secret_domains[secret_value] = field_name
+
+
+def parse_booking_locations(encoded_locations: str) -> dict[str, str]:
+    """Parse ``code=Label`` pairs separated by commas, keeping their order.
+
+    CARLOS sends only the code with an offered time; the patient sees the label. Labels are shown
+    to patients, so they must be plain text a person can read back as configured.
+    """
+    locations: dict[str, str] = {}
+    for entry in encoded_locations.split(","):
+        code, separator, label = entry.partition("=")
+        normalized_code = code.strip()
+        normalized_label = label.strip()
+        if not separator or BOOKING_LOCATION_CODE_PATTERN.fullmatch(normalized_code) is None:
+            raise ValueError(
+                f"{BOOKING_LOCATIONS_VARIABLE} must list code=Label pairs separated by commas; "
+                f"codes are 1 to {MAX_BOOKING_LOCATION_CODE_LENGTH} lowercase letters, digits, "
+                "underscores, or hyphens"
+            )
+        if (
+            not normalized_label
+            or len(normalized_label) > MAX_BOOKING_LOCATION_LABEL_LENGTH
+            or any(is_hidden_character(character) for character in normalized_label)
+        ):
+            raise ValueError(
+                f"{BOOKING_LOCATIONS_VARIABLE} labels must be 1 to "
+                f"{MAX_BOOKING_LOCATION_LABEL_LENGTH} characters of plain text"
+            )
+        if normalized_code in locations:
+            raise ValueError(f"{BOOKING_LOCATIONS_VARIABLE} lists a location code twice")
+        locations[normalized_code] = normalized_label
+    return locations
 
 
 def parse_unlock_secret_keyring(encoded_keyring: str) -> dict[str, str]:
@@ -218,6 +258,17 @@ class Settings(BaseSettings):
     clinic_booking_phone: str | None = Field(default=None, max_length=32)
     # A booking prompt disappears from the patient's messages after this long.
     booking_prompt_ttl_days: int = Field(default=90, ge=1, le=366)
+    # Where an offered appointment time can be, as comma-separated `code=Label` pairs such as
+    # "main=Main Street Office,east=East Office". CARLOS sends a code with a time; the patient sees
+    # the label. Unset, CARLOS cannot send a location with an offered time.
+    booking_locations: str | None = Field(default=None, max_length=4096)
+    # After this long without an answer from CARLOS, a patient waiting on a chosen time is told the
+    # clinic will confirm it, and to call if it is urgent, rather than left on "confirming".
+    booking_choice_wait_minutes: int = Field(
+        default=DEFAULT_BOOKING_CHOICE_WAIT_MINUTES,
+        ge=1,
+        le=24 * 60,
+    )
     public_base_url: str | None = Field(default=None, max_length=2048)
     # Container/Kubernetes/load-balancer probes reach the service by pod IP or service name, not by
     # the canonical public host. Without these aliases a correctly configured instance answers
@@ -515,6 +566,7 @@ class Settings(BaseSettings):
         "service_name",
         "clinic_name",
         "clinic_booking_phone",
+        "booking_locations",
         "maintenance_database_url",
         mode="before",
     )
@@ -540,6 +592,13 @@ class Settings(BaseSettings):
                 "PATIENT_PORTAL_CLINIC_BOOKING_PHONE must be a phone number, optionally with an "
                 "extension, such as 555-123-4567 ext. 2"
             )
+        return value
+
+    @field_validator("booking_locations")
+    @classmethod
+    def validate_booking_locations(cls, value: str | None) -> str | None:
+        if value is not None:
+            parse_booking_locations(value)
         return value
 
     @field_validator("service_name", "clinic_name", "smtp_host", "sms_sender_id")
@@ -713,6 +772,13 @@ class Settings(BaseSettings):
         if value is None:
             return None
         return value.get_secret_value().strip()
+
+    @property
+    def resolved_booking_locations(self) -> dict[str, str]:
+        """Configured location codes and their patient-facing labels, in configured order."""
+        if self.booking_locations is None:
+            return {}
+        return parse_booking_locations(self.booking_locations)
 
     @property
     def resolved_unlock_secret_keyring(self) -> dict[str, str]:
