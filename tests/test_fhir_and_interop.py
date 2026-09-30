@@ -288,7 +288,7 @@ def test_fhir_document_organization_and_practitioner_resources_are_scoped() -> N
     )
     Organization(organization_search_payload["entry"][0]["resource"])
     assert organization_read_response.status_code == 200
-    assert organization_read_response.json()["name"] == "Maple Creek Medical"
+    assert organization_read_response.json()["name"] == "Your clinic"
     Organization(organization_read_response.json())
 
     assert practitioner_search_response.status_code == 200

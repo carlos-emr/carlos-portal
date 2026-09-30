@@ -109,7 +109,7 @@ def test_index_renders_sign_in_shell() -> None:
     assert f'value="{text["username_placeholder"]}"' not in response.text
     assert 'name="csrf_token"' in response.text
     assert "nosemgrep" not in response.text
-    assert "Maple Creek Medical" in response.text
+    assert "Your clinic" in response.text
 
 
 def test_language_switch_links_to_every_supported_locale() -> None:

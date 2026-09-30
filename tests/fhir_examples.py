@@ -47,7 +47,7 @@ def write_fhir_examples(output_dir: Path) -> None:
     )
     organization = build_fhir_r4_organization(
         clinic_id="default",
-        clinic_name="Maple Creek Medical",
+        clinic_name="Example Clinic",
     )
     practitioner = build_fhir_r4_practitioner(
         clinic_id="default",

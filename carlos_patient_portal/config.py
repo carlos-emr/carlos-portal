@@ -88,7 +88,7 @@ MIN_AUDIT_RETENTION_DAYS = 30
 # hostname (or the canonical public host) rather than an address literal; see README.
 DEFAULT_PROBE_ALLOWED_HOSTS = ("127.0.0.1", "localhost")
 DEFAULT_CLINIC_ID = "default"
-DEFAULT_CLINIC_NAME = "Maple Creek Medical"
+DEFAULT_CLINIC_NAME = "Your clinic"
 ENVIRONMENT_ALIASES = {
     "dev": "development",
     "prod": "production",
