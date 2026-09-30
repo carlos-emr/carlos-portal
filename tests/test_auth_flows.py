@@ -745,7 +745,7 @@ def test_dashboard_shell_navigation_and_cookie_logout() -> None:
     assert "No email passwords" in email_passwords_response.text
     assert help_response.status_code == 200
     assert 'data-active-module="help"' in help_response.text
-    assert "Maple Creek Medical" in help_response.text
+    assert "Your clinic" in help_response.text
 
     match = CSRF_TOKEN_PATTERN.search(help_response.text)
     assert match is not None

@@ -173,7 +173,7 @@ Common development variables:
 ```bash
 export PATIENT_PORTAL_ENVIRONMENT=development
 export PATIENT_PORTAL_ENABLE_DEV_ADMIN=true
-export PATIENT_PORTAL_CLINIC_NAME="Maple Creek Medical"
+export PATIENT_PORTAL_CLINIC_NAME="Example Clinic"
 export PATIENT_PORTAL_PUBLIC_BASE_URL="http://127.0.0.1:8090"
 export PATIENT_PORTAL_DATABASE_URL="postgresql+psycopg://localhost:5432/carlos_portal"
 # The development Postfix capture service listens locally without TLS or authentication.

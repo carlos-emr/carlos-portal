@@ -58,7 +58,7 @@ def booking_app(**overrides: object):
     return migrated_development_app(
         **{
             "clinic_id": "clinic-a",
-            "clinic_name": "Maple Clinic",
+            "clinic_name": "Example Clinic",
             "internal_api_token": INTERNAL_API_TOKEN,
             "outbox_encryption_secret": OUTBOX_ENCRYPTION_SECRET,
             **overrides,
@@ -265,7 +265,7 @@ def test_notice_says_only_that_a_message_is_waiting_and_is_recorded() -> None:
 def test_notice_email_carries_no_provider_type_or_urgency() -> None:
     message = booking_prompt_email_message(
         service_name="CARLOS Patient Portal",
-        clinic_name="Maple Clinic",
+        clinic_name="Example Clinic",
         sign_in_url="https://portal.example.test/",
     )
     text = (message.subject + "\n" + message.body).casefold()
@@ -443,7 +443,7 @@ def test_patient_reads_the_prompt_and_staff_can_see_it_was_read() -> None:
     assert opened.status_code == 200
     assert "Dr. Singh suggested this appointment." in opened.text
     assert "Please book as soon as possible." in opened.text
-    assert "To book, call Maple Clinic at 555-123-4567." in opened.text
+    assert "To book, call Example Clinic at 555-123-4567." in opened.text
     assert "Appointments cannot be booked in this portal." in opened.text
     assert reopened.status_code == 200
     assert listed[0]["state"] == "read"
@@ -465,7 +465,7 @@ def test_prompt_without_a_booking_phone_says_to_contact_the_clinic() -> None:
 
     opened = client.get(f"/portal/messages/{prompt_id}")
 
-    assert "To book, contact Maple Clinic." in opened.text
+    assert "To book, contact Example Clinic." in opened.text
     assert "Your clinic suggested this appointment." in opened.text
     assert "Please book at a time that suits you." in opened.text
 
