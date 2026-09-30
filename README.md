@@ -200,6 +200,13 @@ CA material through the deployment secret manager rather than committed URLs.
 The portal defaults to `production`, so deployments fail closed unless required secrets are set.
 Local development should explicitly set `PATIENT_PORTAL_ENVIRONMENT=development`.
 
+`PATIENT_PORTAL_SOURCE_CODE_URL` is the target of the "Source code" link in every page footer. The
+default, the upstream repository `https://github.com/carlos-emr/carlos-portal`, is correct only for
+an unmodified portal. **Anyone running a modified portal must set it to the location of their own
+modified source**, because section 13 of the AGPL requires a modified version to offer its users
+that source (see [License](#license)). The value must be an HTTP(S) URL without credentials, query,
+or fragment, must use HTTPS outside development, and cannot be blank.
+
 Development SMTP defaults to `carlos-test@openo-dev.local`; override it with
 `PATIENT_PORTAL_SMTP_FROM_ADDRESS` when needed. A sender address is always required outside
 development. SMTP is required in production, and every non-development SMTP connection must enable
@@ -1020,7 +1027,10 @@ words in the passphrase wordlist (`CC BY 3.0 US`). [`NOTICE.md`](NOTICE.md) has 
 
 If you modify the portal and let patients or other users interact with it over a network, section 13
 of the AGPL requires your modified version to prominently offer those users its complete source code
-at no charge.
+at no charge. The portal makes that offer with the "Source code" link in every page footer. Set
+`PATIENT_PORTAL_SOURCE_CODE_URL` to the location of your modified source (see
+[Configuration](#configuration)); the default points at the upstream repository, which is correct
+only for an unmodified portal.
 
 CARLOS EMR is a separate program under its own license (`GPL-2.0-or-later`). The portal does not
 include or link CARLOS program code; the two communicate only over the portal's network API.
