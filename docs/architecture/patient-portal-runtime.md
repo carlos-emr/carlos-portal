@@ -42,7 +42,8 @@ shared deployment.
   different urgency. Separating them lets either be restarted without the other.
 - **Data separation is the point.** The portal deliberately holds no chart data. It stores portal
   accounts, invites, audit events, and encrypted passphrases — nothing clinical. Sharing the
-  CARLOS schema would have made that boundary a convention instead of a fact.
+  CARLOS schema would have made that boundary a convention instead of a fact. (Offered appointment
+  times are a bounded exception; see *Amendment: offered appointment times* below.)
 
 ### Why Python/FastAPI rather than a second Java service
 
@@ -85,7 +86,8 @@ have to be re-expressed, and the migration would not be mechanical.
 Sharing tables would have coupled the portal's schema to Hibernate's mapping and made every portal
 migration an EMR migration. The internal API keeps the coupling to a handful of documented
 operations (invite lifecycle, account unlock and enable/disable, unlock-secret create/publish/
-revoke, contact-review listing and decision) with explicit request and response models.
+revoke, contact-review listing and decision, booking prompts and the offered-time sync) with
+explicit request and response models.
 
 ## Alternatives considered
 
@@ -119,6 +121,50 @@ Conditions under which this decision should be revisited:
 - If a multi-clinic deployment is ever wanted. The MVP is deliberately one deployment, one
   database, one origin, one clinic identity per clinic, and several of the schema decisions assume
   it.
+
+## Amendment: offered appointment times (carlos-portal#11)
+
+**Recorded:** 2026-09-30.
+
+CARLOS can attach open appointment times to a booking prompt so the patient can pick one in the
+portal. These are **the first appointment data the portal stores**, and they sit uneasily with
+"holds nothing clinical": a time, a visit mode, and a location tell a reader of the portal database
+that a patient has a follow-up coming. The decision is to accept that narrowly, on these terms.
+
+The direction of the contract does not change. The portal never reads the CARLOS schedule and
+CARLOS never accepts calls from the portal. CARLOS pushes the times with the prompt; a CARLOS job,
+signed as a dedicated non-login system provider holding only `portal.booking_prompt.sync`, polls
+for the patient's pick and reports whether it was booked. That permission can list pending picks
+and report results and nothing else.
+
+What is stored, per offered time (`patient_portal_booking_offered_slots`): the CARLOS `slot_id`
+(opaque, never interpreted), the start with its UTC offset normalised to UTC, a duration, a visit
+mode from a fixed vocabulary (in person, phone, video), and optionally a location code from the
+deployment's configured list. What is not stored: the provider, the reason for the visit, the
+appointment type beyond the prompt's existing fixed vocabulary, and any free text. Per pick
+(`patient_portal_booking_choices`): which time was picked, as a copy of those same fields so the
+confirmation survives the offered rows being deleted, when it was picked, and CARLOS's answer. The
+prompt keeps a keyed digest of the original offer, used only to recognise a retried create.
+
+When it is deleted:
+
+- Offered times: when the prompt is booked, withdrawn, or declined, in the same transaction; and
+  by `cleanup-transient-auth` at its first run after a time starts or its prompt expires, without
+  waiting for the transient retention window.
+- The copy of a picked time: when CARLOS reports that time taken, or the prompt is withdrawn, in
+  the same transaction; for a booked time, by `cleanup-transient-auth` one day after the
+  appointment's start. The pick row itself stays, without the time, so a repeated CARLOS result is
+  still answered idempotently, and goes with its prompt.
+- The prompt, with its picks: by `cleanup-transient-auth` once it is past its expiry by the
+  retention window and any booked time is more than a day past.
+
+The emails the portal sends about a prompt carry none of it: "a message is waiting" and "there is
+an update" with a sign-in link, and nothing about times, providers, visit types, or locations.
+Audit events record offers, picks, results, and declines with keyed ids and counts only.
+
+This amendment does not make the portal a scheduler: it cannot cancel or move a booking, and it
+shows no times CARLOS did not push. A later change that stores more appointment data than this,
+or keeps it longer, should amend this section rather than extend it silently.
 
 ## Open items owned by the author
 
