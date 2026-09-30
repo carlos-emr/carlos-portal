@@ -26,7 +26,7 @@ ARG OCI_VERSION
 
 LABEL org.opencontainers.image.created="${OCI_CREATED}" \
       org.opencontainers.image.description="CARLOS patient credential portal" \
-      org.opencontainers.image.licenses="GPL-2.0-or-later" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later" \
       org.opencontainers.image.revision="${OCI_REVISION}" \
       org.opencontainers.image.source="${OCI_SOURCE}" \
       org.opencontainers.image.title="CARLOS Patient Portal" \

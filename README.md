@@ -1010,3 +1010,17 @@ ruff check .
 
 The test command enforces the configured 85% minimum Python coverage and writes the report consumed
 by SonarCloud.
+
+## License
+
+The CARLOS Patient Portal is licensed under the GNU Affero General Public License, version 3 or (at
+your option) any later version (`AGPL-3.0-or-later`); see [`COPYING.md`](COPYING.md). Two files keep
+their own licenses: the CARLOS Birdman logo (`GPL-2.0-or-later`, from CARLOS EMR) and the EFF
+words in the passphrase wordlist (`CC BY 3.0 US`). [`NOTICE.md`](NOTICE.md) has the details.
+
+If you modify the portal and let patients or other users interact with it over a network, section 13
+of the AGPL requires your modified version to prominently offer those users its complete source code
+at no charge.
+
+CARLOS EMR is a separate program under its own license (`GPL-2.0-or-later`). The portal does not
+include or link CARLOS program code; the two communicate only over the portal's network API.

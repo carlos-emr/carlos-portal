@@ -1,6 +1,7 @@
 {
   "name": "carlos-patient-portal-browser-tests",
   "private": true,
+  "license": "AGPL-3.0-or-later",
   "engines": {
     "node": ">=18"
   },
