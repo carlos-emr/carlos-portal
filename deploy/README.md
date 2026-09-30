@@ -70,6 +70,11 @@ deployment loads the owner and admin files only into their one-shot jobs, and lo
 audit-deletion credential only for `prune-audit`; web, worker, and general operator commands never
 receive those elevated credentials.
 
+If you run a modified portal, also set `PATIENT_PORTAL_SOURCE_CODE_URL` in `production.env` to the
+location of your modified source. Every page footer links there as "Source code", which is how the
+portal meets section 13 of the AGPL; the default points at the upstream repository and is correct
+only for an unmodified portal.
+
 Use a capacity-appropriate value for `PORTAL_WEB_WORKERS`. Each worker can open
 `PATIENT_PORTAL_DATABASE_POOL_SIZE + PATIENT_PORTAL_DATABASE_MAX_OVERFLOW` connections and the
 default Argon2 concurrency reserves roughly 256 MiB at peak. Benchmark the target host before
