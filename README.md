@@ -795,7 +795,9 @@ collects the pick by polling.
   100) returns the clinic's picks waiting for CARLOS, oldest first, as `items` of `prompt_id`,
   `choice_id`, `demographic_no`, `slot_id`, and `chosen_at`, with `has_more`. A pick stays listed
   until CARLOS reports its result or staff withdraw its prompt, including after the prompt's
-  expiry. A poll that returns picks is audited as `staff.action` with reason
+  expiry. It is not listed while staff have the patient's account disabled, because disabling is
+  the emergency cut-off; it is listed again if the account is re-enabled. A poll that returns picks
+  is audited as `staff.action` with reason
   `pending_choices_listed` and the count; an empty poll writes nothing.
 - `POST /internal/carlos/booking-prompts/{id}/choice-result` with `{"choice_id": ...,
   "result": "booked" | "slot_unavailable", "offered_slots": [...]}` records the answer. Replacement

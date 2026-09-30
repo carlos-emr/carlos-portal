@@ -51,6 +51,7 @@ from carlos_patient_portal.invites import (
     normalize_staff_actor_id,
 )
 from carlos_patient_portal.models import (
+    ACCOUNT_STATUS_ACTIVE,
     AUDIT_ACTOR_TYPE_PATIENT,
     AUDIT_ACTOR_TYPE_STAFF,
     AUDIT_EVENT_BOOKING_PROMPT_CHOICE,
@@ -353,7 +354,9 @@ def list_pending_choices(
     """The clinic's picks waiting for CARLOS, oldest first, for the polling job.
 
     A pick stays listed until CARLOS reports its result or staff withdraw its prompt, including
-    after the prompt's expiry: the patient chose while it was live and is still waiting.
+    after the prompt's expiry: the patient chose while it was live and is still waiting. It is not
+    listed while staff have the account disabled: disabling is the emergency cut-off, and a pick
+    made just before it may not have been the patient's.
     """
     if not 1 <= limit <= MAX_PENDING_CHOICE_LIST:
         raise ValueError(f"limit must be between 1 and {MAX_PENDING_CHOICE_LIST}")
@@ -365,10 +368,15 @@ def list_pending_choices(
             PatientPortalBookingPrompt,
             PatientPortalBookingPrompt.id == PatientPortalBookingChoice.prompt_id,
         )
+        .join(
+            PatientPortalAccount,
+            PatientPortalAccount.id == PatientPortalBookingPrompt.account_id,
+        )
         .where(
             PatientPortalBookingChoice.clinic_id == normalized_clinic_id,
             PatientPortalBookingChoice.state == BOOKING_CHOICE_STATE_PENDING,
             PatientPortalBookingPrompt.clinic_id == normalized_clinic_id,
+            PatientPortalAccount.status == ACCOUNT_STATUS_ACTIVE,
         )
         .order_by(PatientPortalBookingChoice.chosen_at, PatientPortalBookingChoice.id)
         .limit(limit + 1)

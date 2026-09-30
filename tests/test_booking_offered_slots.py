@@ -961,6 +961,30 @@ def test_the_polling_list_has_only_pending_choices_for_its_clinic_oldest_first()
     assert other_clinic.status_code == 404
 
 
+def test_a_disabled_accounts_pick_is_not_listed_while_it_is_disabled() -> None:
+    app, patient, prompt_id = patient_with_offer()
+    assert pick(app, patient, prompt_id).status_code == 303
+
+    def set_access(enabled: bool):
+        # A fresh assertion each time: every one is single-use.
+        return TestClient(app).post(
+            "/internal/carlos/patients/1234/portal-account/access",
+            headers=staff_headers("portal.account.manage"),
+            json={"enabled": enabled, "reason": "staff_action"},
+        )
+
+    disabled = set_access(False)
+    while_disabled = pending_choices(app)
+    enabled = set_access(True)
+    after = pending_choices(app)
+
+    # Disabling is the emergency cut-off: CARLOS is not asked to book for the account meanwhile.
+    assert disabled.status_code == 200
+    assert while_disabled.json()["items"] == []
+    assert enabled.status_code == 200
+    assert [item["prompt_id"] for item in after.json()["items"]] == [prompt_id]
+
+
 def test_the_polling_list_needs_the_pending_state_and_audits_only_what_it_discloses() -> None:
     app, patient, prompt_id = patient_with_offer()
 
