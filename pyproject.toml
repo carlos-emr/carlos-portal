@@ -1,11 +1,14 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
+# 77 is the first setuptools that reads an SPDX license expression (PEP 639).
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "carlos-patient-portal"
 version = "0.1.0"
 description = "Patient credential portal foundation for CARLOS EMR"
+license = "AGPL-3.0-or-later"
+license-files = ["COPYING.md", "NOTICE.md"]
 requires-python = ">=3.11"
 dependencies = [
   "alembic>=1.14,<2",
