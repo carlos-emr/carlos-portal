@@ -16,6 +16,7 @@
  *   PORTAL_BROWSER_FIXTURE_FILE=/tmp/patient-portal-browser-fixtures.json
  *   PORTAL_SCREENSHOT_DIR=/tmp
  *   PORTAL_CHROME_PATH=/path/to/chrome-or-chromium
+ *   PORTAL_PYTHON=python, run with the portal's environment to stand in for the CARLOS polling job
  *   PORTAL_ALLOW_NON_LOCAL_BASE_URL=true only for an intentional non-production test target
  */
 
@@ -41,6 +42,8 @@ const mailCommand = process.env.PORTAL_MAIL_COMMAND || '/scripts/mail';
 const useDevelopmentMfaCode = process.env.PORTAL_USE_DEVELOPMENT_MFA_CODE === 'true';
 const screenshotDir = path.resolve(process.env.PORTAL_SCREENSHOT_DIR || os.tmpdir());
 const chromePath = process.env.PORTAL_CHROME_PATH || process.env.CHROME_PATH || '';
+const pythonCommand = process.env.PORTAL_PYTHON || 'python';
+const browserSeedScript = path.join(__dirname, '..', 'tests', 'seed_browser.py');
 const fixturePath = process.env.PORTAL_BROWSER_FIXTURE_FILE
   || path.join(os.tmpdir(), 'patient-portal-browser-fixtures.json');
 const browserFixtures = JSON.parse(readFileSync(fixturePath, 'utf8'));
@@ -158,6 +161,17 @@ async function assertAccessiblePage(page, surface) {
   assert(problems.imagesWithoutAlt === 0, `${surface} has an image without alt text`);
   assert(problems.unnamedControls.length === 0,
     `${surface} has unnamed controls: ${problems.unnamedControls.join(', ')}`);
+}
+
+// Stands in for the CARLOS polling job: reports a result for the patient's pending pick on the
+// seeded offer. The browser run has no CARLOS and no internal API token, so the seed script calls
+// the same service function the internal choice-result endpoint uses.
+function reportBookingResult(result) {
+  execFileSync(pythonCommand, [browserSeedScript, 'choice-result', result], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 30000,
+  });
 }
 
 function runMailCommand(...args) {
@@ -942,8 +956,78 @@ function screenshotPath(name) {
     await page.getByRole('link', { name: 'Back to messages', exact: true }).click();
     await page.waitForURL((url) => url.pathname === portalPathname('/portal/messages'));
     assert(
-      await page.locator('.message-badge').count() === 0,
+      await seededPrompt.locator('.message-badge').count() === 0,
       'an opened booking prompt should no longer be marked new'
+    );
+
+    // Offered times: pick one, the clinic reports it taken, pick another, the clinic books it.
+    const offerPrompt = page.locator('.message-row').filter({ hasText: 'Book your annual exam' });
+    await offerPrompt.click();
+    await page.waitForURL((url) => url.pathname.startsWith(portalPathname('/portal/messages/')));
+    const offerPath = new URL(page.url()).pathname;
+    await page.getByRole('heading', { name: 'Book your annual exam' }).waitFor();
+    await assertAccessiblePage(page, 'booking prompt with offered times');
+    const offeredTimes = page.getByRole('group', { name: 'Available times' }).getByRole('radio');
+    assert(await offeredTimes.count() === 3, 'the seeded offer should list three times');
+    assert(
+      await page.getByRole('button', { name: 'None of these work', exact: true }).count() === 1,
+      'an offer must let the patient say none of the times work'
+    );
+    const takenTime = (await page.locator('.booking-slot-when').first().innerText()).trim();
+    await offeredTimes.first().check();
+    await page.screenshot({
+      path: screenshotPath('patient-portal-offered-times-mobile'),
+      fullPage: true,
+    });
+    await Promise.all([
+      page.waitForURL((url) => url.pathname === offerPath),
+      page.getByRole('button', { name: 'Choose this time', exact: true }).click(),
+    ]);
+    await page.getByText('We are confirming your time with the clinic.', { exact: true }).waitFor();
+    assert(
+      await page.locator('input[name="slot"]').count() === 0,
+      'a patient waiting on the clinic must not be offered another pick'
+    );
+
+    reportBookingResult('slot_unavailable');
+    await page.reload();
+    await page.getByText('That time was just taken. Please pick another.', { exact: true })
+      .waitFor();
+    await assertAccessiblePage(page, 'booking prompt after a taken time');
+    const remainingTimes = page.getByRole('group', { name: 'Available times' }).getByRole('radio');
+    assert(
+      await remainingTimes.count() === 3,
+      'the two remaining times and one replacement should be offered'
+    );
+    assert(
+      !(await page.locator('.booking-slot-when').allInnerTexts())
+        .map((text) => text.trim())
+        .includes(takenTime),
+      'the taken time must no longer be offered'
+    );
+    await remainingTimes.last().check();
+    await Promise.all([
+      page.waitForURL((url) => url.pathname === offerPath),
+      page.getByRole('button', { name: 'Choose this time', exact: true }).click(),
+    ]);
+    await page.getByText('We are confirming your time with the clinic.', { exact: true }).waitFor();
+
+    reportBookingResult('booked');
+    await page.reload();
+    await page.getByText(/^Booked for .+ at \d{2}:\d{2}\.$/).waitFor();
+    assert(
+      await page.locator('.message-detail form, input[name="slot"]').count() === 0,
+      'a booked prompt must offer nothing more to pick'
+    );
+    await page.screenshot({
+      path: screenshotPath('patient-portal-booked-mobile'),
+      fullPage: true,
+    });
+    await page.getByRole('link', { name: 'Back to messages', exact: true }).click();
+    await page.waitForURL((url) => url.pathname === portalPathname('/portal/messages'));
+    assert(
+      await page.locator('.message-badge').count() === 0,
+      'opened booking prompts should no longer be marked new'
     );
     await page.getByRole('link', { name: 'Help', exact: true }).click();
     await page.waitForURL((url) => url.pathname === portalPathname('/portal/help'));
