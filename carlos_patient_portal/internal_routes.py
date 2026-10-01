@@ -87,6 +87,7 @@ from carlos_patient_portal.invites import (
     revoke_invite,
 )
 from carlos_patient_portal.models import (
+    ACCOUNT_STATUS_ACTIVE,
     AUDIT_ACTOR_TYPE_STAFF,
     AUDIT_EVENT_INVITE_LIST,
     AUDIT_EVENT_STAFF_ACTION,
@@ -467,6 +468,14 @@ class InternalBookingPromptRequest(BaseModel):
         default=None,
         max_length=MAX_OFFERED_SLOTS,
     )
+
+
+class InternalBookingEligibilityResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    clinic_id: str
+    demographic_no: int
+    eligible: bool
 
 
 class InternalBookingPromptResponse(BaseModel):
@@ -1464,7 +1473,47 @@ def register_internal_booking_prompt_routes(
     runtime: InternalRuntime,
     deps: InternalRouteDependencies,
 ) -> None:
-    """Booking prompts: create, list, and withdraw (carlos-portal#8)."""
+    """Booking prompts: eligibility, create, list, and withdraw (carlos-portal#8)."""
+
+    @app.get(
+        "/internal/carlos/patients/{demographic_no}/booking-eligibility",
+        response_model=InternalBookingEligibilityResponse,
+        responses=COMMON_INTERNAL_RESPONSES,
+    )
+    def internal_get_booking_eligibility(
+        demographic_no: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
+        principal: Annotated[
+            StaffPrincipal,
+            Depends(deps.staff_principal_requiring(PERMISSION_BOOKING_PROMPT_MANAGE)),
+        ],
+        session: Annotated[Session, deps.session_dependency],
+    ) -> dict[str, object]:
+        # Match create's active-account condition without retrieving account details/free text.
+        account_id = session.scalar(
+            select(PatientPortalAccount.id).where(
+                PatientPortalAccount.clinic_id == principal.clinic_id,
+                PatientPortalAccount.demographic_no == demographic_no,
+                PatientPortalAccount.status == ACCOUNT_STATUS_ACTIVE,
+            )
+        )
+        record_audit_event(
+            session,
+            event_type=AUDIT_EVENT_STAFF_ACTION,
+            outcome=AUDIT_OUTCOME_SUCCESS,
+            actor_type=AUDIT_ACTOR_TYPE_STAFF,
+            actor=principal.display_name,
+            actor_id=principal.provider_id,
+            clinic_id=principal.clinic_id,
+            demographic_no=demographic_no,
+            account_id=account_id,
+            resource_type="portal_account",
+            reason="booking_eligibility_viewed",
+        )
+        return {
+            "clinic_id": principal.clinic_id,
+            "demographic_no": demographic_no,
+            "eligible": account_id is not None,
+        }
 
     @app.post(
         "/internal/carlos/patients/{demographic_no}/booking-prompts",

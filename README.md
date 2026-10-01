@@ -665,7 +665,7 @@ Permissions are deliberately narrow:
 - `portal.account.manage`: read portal status and disable/re-enable patient access.
 - `portal.secret.manage`: idempotently create, publish, and revoke generated email passphrases.
 - `portal.contact.review`: list and approve/reject pending patient contact changes.
-- `portal.booking_prompt.manage`: create, list, and withdraw booking prompts.
+- `portal.booking_prompt.manage`: check booking eligibility, create, list, and withdraw booking prompts.
 - `portal.booking_prompt.sync`: list patients' pending picks of offered times and report whether
   CARLOS booked them. Held only by the CARLOS polling job's dedicated, non-login system provider;
   only the two sync endpoints accept it, and they accept nothing else. That provider is refused by
@@ -749,6 +749,11 @@ appointment. Please book as soon as possible." The portal books nothing itself: 
 the patient how to contact the clinic, using `PATIENT_PORTAL_CLINIC_BOOKING_PHONE` when it is set,
 or offers times CARLOS sent with it for the patient to pick (see *Offered times* below).
 
+- `GET /internal/carlos/patients/{demographic_no}/booking-eligibility` returns only the signed
+  clinic/patient scope and `eligible`, which is true for an active portal account. Missing and
+  inactive accounts both return false. This uses `portal.booking_prompt.manage`; it does not
+  grant account-status access or expose account identifiers, lock/reset flags, dates, or reasons.
+  Eligibility is a read-time check; create independently rechecks the active account.
 - `POST /internal/carlos/patients/{demographic_no}/booking-prompts` creates one from a stable
   `operation_id`, an `urgency` (`routine`, `soon`, `as_soon_as_possible`), an `appointment_type`
   (`follow_up`, `annual_exam`, `lab_review`), and an optional `suggested_by` provider name. A retry
