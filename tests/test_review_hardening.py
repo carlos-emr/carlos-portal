@@ -83,7 +83,7 @@ def test_production_rejects_unsupported_database_and_placeholder_clinic() -> Non
     with pytest.raises(ValidationError, match="PATIENT_PORTAL_CLINIC_ID"):
         Settings(**production_settings_values(clinic_id="default"))
     with pytest.raises(ValidationError, match="PATIENT_PORTAL_CLINIC_NAME"):
-        Settings(**production_settings_values(clinic_name="Maple Creek Medical"))
+        Settings(**production_settings_values(clinic_name="Your clinic"))
 
 
 def test_non_development_rejects_cross_purpose_secret_reuse() -> None:

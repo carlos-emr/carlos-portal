@@ -96,7 +96,11 @@ MIN_AUDIT_RETENTION_DAYS = 30
 # hostname (or the canonical public host) rather than an address literal; see README.
 DEFAULT_PROBE_ALLOWED_HOSTS = ("127.0.0.1", "localhost")
 DEFAULT_CLINIC_ID = "default"
-DEFAULT_CLINIC_NAME = "Maple Creek Medical"
+DEFAULT_CLINIC_NAME = "Your clinic"
+# The upstream repository. Correct only for an unmodified portal: AGPL-3.0 section 13 requires a
+# modified portal to offer its users the modified source, so such a deployment must point
+# PATIENT_PORTAL_SOURCE_CODE_URL at that source instead.
+DEFAULT_SOURCE_CODE_URL = "https://github.com/carlos-emr/carlos-portal"
 ENVIRONMENT_ALIASES = {
     "dev": "development",
     "prod": "production",
@@ -270,6 +274,9 @@ class Settings(BaseSettings):
         le=24 * 60,
     )
     public_base_url: str | None = Field(default=None, max_length=2048)
+    # Linked from every page footer as the "Source code" offer AGPL-3.0 section 13 requires. Never
+    # optional: the offer must be present on every page, so a blank value fails startup.
+    source_code_url: str = Field(default=DEFAULT_SOURCE_CODE_URL, max_length=2048)
     # Container/Kubernetes/load-balancer probes reach the service by pod IP or service name, not by
     # the canonical public host. Without these aliases a correctly configured instance answers
     # 400 "Invalid host header" to its own liveness/readiness probes and is marked dead.
@@ -601,7 +608,13 @@ class Settings(BaseSettings):
             parse_booking_locations(value)
         return value
 
-    @field_validator("service_name", "clinic_name", "smtp_host", "sms_sender_id")
+    @field_validator(
+        "service_name",
+        "clinic_name",
+        "smtp_host",
+        "sms_sender_id",
+        "source_code_url",
+    )
     @classmethod
     def reject_header_control_characters(cls, value: str | None) -> str | None:
         if value is not None and any(
@@ -720,6 +733,36 @@ class Settings(BaseSettings):
                 "credentials, query, or fragment"
             )
         return value
+
+    @field_validator("source_code_url")
+    @classmethod
+    def validate_source_code_url(cls, value: str) -> str:
+        """Hold the footer's source link to the same shape as the other configured URLs.
+
+        The scheme allowlist is what keeps a `javascript:` or `data:` value out of an `href` that
+        every patient sees; autoescaping alone would not stop either. Blank is refused rather than
+        read as "no link", because the AGPL offer has to be on every page.
+        """
+        normalized_url = value.strip()
+        parsed_url = urlsplit(normalized_url)
+        try:
+            _ = parsed_url.port
+        except ValueError as exc:
+            raise ValueError("PATIENT_PORTAL_SOURCE_CODE_URL must contain a valid port") from exc
+        if (
+            parsed_url.scheme not in {"http", "https"}
+            or not parsed_url.netloc
+            or parsed_url.hostname is None
+            or parsed_url.username is not None
+            or parsed_url.password is not None
+            or parsed_url.query
+            or parsed_url.fragment
+        ):
+            raise ValueError(
+                "PATIENT_PORTAL_SOURCE_CODE_URL must be an HTTP(S) URL without "
+                "credentials, query, or fragment"
+            )
+        return normalized_url
 
     @field_validator("clinic_id")
     @classmethod
@@ -1006,6 +1049,12 @@ class Settings(BaseSettings):
         if not self.is_development and self.sms_webhook_url is None:
             raise ValueError("PATIENT_PORTAL_SMS_WEBHOOK_URL must be set outside development")
 
+    def validate_source_code_policy(self) -> None:
+        # The parsed scheme rather than a prefix test: urlsplit lowercases it, so a value written
+        # as HTTPS:// is not refused for want of HTTPS.
+        if not self.is_development and urlsplit(self.source_code_url).scheme != "https":
+            raise ValueError("PATIENT_PORTAL_SOURCE_CODE_URL must use HTTPS outside development")
+
     def validate_proxy_policy(self) -> None:
         if (self.trusted_client_ip_header is None) != (self.trusted_proxy_cidrs is None):
             raise ValueError(
@@ -1179,6 +1228,7 @@ class Settings(BaseSettings):
         self.validate_admin_and_mfa_policy()
         self.validate_smtp_policy()
         self.validate_sms_policy()
+        self.validate_source_code_policy()
         self.validate_proxy_policy()
         self.validate_database_transport_policy()
         self.validate_clinic_policy()

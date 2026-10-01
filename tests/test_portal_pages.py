@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from jinja2 import meta
 from sqlalchemy import select
 
 from carlos_patient_portal import main, presenters, web_support
@@ -109,7 +110,7 @@ def test_index_renders_sign_in_shell() -> None:
     assert f'value="{text["username_placeholder"]}"' not in response.text
     assert 'name="csrf_token"' in response.text
     assert "nosemgrep" not in response.text
-    assert "Maple Creek Medical" in response.text
+    assert "Your clinic" in response.text
 
 
 def test_language_switch_links_to_every_supported_locale() -> None:
@@ -255,6 +256,111 @@ def test_sign_in_shell_uses_security_headers() -> None:
 
 def test_jinja_templates_always_autoescape_jinja_files() -> None:
     assert web_support.templates.env.autoescape is True
+
+
+FOOTER_PATTERN = re.compile(r"</main>\s*<footer class=\"page-footer\">(.*?)</footer>", re.DOTALL)
+SOURCE_CODE_LINK_PATTERN = re.compile(r'<a class="link-action" href="([^"]*)">Source code</a>')
+
+
+def rendered_source_code_url(page_html: str) -> str:
+    """The href of the footer's "Source code" link, which must sit outside <main>.
+
+    Outside <main> is what makes the <footer> the page's contentinfo landmark, so the match is
+    anchored on the closing </main> rather than on the footer alone.
+    """
+    footer_match = FOOTER_PATTERN.search(page_html)
+    assert footer_match is not None, "page has no footer after </main>"
+    link_match = SOURCE_CODE_LINK_PATTERN.search(footer_match.group(1))
+    assert link_match is not None, "footer has no Source code link"
+    return link_match.group(1)
+
+
+def test_every_page_template_includes_the_source_code_footer() -> None:
+    """AGPL-3.0 section 13 requires the source offer on every page, including future ones."""
+    environment = web_support.templates.env
+    page_templates = sorted(
+        path.name
+        for path in (web_support.PACKAGE_DIR / "templates").glob("*.jinja")
+        if not path.name.startswith("_")
+    )
+
+    assert "dashboard.jinja" in page_templates
+    for template_name in page_templates:
+        source, _, _ = environment.loader.get_source(environment, template_name)
+        included = set(meta.find_referenced_templates(environment.parse(source)))
+        assert "_page_footer.jinja" in included, f"{template_name} has no source code footer"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/",
+        "/auth/activate",
+        "/auth/password-reset",
+        "/auth/password-reset/complete",
+        "/auth/email-change/confirm",
+    ],
+)
+def test_public_pages_link_the_upstream_source_by_default(path: str) -> None:
+    response = TestClient(main.create_app(development_settings())).get(path)
+
+    assert response.status_code == 200
+    assert rendered_source_code_url(response.text) == "https://github.com/carlos-emr/carlos-portal"
+
+
+def test_service_notice_page_links_the_source_code() -> None:
+    app = main.create_app(development_settings(maintenance_mode=True))
+    response = TestClient(app).get("/")
+
+    assert response.status_code == 503
+    assert "Portal unavailable" in response.text
+    assert rendered_source_code_url(response.text) == "https://github.com/carlos-emr/carlos-portal"
+
+
+def test_signed_in_dashboard_links_the_source_code() -> None:
+    app = migrated_development_app()
+    client = TestClient(app)
+    browser_sign_in_seeded_patient(app, client)
+
+    for path in ("/portal", "/portal/account", "/portal/help"):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert (
+            rendered_source_code_url(response.text)
+            == "https://github.com/carlos-emr/carlos-portal"
+        )
+
+
+def test_configured_source_code_url_replaces_the_upstream_link() -> None:
+    """A modified deployment's own source location is what its patients are offered."""
+    app = migrated_development_app(source_code_url="https://git.example.test/clinic/portal-fork")
+    client = TestClient(app)
+
+    index_response = client.get("/")
+    browser_sign_in_seeded_patient(app, client)
+    dashboard_response = client.get("/portal")
+
+    for response in (index_response, dashboard_response):
+        assert (
+            rendered_source_code_url(response.text)
+            == "https://git.example.test/clinic/portal-fork"
+        )
+        assert "github.com/carlos-emr/carlos-portal" not in response.text
+
+
+def test_source_code_url_is_autoescaped_in_the_footer() -> None:
+    """Operator configuration still goes through autoescape; it cannot break out of the href."""
+    app = main.create_app(
+        development_settings(
+            source_code_url='https://git.example.test/fork"><script>alert(1)</script>'
+        )
+    )
+    response = TestClient(app).get("/")
+
+    assert "<script>alert(1)</script>" not in response.text
+    assert rendered_source_code_url(response.text) == (
+        "https://git.example.test/fork&#34;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"
+    )
 
 
 def test_account_contact_update_creates_staff_review_request() -> None:
@@ -1231,6 +1337,7 @@ def test_presenters_perform_no_writes() -> None:
         ("activate.jinja", "public_auth_template_context"),
         ("password_reset_request.jinja", "public_auth_template_context"),
         ("password_reset_complete.jinja", "public_auth_template_context"),
+        ("email_change_complete.jinja", "public_auth_template_context"),
         ("auth_result.jinja", "public_auth_template_context"),
         ("locked.jinja", "public_auth_template_context"),
         ("mfa.jinja", "mfa_template_context"),

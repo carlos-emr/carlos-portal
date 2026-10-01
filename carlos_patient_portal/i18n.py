@@ -361,6 +361,7 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
         "sign_in_button": SIGN_IN_LABEL,
         "sign_in_heading": SIGN_IN_LABEL,
         "show_password": "Show password",
+        "source_code": "Source code",
         "subject": "Subject",
         "unavailable": "Unavailable",
         "update_contact": "Update contact",

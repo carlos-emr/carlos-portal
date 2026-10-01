@@ -16,6 +16,8 @@
 }
 
 body {
+  display: flex;
+  flex-direction: column;
   margin: 0;
   min-height: 100vh;
   color: #111827;
@@ -34,16 +36,28 @@ a {
   color: inherit;
 }
 
+/* Body is a column of the shell and the page footer. The shell and screen grow to fill what the
+   footer leaves, so a short page still fills the viewport with the footer in view at the bottom,
+   rather than the shell claiming the full height and pushing the footer below the fold. */
 .app-shell {
-  min-height: 100vh;
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
   padding: 14px;
   background: var(--page);
 }
 
 .portal-screen {
-  min-height: calc(100vh - 28px);
+  flex: 1 0 auto;
   background: var(--surface);
   border: 1px solid #b8c0d0;
+}
+
+/* Outside <main>, so it is the page's contentinfo landmark. */
+.page-footer {
+  display: flex;
+  justify-content: center;
+  padding: 0 14px 8px;
 }
 
 .patient-topbar {
@@ -955,7 +969,6 @@ a.module-tile:focus-visible {
   }
 
   .portal-screen {
-    min-height: 100vh;
     border: 0;
   }
 

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from carlos_patient_portal import models
-from carlos_patient_portal.config import OutboxSettings, Settings
+from carlos_patient_portal.config import DEFAULT_SOURCE_CODE_URL, OutboxSettings, Settings
 
 PACKAGE_ROOT = Path(__file__).parents[1] / "carlos_patient_portal"
 REPOSITORY_ROOT = PACKAGE_ROOT.parent
@@ -323,6 +323,10 @@ def test_production_environment_example_can_satisfy_runtime_policy(tmp_path: Pat
     assert settings.environment == "production"
     assert settings.resolved_outbox_keyring.keys() == {"initial"}
     assert settings.resolved_unlock_secret_keyring.keys() == {"initial"}
+    # Listed, not left to the default, so an operator who modifies the portal sees the setting
+    # AGPL-3.0 section 13 obliges them to change.
+    assert values["PATIENT_PORTAL_SOURCE_CODE_URL"] == DEFAULT_SOURCE_CODE_URL
+    assert settings.source_code_url == DEFAULT_SOURCE_CODE_URL
 
 
 def test_outbox_environment_example_excludes_web_only_secrets(tmp_path: Path) -> None:
