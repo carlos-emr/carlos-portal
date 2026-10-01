@@ -72,8 +72,46 @@ class EmailPasswordDashboardViewModel:
 
 
 @dataclass(frozen=True, slots=True)
+class BookingSlotViewModel:
+    """One offered time as a radio option; `id` is the portal's row id, never CARLOS's slot id."""
+
+    id: int
+    when: str
+    details: str
+
+
+# What the booking part of an opened prompt shows.
+BOOKING_VIEW_CONTACT = "contact"  # No times were offered: contact the clinic, as before.
+BOOKING_VIEW_CLOSED = "closed"  # Times were offered but none can be picked now: contact the clinic.
+BOOKING_VIEW_CHOOSE = "choose"  # Pick one of the offered times, or say none of them work.
+BOOKING_VIEW_PENDING = "pending"  # Waiting for CARLOS to confirm the picked time.
+BOOKING_VIEW_BOOKED = "booked"  # CARLOS booked the picked time.
+
+
+@dataclass(frozen=True, slots=True)
+class BookingOfferViewModel:
+    """The booking part of an opened prompt.
+
+    ``notice`` is the one status sentence for the state (confirming, booked, taken); ``chosen``
+    describes the picked or booked time.
+    """
+
+    state: str
+    notice: str | None = None
+    chosen: str | None = None
+    slots: tuple[BookingSlotViewModel, ...] = ()
+    choice_href: str = ""
+    decline_href: str = ""
+    wait_remaining_ms: int | None = None
+    overdue_notice: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class BookingPromptViewModel:
-    """One booking prompt as the patient reads it: fixed wording, no clinical detail."""
+    """One booking prompt as the patient reads it: fixed wording, no clinical detail.
+
+    ``booking`` is built only for the opened prompt, not for each row of the list.
+    """
 
     id: int
     href: str
@@ -83,6 +121,7 @@ class BookingPromptViewModel:
     contact: str
     sent_at: str
     is_new: bool
+    booking: BookingOfferViewModel | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,10 +129,12 @@ class MessagesViewModel:
     """View state for the messages module of `dashboard.jinja`.
 
     ``selected`` is the prompt being read, or None on the list. ``not_found`` reports a link to a
-    prompt that was withdrawn, expired, or is not the patient's.
+    prompt that was withdrawn, expired, or is not the patient's. ``error`` reports a pick or
+    decline that could not be saved.
     """
 
     prompts: tuple[BookingPromptViewModel, ...] = ()
     selected: BookingPromptViewModel | None = None
     not_found: bool = False
     no_online_booking: str = ""
+    error: str | None = None

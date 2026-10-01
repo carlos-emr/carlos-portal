@@ -126,6 +126,49 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
         "booking_prompt_urgency_as_soon_as_possible": "Please book as soon as possible.",
         "booking_prompt_urgency_routine": "Please book at a time that suits you.",
         "booking_prompt_urgency_soon": "Please book within the next few weeks.",
+        "booking_booked": "Booked for {date} at {time}.",
+        "booking_choice_error": (
+            "That time could not be chosen. Review the message below and try again."
+        ),
+        "booking_choice_pending": "We are confirming your time with the clinic.",
+        "booking_choice_pending_overdue": (
+            "The clinic will confirm your time. If it is urgent, call the clinic."
+        ),
+        "booking_choose": "Choose this time",
+        "booking_decline": "None of these work",
+        "booking_month_1": "January",
+        "booking_month_2": "February",
+        "booking_month_3": "March",
+        "booking_month_4": "April",
+        "booking_month_5": "May",
+        "booking_month_6": "June",
+        "booking_month_7": "July",
+        "booking_month_8": "August",
+        "booking_month_9": "September",
+        "booking_month_10": "October",
+        "booking_month_11": "November",
+        "booking_month_12": "December",
+        "booking_offer_intro": (
+            "The clinic has offered these times. Pick one and the clinic will confirm it."
+        ),
+        "booking_slot_date": "{weekday} {day} {month}",
+        "booking_slot_detail_separator": " · ",
+        "booking_slot_duration": "{minutes} minutes",
+        "booking_slot_taken": "That time was just taken. Please pick another.",
+        "booking_slot_taken_contact": "That time was just taken. Please contact the clinic.",
+        "booking_slot_time": "{hour:02d}:{minute:02d}",
+        "booking_slot_when": "{date} at {time}",
+        "booking_slots_legend": "Available times",
+        "booking_visit_mode_in_person": "In person",
+        "booking_visit_mode_phone": "By phone",
+        "booking_visit_mode_video": "By video",
+        "booking_weekday_0": "Monday",
+        "booking_weekday_1": "Tuesday",
+        "booking_weekday_2": "Wednesday",
+        "booking_weekday_3": "Thursday",
+        "booking_weekday_4": "Friday",
+        "booking_weekday_5": "Saturday",
+        "booking_weekday_6": "Sunday",
         "email_change_confirm": "Confirm email address",
         "email_change_complete_error": (
             "This confirmation link is no longer valid. Request the change again from your "
@@ -436,6 +479,31 @@ def supported_locale_options(current_locale: str = DEFAULT_LOCALE) -> tuple[dict
         }
         for locale in SUPPORTED_LOCALES
     )
+
+
+def format_booking_time(
+    value: datetime,
+    locale: str = DEFAULT_LOCALE,
+    timezone_name: str = "UTC",
+) -> tuple[str, str]:
+    """An appointment time as the patient reads it: ("Tuesday 14 October", "10:30").
+
+    Weekday and month names come from the catalog, not the process locale, so they follow the
+    patient's language; the time is shown in the clinic's time zone.
+    """
+    text = portal_text(locale)
+    utc_value = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    local_value = utc_value.astimezone(ZoneInfo(timezone_name))
+    date_text = text["booking_slot_date"].format(
+        weekday=text[f"booking_weekday_{local_value.weekday()}"],
+        day=local_value.day,
+        month=text[f"booking_month_{local_value.month}"],
+    )
+    time_text = text["booking_slot_time"].format(
+        hour=local_value.hour,
+        minute=local_value.minute,
+    )
+    return date_text, time_text
 
 
 def format_portal_datetime(

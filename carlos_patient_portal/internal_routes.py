@@ -19,7 +19,15 @@ from datetime import datetime, timedelta
 from typing import Annotated, Literal, Protocol
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Request, status
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from pydantic import (
+    AfterValidator,
+    AwareDatetime,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    model_validator,
+)
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
@@ -40,6 +48,14 @@ from carlos_patient_portal.auth import (
     set_patient_account_access,
     unlock_patient_account,
 )
+from carlos_patient_portal.booking_choices import (
+    MAX_PENDING_CHOICE_LIST,
+    BookingChoiceNotPendingError,
+    BookingChoiceResultConflictError,
+    list_pending_choices,
+    record_choice_result,
+)
+from carlos_patient_portal.booking_offers import OfferedSlotSpec
 from carlos_patient_portal.booking_prompts import (
     BookingPromptAccountUnavailableError,
     BookingPromptNotFoundError,
@@ -76,10 +92,15 @@ from carlos_patient_portal.models import (
     AUDIT_EVENT_STAFF_ACTION,
     AUDIT_OUTCOME_FAILURE,
     AUDIT_OUTCOME_SUCCESS,
+    MAX_BOOKING_LOCATION_CODE_LENGTH,
     MAX_BOOKING_PROMPT_ACTOR_LENGTH,
     MAX_BOOKING_PROMPT_OPERATION_ID_LENGTH,
+    MAX_BOOKING_SLOT_DURATION_MINUTES,
+    MAX_BOOKING_SLOT_ID_LENGTH,
     MAX_INVITE_DELIVERY_OPERATION_ID_LENGTH,
     MAX_INVITE_DELIVERY_REFERENCE_LENGTH,
+    MAX_OFFERED_SLOTS,
+    MIN_BOOKING_SLOT_DURATION_MINUTES,
     UNLOCK_SECRET_STATUS_PENDING,
     UNLOCK_SECRET_STATUS_REVOKED,
     PatientPortalAccount,
@@ -117,12 +138,18 @@ PERMISSION_ACCOUNT_MANAGE = "portal.account.manage"
 PERMISSION_SECRET_MANAGE = "portal.secret.manage"
 PERMISSION_CONTACT_REVIEW = "portal.contact.review"
 PERMISSION_BOOKING_PROMPT_MANAGE = "portal.booking_prompt.manage"
+# Held by the CARLOS polling job's dedicated, non-login system provider and nothing else. It lists
+# patients' pending picks and reports results; it cannot create prompts, read accounts, or manage
+# invites, and no other endpoint accepts it.
+PERMISSION_BOOKING_PROMPT_SYNC = "portal.booking_prompt.sync"
 # Part of the CARLOS/Java boundary: one deliberately generic 404 shared by every account lookup so
 # the contract cannot drift branch by branch.
 INTERNAL_ACCOUNT_NOT_FOUND_DETAIL = "portal account not found"
 UNLOCK_SECRET_NOT_FOUND_DETAIL = "unlock secret not found"
 BOOKING_PROMPT_NOT_FOUND_DETAIL = "booking prompt not found"
 BOOKING_PROMPT_OPERATION_CONFLICT_DETAIL = "operation id was used for a different booking prompt"
+BOOKING_CHOICE_NOT_PENDING_DETAIL = "booking choice is not pending"
+BOOKING_CHOICE_RESULT_CONFLICT_DETAIL = "booking choice already has a different result"
 
 
 class InternalErrorResponse(BaseModel):
@@ -353,6 +380,74 @@ class InternalContactReviewDecisionResponse(BaseModel):
     decision: str | None
 
 
+BookingPromptState = Literal[
+    "sent", "read", "choice_pending", "booked", "declined_all", "withdrawn", "expired"
+]
+
+
+def parse_iso_datetime_text(value: object) -> datetime:
+    """Accept only ISO 8601 text with an explicit UTC offset.
+
+    Pydantic alone would also take a number, or a numeric string, as a Unix timestamp; an offered
+    appointment time must say which offset it was written in.
+    """
+    if not isinstance(value, str):
+        raise ValueError("must be an ISO 8601 date and time with a UTC offset")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("must be an ISO 8601 date and time with a UTC offset") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("must include a UTC offset")
+    return parsed
+
+
+IsoDateTimeWithOffset = Annotated[AwareDatetime, BeforeValidator(parse_iso_datetime_text)]
+
+
+class InternalOfferedSlot(BaseModel):
+    """One time CARLOS offers the patient. Only what the patient must see; no free text.
+
+    `slot_id` is CARLOS's own identifier, returned when the patient picks this time and never
+    interpreted by the portal. `starts_at` must carry an explicit UTC offset.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    slot_id: str = Field(
+        min_length=1,
+        max_length=MAX_BOOKING_SLOT_ID_LENGTH,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+    starts_at: IsoDateTimeWithOffset
+    duration_minutes: int = Field(
+        strict=True,
+        ge=MIN_BOOKING_SLOT_DURATION_MINUTES,
+        le=MAX_BOOKING_SLOT_DURATION_MINUTES,
+    )
+    visit_mode: Literal["in_person", "phone", "video"]
+    # One of the codes in PATIENT_PORTAL_BOOKING_LOCATIONS; the patient sees its label.
+    location_code: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=MAX_BOOKING_LOCATION_CODE_LENGTH,
+        pattern=r"^[a-z0-9_-]+$",
+    )
+
+    def to_spec(self) -> OfferedSlotSpec:
+        return OfferedSlotSpec(
+            slot_id=self.slot_id,
+            starts_at=self.starts_at,
+            duration_minutes=self.duration_minutes,
+            visit_mode=self.visit_mode,
+            location_code=self.location_code,
+        )
+
+
+def offered_slot_specs(slots: list[InternalOfferedSlot] | None) -> tuple[OfferedSlotSpec, ...]:
+    return tuple(slot.to_spec() for slot in slots or ())
+
+
 class InternalBookingPromptRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -366,6 +461,12 @@ class InternalBookingPromptRequest(BaseModel):
     # The provider the patient is told suggested it, for example "Dr. Singh". Checked like a staff
     # actor name; it is the only variable text in a prompt.
     suggested_by: str | None = Field(default=None, max_length=MAX_BOOKING_PROMPT_ACTOR_LENGTH)
+    # Times the patient can pick from (carlos-portal#11). Omitted or empty, the prompt tells the
+    # patient to contact the clinic, as before.
+    offered_slots: list[InternalOfferedSlot] | None = Field(
+        default=None,
+        max_length=MAX_OFFERED_SLOTS,
+    )
 
 
 class InternalBookingPromptResponse(BaseModel):
@@ -376,7 +477,7 @@ class InternalBookingPromptResponse(BaseModel):
     urgency: str
     appointment_type: str
     suggested_by: str | None
-    state: Literal["sent", "read", "withdrawn", "expired"]
+    state: BookingPromptState
     created_by: str
     created_at: datetime
     expires_at: datetime
@@ -388,6 +489,53 @@ class InternalBookingPromptResponse(BaseModel):
 
 class InternalBookingPromptCreateResponse(InternalBookingPromptResponse):
     created: bool
+
+
+class InternalBookingChoiceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt_id: int
+    choice_id: int
+    demographic_no: int
+    slot_id: str
+    chosen_at: datetime
+
+
+class InternalBookingChoiceListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[InternalBookingChoiceResponse]
+    has_more: bool
+
+
+class InternalBookingChoiceResultRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    choice_id: int = Field(strict=True, gt=0, le=MAX_DATABASE_ID)
+    result: Literal["booked", "slot_unavailable"]
+    # Replacement times, only with slot_unavailable; added after the times still on offer.
+    offered_slots: list[InternalOfferedSlot] | None = Field(
+        default=None,
+        max_length=MAX_OFFERED_SLOTS,
+    )
+
+    @model_validator(mode="after")
+    def replacements_only_when_unavailable(self) -> "InternalBookingChoiceResultRequest":
+        if self.result == "booked" and self.offered_slots:
+            raise ValueError("offered_slots are accepted only with slot_unavailable")
+        return self
+
+
+class InternalBookingChoiceResultResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt_id: int
+    choice_id: int
+    result: Literal["booked", "slot_unavailable"]
+    state: BookingPromptState
+    # False when this result was already recorded: nothing changed and no notice was queued.
+    recorded: bool
+    offered_slot_count: int
 
 
 def booking_prompt_payload(prompt: PatientPortalBookingPrompt) -> dict[str, object]:
@@ -1352,6 +1500,9 @@ def register_internal_booking_prompt_routes(
                 created_by_id=principal.provider_id,
                 ttl=timedelta(days=runtime.settings.booking_prompt_ttl_days),
                 notice=notice,
+                offered_slots=offered_slot_specs(payload.offered_slots),
+                booking_location_codes=runtime.settings.resolved_booking_locations.keys(),
+                offer_digest_secret=runtime.audit_hash_secret,
             )
         except BookingPromptAccountUnavailableError as exc:
             # CARLOS falls back to a phone call; nothing was stored.
@@ -1416,6 +1567,112 @@ def register_internal_booking_prompt_routes(
         return booking_prompt_payload(prompt)
 
 
+def register_internal_booking_sync_routes(
+    app: FastAPI,
+    runtime: InternalRuntime,
+    deps: InternalRouteDependencies,
+) -> None:
+    """Offered-time sync for the CARLOS polling job (carlos-portal#11).
+
+    Both routes require `portal.booking_prompt.sync` and accept nothing else, so the polling job's
+    system provider can hold that permission alone.
+    """
+
+    @app.get(
+        "/internal/carlos/booking-prompts/choices",
+        response_model=InternalBookingChoiceListResponse,
+        responses=COMMON_INTERNAL_RESPONSES,
+    )
+    def internal_list_booking_choices(
+        principal: Annotated[
+            StaffPrincipal,
+            Depends(deps.staff_principal_requiring(PERMISSION_BOOKING_PROMPT_SYNC)),
+        ],
+        session: Annotated[Session, deps.session_dependency],
+        state: Annotated[Literal["pending"], Query()],
+        limit: Annotated[int, Query(ge=1, le=MAX_PENDING_CHOICE_LIST)] = MAX_PENDING_CHOICE_LIST,
+    ) -> dict[str, object]:
+        page = list_pending_choices(
+            session,
+            clinic_id=principal.clinic_id,
+            actor=principal.display_name,
+            actor_id=principal.provider_id,
+            limit=limit,
+        )
+        return {
+            "items": [
+                {
+                    "prompt_id": pending.choice.prompt_id,
+                    "choice_id": pending.choice.id,
+                    "demographic_no": pending.demographic_no,
+                    "slot_id": pending.choice.slot_id,
+                    "chosen_at": pending.choice.chosen_at,
+                }
+                for pending in page.choices
+            ],
+            "has_more": page.has_more,
+        }
+
+    @app.post(
+        "/internal/carlos/booking-prompts/{prompt_id}/choice-result",
+        response_model=InternalBookingChoiceResultResponse,
+        responses=INTERNAL_CONFLICT_RESPONSES,
+    )
+    def internal_record_booking_choice_result(
+        request: Request,
+        prompt_id: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
+        payload: InternalBookingChoiceResultRequest,
+        principal: Annotated[
+            StaffPrincipal,
+            Depends(deps.staff_principal_requiring(PERMISSION_BOOKING_PROMPT_SYNC)),
+        ],
+        session: Annotated[Session, deps.session_dependency],
+    ) -> dict[str, object]:
+        notice = BookingPromptNotice(
+            sign_in_url=_booking_prompt_sign_in_url(request, runtime.settings),
+            encryption_secret=runtime.outbox_encryption_secret,
+            encryption_key_id=runtime.outbox_active_key_id,
+        )
+        try:
+            outcome = record_choice_result(
+                session,
+                prompt_id,
+                clinic_id=principal.clinic_id,
+                choice_id=payload.choice_id,
+                result=payload.result,
+                replacement_slots=offered_slot_specs(payload.offered_slots),
+                booking_location_codes=runtime.settings.resolved_booking_locations.keys(),
+                actor=principal.display_name,
+                actor_id=principal.provider_id,
+                notice=notice,
+            )
+        except BookingPromptNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=BOOKING_PROMPT_NOT_FOUND_DETAIL) from exc
+        except BookingChoiceNotPendingError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=BOOKING_CHOICE_NOT_PENDING_DETAIL,
+            ) from exc
+        except BookingChoiceResultConflictError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=BOOKING_CHOICE_RESULT_CONFLICT_DETAIL,
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="booking choice result is invalid",
+            ) from exc
+        return {
+            "prompt_id": outcome.prompt.id,
+            "choice_id": outcome.choice.id,
+            "result": outcome.choice.state,
+            "state": booking_prompt_state(outcome.prompt),
+            "recorded": outcome.recorded,
+            "offered_slot_count": outcome.offered_slot_count,
+        }
+
+
 def register_carlos_internal_routes(app: FastAPI, runtime: InternalRuntime) -> None:
     """Register the CARLOS-facing internal API, one registrar per permission domain."""
     if not runtime.settings.is_internal_api_enabled:
@@ -1427,3 +1684,4 @@ def register_carlos_internal_routes(app: FastAPI, runtime: InternalRuntime) -> N
     register_internal_unlock_secret_routes(app, runtime, deps)
     register_internal_contact_review_routes(app, deps)
     register_internal_booking_prompt_routes(app, runtime, deps)
+    register_internal_booking_sync_routes(app, runtime, deps)

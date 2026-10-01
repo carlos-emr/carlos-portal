@@ -1,19 +1,35 @@
-"""Seed the isolated development database used by the Playwright CI smoke test."""
+"""Seed the isolated development database used by the Playwright CI smoke test.
+
+Run without arguments to seed. `choice-result booked|slot_unavailable` stands in for the CARLOS
+polling job: it reports a result for the patient's pending pick on the seeded offer, through the
+same service function the internal API uses. The browser run has no CARLOS and no internal API
+token, so the Playwright script calls this instead.
+"""
 
 import json
 import os
+import sys
 import tempfile
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from secrets import token_urlsafe
+from zoneinfo import ZoneInfo
+
+from sqlalchemy import select
 
 from carlos_patient_portal.accounts import ActivationRateLimit, activate_patient_account
 from carlos_patient_portal.auth import request_password_reset
-from carlos_patient_portal.config import get_settings
+from carlos_patient_portal.booking_choices import record_choice_result
+from carlos_patient_portal.booking_offers import OfferedSlotSpec, add_offered_slots, offer_digest
+from carlos_patient_portal.booking_prompts import BookingPromptNotice
+from carlos_patient_portal.config import Settings, get_settings
 from carlos_patient_portal.database import create_portal_engine, create_session_factory
 from carlos_patient_portal.identity import IdentityProof
 from carlos_patient_portal.invites import create_invite
 from carlos_patient_portal.models import (
+    BOOKING_CHOICE_STATE_PENDING,
     BOOKING_PROMPT_STATUS_SENT,
+    PatientPortalBookingChoice,
     PatientPortalBookingPrompt,
     utc_now,
 )
@@ -33,6 +49,25 @@ RESET_EMAIL = "reset.patient@example.com"
 RESET_DATE_OF_BIRTH = date(1968, 2, 29)
 RESET_HEALTH_CARD_NUMBER = "IJKL 2468-1357"
 RESET_USERNAME = "PlaywrightReset"
+OFFER_OPERATION_ID = "ci-booking-offer-1"
+
+
+def _clinic_time(settings: Settings, days_ahead: int, hour: int, minute: int) -> datetime:
+    clinic_zone = ZoneInfo(settings.clinic_timezone)
+    day = datetime.now(clinic_zone).date() + timedelta(days=days_ahead)
+    return datetime.combine(day, time(hour, minute), tzinfo=clinic_zone)
+
+
+def browser_offered_slots(settings: Settings) -> tuple[OfferedSlotSpec, ...]:
+    return (
+        OfferedSlotSpec("ci-slot-1", _clinic_time(settings, 7, 10, 30), 30, "in_person"),
+        OfferedSlotSpec("ci-slot-2", _clinic_time(settings, 8, 14, 0), 45, "phone"),
+        OfferedSlotSpec("ci-slot-3", _clinic_time(settings, 9, 9, 15), 30, "video"),
+    )
+
+
+def browser_replacement_slots(settings: Settings) -> tuple[OfferedSlotSpec, ...]:
+    return (OfferedSlotSpec("ci-slot-4", _clinic_time(settings, 10, 16, 20), 30, "phone"),)
 
 
 def main() -> None:
@@ -135,6 +170,33 @@ def main() -> None:
                         expires_at=seeded_at + timedelta(days=90),
                     )
                 )
+                # A second prompt offering times, for the pick, confirm, and pick-again check.
+                offered_slots = browser_offered_slots(settings)
+                offer_prompt = PatientPortalBookingPrompt(
+                    clinic_id=settings.clinic_id,
+                    demographic_no=account.demographic_no,
+                    account_id=account.id,
+                    operation_id=OFFER_OPERATION_ID,
+                    urgency="routine",
+                    appointment_type="annual_exam",
+                    suggested_by=None,
+                    status=BOOKING_PROMPT_STATUS_SENT,
+                    created_by="CarlosDoc",
+                    created_by_id="provider-42",
+                    created_at=seeded_at,
+                    expires_at=seeded_at + timedelta(days=90),
+                    offer_digest=offer_digest(
+                        offered_slots,
+                        secret=(
+                            settings.audit_hash_secret.get_secret_value()
+                            if settings.audit_hash_secret is not None
+                            else token_urlsafe(32)
+                        ),
+                    ),
+                )
+                session.add(offer_prompt)
+                session.flush()
+                add_offered_slots(session, offer_prompt.id, offered_slots)
                 _, activation_invite_token = create_invite(
                     session,
                     5678,
@@ -230,5 +292,60 @@ def main() -> None:
         engine.dispose()
 
 
+def report_choice_result(result: str) -> None:
+    """Answer the patient's pending pick on the seeded offer, as the CARLOS polling job would."""
+    settings = get_settings()
+    outbox_keys = settings.resolved_outbox_keyring
+    engine = create_portal_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        with session_factory() as session:
+            with session.begin():
+                pending = session.execute(
+                    select(PatientPortalBookingChoice.id, PatientPortalBookingPrompt.id)
+                    .join(
+                        PatientPortalBookingPrompt,
+                        PatientPortalBookingPrompt.id == PatientPortalBookingChoice.prompt_id,
+                    )
+                    .where(
+                        PatientPortalBookingPrompt.clinic_id == settings.clinic_id,
+                        PatientPortalBookingPrompt.operation_id == OFFER_OPERATION_ID,
+                        PatientPortalBookingChoice.state == BOOKING_CHOICE_STATE_PENDING,
+                    )
+                ).one_or_none()
+                if pending is None:
+                    raise RuntimeError("the seeded offer has no pending choice to answer")
+                choice_id, prompt_id = pending
+                record_choice_result(
+                    session,
+                    prompt_id,
+                    clinic_id=settings.clinic_id,
+                    choice_id=choice_id,
+                    result=result,
+                    replacement_slots=(
+                        browser_replacement_slots(settings)
+                        if result == "slot_unavailable"
+                        else ()
+                    ),
+                    actor="CARLOS booking sync",
+                    actor_id="carlos-booking-sync",
+                    # The browser run has no outbox worker; the queued notice is never sent.
+                    notice=BookingPromptNotice(
+                        sign_in_url=(settings.public_base_url or "http://127.0.0.1:8090") + "/",
+                        encryption_secret=outbox_keys.get(
+                            settings.outbox_active_key_id, token_urlsafe(32)
+                        ),
+                        encryption_key_id=settings.outbox_active_key_id,
+                    ),
+                )
+    finally:
+        engine.dispose()
+
+
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:2] == ["choice-result"] and len(sys.argv) == 3:
+        report_choice_result(sys.argv[2])
+    elif len(sys.argv) == 1:
+        main()
+    else:
+        raise SystemExit("usage: seed_browser.py [choice-result booked|slot_unavailable]")

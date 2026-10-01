@@ -20,6 +20,7 @@ Assemblers must not write: no audit events, no session mutation, no commits. A w
 to a page render belongs in the route that owns the request, not here.
 """
 
+from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from datetime import time as datetime_time
 from urllib.parse import urlencode
@@ -27,15 +28,32 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
+from carlos_patient_portal.booking_choices import latest_choice
+from carlos_patient_portal.booking_offers import as_utc, current_offered_slots
 from carlos_patient_portal.booking_prompts import list_active_prompts_for_account
-from carlos_patient_portal.i18n import DEFAULT_LOCALE, format_portal_datetime, portal_text
+from carlos_patient_portal.config import DEFAULT_BOOKING_CHOICE_WAIT_MINUTES
+from carlos_patient_portal.i18n import (
+    DEFAULT_LOCALE,
+    format_booking_time,
+    format_portal_datetime,
+    portal_text,
+)
 from carlos_patient_portal.models import (
+    BOOKING_CHOICE_STATE_BOOKED,
+    BOOKING_CHOICE_STATE_PENDING,
+    BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE,
+    BOOKING_PROMPT_STATUS_BOOKED,
+    BOOKING_PROMPT_STATUS_CHOICE_PENDING,
+    BOOKING_PROMPT_STATUS_READ,
     BOOKING_PROMPT_STATUS_SENT,
     UNLOCK_SECRET_STATUS_ACTIVE,
     UNLOCK_SECRET_TYPE_EMAIL,
     PatientPortalAccount,
+    PatientPortalBookingChoice,
+    PatientPortalBookingOfferedSlot,
     PatientPortalBookingPrompt,
     PatientPortalUnlockSecret,
+    utc_now,
 )
 from carlos_patient_portal.unlock_secrets import (
     DEFAULT_UNLOCK_SECRET_LIST_LIMIT,
@@ -45,7 +63,14 @@ from carlos_patient_portal.unlock_secrets import (
     list_unlock_secrets,
 )
 from carlos_patient_portal.view_models import (
+    BOOKING_VIEW_BOOKED,
+    BOOKING_VIEW_CHOOSE,
+    BOOKING_VIEW_CLOSED,
+    BOOKING_VIEW_CONTACT,
+    BOOKING_VIEW_PENDING,
+    BookingOfferViewModel,
     BookingPromptViewModel,
+    BookingSlotViewModel,
     EmailPasswordDashboardViewModel,
     EmailPasswordRowViewModel,
     MessagesViewModel,
@@ -285,6 +310,118 @@ def assemble_email_password_dashboard(
     )
 
 
+def _booking_slot_text(
+    slot: PatientPortalBookingOfferedSlot | PatientPortalBookingChoice,
+    *,
+    text: dict[str, str],
+    booking_locations: Mapping[str, str],
+    timezone_name: str,
+    locale: str,
+) -> tuple[str, str]:
+    """When a time is, and its duration, visit mode, and location, in the patient's language."""
+    if slot.starts_at is None or slot.duration_minutes is None or slot.visit_mode is None:
+        raise ValueError("the time is no longer stored")
+    date_text, time_text = format_booking_time(slot.starts_at, locale, timezone_name)
+    details = [
+        text["booking_slot_duration"].format(minutes=slot.duration_minutes),
+        text[f"booking_visit_mode_{slot.visit_mode}"],
+    ]
+    # A code removed from the configuration since the time was offered is simply not shown.
+    location = booking_locations.get(slot.location_code or "")
+    if location:
+        details.append(location)
+    return (
+        text["booking_slot_when"].format(date=date_text, time=time_text),
+        text["booking_slot_detail_separator"].join(details),
+    )
+
+
+def assemble_booking_offer(
+    session: Session,
+    prompt: PatientPortalBookingPrompt,
+    *,
+    text: dict[str, str],
+    href: str,
+    now: datetime,
+    wait_minutes: int,
+    booking_locations: Mapping[str, str],
+    timezone_name: str,
+    locale: str,
+) -> BookingOfferViewModel:
+    """The booking part of one opened prompt: the times to pick, the wait, or the booked time."""
+
+    def slot_text(
+        slot: PatientPortalBookingOfferedSlot | PatientPortalBookingChoice,
+    ) -> tuple[str, str]:
+        return _booking_slot_text(
+            slot,
+            text=text,
+            booking_locations=booking_locations,
+            timezone_name=timezone_name,
+            locale=locale,
+        )
+
+    choice = latest_choice(session, prompt.id)
+    if (
+        prompt.status == BOOKING_PROMPT_STATUS_BOOKED
+        and choice is not None
+        and choice.state == BOOKING_CHOICE_STATE_BOOKED
+        and choice.starts_at is not None
+    ):
+        date_text, time_text = format_booking_time(choice.starts_at, locale, timezone_name)
+        return BookingOfferViewModel(
+            state=BOOKING_VIEW_BOOKED,
+            notice=text["booking_booked"].format(date=date_text, time=time_text),
+            chosen=slot_text(choice)[1],
+        )
+    if (
+        prompt.status == BOOKING_PROMPT_STATUS_CHOICE_PENDING
+        and choice is not None
+        and choice.state == BOOKING_CHOICE_STATE_PENDING
+        and choice.starts_at is not None
+    ):
+        # Past the configured wait, the patient is told plainly rather than left on "confirming".
+        remaining = as_utc(choice.chosen_at) + timedelta(minutes=wait_minutes) - now
+        overdue = remaining <= timedelta(0)
+        when, details = slot_text(choice)
+        return BookingOfferViewModel(
+            state=BOOKING_VIEW_PENDING,
+            notice=text[
+                "booking_choice_pending_overdue" if overdue else "booking_choice_pending"
+            ],
+            chosen=text["booking_slot_detail_separator"].join((when, details)),
+            wait_remaining_ms=None if overdue else max(1, int(remaining.total_seconds() * 1000)),
+            overdue_notice=text["booking_choice_pending_overdue"],
+        )
+    open_for_choice = prompt.status in (BOOKING_PROMPT_STATUS_SENT, BOOKING_PROMPT_STATUS_READ)
+    taken_notice = (
+        text["booking_slot_taken"]
+        if open_for_choice
+        and choice is not None
+        and choice.state == BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE
+        else None
+    )
+    slots = current_offered_slots(session, prompt.id, now=now) if open_for_choice else []
+    if slots:
+        slot_views = []
+        for slot in slots:
+            when, details = slot_text(slot)
+            slot_views.append(BookingSlotViewModel(id=slot.id, when=when, details=details))
+        return BookingOfferViewModel(
+            state=BOOKING_VIEW_CHOOSE,
+            notice=taken_notice,
+            slots=tuple(slot_views),
+            choice_href=f"{href}/choice",
+            decline_href=f"{href}/decline",
+        )
+    # Declined, or every offered time taken or past: contact the clinic, as for a prompt that never
+    # offered times, but without saying the portal cannot book.
+    return BookingOfferViewModel(
+        state=BOOKING_VIEW_CONTACT if prompt.offer_digest is None else BOOKING_VIEW_CLOSED,
+        notice=text["booking_slot_taken_contact"] if taken_notice else None,
+    )
+
+
 def _booking_prompt_view(
     prompt: PatientPortalBookingPrompt,
     *,
@@ -294,6 +431,7 @@ def _booking_prompt_view(
     booking_phone: str | None,
     timezone_name: str,
     locale: str,
+    booking: BookingOfferViewModel | None = None,
 ) -> BookingPromptViewModel:
     # Every sentence comes from the catalog; the provider name is the only variable text, and it
     # is escaped by the template like any other value.
@@ -317,6 +455,7 @@ def _booking_prompt_view(
         ),
         sent_at=format_portal_datetime(prompt.created_at, locale, timezone_name),
         is_new=prompt.status == BOOKING_PROMPT_STATUS_SENT,
+        booking=booking,
     )
 
 
@@ -331,27 +470,55 @@ def assemble_messages(
     not_found: bool = False,
     timezone_name: str = "UTC",
     locale: str = DEFAULT_LOCALE,
+    booking_locations: Mapping[str, str] | None = None,
+    wait_minutes: int = DEFAULT_BOOKING_CHOICE_WAIT_MINUTES,
+    error: str | None = None,
 ) -> MessagesViewModel:
     """Build the messages view state for `dashboard.jinja`. Read-only: opening is the route's."""
     text = portal_text(locale)
 
-    def view(prompt: PatientPortalBookingPrompt) -> BookingPromptViewModel:
+    def href(prompt: PatientPortalBookingPrompt) -> str:
+        return f"{base_path.rstrip('/')}/{prompt.id}"
+
+    def view(
+        prompt: PatientPortalBookingPrompt,
+        booking: BookingOfferViewModel | None = None,
+    ) -> BookingPromptViewModel:
         return _booking_prompt_view(
             prompt,
             text=text,
-            href=f"{base_path.rstrip('/')}/{prompt.id}",
+            href=href(prompt),
             clinic_name=clinic_name,
             booking_phone=booking_phone,
             timezone_name=timezone_name,
             locale=locale,
+            booking=booking,
         )
 
     prompts = tuple(view(prompt) for prompt in list_active_prompts_for_account(session, account.id))
     # Built from the prompt the route opened, not looked up in the capped list above.
-    selected = view(selected_prompt) if selected_prompt is not None else None
+    selected = (
+        view(
+            selected_prompt,
+            assemble_booking_offer(
+                session,
+                selected_prompt,
+                text=text,
+                href=href(selected_prompt),
+                now=utc_now(),
+                wait_minutes=wait_minutes,
+                booking_locations=booking_locations or {},
+                timezone_name=timezone_name,
+                locale=locale,
+            ),
+        )
+        if selected_prompt is not None
+        else None
+    )
     return MessagesViewModel(
         prompts=prompts,
         selected=selected,
         not_found=not_found,
         no_online_booking=text["booking_prompt_no_online_booking"],
+        error=error,
     )

@@ -42,10 +42,14 @@ AUDIT_ACTOR_TYPE_STAFF = "staff"
 # The portal itself, for events no human initiated — a configuration policy recorded at startup.
 AUDIT_ACTOR_TYPE_SYSTEM = "system"
 AUDIT_EVENT_ACTIVATION = "activation"
+AUDIT_EVENT_BOOKING_PROMPT_CHOICE = "booking_prompt.choice"
 AUDIT_EVENT_BOOKING_PROMPT_CREATE = "booking_prompt.create"
+AUDIT_EVENT_BOOKING_PROMPT_DECLINE = "booking_prompt.decline"
 AUDIT_EVENT_BOOKING_PROMPT_DELIVERY = "booking_prompt.delivery"
 AUDIT_EVENT_BOOKING_PROMPT_LIST = "booking_prompt.list"
+AUDIT_EVENT_BOOKING_PROMPT_OFFER = "booking_prompt.offer"
 AUDIT_EVENT_BOOKING_PROMPT_READ = "booking_prompt.read"
+AUDIT_EVENT_BOOKING_PROMPT_RESULT = "booking_prompt.result"
 AUDIT_EVENT_BOOKING_PROMPT_WITHDRAW = "booking_prompt.withdraw"
 AUDIT_EVENT_ACCOUNT_CONTACT_UPDATE = "account.contact_update"
 AUDIT_EVENT_ACCOUNT_DISABLE = "account.disable"
@@ -105,11 +109,33 @@ OUTBOX_KIND_PASSWORD_RESET = "password_reset"
 OUTBOX_KIND_PASSWORD_RESET_REQUEST = "password_reset_request"
 OUTBOX_KIND_CONTACT_CHANGE = "contact_change"
 OUTBOX_KIND_BOOKING_PROMPT = "booking_prompt"
+# "There is an update in the portal": sent when CARLOS reports the result of a patient's choice.
+OUTBOX_KIND_BOOKING_PROMPT_UPDATE = "booking_prompt_update"
 BOOKING_PROMPT_STATUS_SENT = "sent"
 BOOKING_PROMPT_STATUS_READ = "read"
 BOOKING_PROMPT_STATUS_WITHDRAWN = "withdrawn"
-# Not stored: a sent or read prompt past its expiry is reported as expired.
+# The patient picked one of the offered times and CARLOS has not answered yet.
+BOOKING_PROMPT_STATUS_CHOICE_PENDING = "choice_pending"
+# CARLOS booked the patient's choice. Terminal, and never reported as expired.
+BOOKING_PROMPT_STATUS_BOOKED = "booked"
+# The patient said none of the offered times work; they are told to contact the clinic.
+BOOKING_PROMPT_STATUS_DECLINED_ALL = "declined_all"
+# Not stored: a prompt past its expiry is reported as expired, unless it is booked or a choice is
+# still waiting for CARLOS.
 BOOKING_PROMPT_STATE_EXPIRED = "expired"
+# A patient's pick of one offered time. `withdrawn` is a choice still pending when staff withdrew
+# its prompt: CARLOS can no longer report a result for it.
+BOOKING_CHOICE_STATE_PENDING = "pending"
+BOOKING_CHOICE_STATE_BOOKED = "booked"
+BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE = "slot_unavailable"
+BOOKING_CHOICE_STATE_WITHDRAWN = "withdrawn"
+BOOKING_CHOICE_RESULTS = (BOOKING_CHOICE_STATE_BOOKED, BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE)
+BOOKING_VISIT_MODES = ("in_person", "phone", "video")
+MAX_OFFERED_SLOTS = 8
+MAX_BOOKING_SLOT_ID_LENGTH = 64
+MAX_BOOKING_LOCATION_CODE_LENGTH = 32
+MIN_BOOKING_SLOT_DURATION_MINUTES = 5
+MAX_BOOKING_SLOT_DURATION_MINUTES = 480
 # Fixed vocabularies. A prompt is built from these, never from staff free text, so it carries no
 # clinical detail and can be translated. Changing either list needs a migration for its constraint.
 BOOKING_PROMPT_URGENCIES = ("routine", "soon", "as_soon_as_possible")
@@ -160,6 +186,7 @@ ACCOUNT_FOREIGN_KEY_TARGET = "patient_portal_accounts.id"
 DEMOGRAPHIC_NO_POSITIVE_SQL = "demographic_no > 0"
 EXPIRY_AFTER_CREATION_SQL = "expires_at > created_at"
 PENDING_STATUS_SQL = "status = 'pending'"
+BOOKING_CHOICE_PENDING_STATE_SQL = "state = 'pending'"
 
 
 def utc_now() -> datetime:
@@ -734,7 +761,7 @@ class PatientPortalOutboundDelivery(Base):
     __table_args__ = (
         CheckConstraint(
             "kind in ('password_reset_request', 'password_reset', 'contact_change', "
-            "'booking_prompt')",
+            "'booking_prompt', 'booking_prompt_update')",
             name="ck_pp_outbound_delivery_kind",
         ),
         CheckConstraint(
@@ -744,13 +771,14 @@ class PatientPortalOutboundDelivery(Base):
             "reset_token_id is null) or "
             "(kind = 'password_reset_request' and account_id is null and "
             "reset_token_id is null) or "
-            "(kind = 'booking_prompt' and account_id is not null and "
+            "(kind in ('booking_prompt', 'booking_prompt_update') and account_id is not null and "
             "reset_token_id is null)",
             name="ck_pp_outbound_delivery_reset_token_kind",
         ),
         # Only a booking-prompt notice names a prompt, and it always does.
         CheckConstraint(
-            "(kind = 'booking_prompt') = (booking_prompt_id is not null)",
+            "(kind in ('booking_prompt', 'booking_prompt_update')) = "
+            "(booking_prompt_id is not null)",
             name="ck_pp_outbound_delivery_booking_prompt_kind",
         ),
         CheckConstraint(
@@ -1233,7 +1261,8 @@ class PatientPortalBookingPrompt(Base):
     """A clinic's request that a patient book an appointment, shown to them after sign-in.
 
     Built from fixed vocabularies rather than staff text, so it holds no clinical detail. The
-    portal books nothing: the patient is told how to contact the clinic.
+    portal books nothing itself: the patient is told how to contact the clinic, or picks one of the
+    times CARLOS offered with the prompt and CARLOS books it (carlos-portal#11).
     """
 
     __tablename__ = "patient_portal_booking_prompts"
@@ -1259,7 +1288,7 @@ class PatientPortalBookingPrompt(Base):
             name="ck_pp_booking_prompts_appointment_type",
         ),
         CheckConstraint(
-            "status in ('sent', 'read', 'withdrawn')",
+            "status in ('sent', 'read', 'withdrawn', 'choice_pending', 'booked', 'declined_all')",
             name="ck_pp_booking_prompts_status",
         ),
         CheckConstraint(
@@ -1275,9 +1304,11 @@ class PatientPortalBookingPrompt(Base):
             EXPIRY_AFTER_CREATION_SQL,
             name="ck_pp_booking_prompts_expiry_after_creation",
         ),
-        # Read stays recorded after a withdrawal, so staff can still see the patient saw it.
+        # Read stays recorded after a withdrawal, so staff can still see the patient saw it. A
+        # patient chooses or declines only from an opened prompt, so those states are read too.
         CheckConstraint(
-            "status != 'read' or read_at is not null",
+            "status not in ('read', 'choice_pending', 'booked', 'declined_all') "
+            "or read_at is not null",
             name="ck_pp_booking_prompts_read_at_present",
         ),
         CheckConstraint(
@@ -1289,6 +1320,10 @@ class PatientPortalBookingPrompt(Base):
             "(status != 'withdrawn' and withdrawn_at is null and withdrawn_by is null and "
             "withdrawn_by_id is null)",
             name="ck_pp_booking_prompts_withdrawn_fields",
+        ),
+        CheckConstraint(
+            f"offer_digest is null or length(offer_digest) = {HASH_LENGTH}",
+            name="ck_pp_booking_prompts_offer_digest_length",
         ),
         Index(
             "ux_pp_booking_prompts_clinic_operation",
@@ -1351,6 +1386,185 @@ class PatientPortalBookingPrompt(Base):
         String(MAX_BOOKING_PROMPT_ACTOR_LENGTH),
         nullable=True,
     )
+    # A keyed hash of the times offered at creation, so a CARLOS retry of the same operation can be
+    # recognised after the offered rows have changed or been deleted. Null for a prompt created
+    # without times.
+    offer_digest: Mapped[str | None] = mapped_column(String(HASH_LENGTH), nullable=True)
+
+
+BOOKING_PROMPT_FOREIGN_KEY_TARGET = "patient_portal_booking_prompts.id"
+BOOKING_SLOT_COPY_ABSENT_SQL = (
+    "slot_id is null and starts_at is null and duration_minutes is null and "
+    "visit_mode is null and location_code is null"
+)
+BOOKING_SLOT_COPY_PRESENT_SQL = (
+    "slot_id is not null and starts_at is not null and duration_minutes is not null and "
+    "visit_mode is not null"
+)
+
+
+class PatientPortalBookingOfferedSlot(Base):
+    """One time CARLOS offered with a booking prompt, for the patient to pick.
+
+    The first appointment data the portal stores, so only what the patient must see: when, how
+    long, how (in person, phone, video), and where as a configured location code. No provider, no
+    reason for the visit, no free text. `slot_id` is issued by CARLOS and never interpreted here.
+    Rows are deleted once the prompt is booked, withdrawn, declined, or expired.
+    """
+
+    __tablename__ = "patient_portal_booking_offered_slots"
+    __table_args__ = (
+        CheckConstraint("position >= 0", name="ck_pp_booking_offered_slots_position"),
+        CheckConstraint(
+            f"length(slot_id) between 1 and {MAX_BOOKING_SLOT_ID_LENGTH}",
+            name="ck_pp_booking_offered_slots_slot_id_length",
+        ),
+        CheckConstraint(
+            f"duration_minutes between {MIN_BOOKING_SLOT_DURATION_MINUTES} "
+            f"and {MAX_BOOKING_SLOT_DURATION_MINUTES}",
+            name="ck_pp_booking_offered_slots_duration",
+        ),
+        CheckConstraint(
+            "visit_mode in ('in_person', 'phone', 'video')",
+            name="ck_pp_booking_offered_slots_visit_mode",
+        ),
+        CheckConstraint(
+            f"location_code is null or "
+            f"length(location_code) between 1 and {MAX_BOOKING_LOCATION_CODE_LENGTH}",
+            name="ck_pp_booking_offered_slots_location_code_length",
+        ),
+        Index(
+            "ux_pp_booking_offered_slots_prompt_slot",
+            "prompt_id",
+            "slot_id",
+            unique=True,
+        ),
+        Index(
+            "ux_pp_booking_offered_slots_prompt_position",
+            "prompt_id",
+            "position",
+            unique=True,
+        ),
+        Index("ix_pp_booking_offered_slots_starts", "starts_at"),
+        # An old browser form must never select a replacement that reused a deleted row ID.
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    prompt_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            BOOKING_PROMPT_FOREIGN_KEY_TARGET,
+            ondelete="CASCADE",
+            name="fk_pp_booking_offered_slots_prompt",
+        ),
+        nullable=False,
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    slot_id: Mapped[str] = mapped_column(String(MAX_BOOKING_SLOT_ID_LENGTH), nullable=False)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    visit_mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    location_code: Mapped[str | None] = mapped_column(
+        String(MAX_BOOKING_LOCATION_CODE_LENGTH),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+
+
+class PatientPortalBookingChoice(Base):
+    """The patient's pick of one offered time, and what CARLOS answered.
+
+    Holds a copy of the chosen time so the confirmation survives the offered rows being deleted.
+    The copy is kept only while it is needed: it is cleared when CARLOS reports the time was taken,
+    when the prompt is withdrawn, and one day after a booked appointment's start.
+    """
+
+    __tablename__ = "patient_portal_booking_choices"
+    __table_args__ = (
+        CheckConstraint(
+            f"length(clinic_id) between 1 and {MAX_CLINIC_ID_LENGTH}",
+            name="ck_pp_booking_choices_clinic_id_length",
+        ),
+        CheckConstraint(
+            "state in ('pending', 'booked', 'slot_unavailable', 'withdrawn')",
+            name="ck_pp_booking_choices_state",
+        ),
+        CheckConstraint(
+            f"({BOOKING_SLOT_COPY_ABSENT_SQL}) or ({BOOKING_SLOT_COPY_PRESENT_SQL})",
+            name="ck_pp_booking_choices_slot_copy_complete",
+        ),
+        # CARLOS polls a pending choice by its slot, and the patient is waiting on that time.
+        CheckConstraint(
+            "state != 'pending' or slot_id is not null",
+            name="ck_pp_booking_choices_pending_has_slot",
+        ),
+        CheckConstraint(
+            "(state = 'pending' and result_at is null) or "
+            "(state != 'pending' and result_at is not null)",
+            name="ck_pp_booking_choices_result_at_matches_state",
+        ),
+        CheckConstraint(
+            f"slot_id is null or length(slot_id) between 1 and {MAX_BOOKING_SLOT_ID_LENGTH}",
+            name="ck_pp_booking_choices_slot_id_length",
+        ),
+        CheckConstraint(
+            f"duration_minutes is null or duration_minutes between "
+            f"{MIN_BOOKING_SLOT_DURATION_MINUTES} and {MAX_BOOKING_SLOT_DURATION_MINUTES}",
+            name="ck_pp_booking_choices_duration",
+        ),
+        CheckConstraint(
+            "visit_mode is null or visit_mode in ('in_person', 'phone', 'video')",
+            name="ck_pp_booking_choices_visit_mode",
+        ),
+        CheckConstraint(
+            f"location_code is null or "
+            f"length(location_code) between 1 and {MAX_BOOKING_LOCATION_CODE_LENGTH}",
+            name="ck_pp_booking_choices_location_code_length",
+        ),
+        Index("ix_pp_booking_choices_prompt", "prompt_id", "id"),
+        # One choice at a time: the row lock on the prompt serialises choosers, and this makes a
+        # second pending choice impossible even for a writer that skipped the lock.
+        Index(
+            "ux_pp_booking_choices_pending_prompt",
+            "prompt_id",
+            unique=True,
+            sqlite_where=text(BOOKING_CHOICE_PENDING_STATE_SQL),
+            postgresql_where=text(BOOKING_CHOICE_PENDING_STATE_SQL),
+        ),
+        # CARLOS polls pending choices for its clinic, oldest first.
+        Index("ix_pp_booking_choices_clinic_state_chosen", "clinic_id", "state", "chosen_at"),
+        # Cleanup clears booked copies a day after the appointment.
+        Index("ix_pp_booking_choices_state_starts", "state", "starts_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    prompt_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            BOOKING_PROMPT_FOREIGN_KEY_TARGET,
+            ondelete="CASCADE",
+            name="fk_pp_booking_choices_prompt",
+        ),
+        nullable=False,
+    )
+    clinic_id: Mapped[str] = mapped_column(String(MAX_CLINIC_ID_LENGTH), nullable=False)
+    slot_id: Mapped[str | None] = mapped_column(
+        String(MAX_BOOKING_SLOT_ID_LENGTH),
+        nullable=True,
+    )
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    visit_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    location_code: Mapped[str | None] = mapped_column(
+        String(MAX_BOOKING_LOCATION_CODE_LENGTH),
+        nullable=True,
+    )
+    state: Mapped[str] = mapped_column(String(16), nullable=False)
+    chosen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    result_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class PatientPortalAuditEvent(Base):
@@ -1387,6 +1601,8 @@ class PatientPortalAuditEvent(Base):
                 "'fhir.read', 'fhir.search', "
                 "'booking_prompt.create', 'booking_prompt.delivery', 'booking_prompt.list', "
                 "'booking_prompt.read', 'booking_prompt.withdraw', "
+                "'booking_prompt.offer', 'booking_prompt.choice', 'booking_prompt.result', "
+                "'booking_prompt.decline', "
                 "'unlock_secret.create', 'unlock_secret.list', 'unlock_secret.read', "
                 "'unlock_secret.publish', 'unlock_secret.revoke')"
             ),
