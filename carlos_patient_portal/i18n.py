@@ -155,6 +155,7 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
         "booking_slot_detail_separator": " · ",
         "booking_slot_duration": "{minutes} minutes",
         "booking_slot_taken": "That time was just taken. Please pick another.",
+        "booking_slot_taken_contact": "That time was just taken. Please contact the clinic.",
         "booking_slot_time": "{hour:02d}:{minute:02d}",
         "booking_slot_when": "{date} at {time}",
         "booking_slots_legend": "Available times",

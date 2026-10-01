@@ -102,6 +102,8 @@ class BookingOfferViewModel:
     slots: tuple[BookingSlotViewModel, ...] = ()
     choice_href: str = ""
     decline_href: str = ""
+    wait_remaining_ms: int | None = None
+    overdue_notice: str = ""
 
 
 @dataclass(frozen=True, slots=True)

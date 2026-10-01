@@ -836,6 +836,9 @@ def test_a_patient_waiting_past_the_configured_time_is_told_to_call_if_urgent() 
     overdue = open_message(patient, prompt_id)
 
     assert "We are confirming your time with the clinic." in still_waiting.text
+    remaining_ms = int(re.search(r'data-booking-wait-ms="(\d+)"', still_waiting.text).group(1))
+    assert 0 < remaining_ms <= 60_000
+    assert 'data-booking-wait-ms=' not in overdue.text
     assert (
         "The clinic will confirm your time. If it is urgent, call the clinic." in overdue.text
     )
@@ -1239,7 +1242,7 @@ def test_slot_unavailable_with_nothing_left_shows_the_contact_message() -> None:
     assert report(app, prompt_id, only_choice(app).id, "slot_unavailable").status_code == 200
 
     page = open_message(patient, prompt_id)
-    assert "That time was just taken. Please pick another." in page.text
+    assert "That time was just taken. Please contact the clinic." in page.text
     assert "To book, contact Example Clinic." in page.text
     assert 'name="slot"' not in page.text
 
@@ -1682,3 +1685,72 @@ def test_a_second_pending_choice_is_refused_by_the_database() -> None:
                     chosen_at=utc_now(),
                 )
             )
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_cleanup_preserves_unanswered_choices_after_retention(dry_run) -> None:
+    app, patient, prompt_id = patient_with_offer()
+    assert pick(app, patient, prompt_id).status_code == 303
+    choice_id = only_choice(app).id
+    long_ago = utc_now() - timedelta(days=200)
+    move_prompt_expiry(app, prompt_id, expires_at=long_ago)
+    with app.state.session_factory.begin() as session:
+        for notice in session.scalars(select(PatientPortalOutboundDelivery)):
+            notice.status = OUTBOX_STATUS_FAILED
+            notice.created_at = long_ago
+    with app.state.session_factory.begin() as session:
+        cleaned = cleanup_transient_auth_rows(
+            session, before=utc_now() - timedelta(days=30), dry_run=dry_run
+        )
+    assert cleaned.booking_prompts == 0
+    assert cleaned.booking_choice_times == 0
+    assert only_choice(app).state == "pending"
+    assert pending_choices(app).json()["items"][0]["choice_id"] == choice_id
+    assert open_message(patient, prompt_id).status_code == 200
+    assert report(app, prompt_id, choice_id, "booked").status_code == 200
+
+
+@pytest.mark.parametrize("clear_copy", [False, True])
+def test_delayed_notice_is_suppressed_after_booked_confirmation_disappears(clear_copy) -> None:
+    app, patient, prompt_id = patient_with_offer()
+    assert pick(app, patient, prompt_id).status_code == 303
+    assert report(app, prompt_id, only_choice(app).id, "booked").status_code == 200
+    with app.state.session_factory.begin() as session:
+        session.scalar(select(PatientPortalBookingChoice)).starts_at = utc_now() - timedelta(days=2)
+    if clear_copy:
+        with app.state.session_factory.begin() as session:
+            cleanup_transient_auth_rows(session, before=utc_now() - timedelta(days=30))
+    assert patient.get(f"/portal/messages/{prompt_id}").status_code == 404
+    sender = RecordingPortalEmailSender()
+    deliver_all(app, sender)
+    assert not sender.messages
+    (notice,) = update_notices(app)
+    assert notice.last_failure_code == OUTBOX_FAILURE_BOOKING_PROMPT_NOT_NEEDED
+
+
+def test_stale_form_cannot_select_a_replacement_after_all_original_slots_are_deleted() -> None:
+    app = booking_app()
+    patient = TestClient(app)
+    browser_sign_in_seeded_patient(app, patient)
+    prompt_id = create_prompt(app, offered_slots=[default_slots()[0]])
+    stale_id = slot_row_ids(app, prompt_id)["carlos:slot:1"]
+    assert choose(patient, prompt_id, stale_id).status_code == 303
+    assert report(
+        app, prompt_id, only_choice(app).id, "slot_unavailable",
+        offered_slots=[slot("replacement", SECOND)],
+    ).status_code == 200
+    assert slot_row_ids(app, prompt_id)["replacement"] != stale_id
+    assert choose(patient, prompt_id, stale_id).status_code == 409
+    assert pending_choices(app).json()["items"] == []
+
+
+def test_last_taken_slot_tells_patient_to_contact_clinic() -> None:
+    app = booking_app()
+    patient = TestClient(app)
+    browser_sign_in_seeded_patient(app, patient)
+    prompt_id = create_prompt(app, offered_slots=[default_slots()[0]])
+    assert pick(app, patient, prompt_id).status_code == 303
+    assert report(app, prompt_id, only_choice(app).id, "slot_unavailable").status_code == 200
+    page = open_message(patient, prompt_id)
+    assert "That time was just taken. Please contact the clinic." in page.text
+    assert "Please pick another" not in page.text

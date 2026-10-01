@@ -29,9 +29,11 @@ from sqlalchemy.orm import Session, aliased
 from carlos_patient_portal.booking_offers import BOOKED_TIME_RETENTION_AFTER_START
 from carlos_patient_portal.models import (
     BOOKING_CHOICE_STATE_BOOKED,
+    BOOKING_CHOICE_STATE_PENDING,
     BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE,
     BOOKING_CHOICE_STATE_WITHDRAWN,
     BOOKING_PROMPT_STATUS_BOOKED,
+    BOOKING_PROMPT_STATUS_CHOICE_PENDING,
     BOOKING_PROMPT_STATUS_DECLINED_ALL,
     BOOKING_PROMPT_STATUS_WITHDRAWN,
     INVITE_STATUS_PENDING,
@@ -262,6 +264,7 @@ def cleanup_transient_auth_rows(
                 ),
             ),
         )
+        .correlate(PatientPortalBookingOfferedSlot)
         .exists()
     )
     booked_time_upcoming = (
@@ -270,6 +273,14 @@ def cleanup_transient_auth_rows(
             PatientPortalBookingChoice.prompt_id == PatientPortalBookingPrompt.id,
             PatientPortalBookingChoice.state == BOOKING_CHOICE_STATE_BOOKED,
             PatientPortalBookingChoice.starts_at > booked_time_cutoff,
+        )
+        .exists()
+    )
+    unresolved_choice = (
+        select(PatientPortalBookingChoice.id)
+        .where(
+            PatientPortalBookingChoice.prompt_id == PatientPortalBookingPrompt.id,
+            PatientPortalBookingChoice.state == BOOKING_CHOICE_STATE_PENDING,
         )
         .exists()
     )
@@ -334,10 +345,11 @@ def cleanup_transient_auth_rows(
         (
             PatientPortalBookingPrompt,
             and_(
-                # An expired prompt is no longer shown to anyone; its audit events remain. As for
-                # reset tokens, its notice rows cascade with it, so a prompt waits until the
-                # outbox pass has removed every one, and never takes queued work with it.
+                # Keep unanswered choices, even after expiry, until CARLOS reports a result.
+                # Notice rows cascade too, so wait until the bounded outbox pass removes them.
                 PatientPortalBookingPrompt.expires_at < before,
+                PatientPortalBookingPrompt.status != BOOKING_PROMPT_STATUS_CHOICE_PENDING,
+                ~unresolved_choice,
                 ~remaining_prompt_notice.exists(),
                 # A booked appointment stays shown to the patient until a day after it starts,
                 # however long ago the prompt expired.
@@ -375,7 +387,13 @@ def cleanup_transient_auth_rows(
         candidates = (
             select(model.id).where(predicate).order_by(model.id).limit(normalized_batch_size)
         )
-        if model is PatientPortalInvite and not dry_run:
+        if model is PatientPortalBookingOfferedSlot and not dry_run:
+            # Every booking writer locks the parent before touching slots or choices.
+            candidates = candidates.join(
+                PatientPortalBookingPrompt,
+                PatientPortalBookingPrompt.id == PatientPortalBookingOfferedSlot.prompt_id,
+            ).with_for_update(of=PatientPortalBookingPrompt, skip_locked=True)
+        if model in (PatientPortalInvite, PatientPortalBookingPrompt) and not dry_run:
             # Preparation locks its original invite before inserting the replacement. Lock
             # deletion candidates too, so a new preparation cannot appear between selection
             # and DELETE. The DELETE rechecks the child predicate using a fresh snapshot.
@@ -426,14 +444,21 @@ def _clear_booking_choice_times(
             PatientPortalBookingChoice.slot_id.is_not(None),
         ),
     )
-    choice_ids = list(
-        session.scalars(
-            select(PatientPortalBookingChoice.id)
-            .where(stale_copy)
-            .order_by(PatientPortalBookingChoice.id)
-            .limit(batch_size)
+    candidates = (
+        select(PatientPortalBookingChoice.id)
+        .join(
+            PatientPortalBookingPrompt,
+            PatientPortalBookingPrompt.id == PatientPortalBookingChoice.prompt_id,
         )
+        .where(stale_copy)
+        .order_by(PatientPortalBookingChoice.id)
+        .limit(batch_size)
     )
+    if not dry_run:
+        # Result processing takes prompt then choice. Skip busy parents so cleanup never
+        # takes the opposite order or waits while holding another prompt's lock.
+        candidates = candidates.with_for_update(of=PatientPortalBookingPrompt, skip_locked=True)
+    choice_ids = list(session.scalars(candidates))
     if dry_run or not choice_ids:
         return len(choice_ids)
     result = session.execute(

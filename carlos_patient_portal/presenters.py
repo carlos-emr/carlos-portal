@@ -381,7 +381,8 @@ def assemble_booking_offer(
         and choice.starts_at is not None
     ):
         # Past the configured wait, the patient is told plainly rather than left on "confirming".
-        overdue = as_utc(choice.chosen_at) + timedelta(minutes=wait_minutes) <= now
+        remaining = as_utc(choice.chosen_at) + timedelta(minutes=wait_minutes) - now
+        overdue = remaining <= timedelta(0)
         when, details = slot_text(choice)
         return BookingOfferViewModel(
             state=BOOKING_VIEW_PENDING,
@@ -389,6 +390,8 @@ def assemble_booking_offer(
                 "booking_choice_pending_overdue" if overdue else "booking_choice_pending"
             ],
             chosen=text["booking_slot_detail_separator"].join((when, details)),
+            wait_remaining_ms=None if overdue else max(1, int(remaining.total_seconds() * 1000)),
+            overdue_notice=text["booking_choice_pending_overdue"],
         )
     open_for_choice = prompt.status in (BOOKING_PROMPT_STATUS_SENT, BOOKING_PROMPT_STATUS_READ)
     taken_notice = (
@@ -415,7 +418,7 @@ def assemble_booking_offer(
     # offered times, but without saying the portal cannot book.
     return BookingOfferViewModel(
         state=BOOKING_VIEW_CONTACT if prompt.offer_digest is None else BOOKING_VIEW_CLOSED,
-        notice=taken_notice,
+        notice=text["booking_slot_taken_contact"] if taken_notice else None,
     )
 
 

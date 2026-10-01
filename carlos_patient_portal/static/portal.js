@@ -313,3 +313,15 @@ if (activationMfaMethod instanceof HTMLSelectElement && activationPhone instance
   activationMfaMethod.addEventListener("change", syncActivationPhoneRequirement);
   syncActivationPhoneRequirement();
 }
+
+// Keep an open waiting page honest even when the patient does not reload it.
+const bookingStatus = document.querySelector("[data-booking-wait-ms]");
+if (bookingStatus instanceof HTMLElement) {
+  const remainingMs = Number(bookingStatus.dataset.bookingWaitMs);
+  const overdueNotice = bookingStatus.dataset.bookingOverdueNotice;
+  if (Number.isFinite(remainingMs) && remainingMs >= 0 && overdueNotice) {
+    window.setTimeout(() => {
+      bookingStatus.textContent = overdueNotice;
+    }, remainingMs);
+  }
+}

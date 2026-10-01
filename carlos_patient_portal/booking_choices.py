@@ -225,11 +225,12 @@ def choose_offered_slot(
     `offered_slot_id` is the portal's own row id, as the page offered it; CARLOS's slot id never
     reaches the browser.
     """
-    now = utc_now()
-    prompt = _require_open_for_patient(
-        _lock_prompt(session, prompt_id, clinic_id=account.clinic_id, account_id=account.id),
-        now=now,
+    locked_prompt = _lock_prompt(
+        session, prompt_id, clinic_id=account.clinic_id, account_id=account.id
     )
+    # The prompt or slot may expire while another request holds this lock.
+    now = utc_now()
+    prompt = _require_open_for_patient(locked_prompt, now=now)
     if _pending_choice(session, prompt.id) is not None:
         raise BookingChoiceUnavailableError()
     slot = (
@@ -287,11 +288,12 @@ def decline_offered_slots(
     account: PatientPortalAccount,
 ) -> PatientPortalBookingPrompt:
     """Record that none of the offered times work; the patient is told to contact the clinic."""
-    now = utc_now()
-    prompt = _require_open_for_patient(
-        _lock_prompt(session, prompt_id, clinic_id=account.clinic_id, account_id=account.id),
-        now=now,
+    locked_prompt = _lock_prompt(
+        session, prompt_id, clinic_id=account.clinic_id, account_id=account.id
     )
+    # The prompt or slot may expire while another request holds this lock.
+    now = utc_now()
+    prompt = _require_open_for_patient(locked_prompt, now=now)
     if _pending_choice(session, prompt.id) is not None:
         raise BookingChoiceUnavailableError()
     offered_count = len(current_offered_slots(session, prompt.id, now=now))

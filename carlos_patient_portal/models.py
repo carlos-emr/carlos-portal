@@ -1446,6 +1446,8 @@ class PatientPortalBookingOfferedSlot(Base):
             unique=True,
         ),
         Index("ix_pp_booking_offered_slots_starts", "starts_at"),
+        # An old browser form must never select a replacement that reused a deleted row ID.
+        {"sqlite_autoincrement": True},
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

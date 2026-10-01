@@ -162,6 +162,7 @@ def upgrade() -> None:
             "location_code is null or length(location_code) between 1 and 32",
             name="ck_pp_booking_offered_slots_location_code_length",
         ),
+        sqlite_autoincrement=True,
     )
     op.create_index(
         "ux_pp_booking_offered_slots_prompt_slot",

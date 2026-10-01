@@ -31,7 +31,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -44,6 +44,7 @@ from carlos_patient_portal.auth import (
     record_password_reset_delivery_outcome,
     request_password_reset,
 )
+from carlos_patient_portal.booking_offers import BOOKED_TIME_RETENTION_AFTER_START
 from carlos_patient_portal.email_delivery import PortalEmailDeliveryError, PortalEmailSender
 from carlos_patient_portal.models import (
     ACCOUNT_STATUS_ACTIVE,
@@ -54,6 +55,7 @@ from carlos_patient_portal.models import (
     AUDIT_EVENT_PASSWORD_RESET_DELIVERY,
     AUDIT_OUTCOME_FAILURE,
     AUDIT_OUTCOME_SUCCESS,
+    BOOKING_CHOICE_STATE_BOOKED,
     BOOKING_PROMPT_STATUS_BOOKED,
     BOOKING_PROMPT_STATUS_SENT,
     BOOKING_PROMPT_STATUS_WITHDRAWN,
@@ -71,6 +73,7 @@ from carlos_patient_portal.models import (
     PASSWORD_RESET_STATUS_PENDING,
     PASSWORD_RESET_STATUS_REVOKED,
     PatientPortalAccount,
+    PatientPortalBookingChoice,
     PatientPortalBookingPrompt,
     PatientPortalOutboundDelivery,
     PatientPortalPasswordResetToken,
@@ -690,8 +693,19 @@ def _booking_prompt_update_recipient(
             PatientPortalBookingPrompt.id == booking_prompt_id,
             PatientPortalBookingPrompt.status != BOOKING_PROMPT_STATUS_WITHDRAWN,
             or_(
-                PatientPortalBookingPrompt.status == BOOKING_PROMPT_STATUS_BOOKED,
-                PatientPortalBookingPrompt.expires_at > utc_now(),
+                and_(
+                    PatientPortalBookingPrompt.status == BOOKING_PROMPT_STATUS_BOOKED,
+                    select(PatientPortalBookingChoice.id).where(
+                        PatientPortalBookingChoice.prompt_id == PatientPortalBookingPrompt.id,
+                        PatientPortalBookingChoice.state == BOOKING_CHOICE_STATE_BOOKED,
+                        PatientPortalBookingChoice.starts_at
+                        > utc_now() - BOOKED_TIME_RETENTION_AFTER_START,
+                    ).exists(),
+                ),
+                and_(
+                    PatientPortalBookingPrompt.status != BOOKING_PROMPT_STATUS_BOOKED,
+                    PatientPortalBookingPrompt.expires_at > utc_now(),
+                ),
             ),
         )
     )

@@ -156,7 +156,10 @@ When it is deleted:
   appointment's start. The pick row itself stays, without the time, so a repeated CARLOS result is
   still answered idempotently, and goes with its prompt.
 - The prompt, with its picks: by `cleanup-transient-auth` once it is past its expiry by the
-  retention window and any booked time is more than a day past.
+  retention window and any booked time is more than a day past. Unanswered choices and their
+  prompts survive every cleanup until CARLOS reports a result or staff withdraws the prompt.
+  Cleanup locks each prompt before its slots or choices and skips busy prompts, matching result
+  processing so concurrent cleanup cannot discard pending work or invert its lock order.
 
 The emails the portal sends about a prompt carry none of it: "a message is waiting" and "there is
 an update" with a sign-in link, and nothing about times, providers, visit types, or locations.

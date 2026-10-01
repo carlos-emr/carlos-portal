@@ -974,6 +974,7 @@ function screenshotPath(name) {
       'an offer must let the patient say none of the times work'
     );
     const takenTime = (await page.locator('.booking-slot-when').first().innerText()).trim();
+    await page.clock.install();
     await offeredTimes.first().check();
     await page.screenshot({
       path: screenshotPath('patient-portal-offered-times-mobile'),
@@ -989,6 +990,12 @@ function screenshotPath(name) {
       'a patient waiting on the clinic must not be offered another pick'
     );
 
+    // The page must change its advice without a navigation or manual refresh.
+    await page.clock.fastForward(16 * 60 * 1000);
+    await page.getByText(
+      'The clinic will confirm your time. If it is urgent, call the clinic.',
+      { exact: true },
+    ).waitFor();
     reportBookingResult('slot_unavailable');
     await page.reload();
     await page.getByText('That time was just taken. Please pick another.', { exact: true })

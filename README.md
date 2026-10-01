@@ -825,7 +825,8 @@ collects the pick by polling.
   time: every write locks the prompt row, and a partial unique index refuses a second pending pick.
 - The patient sees "We are confirming your time with the clinic." while a pick waits, and after
   `PATIENT_PORTAL_BOOKING_CHOICE_WAIT_MINUTES` (default 15, 1 to 1440) "The clinic will confirm your
-  time. If it is urgent, call the clinic." On `booked`: "Booked for Tuesday 14 October at 10:30."
+  time. If it is urgent, call the clinic." An open page updates this advice at the threshold.
+  On `booked`: "Booked for Tuesday 14 October at 10:30."
   in clinic time, until a day after the appointment. On `slot_unavailable`: "That time was just
   taken. Please pick another." with the remaining and replacement times. After **None of these
   work**, or when no time is left, the prompt tells them to contact the clinic. Cancelling or
@@ -833,7 +834,9 @@ collects the pick by polling.
 - The first `booked` or `slot_unavailable` result queues one `booking_prompt_update` email saying
   only that there is an update in the portal, with a sign-in link: no time, provider, visit type,
   or location. It is not sent if the prompt has since been withdrawn or has expired unbooked, or if
-  staff disabled or locked the account, and it does not change `notified_at`.
+  staff disabled or locked the account. A booked confirmation must still be visible (until a day
+  after the appointment starts); delayed notices after that point are suppressed. An update does
+  not change `notified_at`.
 - Offers, picks, results, and declines are audited as `booking_prompt.offer` (reason
   `initial:<count>` or `replacement:<count>`), `booking_prompt.choice`, `booking_prompt.result`
   (reason `booked` or `slot_unavailable`), and `booking_prompt.decline` (reason
@@ -844,7 +847,8 @@ collects the pick by polling.
   for the retention window. A pick keeps a copy of its time so the confirmation survives the offer's
   deletion; the copy is cleared when CARLOS reports the time taken or the prompt is withdrawn, and
   for a booked time by `cleanup-transient-auth` a day after the appointment starts. Schedule that
-  command at least daily. See the amendment in
+  command at least daily. Unanswered choices and their prompts remain until CARLOS answers or
+  staff withdraws the prompt, including beyond the retention window. See the amendment in
   [`docs/architecture/patient-portal-runtime.md`](docs/architecture/patient-portal-runtime.md).
 
 `PATIENT_PORTAL_BOOKING_LOCATIONS` lists where an offered time can be, as comma-separated

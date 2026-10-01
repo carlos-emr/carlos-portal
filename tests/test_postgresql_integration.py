@@ -12,6 +12,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
+from carlos_patient_portal import booking_choices
 from carlos_patient_portal.account_settings import (
     CONTACT_UPDATE_OUTCOME_CONFIRMATION_REQUIRED,
     AccountSettingsStepUpError,
@@ -24,11 +25,17 @@ from carlos_patient_portal.account_settings import (
 from carlos_patient_portal.auth import create_patient_session, hash_auth_token
 from carlos_patient_portal.booking_choices import (
     BookingChoiceUnavailableError,
+    BookingSlotUnavailableError,
     choose_offered_slot,
+    decline_offered_slots,
     record_choice_result,
 )
 from carlos_patient_portal.booking_offers import OfferedSlotSpec
-from carlos_patient_portal.booking_prompts import BookingPromptNotice, create_booking_prompt
+from carlos_patient_portal.booking_prompts import (
+    BookingPromptNotFoundError,
+    BookingPromptNotice,
+    create_booking_prompt,
+)
 from carlos_patient_portal.config import Settings
 from carlos_patient_portal.credentials import hash_password
 from carlos_patient_portal.database import create_portal_engine
@@ -1672,4 +1679,138 @@ def test_postgresql_simultaneous_identical_results_record_once_and_notify_once()
             assert session.get(PatientPortalBookingPrompt, prompt_id).status == "booked"
             assert session.scalar(select(func.count(PatientPortalBookingOfferedSlot.id))) == 0
     finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize("action", ["choose_expired_prompt", "choose_started_slot", "decline"])
+def test_postgresql_choice_rechecks_time_after_waiting_for_prompt_lock(monkeypatch, action) -> None:
+    assert POSTGRES_URL is not None
+    clean_postgresql_database()
+    account_id = insert_postgres_account(username="clock.race", demographic_no=1234)
+    engine = create_portal_engine(POSTGRES_URL)
+    lock_attempted = Event()
+    now = utc_now()
+    clock = [now]
+    monkeypatch.setattr(booking_choices, "utc_now", lambda: clock[0])
+
+    def observe_lock(connection, cursor, statement, parameters, context, executemany):
+        if connection.info.get("booking_clock_worker") and "FOR UPDATE" in statement:
+            lock_attempted.set()
+
+    def submit_choice():
+        with Session(engine) as session, session.begin():
+            session.connection().info["booking_clock_worker"] = True
+            session.execute(text("SET LOCAL statement_timeout = '10s'"))
+            account = session.get(PatientPortalAccount, account_id)
+            expected = (
+                BookingSlotUnavailableError if action == "choose_started_slot"
+                else BookingPromptNotFoundError
+            )
+            with pytest.raises(expected):
+                if action == "decline":
+                    decline_offered_slots(session, prompt_id, account=account)
+                else:
+                    choose_offered_slot(session, prompt_id, slot_ids[0], account=account)
+
+    try:
+        prompt_id, slot_ids = create_postgres_offer(engine, operation_id="clock-race")
+        with Session(engine) as session, session.begin():
+            if action == "choose_started_slot":
+                session.get(PatientPortalBookingOfferedSlot, slot_ids[0]).starts_at = (
+                    now + timedelta(seconds=1)
+                )
+            else:
+                session.get(PatientPortalBookingPrompt, prompt_id).expires_at = (
+                    now + timedelta(seconds=1)
+                )
+        event.listen(engine, "before_cursor_execute", observe_lock)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            with Session(engine) as holding, holding.begin():
+                holding.scalar(select(PatientPortalBookingPrompt).where(
+                    PatientPortalBookingPrompt.id == prompt_id
+                ).with_for_update())
+                worker = executor.submit(submit_choice)
+                assert lock_attempted.wait(timeout=5)
+                clock[0] = now + timedelta(seconds=2)
+            worker.result(timeout=15)
+        with Session(engine) as session:
+            assert session.scalar(select(func.count(PatientPortalBookingChoice.id))) == 0
+            assert session.get(PatientPortalBookingPrompt, prompt_id).status == "sent"
+    finally:
+        event.remove(engine, "before_cursor_execute", observe_lock)
+        engine.dispose()
+
+
+@pytest.mark.parametrize("state", ["pending", "booked"])
+def test_postgresql_cleanup_skips_prompt_while_result_holds_parent_lock(state) -> None:
+    """An in-flight result must not lose its choice, or deadlock against cleanup's child lock."""
+    assert POSTGRES_URL is not None
+    clean_postgresql_database()
+    account_id = insert_postgres_account(username="cleanup.booking", demographic_no=1234)
+    engine = create_portal_engine(POSTGRES_URL)
+    parent_locked = Event()
+    allow_result = Event()
+    long_ago = utc_now() - timedelta(days=200)
+
+    def pause_result_after_parent_lock(connection, cursor, statement, parameters, context, many):
+        if (
+            connection.info.get("booking_cleanup_worker") == "result"
+            and "FROM patient_portal_booking_prompts" in statement
+            and "FOR UPDATE" in statement
+        ):
+            parent_locked.set()
+            assert allow_result.wait(timeout=10)
+
+    def report_result():
+        with Session(engine) as session, session.begin():
+            session.connection().info["booking_cleanup_worker"] = "result"
+            session.execute(text("SET LOCAL statement_timeout = '10s'"))
+            return record_choice_result(
+                session, prompt_id, clinic_id="postgres-clinic", choice_id=choice_id,
+                result="booked", actor="Sync", actor_id="sync", notice=POSTGRES_BOOKING_NOTICE,
+            ).recorded
+
+    try:
+        prompt_id, slot_ids = create_postgres_offer(engine, operation_id="cleanup-result-race")
+        with Session(engine) as session, session.begin():
+            account = session.get(PatientPortalAccount, account_id)
+            choice_id = choose_offered_slot(session, prompt_id, slot_ids[0], account=account).id
+            if state == "booked":
+                record_choice_result(
+                    session, prompt_id, clinic_id="postgres-clinic", choice_id=choice_id,
+                    result="booked", actor="Sync", actor_id="sync", notice=POSTGRES_BOOKING_NOTICE,
+                )
+                session.get(PatientPortalBookingChoice, choice_id).starts_at = (
+                    utc_now() - timedelta(days=2)
+                )
+            prompt = session.get(PatientPortalBookingPrompt, prompt_id)
+            prompt.created_at = long_ago - timedelta(days=1)
+            prompt.expires_at = long_ago
+            for notice in session.scalars(select(PatientPortalOutboundDelivery)):
+                notice.status = OUTBOX_STATUS_DELIVERED
+                notice.delivered_at = long_ago
+                notice.created_at = long_ago
+        event.listen(engine, "after_cursor_execute", pause_result_after_parent_lock)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            result = executor.submit(report_result)
+            try:
+                assert parent_locked.wait(timeout=5)
+                with Session(engine) as session, session.begin():
+                    session.execute(text("SET LOCAL statement_timeout = '3s'"))
+                    cleaned = cleanup_transient_auth_rows(
+                        session, before=utc_now() - timedelta(days=30)
+                    )
+                    assert cleaned.booking_prompts == 0
+                    assert cleaned.booking_choice_times == 0
+                    assert cleaned.offered_slots == 0
+            finally:
+                allow_result.set()
+            assert result.result(timeout=15) is (state == "pending")
+        with Session(engine) as session, session.begin():
+            assert session.get(PatientPortalBookingChoice, choice_id).state == "booked"
+            cleaned = cleanup_transient_auth_rows(session, before=utc_now() - timedelta(days=30))
+            assert cleaned.booking_prompts == (1 if state == "booked" else 0)
+    finally:
+        allow_result.set()
+        event.remove(engine, "after_cursor_execute", pause_result_after_parent_lock)
         engine.dispose()

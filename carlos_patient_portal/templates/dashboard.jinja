@@ -384,7 +384,12 @@
                     <button class="secondary-action" type="submit">{{ text.booking_decline }}</button>
                   </form>
                 {% elif booking and booking.state in ("pending", "booked") %}
-                  <p class="form-notice booking-status" role="status">{{ booking.notice }}</p>
+                  <p class="form-notice booking-status" role="status"
+                    {% if booking.wait_remaining_ms is not none %}
+                      data-booking-wait-ms="{{ booking.wait_remaining_ms }}"
+                      data-booking-overdue-notice="{{ booking.overdue_notice }}"
+                    {% endif %}
+                  >{{ booking.notice }}</p>
                   {% if booking.chosen %}
                     <p class="message-meta booking-chosen">{{ booking.chosen }}</p>
                   {% endif %}
