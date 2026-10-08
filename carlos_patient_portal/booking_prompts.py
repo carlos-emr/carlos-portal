@@ -15,19 +15,32 @@
 """Booking prompts: a clinic asks a patient to book an appointment.
 
 CARLOS creates a prompt through the internal API; the patient reads it after signing in and is
-emailed only that a message is waiting. The portal books nothing. A prompt is built from fixed
-vocabularies, never from staff text, so it carries no clinical detail.
+emailed only that a message is waiting. The portal books nothing itself. A prompt is built from
+fixed vocabularies, never from staff text, so it carries no clinical detail. It may carry times
+CARLOS offers for the patient to pick from; `booking_choices` handles the pick and CARLOS's answer.
 """
 
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
 from carlos_patient_portal.audit import record_audit_event
+from carlos_patient_portal.booking_offers import (
+    BOOKED_TIME_RETENTION_AFTER_START,
+    OfferedSlotSpec,
+    add_offered_slots,
+    as_utc,
+    closed_after_expiry_notice,
+    delete_offered_slots,
+    normalize_offered_slots,
+    offer_digest,
+    require_future_slots,
+)
 from carlos_patient_portal.delivery_outbox import enqueue_booking_prompt_delivery
 from carlos_patient_portal.invites import (
     normalize_clinic_id,
@@ -41,17 +54,25 @@ from carlos_patient_portal.models import (
     AUDIT_ACTOR_TYPE_STAFF,
     AUDIT_EVENT_BOOKING_PROMPT_CREATE,
     AUDIT_EVENT_BOOKING_PROMPT_LIST,
+    AUDIT_EVENT_BOOKING_PROMPT_OFFER,
     AUDIT_EVENT_BOOKING_PROMPT_READ,
     AUDIT_EVENT_BOOKING_PROMPT_WITHDRAW,
     AUDIT_OUTCOME_SUCCESS,
+    BOOKING_CHOICE_STATE_BOOKED,
+    BOOKING_CHOICE_STATE_PENDING,
+    BOOKING_CHOICE_STATE_WITHDRAWN,
     BOOKING_PROMPT_APPOINTMENT_TYPES,
     BOOKING_PROMPT_STATE_EXPIRED,
+    BOOKING_PROMPT_STATUS_BOOKED,
+    BOOKING_PROMPT_STATUS_CHOICE_PENDING,
+    BOOKING_PROMPT_STATUS_DECLINED_ALL,
     BOOKING_PROMPT_STATUS_READ,
     BOOKING_PROMPT_STATUS_SENT,
     BOOKING_PROMPT_STATUS_WITHDRAWN,
     BOOKING_PROMPT_URGENCIES,
     MAX_BOOKING_PROMPT_OPERATION_ID_LENGTH,
     PatientPortalAccount,
+    PatientPortalBookingChoice,
     PatientPortalBookingPrompt,
     utc_now,
 )
@@ -89,18 +110,28 @@ class CreatedBookingPrompt:
     created: bool
 
 
+# Statuses that expiry does not override: a booked prompt stays booked, and a patient waiting on
+# CARLOS keeps waiting until CARLOS answers, however long the prompt was meant to last.
+_STATUSES_THAT_DO_NOT_EXPIRE = frozenset(
+    {
+        BOOKING_PROMPT_STATUS_WITHDRAWN,
+        BOOKING_PROMPT_STATUS_BOOKED,
+        BOOKING_PROMPT_STATUS_CHOICE_PENDING,
+    }
+)
+
+
 def booking_prompt_state(prompt: PatientPortalBookingPrompt, *, now: datetime | None = None) -> str:
-    """The state CARLOS and the patient see: sent, read, withdrawn, or expired."""
-    if prompt.status == BOOKING_PROMPT_STATUS_WITHDRAWN:
-        return BOOKING_PROMPT_STATUS_WITHDRAWN
-    if _as_utc(prompt.expires_at) <= (now or utc_now()):
+    """The state CARLOS and the patient see.
+
+    One of sent, read, choice_pending, booked, declined_all, withdrawn, or expired. Expired is not
+    stored: it is a sent, read, or declined prompt past its expiry.
+    """
+    if prompt.status in _STATUSES_THAT_DO_NOT_EXPIRE:
+        return prompt.status
+    if as_utc(prompt.expires_at) <= (now or utc_now()):
         return BOOKING_PROMPT_STATE_EXPIRED
     return prompt.status
-
-
-def _as_utc(value: datetime) -> datetime:
-    # SQLite returns naive datetimes for timezone-aware columns; PostgreSQL returns aware ones.
-    return value if value.tzinfo is not None else value.replace(tzinfo=utc_now().tzinfo)
 
 
 def _normalize_operation_id(operation_id: str) -> str:
@@ -118,13 +149,17 @@ class _PromptRequest:
     urgency: str
     appointment_type: str
     suggested_by: str | None
+    offer_digest: str | None
 
     def matches(self, prompt: PatientPortalBookingPrompt) -> bool:
+        # The offer is compared by its digest, not against the stored times, which change once
+        # the patient picks one and are deleted when the prompt closes.
         return (
             prompt.demographic_no == self.demographic_no
             and prompt.urgency == self.urgency
             and prompt.appointment_type == self.appointment_type
             and prompt.suggested_by == self.suggested_by
+            and prompt.offer_digest == self.offer_digest
         )
 
 
@@ -167,11 +202,15 @@ def create_booking_prompt(
     created_by_id: str | None,
     ttl: timedelta,
     notice: BookingPromptNotice,
+    offered_slots: Sequence[OfferedSlotSpec] = (),
+    booking_location_codes: Collection[str] = (),
+    offer_digest_secret: str | None = None,
 ) -> CreatedBookingPrompt:
-    """Create a prompt and queue its notice in one transaction.
+    """Create a prompt, with any offered times, and queue its notice in one transaction.
 
     Retrying the same operation returns the same prompt and queues nothing, so a CARLOS retry
-    after a lost response sends the patient one email. A patient without an active account gets
+    after a lost response sends the patient one email. The same operation with different values,
+    including different offered times, is refused. A patient without an active account gets
     nothing stored, so CARLOS can tell staff to phone instead.
     """
     validate_demographic_no(demographic_no)
@@ -189,11 +228,22 @@ def create_booking_prompt(
     )
     normalized_created_by = normalize_staff_actor(created_by)
     normalized_created_by_id = normalize_staff_actor_id(created_by_id, normalized_created_by)
+    normalized_slots = normalize_offered_slots(
+        offered_slots,
+        location_codes=booking_location_codes,
+    )
+    if normalized_slots and not offer_digest_secret:
+        raise ValueError("offer_digest_secret is required to offer times")
     request = _PromptRequest(
         demographic_no=demographic_no,
         urgency=urgency,
         appointment_type=appointment_type,
         suggested_by=normalized_suggested_by,
+        offer_digest=(
+            offer_digest(normalized_slots, secret=offer_digest_secret)
+            if normalized_slots and offer_digest_secret
+            else None
+        ),
     )
 
     existing = _prompt_for_operation(
@@ -204,17 +254,23 @@ def create_booking_prompt(
     if existing is not None:
         return _retry_result(existing, request)
 
+    # FOR SHARE: staff turning the account off lock it before cancelling its prompts' picks, so a
+    # prompt is either created first (and its picks cancelled there) or waits and finds it off.
+    # The prompt's own foreign key takes only KEY SHARE, which would not wait.
     account = session.scalar(
-        select(PatientPortalAccount).where(
+        select(PatientPortalAccount)
+        .where(
             PatientPortalAccount.clinic_id == normalized_clinic_id,
             PatientPortalAccount.demographic_no == demographic_no,
             PatientPortalAccount.status == ACCOUNT_STATUS_ACTIVE,
         )
+        .with_for_update(read=True)
     )
     if account is None:
         raise BookingPromptAccountUnavailableError()
 
     now = utc_now()
+    require_future_slots(normalized_slots, now=now)
     prompt = PatientPortalBookingPrompt(
         clinic_id=normalized_clinic_id,
         demographic_no=demographic_no,
@@ -228,6 +284,7 @@ def create_booking_prompt(
         created_by_id=normalized_created_by_id,
         created_at=now,
         expires_at=now + ttl,
+        offer_digest=request.offer_digest,
     )
     try:
         with session.begin_nested():
@@ -245,6 +302,7 @@ def create_booking_prompt(
             raise
         return _retry_result(raced, request)
 
+    add_offered_slots(session, prompt.id, normalized_slots)
     enqueue_booking_prompt_delivery(
         session,
         account_id=account.id,
@@ -266,6 +324,22 @@ def create_booking_prompt(
         resource_type="booking_prompt",
         resource_id=str(prompt.id),
     )
+    if normalized_slots:
+        record_audit_event(
+            session,
+            event_type=AUDIT_EVENT_BOOKING_PROMPT_OFFER,
+            outcome=AUDIT_OUTCOME_SUCCESS,
+            actor_type=AUDIT_ACTOR_TYPE_STAFF,
+            actor=normalized_created_by,
+            actor_id=normalized_created_by_id,
+            clinic_id=normalized_clinic_id,
+            demographic_no=demographic_no,
+            account_id=account.id,
+            resource_type="booking_prompt",
+            resource_id=str(prompt.id),
+            # A count only: which times were offered is not audit evidence anyone needs.
+            reason=f"initial:{len(normalized_slots)}",
+        )
     return CreatedBookingPrompt(prompt=prompt, created=True)
 
 
@@ -320,7 +394,9 @@ def withdraw_booking_prompt(
     """Withdraw a prompt, for example once the patient has booked by phone.
 
     Withdrawing again returns the prompt unchanged, so a CARLOS retry is safe. A withdrawn
-    prompt's pending notice is not sent: the outbox checks the prompt before sending.
+    prompt's pending notice is not sent: the outbox checks the prompt before sending. Its offered
+    times are deleted, a choice still waiting for CARLOS is closed so CARLOS cannot book it, and
+    no copy of a chosen time is kept, because the patient no longer sees the prompt.
     """
     normalized_clinic_id = normalize_clinic_id(clinic_id)
     normalized_actor = normalize_staff_actor(withdrawn_by)
@@ -337,11 +413,34 @@ def withdraw_booking_prompt(
         raise BookingPromptNotFoundError()
     if prompt.status == BOOKING_PROMPT_STATUS_WITHDRAWN:
         return prompt
+    now = utc_now()
     prompt.status = BOOKING_PROMPT_STATUS_WITHDRAWN
-    prompt.withdrawn_at = utc_now()
+    prompt.withdrawn_at = now
     prompt.withdrawn_by = normalized_actor
     prompt.withdrawn_by_id = normalized_actor_id
     session.flush()
+    delete_offered_slots(session, prompt.id)
+    session.execute(
+        update(PatientPortalBookingChoice)
+        .where(
+            PatientPortalBookingChoice.prompt_id == prompt.id,
+            PatientPortalBookingChoice.state == BOOKING_CHOICE_STATE_PENDING,
+        )
+        .values(state=BOOKING_CHOICE_STATE_WITHDRAWN, result_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    session.execute(
+        update(PatientPortalBookingChoice)
+        .where(PatientPortalBookingChoice.prompt_id == prompt.id)
+        .values(
+            slot_id=None,
+            starts_at=None,
+            duration_minutes=None,
+            visit_mode=None,
+            location_code=None,
+        )
+        .execution_options(synchronize_session=False)
+    )
     record_audit_event(
         session,
         event_type=AUDIT_EVENT_BOOKING_PROMPT_WITHDRAW,
@@ -359,12 +458,45 @@ def withdraw_booking_prompt(
 
 
 def _active_for_account(account_id: int, now: datetime) -> tuple[ColumnElement[bool], ...]:
+    """Which of an account's prompts the patient sees.
+
+    A live sent, read, or declined prompt; a prompt whose chosen time CARLOS has not answered yet,
+    even past its expiry, so the patient is not left without an answer; for a few days, a prompt
+    whose pick was reported taken, or lapsed, after it expired, so the patient learns to contact
+    the clinic; and a booked prompt until a day after the booked time.
+    """
+    booked_time_upcoming = (
+        select(PatientPortalBookingChoice.id)
+        .where(
+            PatientPortalBookingChoice.prompt_id == PatientPortalBookingPrompt.id,
+            PatientPortalBookingChoice.state == BOOKING_CHOICE_STATE_BOOKED,
+            PatientPortalBookingChoice.starts_at > now - BOOKED_TIME_RETENTION_AFTER_START,
+        )
+        .exists()
+    )
     return (
         PatientPortalBookingPrompt.account_id == account_id,
-        PatientPortalBookingPrompt.status.in_(
-            (BOOKING_PROMPT_STATUS_SENT, BOOKING_PROMPT_STATUS_READ)
+        or_(
+            and_(
+                PatientPortalBookingPrompt.status.in_(
+                    (
+                        BOOKING_PROMPT_STATUS_SENT,
+                        BOOKING_PROMPT_STATUS_READ,
+                        BOOKING_PROMPT_STATUS_DECLINED_ALL,
+                    )
+                ),
+                PatientPortalBookingPrompt.expires_at > now,
+            ),
+            PatientPortalBookingPrompt.status == BOOKING_PROMPT_STATUS_CHOICE_PENDING,
+            and_(
+                PatientPortalBookingPrompt.status == BOOKING_PROMPT_STATUS_BOOKED,
+                booked_time_upcoming,
+            ),
+            and_(
+                PatientPortalBookingPrompt.status == BOOKING_PROMPT_STATUS_READ,
+                closed_after_expiry_notice(now),
+            ),
         ),
-        PatientPortalBookingPrompt.expires_at > now,
     )
 
 
@@ -372,7 +504,7 @@ def list_active_prompts_for_account(
     session: Session,
     account_id: int,
 ) -> list[PatientPortalBookingPrompt]:
-    """The patient's live prompts, newest first; withdrawn and expired ones drop out."""
+    """The patient's live prompts, newest first; withdrawn, expired, and past ones drop out."""
     return list(
         session.scalars(
             select(PatientPortalBookingPrompt)
@@ -431,3 +563,19 @@ def open_booking_prompt(
             resource_id=str(prompt.id),
         )
     return prompt
+
+
+def find_visible_prompt(
+    session: Session,
+    prompt_id: int,
+    *,
+    account: PatientPortalAccount,
+) -> PatientPortalBookingPrompt | None:
+    """One of the patient's visible prompts, without recording a read; None when not theirs."""
+    return session.scalar(
+        select(PatientPortalBookingPrompt).where(
+            PatientPortalBookingPrompt.id == prompt_id,
+            PatientPortalBookingPrompt.clinic_id == account.clinic_id,
+            *_active_for_account(account.id, utc_now()),
+        )
+    )

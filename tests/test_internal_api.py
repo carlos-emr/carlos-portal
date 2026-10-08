@@ -1833,6 +1833,8 @@ INTERNAL_ROUTE_PERMISSIONS = (
     ("POST", "/internal/carlos/patients/1234/booking-prompts", "portal.booking_prompt.manage"),
     ("GET", "/internal/carlos/patients/1234/booking-prompts", "portal.booking_prompt.manage"),
     ("POST", "/internal/carlos/booking-prompts/1/withdraw", "portal.booking_prompt.manage"),
+    ("GET", "/internal/carlos/booking-prompts/choices", "portal.booking_prompt.sync"),
+    ("POST", "/internal/carlos/booking-prompts/1/choice-result", "portal.booking_prompt.sync"),
 )
 UNRELATED_PERMISSION = "portal.something.else"
 
@@ -1852,6 +1854,8 @@ def test_internal_openapi_contract_is_stable() -> None:
     }
 
     assert paths == {
+        "/internal/carlos/booking-prompts/choices": ["get"],
+        "/internal/carlos/booking-prompts/{prompt_id}/choice-result": ["post"],
         "/internal/carlos/booking-prompts/{prompt_id}/withdraw": ["post"],
         "/internal/carlos/contact-reviews": ["get"],
         "/internal/carlos/contact-reviews/{review_request_id}/decision": ["post"],

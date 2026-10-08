@@ -31,7 +31,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -44,6 +44,10 @@ from carlos_patient_portal.auth import (
     record_password_reset_delivery_outcome,
     request_password_reset,
 )
+from carlos_patient_portal.booking_offers import (
+    BOOKED_TIME_RETENTION_AFTER_START,
+    closed_after_expiry_notice,
+)
 from carlos_patient_portal.email_delivery import PortalEmailDeliveryError, PortalEmailSender
 from carlos_patient_portal.models import (
     ACCOUNT_STATUS_ACTIVE,
@@ -54,9 +58,13 @@ from carlos_patient_portal.models import (
     AUDIT_EVENT_PASSWORD_RESET_DELIVERY,
     AUDIT_OUTCOME_FAILURE,
     AUDIT_OUTCOME_SUCCESS,
+    BOOKING_CHOICE_STATE_BOOKED,
+    BOOKING_PROMPT_STATUS_BOOKED,
     BOOKING_PROMPT_STATUS_SENT,
+    BOOKING_PROMPT_STATUS_WITHDRAWN,
     MFA_DELIVERY_METHOD_EMAIL,
     OUTBOX_KIND_BOOKING_PROMPT,
+    OUTBOX_KIND_BOOKING_PROMPT_UPDATE,
     OUTBOX_KIND_CONTACT_CHANGE,
     OUTBOX_KIND_PASSWORD_RESET,
     OUTBOX_KIND_PASSWORD_RESET_REQUEST,
@@ -68,6 +76,7 @@ from carlos_patient_portal.models import (
     PASSWORD_RESET_STATUS_PENDING,
     PASSWORD_RESET_STATUS_REVOKED,
     PatientPortalAccount,
+    PatientPortalBookingChoice,
     PatientPortalBookingPrompt,
     PatientPortalOutboundDelivery,
     PatientPortalPasswordResetToken,
@@ -75,6 +84,8 @@ from carlos_patient_portal.models import (
 )
 
 logger = logging.getLogger(__name__)
+# Both booking notices say only that something is waiting in the portal, and both name their prompt.
+BOOKING_NOTICE_KINDS = frozenset({OUTBOX_KIND_BOOKING_PROMPT, OUTBOX_KIND_BOOKING_PROMPT_UPDATE})
 
 KEY_DERIVATION_INFO = b"carlos-patient-portal:outbound-delivery:v1"
 ASSOCIATED_DATA_PREFIX = "carlos-patient-portal.outbound-delivery.v1"
@@ -366,18 +377,64 @@ def enqueue_booking_prompt_delivery(
     The payload holds only the sign-in link: no prompt detail, and no address, because the notice
     goes to the account's email as it is when sent.
     """
+    return _enqueue_booking_notice(
+        session,
+        kind=OUTBOX_KIND_BOOKING_PROMPT,
+        account_id=account_id,
+        booking_prompt_id=booking_prompt_id,
+        sign_in_url=sign_in_url,
+        encryption_secret=encryption_secret,
+        encryption_key_id=encryption_key_id,
+    )
+
+
+def enqueue_booking_prompt_update_delivery(
+    session: Session,
+    *,
+    account_id: int,
+    booking_prompt_id: int,
+    sign_in_url: str,
+    encryption_secret: str,
+    encryption_key_id: str = OUTBOX_KEY_ID,
+) -> PatientPortalOutboundDelivery:
+    """Queue the "there is an update" email once CARLOS answers a patient's chosen time.
+
+    Like the first notice, the payload holds only the sign-in link: no time, provider, visit type,
+    or location, and no address.
+    """
+    return _enqueue_booking_notice(
+        session,
+        kind=OUTBOX_KIND_BOOKING_PROMPT_UPDATE,
+        account_id=account_id,
+        booking_prompt_id=booking_prompt_id,
+        sign_in_url=sign_in_url,
+        encryption_secret=encryption_secret,
+        encryption_key_id=encryption_key_id,
+    )
+
+
+def _enqueue_booking_notice(
+    session: Session,
+    *,
+    kind: str,
+    account_id: int,
+    booking_prompt_id: int,
+    sign_in_url: str,
+    encryption_secret: str,
+    encryption_key_id: str,
+) -> PatientPortalOutboundDelivery:
     message_id = _new_message_id()
     ciphertext, nonce = _encrypt_payload(
         {"sign_in_url": sign_in_url},
         encryption_secret=encryption_secret,
-        kind=OUTBOX_KIND_BOOKING_PROMPT,
+        kind=kind,
         account_id=account_id,
         message_id=message_id,
     )
     delivery = PatientPortalOutboundDelivery(
         account_id=account_id,
         booking_prompt_id=booking_prompt_id,
-        kind=OUTBOX_KIND_BOOKING_PROMPT,
+        kind=kind,
         status=OUTBOX_STATUS_PENDING,
         encrypted_payload=ciphertext,
         encryption_nonce=nonce,
@@ -614,6 +671,55 @@ def _booking_prompt_notice_recipient(
             PatientPortalBookingPrompt.expires_at > utc_now(),
         )
     )
+    return _deliverable_email(account)
+
+
+def _booking_prompt_update_recipient(
+    session: Session,
+    booking_prompt_id: int | None,
+) -> str | None:
+    """Where the "there is an update" notice should go now, or None when it should not be sent.
+
+    Checked at send time, as for the first notice. Not once the prompt is withdrawn, or has expired
+    without being booked, when the patient would find nothing to act on (except a pick reported
+    taken, or lapsed, after the expiry, which the patient is still shown); and not once staff have
+    disabled or locked the account.
+    """
+    if booking_prompt_id is None:
+        return None
+    account = session.scalar(
+        select(PatientPortalAccount)
+        .join(
+            PatientPortalBookingPrompt,
+            PatientPortalBookingPrompt.account_id == PatientPortalAccount.id,
+        )
+        .where(
+            PatientPortalBookingPrompt.id == booking_prompt_id,
+            PatientPortalBookingPrompt.status != BOOKING_PROMPT_STATUS_WITHDRAWN,
+            or_(
+                and_(
+                    PatientPortalBookingPrompt.status == BOOKING_PROMPT_STATUS_BOOKED,
+                    select(PatientPortalBookingChoice.id).where(
+                        PatientPortalBookingChoice.prompt_id == PatientPortalBookingPrompt.id,
+                        PatientPortalBookingChoice.state == BOOKING_CHOICE_STATE_BOOKED,
+                        PatientPortalBookingChoice.starts_at
+                        > utc_now() - BOOKED_TIME_RETENTION_AFTER_START,
+                    ).exists(),
+                ),
+                and_(
+                    PatientPortalBookingPrompt.status != BOOKING_PROMPT_STATUS_BOOKED,
+                    or_(
+                        PatientPortalBookingPrompt.expires_at > utc_now(),
+                        closed_after_expiry_notice(utc_now()),
+                    ),
+                ),
+            ),
+        )
+    )
+    return _deliverable_email(account)
+
+
+def _deliverable_email(account: PatientPortalAccount | None) -> str | None:
     if (
         account is None
         or account.status != ACCOUNT_STATUS_ACTIVE
@@ -637,8 +743,12 @@ def _record_booking_prompt_delivery(
     )
     if prompt is None:
         return
-    if outcome == AUDIT_OUTCOME_SUCCESS:
+    is_update = delivery.kind == OUTBOX_KIND_BOOKING_PROMPT_UPDATE
+    if outcome == AUDIT_OUTCOME_SUCCESS and not is_update:
+        # `notified_at` answers "was the patient told about the prompt"; an update does not move it.
         prompt.notified_at = utc_now()
+    if is_update:
+        reason = "update_notice" if reason is None else f"update_notice:{reason}"
     record_audit_event(
         session,
         event_type=AUDIT_EVENT_BOOKING_PROMPT_DELIVERY,
@@ -719,7 +829,7 @@ def _finish_delivery(
                 delivery,
                 outcome=AUDIT_OUTCOME_SUCCESS,
             )
-        elif delivery.kind == OUTBOX_KIND_BOOKING_PROMPT:
+        elif delivery.kind in BOOKING_NOTICE_KINDS:
             audit_recorded = _record_booking_prompt_delivery_best_effort(
                 session,
                 delivery,
@@ -763,7 +873,7 @@ def _finish_delivery(
             session.flush()
         elif delivery.kind == OUTBOX_KIND_CONTACT_CHANGE:
             _mark_terminal_contact_change_failure(session, delivery)
-        elif delivery.kind == OUTBOX_KIND_BOOKING_PROMPT:
+        elif delivery.kind in BOOKING_NOTICE_KINDS:
             _record_booking_prompt_delivery(
                 session,
                 delivery,
@@ -783,7 +893,7 @@ def _finish_delivery(
         elif delivery.kind == OUTBOX_KIND_CONTACT_CHANGE:
             _mark_terminal_contact_change_failure(session, delivery)
         elif (
-            delivery.kind == OUTBOX_KIND_BOOKING_PROMPT
+            delivery.kind in BOOKING_NOTICE_KINDS
             and failure_code != OUTBOX_FAILURE_AUDIT_UNAVAILABLE
         ):
             # The prompt is still in the patient's messages; only the notice is missing. When the
@@ -1025,7 +1135,7 @@ def process_one_delivery(
                 recipient = payload.get("recipient")
                 # A booking-prompt notice carries no address: it goes to the account's current
                 # email, looked up at send time.
-                if kind != OUTBOX_KIND_BOOKING_PROMPT and (
+                if kind not in BOOKING_NOTICE_KINDS and (
                     not isinstance(recipient, str) or not recipient
                 ):
                     raise OutboxPayloadError("recipient is invalid")
@@ -1074,6 +1184,22 @@ def process_one_delivery(
                         sign_in_url=sign_in_url,
                         message_id=message_id,
                     )
+                elif kind == OUTBOX_KIND_BOOKING_PROMPT_UPDATE:
+                    with session_factory() as validation_session:
+                        current_recipient = _booking_prompt_update_recipient(
+                            validation_session,
+                            booking_prompt_id,
+                        )
+                    if current_recipient is None:
+                        raise _BookingPromptNoticeNotNeeded()
+                    sign_in_url = payload.get("sign_in_url")
+                    if not isinstance(sign_in_url, str) or not sign_in_url:
+                        raise OutboxPayloadError("booking prompt payload is invalid")
+                    email_sender.send_booking_prompt_update_notice(
+                        recipient=current_recipient,
+                        sign_in_url=sign_in_url,
+                        message_id=message_id,
+                    )
                 else:
                     raise OutboxPayloadError("delivery kind is invalid")
                 succeeded = True
@@ -1116,7 +1242,7 @@ def process_one_delivery(
     if failure_code == OUTBOX_FAILURE_BOOKING_PROMPT_NOT_NEEDED:
         logger.info(
             "Booking-prompt notice %s not sent: the prompt was withdrawn, expired or already read, "
-            "or the account was disabled or locked by staff",
+            "so there is nothing new to show, or the account was disabled or locked by staff",
             claimed_id,
         )
         return DeliveryRunResult(delivery_id=claimed_id, status=final_status)

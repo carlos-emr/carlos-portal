@@ -249,7 +249,7 @@ def test_runtime_database_allowlist_rejects_acl_escape_hatches(
     assert violation in check.detail
 
 
-def test_postgresql_engine_pins_the_catalog_and_application_search_path(
+def test_postgresql_engine_pins_the_search_path_and_read_committed_isolation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -275,6 +275,7 @@ def test_postgresql_engine_pins_the_catalog_and_application_search_path(
             "-c search_path=pg_catalog,public"
         ),
     }
+    assert captured["isolation_level"] == "READ COMMITTED"
 
 
 def test_database_preflight_rejects_sqlite_before_running_postgresql_queries() -> None:
