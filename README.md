@@ -753,7 +753,13 @@ or offers times CARLOS sent with it for the patient to pick (see *Offered times*
   clinic/patient scope and `eligible`, which is true for an active portal account. Missing and
   inactive accounts both return false. This uses `portal.booking_prompt.manage`; it does not
   grant account-status access or expose account identifiers, lock/reset flags, dates, or reasons.
-  Eligibility is a read-time check; create independently rechecks the active account.
+  Eligibility is a read-time check using the same rule as create, which rechecks it: a locked
+  account is still active and counts. It does not reflect the portal's own setup: outside
+  development, create still answers `503` when email or `PATIENT_PORTAL_PUBLIC_BASE_URL` is not
+  configured. Deploy this endpoint before the CARLOS client that calls it: an older portal answers
+  `404` `{"detail": "Not Found"}`, which CARLOS treats as a refused request (its panel shows the
+  portal did not recognise the request, and the portal audits an `authentication_failed` event per
+  call).
 - `POST /internal/carlos/patients/{demographic_no}/booking-prompts` creates one from a stable
   `operation_id`, an `urgency` (`routine`, `soon`, `as_soon_as_possible`), an `appointment_type`
   (`follow_up`, `annual_exam`, `lab_review`), and an optional `suggested_by` provider name. A retry

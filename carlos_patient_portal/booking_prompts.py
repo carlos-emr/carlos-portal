@@ -188,6 +188,22 @@ def _retry_result(
     return CreatedBookingPrompt(prompt=prompt, created=False)
 
 
+def booking_account_conditions(
+    clinic_id: str,
+    demographic_no: int,
+) -> tuple[ColumnElement[bool], ...]:
+    """Which account can receive a booking prompt: the patient's active account in this clinic.
+
+    The one rule for both creating a prompt and the eligibility check CARLOS makes before offering
+    to send one, so the two cannot drift apart. A locked account is still active and counts.
+    """
+    return (
+        PatientPortalAccount.clinic_id == clinic_id,
+        PatientPortalAccount.demographic_no == demographic_no,
+        PatientPortalAccount.status == ACCOUNT_STATUS_ACTIVE,
+    )
+
+
 def create_booking_prompt(
     session: Session,
     *,
@@ -255,9 +271,7 @@ def create_booking_prompt(
 
     account = session.scalar(
         select(PatientPortalAccount).where(
-            PatientPortalAccount.clinic_id == normalized_clinic_id,
-            PatientPortalAccount.demographic_no == demographic_no,
-            PatientPortalAccount.status == ACCOUNT_STATUS_ACTIVE,
+            *booking_account_conditions(normalized_clinic_id, demographic_no)
         )
     )
     if account is None:

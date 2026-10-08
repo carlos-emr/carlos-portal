@@ -61,6 +61,7 @@ from carlos_patient_portal.booking_prompts import (
     BookingPromptNotFoundError,
     BookingPromptNotice,
     BookingPromptOperationConflictError,
+    booking_account_conditions,
     booking_prompt_state,
     create_booking_prompt,
     list_booking_prompts,
@@ -87,7 +88,6 @@ from carlos_patient_portal.invites import (
     revoke_invite,
 )
 from carlos_patient_portal.models import (
-    ACCOUNT_STATUS_ACTIVE,
     AUDIT_ACTOR_TYPE_STAFF,
     AUDIT_EVENT_INVITE_LIST,
     AUDIT_EVENT_STAFF_ACTION,
@@ -1488,12 +1488,10 @@ def register_internal_booking_prompt_routes(
         ],
         session: Annotated[Session, deps.session_dependency],
     ) -> dict[str, object]:
-        # Match create's active-account condition without retrieving account details/free text.
+        # Create's own rule, reading only the account id (no details or free text).
         account_id = session.scalar(
             select(PatientPortalAccount.id).where(
-                PatientPortalAccount.clinic_id == principal.clinic_id,
-                PatientPortalAccount.demographic_no == demographic_no,
-                PatientPortalAccount.status == ACCOUNT_STATUS_ACTIVE,
+                *booking_account_conditions(principal.clinic_id, demographic_no)
             )
         )
         record_audit_event(
@@ -1507,6 +1505,7 @@ def register_internal_booking_prompt_routes(
             demographic_no=demographic_no,
             account_id=account_id,
             resource_type="portal_account",
+            resource_id=None if account_id is None else str(account_id),
             reason="booking_eligibility_viewed",
         )
         return {
