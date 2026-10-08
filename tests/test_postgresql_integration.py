@@ -1,4 +1,5 @@
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from threading import Barrier, Event, Lock
@@ -22,16 +23,22 @@ from carlos_patient_portal.account_settings import (
     update_account_contact,
     update_account_mfa_method,
 )
-from carlos_patient_portal.auth import create_patient_session, hash_auth_token
+from carlos_patient_portal.auth import (
+    create_patient_session,
+    hash_auth_token,
+    set_patient_account_access,
+)
 from carlos_patient_portal.booking_choices import (
     BookingChoiceUnavailableError,
     BookingSlotUnavailableError,
+    cancel_pending_choices_for_account,
     choose_offered_slot,
     decline_offered_slots,
     record_choice_result,
 )
 from carlos_patient_portal.booking_offers import OfferedSlotSpec
 from carlos_patient_portal.booking_prompts import (
+    BookingPromptAccountUnavailableError,
     BookingPromptNotFoundError,
     BookingPromptNotice,
     create_booking_prompt,
@@ -1578,6 +1585,84 @@ def create_postgres_offer(engine, *, operation_id: str) -> tuple[int, list[int]]
             )
         )
     return prompt_id, slot_ids
+
+
+def test_postgresql_prompt_creation_waits_for_account_off_and_then_refuses() -> None:
+    """A prompt CARLOS creates while staff turn the account off is refused, not sent."""
+    assert POSTGRES_URL is not None
+    clean_postgresql_database()
+    account_id = insert_postgres_account(username="prompt.account.off", demographic_no=1234)
+    engine = create_portal_engine(POSTGRES_URL)
+    account_off_locked = Event()
+    create_finished = Event()
+
+    def turn_account_off() -> None:
+        with Session(engine) as session, session.begin():
+            session.execute(text("SET LOCAL statement_timeout = '15s'"))
+            set_patient_account_access(
+                session,
+                account_id,
+                "Synthetic Staff",
+                enabled=False,
+                clinic_id="postgres-clinic",
+            )
+            cancel_pending_choices_for_account(
+                session, account_id, actor="Synthetic Staff", actor_id=None
+            )
+            account_off_locked.set()
+            # Commit only once creation waits on the account lock, or has finished without
+            # waiting, so a creation that skipped the lock is caught every time.
+            deadline = time.monotonic() + 10
+            with engine.connect() as observer:
+                while not create_finished.is_set() and time.monotonic() < deadline:
+                    waiting = observer.scalar(
+                        text(
+                            "SELECT count(*) FROM pg_locks AS pending_lock "
+                            "JOIN pg_stat_activity AS backend ON backend.pid = pending_lock.pid "
+                            "WHERE NOT pending_lock.granted "
+                            "AND backend.datname = current_database()"
+                        )
+                    )
+                    if waiting:
+                        break
+                    time.sleep(0.05)
+
+    def create_while_turning_off() -> str:
+        assert account_off_locked.wait(timeout=10)
+        try:
+            with Session(engine) as session, session.begin():
+                session.execute(text("SET LOCAL statement_timeout = '15s'"))
+                create_booking_prompt(
+                    session,
+                    clinic_id="postgres-clinic",
+                    demographic_no=1234,
+                    operation_id="while-account-off",
+                    urgency="soon",
+                    appointment_type="follow_up",
+                    suggested_by="Dr. Singh",
+                    created_by="Front Desk",
+                    created_by_id="front-desk",
+                    ttl=timedelta(days=90),
+                    notice=POSTGRES_BOOKING_NOTICE,
+                )
+        except BookingPromptAccountUnavailableError:
+            return "refused"
+        finally:
+            create_finished.set()
+        return "created"
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            account_off = executor.submit(turn_account_off)
+            creation = executor.submit(create_while_turning_off)
+            account_off.result()
+            assert creation.result() == "refused"
+        with Session(engine) as session:
+            assert session.get(PatientPortalAccount, account_id).status == "disabled"
+            assert list(session.scalars(select(PatientPortalBookingPrompt))) == []
+            assert list(session.scalars(select(PatientPortalOutboundDelivery))) == []
+    finally:
+        engine.dispose()
 
 
 def test_postgresql_two_simultaneous_choices_leave_one_waiting() -> None:

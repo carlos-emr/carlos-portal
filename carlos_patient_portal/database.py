@@ -80,9 +80,11 @@ def create_portal_engine(
                 f"-c search_path={POSTGRESQL_SEARCH_PATH}"
             ),
         )
-        # PostgreSQL's default, pinned against a changed server default: locking writers re-read a
-        # row another transaction changed while they waited (a booking pick re-reads the account's
-        # status after locking its prompt), which a REPEATABLE READ snapshot would not see.
+        # PostgreSQL's default, pinned against a changed server default. Booking writers rely on
+        # it: each statement sees rows committed while an earlier one waited (a pick re-reads the
+        # account's status after locking its prompt), and a lock that waited re-checks its WHERE
+        # on the new row (creating a prompt finds a just-disabled account gone). Under REPEATABLE
+        # READ the first would read the old snapshot and the second would fail to serialize.
         engine_options["isolation_level"] = "READ COMMITTED"
     engine = create_engine(database_url, connect_args=connect_args, **engine_options)
 
