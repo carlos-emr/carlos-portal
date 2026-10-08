@@ -157,8 +157,9 @@ When it is deleted:
   `cleanup-transient-auth` one day after the appointment's start. The pick row itself stays, without the time, so a repeated CARLOS result is
   still answered idempotently, and goes with its prompt.
 - The prompt, with its picks: by `cleanup-transient-auth` once it is past its expiry by the
-  retention window, any booked time is more than a day past, and any pick CARLOS reported taken
-  after the expiry was reported more than 7 days ago (the patient is shown that notice). Unanswered choices and their
+  retention window, any booked time is more than a day past, and any pick reported taken, or lapsed,
+  after the expiry was closed more than 7 days ago (the patient is shown that notice). Unanswered
+  choices and their
   prompts survive every cleanup until CARLOS reports a result, staff withdraws the prompt or turns
   the account off, or the picked time starts (the pick then closes as `expired`, and its copy goes
   with it).

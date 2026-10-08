@@ -16,9 +16,10 @@
 
 The patient picks one offered time, or says none of them work. CARLOS polls for pending picks,
 tries to book each one, and reports `booked` or `slot_unavailable`; the portal never calls
-CARLOS. One pick at a time: every write here locks the prompt row first, so two submissions for
-one prompt, or a pick racing a withdrawal or a result, are serialised, and a partial unique index
-refuses a second pending pick even for a writer that skipped the lock.
+CARLOS. One pick at a time: every write here locks the prompt row before its choices and offered
+times, so two submissions for one prompt, or a pick racing a withdrawal, a result, or staff
+turning the account off (which lock the account, then its prompts), are serialised, and a partial
+unique index refuses a second pending pick even for a writer that skipped the lock.
 """
 
 from collections.abc import Callable, Collection, Sequence
@@ -264,23 +265,19 @@ def choose_offered_slot(
     reaches the browser. Submitting the pick that is already pending again (a double click) returns
     it unchanged rather than refusing it.
     """
-    # The account first, as staff turning it off do, so a pick cannot slip past the cancellation
-    # of its waiting picks: wait for that, then refuse once the account is off.
-    if (
-        session.scalar(
-            select(PatientPortalAccount.id)
-            .where(
-                PatientPortalAccount.id == account.id,
-                PatientPortalAccount.status == ACCOUNT_STATUS_ACTIVE,
-            )
-            .with_for_update(read=True)
-        )
-        is None
-    ):
-        raise BookingPromptNotFoundError()
     locked_prompt = _lock_prompt(
         session, prompt_id, clinic_id=account.clinic_id, account_id=account.id
     )
+    # Staff turning the account off lock each of its prompts that could take a pick, so either
+    # they wait for this pick and then cancel it, or this waited for them and now sees the
+    # account off. A plain read: locking the account here could deadlock with that path.
+    if (
+        session.scalar(
+            select(PatientPortalAccount.status).where(PatientPortalAccount.id == account.id)
+        )
+        != ACCOUNT_STATUS_ACTIVE
+    ):
+        raise BookingPromptNotFoundError()
     repeated = _same_pick_pending(session, locked_prompt, offered_slot_id)
     if repeated is not None:
         return repeated
@@ -723,7 +720,9 @@ def cancel_pending_choices_for_account(
 
     Each becomes `withdrawn`, so CARLOS stops seeing it and turning the account back on does not
     bring it back: the patient picks again if times are still on offer. The caller has locked the
-    account; prompts are locked before their choices, as every booking writer does.
+    account. Every prompt that could take a pick is locked, not only those already waiting, so a
+    pick in flight either finishes first (and is cancelled here) or waits and then finds the
+    account off.
     """
     normalized_actor = normalize_staff_actor(actor)
     normalized_actor_id = normalize_staff_actor_id(actor_id, normalized_actor)
@@ -733,7 +732,13 @@ def cancel_pending_choices_for_account(
             select(PatientPortalBookingPrompt)
             .where(
                 PatientPortalBookingPrompt.account_id == account_id,
-                PatientPortalBookingPrompt.status == BOOKING_PROMPT_STATUS_CHOICE_PENDING,
+                PatientPortalBookingPrompt.status.in_(
+                    (
+                        BOOKING_PROMPT_STATUS_SENT,
+                        BOOKING_PROMPT_STATUS_READ,
+                        BOOKING_PROMPT_STATUS_CHOICE_PENDING,
+                    )
+                ),
             )
             .order_by(PatientPortalBookingPrompt.id)
             .with_for_update()

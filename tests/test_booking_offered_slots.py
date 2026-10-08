@@ -21,11 +21,12 @@ from zoneinfo import ZoneInfo
 import pytest
 from alembic import command
 from alembic.config import Config
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import create_engine, func, inspect, select, text
 
-from carlos_patient_portal import delivery_outbox, i18n
+from carlos_patient_portal import delivery_outbox, i18n, internal_routes
 from carlos_patient_portal.booking_choices import (
     choose_offered_slot,
     close_lapsed_choices,
@@ -2177,3 +2178,23 @@ def test_a_pick_is_refused_once_the_account_is_off() -> None:
             choose_offered_slot(session, prompt_id, row_id, account=account)
 
     assert pending_choices(app).json()["items"] == []
+
+
+def test_the_poll_closes_a_started_pick_without_email_when_no_sign_in_address_is_known(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, patient, prompt_id = patient_with_offer()
+    assert pick(app, patient, prompt_id).status_code == 303
+    start_the_picked_time(app, prompt_id)
+
+    def no_sign_in_address(*_args: object) -> str:
+        raise HTTPException(status_code=503, detail="portal sign-in address is not configured")
+
+    monkeypatch.setattr(internal_routes, "_booking_prompt_sign_in_url", no_sign_in_address)
+
+    response = pending_choices(app)
+
+    assert response.status_code == 200
+    assert response.json()["items"] == []
+    assert only_choice(app).state == "expired"
+    assert update_notices(app) == []

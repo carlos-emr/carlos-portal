@@ -1622,6 +1622,9 @@ def register_internal_booking_sync_routes(
             try:
                 sign_in_url = _booking_prompt_sign_in_url(request, runtime.settings)
             except HTTPException:
+                logger.warning(
+                    "Booking picks lapsed without an update email: no public sign-in address"
+                )
                 return None
             return BookingPromptNotice(
                 sign_in_url=sign_in_url,

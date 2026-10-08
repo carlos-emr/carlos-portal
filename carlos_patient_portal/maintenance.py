@@ -370,24 +370,27 @@ def cleanup_transient_auth_rows(
     # Keyed by field name rather than built positionally: these counts are what the operator reads
     # to decide whether cleanup did what they expected, and a reordering of `predicates` must not be
     # able to silently relabel them.
-    counts: dict[str, int] = {
-        # The fallback for when CARLOS has stopped polling (the poll closes them first, and emails
-        # the patient). Before the prompt pass, so a closed pick no longer holds its prompt.
-        "lapsed_booking_choices": close_lapsed_choices(
+    counts: dict[str, int] = {}
+
+    def close_and_clear_booking_choices() -> None:
+        # The fallback for when CARLOS has stopped polling (the poll closes lapsed picks first, and
+        # emails the patient), then the choice-time clearing. Both before the prompt pass, which can
+        # delete a prompt and its choices with it, so the reported counts match a dry run; and after
+        # the sign-in passes, so this transaction locks sessions before prompts, as turning an
+        # account off does.
+        counts["lapsed_booking_choices"] = close_lapsed_choices(
             session,
             delete_slots=False,
             limit=normalized_batch_size,
             dry_run=dry_run,
-        ),
-        # Before the prompt pass, which can delete a prompt and its choices with it; clearing
-        # first keeps the reported count the same in a dry run and a live one.
-        "booking_choice_times": _clear_booking_choice_times(
+        )
+        counts["booking_choice_times"] = _clear_booking_choice_times(
             session,
             booked_time_cutoff=booked_time_cutoff,
             batch_size=normalized_batch_size,
             dry_run=dry_run,
-        ),
-    }
+        )
+
     for field_name, (model, predicate) in zip(
         (
             "outbound_deliveries",
@@ -402,6 +405,8 @@ def cleanup_transient_auth_rows(
         predicates,
         strict=True,
     ):
+        if field_name == "offered_slots":
+            close_and_clear_booking_choices()
         candidates = (
             select(model.id).where(predicate).order_by(model.id).limit(normalized_batch_size)
         )

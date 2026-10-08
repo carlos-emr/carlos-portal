@@ -825,7 +825,7 @@ collects the pick by polling.
   has a different result`; a `choice_id` whose prompt staff withdrew, or whose account staff
   turned off, is `409` `booking choice was withdrawn`, and one whose time started before the result
   arrived is `409` `booking choice expired`: for both, CARLOS must undo any booking it made, because
-  the patient has been told the pick did not go through. Any other `choice_id` that is not this
+  the portal will never show that pick as booked. Any other `choice_id` that is not this
   prompt's pending pick is `409` `booking choice is not pending`; an unknown prompt in the clinic is
   `404`. CARLOS should tell these apart by the `detail` text, which is part of the contract.
   On an expired prompt, `slot_unavailable` is recorded but replacements are not stored, because the
@@ -850,8 +850,9 @@ collects the pick by polling.
   portal, with a sign-in link: no time, provider, visit type, or location. It is not sent if the
   prompt has since been withdrawn, or has expired unbooked (except a pick taken or lapsed after the
   expiry, which the patient is still shown for 7 days), or if staff disabled or locked the account.
-  A pick closed by cleanup rather than the poll gets no email: the portal message is the notice. A booked confirmation must still be visible (until a day
-  after the appointment starts); delayed notices after that point are suppressed. An update does
+  A pick closed by cleanup rather than the poll gets no email: the portal message is the notice. A
+  booked confirmation must still be visible (until a day after the appointment starts); delayed
+  notices after that point are suppressed. An update does
   not change `notified_at`.
 - Offers, picks, results, and declines are audited as `booking_prompt.offer` (reason
   `initial:<count>` or `replacement:<count>`), `booking_prompt.choice`, `booking_prompt.result`
@@ -863,8 +864,10 @@ collects the pick by polling.
 - Retention: offered times are deleted when the prompt is booked, withdrawn, or declined, and by
   `cleanup-transient-auth` at its first run after they start or the prompt expires, without waiting
   for the retention window. A pick keeps a copy of its time so the confirmation survives the offer's
-  deletion; the copy is cleared when CARLOS reports the time taken or the prompt is withdrawn, and
-  for a booked time by `cleanup-transient-auth` a day after the appointment starts. Schedule that
+  deletion; the copy is cleared when CARLOS reports the time taken, the prompt is withdrawn, staff
+  turn the account off, or the time starts unanswered (the pick lapses); for a booked time CARLOS's
+  `slot_id` goes at booking and the rest by `cleanup-transient-auth` a day after the appointment
+  starts. Schedule that
   command at least daily; it also closes picks whose time started while CARLOS was not polling.
   Unanswered choices and their prompts remain until CARLOS answers, staff withdraws the prompt or
   turns the account off, or the picked time starts, including beyond the retention window. See the amendment in
