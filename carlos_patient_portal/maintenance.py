@@ -26,7 +26,10 @@ from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, aliased
 
-from carlos_patient_portal.booking_offers import BOOKED_TIME_RETENTION_AFTER_START
+from carlos_patient_portal.booking_offers import (
+    BOOKED_TIME_RETENTION_AFTER_START,
+    taken_after_expiry_notice,
+)
 from carlos_patient_portal.models import (
     BOOKING_CHOICE_STATE_BOOKED,
     BOOKING_CHOICE_STATE_PENDING,
@@ -354,6 +357,8 @@ def cleanup_transient_auth_rows(
                 # A booked appointment stays shown to the patient until a day after it starts,
                 # however long ago the prompt expired.
                 ~booked_time_upcoming,
+                # So does a pick CARLOS reported taken after the expiry, for its short notice.
+                ~taken_after_expiry_notice(current_time),
             ),
         ),
     )

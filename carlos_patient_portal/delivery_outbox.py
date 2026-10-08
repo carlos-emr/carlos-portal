@@ -44,7 +44,10 @@ from carlos_patient_portal.auth import (
     record_password_reset_delivery_outcome,
     request_password_reset,
 )
-from carlos_patient_portal.booking_offers import BOOKED_TIME_RETENTION_AFTER_START
+from carlos_patient_portal.booking_offers import (
+    BOOKED_TIME_RETENTION_AFTER_START,
+    taken_after_expiry_notice,
+)
 from carlos_patient_portal.email_delivery import PortalEmailDeliveryError, PortalEmailSender
 from carlos_patient_portal.models import (
     ACCOUNT_STATUS_ACTIVE,
@@ -678,8 +681,9 @@ def _booking_prompt_update_recipient(
     """Where the "there is an update" notice should go now, or None when it should not be sent.
 
     Checked at send time, as for the first notice. Not once the prompt is withdrawn, or has expired
-    without being booked, when the patient would find nothing to act on; and not once staff have
-    disabled or locked the account.
+    without being booked, when the patient would find nothing to act on (except a pick CARLOS reported
+    taken after the expiry, which the patient is still shown); and not once staff have disabled or
+    locked the account.
     """
     if booking_prompt_id is None:
         return None
@@ -704,7 +708,10 @@ def _booking_prompt_update_recipient(
                 ),
                 and_(
                     PatientPortalBookingPrompt.status != BOOKING_PROMPT_STATUS_BOOKED,
-                    PatientPortalBookingPrompt.expires_at > utc_now(),
+                    or_(
+                        PatientPortalBookingPrompt.expires_at > utc_now(),
+                        taken_after_expiry_notice(utc_now()),
+                    ),
                 ),
             ),
         )

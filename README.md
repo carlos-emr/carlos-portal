@@ -782,8 +782,12 @@ collects the pick by polling.
 
 - The create endpoint accepts an optional `offered_slots` list. Each entry has a `slot_id` issued by
   CARLOS (1 to 64 of `A-Z a-z 0-9 . _ : -`, unique within the prompt, never interpreted by the
-  portal), a `starts_at` in ISO 8601 with an explicit UTC offset (a time without an offset, a
-  number, or a time that has already started is a `422`), a `duration_minutes` from 5 to 480, a
+  portal). The `slot_id` must be opaque: a random or sequence identifier that encodes no provider,
+  patient, time, or anything else readable, because the portal stores it and the amendment below
+  rests on it carrying nothing. Once a pick is booked the portal clears its `slot_id`. Each entry
+  also has a `starts_at` in ISO 8601 with an explicit UTC offset (a time without an offset, a
+  number, a time that has already started, or one more than 366 days ahead is a `422`), a
+  `duration_minutes` from 5 to 480, a
   `visit_mode` of `in_person`, `phone`, or `video`, and an optional `location_code` that must be one
   of the codes in `PATIENT_PORTAL_BOOKING_LOCATIONS` (refused when none are configured). Nothing
   else is accepted: no provider, no reason for the visit, no free text. More than 8 entries is a
@@ -814,10 +818,12 @@ collects the pick by polling.
   many times the patient can pick now). It is idempotent per choice: the same result again returns
   `200` with `recorded: false`, changes nothing (replacements sent with a repeat are ignored), and
   sends nothing. A different result for an already answered choice is `409` `booking choice already
-  has a different result`; a `choice_id` that is not this prompt's pending pick, including one
-  closed by a withdrawal, is `409` `booking choice is not pending`; an unknown prompt in the clinic
-  is `404`. On an expired prompt, `slot_unavailable` is recorded but replacements are not stored,
-  because the patient can no longer pick.
+  has a different result`; a `choice_id` whose prompt staff withdrew is `409` `booking choice was
+  withdrawn` (undo any booking made for it); any other `choice_id` that is not this prompt's
+  pending pick is `409` `booking choice is not pending`; an unknown prompt in the clinic is `404`.
+  On an expired prompt, `slot_unavailable` is recorded but replacements are not stored, because the
+  patient can no longer pick; the patient still sees the message for 7 days, saying the time was
+  taken and to contact the clinic, and gets the update email.
 - States: a prompt is `sent`, `read`, `choice_pending` (a pick waits for CARLOS), `booked`,
   `declined_all` (none of the times work), `withdrawn`, or `expired`. `expired` is computed from
   `expires_at` for `sent`, `read`, and `declined_all`; a `booked` prompt stays `booked`, and a

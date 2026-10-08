@@ -52,6 +52,7 @@ from carlos_patient_portal.booking_choices import (
     MAX_PENDING_CHOICE_LIST,
     BookingChoiceNotPendingError,
     BookingChoiceResultConflictError,
+    BookingChoiceWithdrawnError,
     list_pending_choices,
     record_choice_result,
 )
@@ -149,6 +150,7 @@ UNLOCK_SECRET_NOT_FOUND_DETAIL = "unlock secret not found"
 BOOKING_PROMPT_NOT_FOUND_DETAIL = "booking prompt not found"
 BOOKING_PROMPT_OPERATION_CONFLICT_DETAIL = "operation id was used for a different booking prompt"
 BOOKING_CHOICE_NOT_PENDING_DETAIL = "booking choice is not pending"
+BOOKING_CHOICE_WITHDRAWN_DETAIL = "booking choice was withdrawn"
 BOOKING_CHOICE_RESULT_CONFLICT_DETAIL = "booking choice already has a different result"
 
 
@@ -562,6 +564,13 @@ def require_permission(principal: StaffPrincipal, permission: str) -> None:
     except CarlosStaffPermissionError as exc:
         # Sonar cannot associate dependency-level errors with every route's OpenAPI responses.
         raise HTTPException(status_code=403, detail="permission denied") from exc  # NOSONAR
+    # The booking sync permission is only accepted on its own: it belongs to CARLOS's polling job,
+    # which holds nothing else, so an assertion carrying it with anything else is refused everywhere.
+    if (
+        PERMISSION_BOOKING_PROMPT_SYNC in principal.permissions
+        and principal.permissions != frozenset({PERMISSION_BOOKING_PROMPT_SYNC})
+    ):
+        raise HTTPException(status_code=403, detail="permission denied")  # NOSONAR
 
 
 def require_pending_for_disclosure(unlock_secret: PatientPortalUnlockSecret) -> None:
@@ -1648,6 +1657,11 @@ def register_internal_booking_sync_routes(
             )
         except BookingPromptNotFoundError as exc:
             raise HTTPException(status_code=404, detail=BOOKING_PROMPT_NOT_FOUND_DETAIL) from exc
+        except BookingChoiceWithdrawnError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=BOOKING_CHOICE_WITHDRAWN_DETAIL,
+            ) from exc
         except BookingChoiceNotPendingError as exc:
             raise HTTPException(
                 status_code=409,

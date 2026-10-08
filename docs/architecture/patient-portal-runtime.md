@@ -152,11 +152,12 @@ When it is deleted:
   by `cleanup-transient-auth` at its first run after a time starts or its prompt expires, without
   waiting for the transient retention window.
 - The copy of a picked time: when CARLOS reports that time taken, or the prompt is withdrawn, in
-  the same transaction; for a booked time, by `cleanup-transient-auth` one day after the
-  appointment's start. The pick row itself stays, without the time, so a repeated CARLOS result is
+  the same transaction; for a booked time, CARLOS's `slot_id` at booking and the rest by
+  `cleanup-transient-auth` one day after the appointment's start. The pick row itself stays, without the time, so a repeated CARLOS result is
   still answered idempotently, and goes with its prompt.
 - The prompt, with its picks: by `cleanup-transient-auth` once it is past its expiry by the
-  retention window and any booked time is more than a day past. Unanswered choices and their
+  retention window, any booked time is more than a day past, and any pick CARLOS reported taken
+  after the expiry was reported more than 7 days ago (the patient is shown that notice). Unanswered choices and their
   prompts survive every cleanup until CARLOS reports a result or staff withdraws the prompt.
   Cleanup locks each prompt before its slots or choices and skips busy prompts, matching result
   processing so concurrent cleanup cannot discard pending work or invert its lock order.
@@ -164,6 +165,10 @@ When it is deleted:
 The emails the portal sends about a prompt carry none of it: "a message is waiting" and "there is
 an update" with a sign-in link, and nothing about times, providers, visit types, or locations.
 Audit events record offers, picks, results, and declines with keyed ids and counts only.
+
+These deletions depend on `cleanup-transient-auth` running at least daily, and deleted times remain
+in database backups and point-in-time recovery until those age out under the clinic's backup
+retention.
 
 This amendment does not make the portal a scheduler: it cannot cancel or move a booking, and it
 shows no times CARLOS did not push. A later change that stores more appointment data than this,

@@ -53,7 +53,7 @@ from carlos_patient_portal.invites import (
 from carlos_patient_portal.models import (
     ACCOUNT_STATUS_ACTIVE,
     AUDIT_ACTOR_TYPE_PATIENT,
-    AUDIT_ACTOR_TYPE_STAFF,
+    AUDIT_ACTOR_TYPE_SYSTEM,
     AUDIT_EVENT_BOOKING_PROMPT_CHOICE,
     AUDIT_EVENT_BOOKING_PROMPT_DECLINE,
     AUDIT_EVENT_BOOKING_PROMPT_OFFER,
@@ -95,6 +95,10 @@ class BookingSlotUnavailableError(Exception):
 
 class BookingChoiceNotPendingError(Exception):
     """A result names a choice that is not this prompt's pending choice."""
+
+
+class BookingChoiceWithdrawnError(BookingChoiceNotPendingError):
+    """A result names a choice whose prompt staff withdrew: undo any booking made for it."""
 
 
 class BookingChoiceResultConflictError(Exception):
@@ -208,6 +212,30 @@ def _require_open_for_patient(
     raise BookingPromptNotFoundError()
 
 
+def _same_pick_pending(
+    session: Session,
+    prompt: PatientPortalBookingPrompt | None,
+    offered_slot_id: int | None,
+) -> PatientPortalBookingChoice | None:
+    """The pending pick that a repeated submission names again (a double click), or None."""
+    if (
+        prompt is None
+        or offered_slot_id is None
+        or prompt.status != BOOKING_PROMPT_STATUS_CHOICE_PENDING
+    ):
+        return None
+    pending = _pending_choice(session, prompt.id)
+    slot = session.scalar(
+        select(PatientPortalBookingOfferedSlot).where(
+            PatientPortalBookingOfferedSlot.id == offered_slot_id,
+            PatientPortalBookingOfferedSlot.prompt_id == prompt.id,
+        )
+    )
+    if pending is None or slot is None or slot.slot_id != pending.slot_id:
+        return None
+    return pending
+
+
 def _mark_read(prompt: PatientPortalBookingPrompt, now: datetime) -> None:
     if prompt.read_at is None:
         prompt.read_at = now
@@ -223,11 +251,15 @@ def choose_offered_slot(
     """Record the patient's pick of one offered time, for CARLOS to book.
 
     `offered_slot_id` is the portal's own row id, as the page offered it; CARLOS's slot id never
-    reaches the browser.
+    reaches the browser. Submitting the pick that is already pending again (a double click) returns
+    it unchanged rather than refusing it.
     """
     locked_prompt = _lock_prompt(
         session, prompt_id, clinic_id=account.clinic_id, account_id=account.id
     )
+    repeated = _same_pick_pending(session, locked_prompt, offered_slot_id)
+    if repeated is not None:
+        return repeated
     # The prompt or slot may expire while another request holds this lock.
     now = utc_now()
     prompt = _require_open_for_patient(locked_prompt, now=now)
@@ -287,12 +319,21 @@ def decline_offered_slots(
     *,
     account: PatientPortalAccount,
 ) -> PatientPortalBookingPrompt:
-    """Record that none of the offered times work; the patient is told to contact the clinic."""
+    """Record that none of the offered times work; the patient is told to contact the clinic.
+
+    Declining again a prompt already declined (a double click) returns it unchanged.
+    """
     locked_prompt = _lock_prompt(
         session, prompt_id, clinic_id=account.clinic_id, account_id=account.id
     )
     # The prompt or slot may expire while another request holds this lock.
     now = utc_now()
+    if (
+        locked_prompt is not None
+        and locked_prompt.status == BOOKING_PROMPT_STATUS_DECLINED_ALL
+        and as_utc(locked_prompt.expires_at) > now
+    ):
+        return locked_prompt
     prompt = _require_open_for_patient(locked_prompt, now=now)
     if _pending_choice(session, prompt.id) is not None:
         raise BookingChoiceUnavailableError()
@@ -393,7 +434,7 @@ def list_pending_choices(
             session,
             event_type=AUDIT_EVENT_STAFF_ACTION,
             outcome=AUDIT_OUTCOME_SUCCESS,
-            actor_type=AUDIT_ACTOR_TYPE_STAFF,
+            actor_type=AUDIT_ACTOR_TYPE_SYSTEM,
             actor=normalized_actor,
             actor_id=normalize_staff_actor_id(actor_id, normalized_actor),
             clinic_id=normalized_clinic_id,
@@ -449,8 +490,10 @@ def record_choice_result(
         .execution_options(populate_existing=True)
     )
     now = utc_now()
-    if choice is None or choice.state == BOOKING_CHOICE_STATE_WITHDRAWN:
+    if choice is None:
         raise BookingChoiceNotPendingError()
+    if choice.state == BOOKING_CHOICE_STATE_WITHDRAWN:
+        raise BookingChoiceWithdrawnError()
     if choice.state == result:
         return BookingChoiceResultOutcome(
             prompt=prompt,
@@ -484,6 +527,8 @@ def record_choice_result(
     choice.result_at = now
     if result == BOOKING_CHOICE_STATE_BOOKED:
         prompt.status = BOOKING_PROMPT_STATUS_BOOKED
+        # The patient is shown the booked time; CARLOS's slot id is not needed again.
+        choice.slot_id = None
         session.flush()
         delete_offered_slots(session, prompt.id)
     else:
@@ -505,7 +550,7 @@ def record_choice_result(
         session,
         event_type=AUDIT_EVENT_BOOKING_PROMPT_RESULT,
         outcome=AUDIT_OUTCOME_SUCCESS,
-        actor_type=AUDIT_ACTOR_TYPE_STAFF,
+        actor_type=AUDIT_ACTOR_TYPE_SYSTEM,
         actor=normalized_actor,
         actor_id=normalized_actor_id,
         clinic_id=normalized_clinic_id,
@@ -520,7 +565,7 @@ def record_choice_result(
             session,
             event_type=AUDIT_EVENT_BOOKING_PROMPT_OFFER,
             outcome=AUDIT_OUTCOME_SUCCESS,
-            actor_type=AUDIT_ACTOR_TYPE_STAFF,
+            actor_type=AUDIT_ACTOR_TYPE_SYSTEM,
             actor=normalized_actor,
             actor_id=normalized_actor_id,
             clinic_id=normalized_clinic_id,

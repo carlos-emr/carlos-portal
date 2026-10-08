@@ -180,6 +180,10 @@ docker compose -f compose.production.yaml logs --tail 100 web outbox
 
 Advance the audit export checkpoint only after `audit-batch.jsonl` is durably accepted by the
 clinic's protected append-only sink. Schedule these commands with the host's audited scheduler and
-capture their exit status. Alert separately on container restarts, readiness failures, terminal
+capture their exit status. Run `cleanup-auth` at least daily: besides expired sign-in material, it
+is what deletes offered appointment times once they start or their prompt expires, and a booked
+time a day after the appointment (see the amendment in
+`docs/architecture/patient-portal-runtime.md`), so a missed schedule keeps appointment data longer
+than documented. Alert separately on container restarts, readiness failures, terminal
 outbox rows, queue age, database saturation, and certificate expiry. Run retention pruning only
 under the clinic's approved retention policy.

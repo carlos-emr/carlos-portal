@@ -32,6 +32,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from carlos_patient_portal.audit import hash_sensitive_reference
 from carlos_patient_portal.models import (
@@ -41,8 +42,10 @@ from carlos_patient_portal.models import (
     MAX_BOOKING_SLOT_ID_LENGTH,
     MAX_OFFERED_SLOTS,
     MIN_BOOKING_SLOT_DURATION_MINUTES,
+    BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE,
     PatientPortalBookingChoice,
     PatientPortalBookingOfferedSlot,
+    PatientPortalBookingPrompt,
     utc_now,
 )
 
@@ -50,6 +53,11 @@ SLOT_ID_PATTERN = re.compile(rf"[A-Za-z0-9._:-]{{1,{MAX_BOOKING_SLOT_ID_LENGTH}}
 LOCATION_CODE_PATTERN = re.compile(rf"[a-z0-9_-]{{1,{MAX_BOOKING_LOCATION_CODE_LENGTH}}}")
 # A booked time stays shown to the patient, and its copy stays stored, until a day after it starts.
 BOOKED_TIME_RETENTION_AFTER_START = timedelta(days=1)
+# A prompt that expired while the patient waited on their pick, and whose pick CARLOS then reported
+# taken, stays shown this long so the patient learns it fell through and to contact the clinic.
+TAKEN_AFTER_EXPIRY_NOTICE = timedelta(days=7)
+# How far ahead an offered time may start.
+MAX_OFFER_HORIZON = timedelta(days=366)
 OFFER_DIGEST_PURPOSE = "booking_offer"
 
 
@@ -106,10 +114,14 @@ def normalize_offered_slots(
             or slot.location_code not in location_codes
         ):
             raise ValueError("location_code is not configured")
+        try:
+            starts_at_utc = slot.starts_at.astimezone(UTC)
+        except (OverflowError, ValueError) as exc:
+            raise ValueError("starts_at is out of range") from exc
         normalized.append(
             OfferedSlotSpec(
                 slot_id=slot.slot_id,
-                starts_at=slot.starts_at.astimezone(UTC),
+                starts_at=starts_at_utc,
                 duration_minutes=slot.duration_minutes,
                 visit_mode=slot.visit_mode,
                 location_code=slot.location_code,
@@ -121,6 +133,23 @@ def normalize_offered_slots(
 def require_future_slots(slots: Sequence[OfferedSlotSpec], *, now: datetime) -> None:
     if any(as_utc(slot.starts_at) <= now for slot in slots):
         raise ValueError("offered times must be in the future")
+    if any(as_utc(slot.starts_at) > now + MAX_OFFER_HORIZON for slot in slots):
+        raise ValueError(f"offered times must start within {MAX_OFFER_HORIZON.days} days")
+
+
+def taken_after_expiry_notice(now: datetime) -> ColumnElement[bool]:
+    """A prompt whose pick CARLOS reported taken after the prompt had expired, recently enough to tell
+    the patient: they were waiting on that pick and would otherwise never learn it fell through."""
+    return (
+        select(PatientPortalBookingChoice.id)
+        .where(
+            PatientPortalBookingChoice.prompt_id == PatientPortalBookingPrompt.id,
+            PatientPortalBookingChoice.state == BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE,
+            PatientPortalBookingChoice.result_at >= PatientPortalBookingPrompt.expires_at,
+            PatientPortalBookingChoice.result_at > now - TAKEN_AFTER_EXPIRY_NOTICE,
+        )
+        .exists()
+    )
 
 
 def offer_digest(slots: Sequence[OfferedSlotSpec], *, secret: str) -> str | None:

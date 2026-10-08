@@ -106,8 +106,8 @@ _SLOT_COPY_ABSENT = (
     "visit_mode is null and location_code is null"
 )
 _SLOT_COPY_PRESENT = (
-    "slot_id is not null and starts_at is not null and duration_minutes is not null and "
-    "visit_mode is not null"
+    "(slot_id is not null or state = 'booked') and starts_at is not null and "
+    "duration_minutes is not null and visit_mode is not null"
 )
 
 

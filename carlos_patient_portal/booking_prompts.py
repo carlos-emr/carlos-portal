@@ -39,6 +39,7 @@ from carlos_patient_portal.booking_offers import (
     normalize_offered_slots,
     offer_digest,
     require_future_slots,
+    taken_after_expiry_notice,
 )
 from carlos_patient_portal.delivery_outbox import enqueue_booking_prompt_delivery
 from carlos_patient_portal.invites import (
@@ -455,8 +456,9 @@ def _active_for_account(account_id: int, now: datetime) -> tuple[ColumnElement[b
     """Which of an account's prompts the patient sees.
 
     A live sent, read, or declined prompt; a prompt whose chosen time CARLOS has not answered yet,
-    even past its expiry, so the patient is not left without an answer; and a booked prompt until
-    a day after the booked time.
+    even past its expiry, so the patient is not left without an answer; for a few days, a prompt
+    whose pick CARLOS reported taken after it expired, so the patient learns to contact the clinic;
+    and a booked prompt until a day after the booked time.
     """
     booked_time_upcoming = (
         select(PatientPortalBookingChoice.id)
@@ -484,6 +486,10 @@ def _active_for_account(account_id: int, now: datetime) -> tuple[ColumnElement[b
             and_(
                 PatientPortalBookingPrompt.status == BOOKING_PROMPT_STATUS_BOOKED,
                 booked_time_upcoming,
+            ),
+            and_(
+                PatientPortalBookingPrompt.status == BOOKING_PROMPT_STATUS_READ,
+                taken_after_expiry_notice(now),
             ),
         ),
     )

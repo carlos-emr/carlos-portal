@@ -1397,9 +1397,11 @@ BOOKING_SLOT_COPY_ABSENT_SQL = (
     "slot_id is null and starts_at is null and duration_minutes is null and "
     "visit_mode is null and location_code is null"
 )
+# A booked pick keeps its time for the patient but not CARLOS's slot id, which nothing needs after
+# booking.
 BOOKING_SLOT_COPY_PRESENT_SQL = (
-    "slot_id is not null and starts_at is not null and duration_minutes is not null and "
-    "visit_mode is not null"
+    "(slot_id is not null or state = 'booked') and starts_at is not null and "
+    "duration_minutes is not null and visit_mode is not null"
 )
 
 

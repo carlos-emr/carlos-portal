@@ -39,7 +39,8 @@ test result, ticket, or named approver is not evidence.
 - [ ] Export an audit batch, confirm durable append-only receipt, and record checkpoint ownership.
 - [ ] Alert on readiness, restarts, database saturation, authentication failures, terminal outbox
       work, oldest queued-message age, audit export failure, backup failure, and certificate expiry.
-- [ ] Schedule outbox review, transient-auth cleanup, audit export, and approved retention pruning.
+- [ ] Schedule outbox review, transient-auth cleanup (at least daily: it also deletes offered
+      appointment times), audit export, and approved retention pruning.
 - [ ] Exercise session, internal API, outbox, and unlock-key rotation procedures.
 
 ## Patient safety, privacy, and access
