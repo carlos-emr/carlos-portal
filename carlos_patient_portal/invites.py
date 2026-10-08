@@ -47,6 +47,7 @@ from carlos_patient_portal.models import (
     INVITE_STATUS_REVOKED,
     INVITE_STATUS_SUPERSEDED,
     MAX_CLINIC_ID_LENGTH,
+    MAX_DEMOGRAPHIC_NO,
     OUTBOX_NONCE_LENGTH,
     PatientPortalAccount,
     PatientPortalInvite,
@@ -136,8 +137,8 @@ def normalize_staff_actor_id(actor_id: str | None, actor: str) -> str:
 
 
 def validate_demographic_no(demographic_no: int) -> None:
-    if demographic_no <= 0:
-        raise ValueError("demographic_no must be positive")
+    if not 0 < demographic_no <= MAX_DEMOGRAPHIC_NO:
+        raise ValueError(f"demographic_no must be between 1 and {MAX_DEMOGRAPHIC_NO}")
 
 
 def validate_list_pagination(limit: int, offset: int) -> None:

@@ -6,6 +6,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -18,7 +19,7 @@ from carlos_patient_portal.account_settings import (
 from carlos_patient_portal.config import MIN_PRODUCTION_SECRET_LENGTH, Settings
 from carlos_patient_portal.credentials import hash_password
 from carlos_patient_portal.identity import IdentityProof
-from carlos_patient_portal.invites import create_invite
+from carlos_patient_portal.invites import create_invite, validate_demographic_no
 from carlos_patient_portal.main import create_app
 from carlos_patient_portal.models import (
     AUDIT_EVENT_ACCOUNT_UNLOCK,
@@ -29,6 +30,7 @@ from carlos_patient_portal.models import (
     AUDIT_EVENT_UNLOCK_SECRET_PUBLISH,
     AUDIT_EVENT_UNLOCK_SECRET_READ,
     AUDIT_EVENT_UNLOCK_SECRET_REVOKE,
+    MAX_DEMOGRAPHIC_NO,
     PatientPortalAccount,
     PatientPortalAuditEvent,
     PatientPortalContactReviewRequest,
@@ -39,6 +41,7 @@ from carlos_patient_portal.models import (
     PatientPortalUnlockSecret,
     utc_now,
 )
+from carlos_patient_portal.schemas import InviteCreateRequest
 from carlos_patient_portal.staff_identity import staff_request_hash
 from tests.support import (
     TEST_STAFF_ASSERTION_KEY_ID,
@@ -1934,6 +1937,67 @@ def test_internal_route_rejects_a_caller_without_its_permission(
             )
         ]
         assert failures == ["authorization_failed"]
+
+
+PATIENT_ROUTE_PERMISSIONS = tuple(
+    route for route in INTERNAL_ROUTE_PERMISSIONS if "/patients/1234/" in route[1]
+)
+
+
+def path_errors(response) -> list[list[str]]:
+    return [error["loc"] for error in response.json()["detail"]]
+
+
+@pytest.mark.parametrize(("method", "path", "permission"), PATIENT_ROUTE_PERMISSIONS)
+def test_internal_patient_route_refuses_a_patient_number_beyond_32_bits(
+    method: str, path: str, permission: str
+) -> None:
+    """Every demographic_no column is a 32-bit Integer: a larger number is a 422, not a 500."""
+    response = TestClient(internal_app()).request(
+        method,
+        path.replace("/1234/", f"/{MAX_DEMOGRAPHIC_NO + 1}/"),
+        headers=carlos_headers(permission),
+    )
+
+    assert response.status_code == 422
+    assert ["path", "demographic_no"] in path_errors(response)
+
+
+@pytest.mark.parametrize(("method", "path", "permission"), PATIENT_ROUTE_PERMISSIONS)
+def test_internal_patient_route_accepts_the_largest_32_bit_patient_number(
+    method: str, path: str, permission: str
+) -> None:
+    response = TestClient(internal_app()).request(
+        method,
+        path.replace("/1234/", f"/{MAX_DEMOGRAPHIC_NO}/"),
+        headers=carlos_headers(permission),
+    )
+
+    # A POST sent without its body may still be a 422, but never for the patient number.
+    assert response.status_code != 500
+    if response.status_code == 422:
+        assert ["path", "demographic_no"] not in path_errors(response)
+
+
+def test_patient_number_bound_covers_every_patient_route() -> None:
+    assert len(PATIENT_ROUTE_PERMISSIONS) == 10
+
+
+def test_invite_body_and_domain_check_use_the_same_patient_number_bound() -> None:
+    fields = {
+        "email": "patient@example.com",
+        "date_of_birth": "1980-01-01",
+        "health_card_number": "9876543217",
+    }
+    assert InviteCreateRequest(demographic_no=MAX_DEMOGRAPHIC_NO, **fields).demographic_no == (
+        MAX_DEMOGRAPHIC_NO
+    )
+    with pytest.raises(ValidationError):
+        InviteCreateRequest(demographic_no=MAX_DEMOGRAPHIC_NO + 1, **fields)
+    validate_demographic_no(MAX_DEMOGRAPHIC_NO)
+    for value in (0, MAX_DEMOGRAPHIC_NO + 1):
+        with pytest.raises(ValueError, match="demographic_no must be between 1 and 2147483647"):
+            validate_demographic_no(value)
 
 
 def test_staff_disable_immediately_revokes_an_already_authenticated_session() -> None:

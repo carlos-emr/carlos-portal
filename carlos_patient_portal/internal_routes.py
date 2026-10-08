@@ -102,6 +102,7 @@ from carlos_patient_portal.models import (
     MAX_BOOKING_PROMPT_OPERATION_ID_LENGTH,
     MAX_BOOKING_SLOT_DURATION_MINUTES,
     MAX_BOOKING_SLOT_ID_LENGTH,
+    MAX_DEMOGRAPHIC_NO,
     MAX_INVITE_DELIVERY_OPERATION_ID_LENGTH,
     MAX_INVITE_DELIVERY_REFERENCE_LENGTH,
     MAX_OFFERED_SLOTS,
@@ -838,7 +839,7 @@ def register_internal_invite_routes(
         responses=INTERNAL_PREPARE_CREATE_INVITE_RESPONSES,
     )
     def internal_prepare_invite(
-        demographic_no: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
+        demographic_no: Annotated[int, Path(gt=0, le=MAX_DEMOGRAPHIC_NO)],
         payload: InternalInvitePrepareRequest,
         principal: Annotated[
             StaffPrincipal, Depends(deps.staff_principal_requiring(PERMISSION_INVITE_MANAGE))
@@ -953,7 +954,7 @@ def register_internal_invite_routes(
         responses=INTERNAL_CREATE_INVITE_RESPONSES,
     )
     def internal_create_invite(
-        demographic_no: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
+        demographic_no: Annotated[int, Path(gt=0, le=MAX_DEMOGRAPHIC_NO)],
         payload: InviteCreateRequest,
         principal: Annotated[
             StaffPrincipal, Depends(deps.staff_principal_requiring(PERMISSION_INVITE_MANAGE))
@@ -990,7 +991,7 @@ def register_internal_invite_routes(
         responses=COMMON_INTERNAL_RESPONSES,
     )
     def internal_list_invites(
-        demographic_no: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
+        demographic_no: Annotated[int, Path(gt=0, le=MAX_DEMOGRAPHIC_NO)],
         principal: Annotated[
             StaffPrincipal, Depends(deps.staff_principal_requiring(PERMISSION_INVITE_MANAGE))
         ],
@@ -1091,7 +1092,7 @@ def register_internal_account_routes(
         responses=COMMON_INTERNAL_RESPONSES,
     )
     def internal_unlock_account(
-        demographic_no: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
+        demographic_no: Annotated[int, Path(gt=0, le=MAX_DEMOGRAPHIC_NO)],
         principal: Annotated[
             StaffPrincipal, Depends(deps.staff_principal_requiring(PERMISSION_ACCOUNT_UNLOCK))
         ],
@@ -1128,7 +1129,7 @@ def register_internal_account_routes(
         responses=COMMON_INTERNAL_RESPONSES,
     )
     def internal_get_account_status(
-        demographic_no: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
+        demographic_no: Annotated[int, Path(gt=0, le=MAX_DEMOGRAPHIC_NO)],
         principal: Annotated[
             StaffPrincipal, Depends(deps.staff_principal_requiring(PERMISSION_ACCOUNT_MANAGE))
         ],
@@ -1173,7 +1174,7 @@ def register_internal_account_routes(
         responses=COMMON_INTERNAL_RESPONSES,
     )
     def internal_set_account_access(
-        demographic_no: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
+        demographic_no: Annotated[int, Path(gt=0, le=MAX_DEMOGRAPHIC_NO)],
         payload: InternalAccountAccessRequest,
         principal: Annotated[
             StaffPrincipal, Depends(deps.staff_principal_requiring(PERMISSION_ACCOUNT_MANAGE))
@@ -1230,7 +1231,7 @@ def register_internal_unlock_secret_routes(
         responses=INTERNAL_CONFLICT_RESPONSES,
     )
     def internal_create_unlock_secret(
-        demographic_no: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
+        demographic_no: Annotated[int, Path(gt=0, le=MAX_DEMOGRAPHIC_NO)],
         payload: InternalUnlockSecretRequest,
         principal: Annotated[
             StaffPrincipal, Depends(deps.staff_principal_requiring(PERMISSION_SECRET_MANAGE))
@@ -1504,7 +1505,7 @@ def register_internal_booking_prompt_routes(
         responses=COMMON_INTERNAL_RESPONSES,
     )
     def internal_get_booking_eligibility(
-        demographic_no: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
+        demographic_no: Annotated[int, Path(gt=0, le=MAX_DEMOGRAPHIC_NO)],
         principal: Annotated[
             StaffPrincipal,
             Depends(deps.staff_principal_requiring(PERMISSION_BOOKING_PROMPT_MANAGE)),
@@ -1545,7 +1546,7 @@ def register_internal_booking_prompt_routes(
     )
     def internal_create_booking_prompt(
         request: Request,
-        demographic_no: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
+        demographic_no: Annotated[int, Path(gt=0, le=MAX_DEMOGRAPHIC_NO)],
         payload: InternalBookingPromptRequest,
         principal: Annotated[
             StaffPrincipal,
@@ -1596,7 +1597,7 @@ def register_internal_booking_prompt_routes(
         responses=COMMON_INTERNAL_RESPONSES,
     )
     def internal_list_booking_prompts(
-        demographic_no: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
+        demographic_no: Annotated[int, Path(gt=0, le=MAX_DEMOGRAPHIC_NO)],
         principal: Annotated[
             StaffPrincipal,
             Depends(deps.staff_principal_requiring(PERMISSION_BOOKING_PROMPT_MANAGE)),

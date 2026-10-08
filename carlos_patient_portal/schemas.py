@@ -29,7 +29,7 @@ from carlos_patient_portal.identity import (
     normalize_email,
     normalize_health_card_number,
 )
-from carlos_patient_portal.models import MAX_EMAIL_LENGTH
+from carlos_patient_portal.models import MAX_DEMOGRAPHIC_NO, MAX_EMAIL_LENGTH
 
 MfaDeliveryMethod = Literal["email", "sms"]
 
@@ -37,7 +37,7 @@ MfaDeliveryMethod = Literal["email", "sms"]
 class InviteCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    demographic_no: int = Field(gt=0)
+    demographic_no: int = Field(gt=0, le=MAX_DEMOGRAPHIC_NO)
     email: str = Field(min_length=1, max_length=MAX_EMAIL_LENGTH)
     date_of_birth: date
     health_card_number: str = Field(
