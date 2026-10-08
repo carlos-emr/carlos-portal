@@ -26,8 +26,17 @@ from pydantic import ValidationError
 from sqlalchemy import create_engine, func, inspect, select, text
 
 from carlos_patient_portal import delivery_outbox, i18n
+from carlos_patient_portal.booking_choices import (
+    choose_offered_slot,
+    close_lapsed_choices,
+    list_pending_choices,
+)
 from carlos_patient_portal.booking_offers import OfferedSlotSpec
-from carlos_patient_portal.booking_prompts import BookingPromptNotice, create_booking_prompt
+from carlos_patient_portal.booking_prompts import (
+    BookingPromptNotFoundError,
+    BookingPromptNotice,
+    create_booking_prompt,
+)
 from carlos_patient_portal.delivery_outbox import (
     OUTBOX_FAILURE_BOOKING_PROMPT_NOT_NEEDED,
     process_one_delivery,
@@ -2072,6 +2081,8 @@ def test_cleanup_closes_a_started_pick_when_carlos_has_stopped_polling() -> None
         removed = cleanup_transient_auth_rows(session, before=retention_cutoff)
 
     assert (dry_run.lapsed_booking_choices, removed.lapsed_booking_choices) == (1, 1)
+    # The started time is left to the offered-time pass, so a dry run reports what a live run does.
+    assert (dry_run.offered_slots, removed.offered_slots) == (1, 1)
     assert only_choice(app).state == "expired"
     # Cleanup has no request to build a sign-in link from: the portal message is the notice.
     assert update_notices(app) == []
@@ -2090,6 +2101,8 @@ def test_a_pick_that_lapses_after_the_prompt_expired_is_still_shown_briefly() ->
     assert 'name="slot"' not in page
     assert slot_row_ids(app, prompt_id) == {}
     assert prompt_state(app, prompt_id) == "expired"
+    deliver_all(app, RecordingPortalEmailSender())
+    assert [notice.status for notice in update_notices(app)] == [OUTBOX_STATUS_DELIVERED]
 
 
 def test_the_waiting_message_gives_the_clinics_number_when_one_is_set() -> None:
@@ -2106,3 +2119,61 @@ def test_the_waiting_message_gives_the_clinics_number_when_one_is_set() -> None:
         "The clinic will confirm your time. If it is urgent, call the clinic at 555-123-4567."
         in page
     )
+
+
+def test_the_poll_never_lists_a_pick_whose_time_has_started_even_before_it_is_closed() -> None:
+    app, patient, prompt_id = patient_with_offer()
+    assert pick(app, patient, prompt_id).status_code == 303
+    start_the_picked_time(app, prompt_id)
+
+    # The listing on its own, as when the closing pass skipped a prompt another writer held.
+    with app.state.session_factory.begin() as session:
+        page = list_pending_choices(
+            session, clinic_id="clinic-a", actor="CARLOS booking sync", actor_id="sync"
+        )
+
+    assert page.choices == ()
+    assert only_choice(app).state == "pending"
+
+
+def test_closing_started_picks_stays_within_the_clinic() -> None:
+    app, patient, prompt_id = patient_with_offer()
+    assert pick(app, patient, prompt_id).status_code == 303
+    start_the_picked_time(app, prompt_id)
+
+    with app.state.session_factory.begin() as session:
+        closed = close_lapsed_choices(session, clinic_id="clinic-b")
+
+    assert closed == 0
+    assert only_choice(app).state == "pending"
+
+
+def test_turning_an_account_off_clears_the_offer_of_an_expired_prompt() -> None:
+    app, patient, prompt_id = patient_with_offer()
+    assert pick(app, patient, prompt_id).status_code == 303
+    move_prompt_expiry(app, prompt_id, expires_at=utc_now() - timedelta(minutes=1))
+
+    assert TestClient(app).post(
+        "/internal/carlos/patients/1234/portal-account/access",
+        headers=staff_headers("portal.account.manage"),
+        json={"enabled": False, "reason": "staff_action"},
+    ).status_code == 200
+
+    assert only_choice(app).state == "withdrawn"
+    assert slot_row_ids(app, prompt_id) == {}
+
+
+def test_a_pick_is_refused_once_the_account_is_off() -> None:
+    app, patient, prompt_id = patient_with_offer()
+    row_id = slot_row_ids(app, prompt_id)["carlos:slot:1"]
+    with app.state.session_factory.begin() as session:
+        account = session.scalar(select(PatientPortalAccount))
+        account.status = "disabled"
+        account.disabled_at = utc_now()
+        account.disabled_by = "Synthetic Staff"
+    with app.state.session_factory.begin() as session:
+        account = session.scalar(select(PatientPortalAccount))
+        with pytest.raises(BookingPromptNotFoundError):
+            choose_offered_slot(session, prompt_id, row_id, account=account)
+
+    assert pending_choices(app).json()["items"] == []

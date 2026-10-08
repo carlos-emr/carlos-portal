@@ -1484,7 +1484,9 @@ class PatientPortalBookingChoice(Base):
 
     Holds a copy of the chosen time so the confirmation survives the offered rows being deleted.
     The copy is kept only while it is needed: it is cleared when CARLOS reports the time was taken,
-    when the prompt is withdrawn, and one day after a booked appointment's start.
+    when the prompt is withdrawn or staff turn the account off, when the time starts unanswered
+    (the pick lapses as `expired`), and one day after a booked appointment's start; CARLOS's
+    `slot_id` is cleared as soon as the pick is booked.
     """
 
     __tablename__ = "patient_portal_booking_choices"

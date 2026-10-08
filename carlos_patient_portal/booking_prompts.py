@@ -457,9 +457,8 @@ def _active_for_account(account_id: int, now: datetime) -> tuple[ColumnElement[b
 
     A live sent, read, or declined prompt; a prompt whose chosen time CARLOS has not answered yet,
     even past its expiry, so the patient is not left without an answer; for a few days, a prompt
-    whose pick was reported taken, or lapsed, after it expired, so the patient learns to contact the
-    clinic;
-    and a booked prompt until a day after the booked time.
+    whose pick was reported taken, or lapsed, after it expired, so the patient learns to contact
+    the clinic; and a booked prompt until a day after the booked time.
     """
     booked_time_upcoming = (
         select(PatientPortalBookingChoice.id)

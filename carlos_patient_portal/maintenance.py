@@ -375,6 +375,7 @@ def cleanup_transient_auth_rows(
         # the patient). Before the prompt pass, so a closed pick no longer holds its prompt.
         "lapsed_booking_choices": close_lapsed_choices(
             session,
+            delete_slots=False,
             limit=normalized_batch_size,
             dry_run=dry_run,
         ),

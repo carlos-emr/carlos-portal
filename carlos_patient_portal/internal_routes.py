@@ -1616,17 +1616,22 @@ def register_internal_booking_sync_routes(
         state: Annotated[Literal["pending"], Query()],
         limit: Annotated[int, Query(ge=1, le=MAX_PENDING_CHOICE_LIST)] = MAX_PENDING_CHOICE_LIST,
     ) -> dict[str, object]:
-        # Picks whose time has started are closed first: CARLOS must not book them, and the patient
-        # is told the time did not go through.
-        close_lapsed_choices(
-            session,
-            clinic_id=principal.clinic_id,
-            notice=BookingPromptNotice(
-                sign_in_url=_booking_prompt_sign_in_url(request, runtime.settings),
+        def lapse_notice() -> BookingPromptNotice | None:
+            # Built only once something has lapsed. Without a public sign-in address the pick is
+            # still closed and the portal message is the notice; the poll itself never fails on it.
+            try:
+                sign_in_url = _booking_prompt_sign_in_url(request, runtime.settings)
+            except HTTPException:
+                return None
+            return BookingPromptNotice(
+                sign_in_url=sign_in_url,
                 encryption_secret=runtime.outbox_encryption_secret,
                 encryption_key_id=runtime.outbox_active_key_id,
-            ),
-        )
+            )
+
+        # Picks whose time has started are closed first: CARLOS must not book them, and the patient
+        # is told the time did not go through.
+        close_lapsed_choices(session, clinic_id=principal.clinic_id, notice=lapse_notice)
         page = list_pending_choices(
             session,
             clinic_id=principal.clinic_id,

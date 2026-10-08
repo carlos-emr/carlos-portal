@@ -151,8 +151,9 @@ When it is deleted:
 - Offered times: when the prompt is booked, withdrawn, or declined, in the same transaction; and
   by `cleanup-transient-auth` at its first run after a time starts or its prompt expires, without
   waiting for the transient retention window.
-- The copy of a picked time: when CARLOS reports that time taken, or the prompt is withdrawn, in
-  the same transaction; for a booked time, CARLOS's `slot_id` at booking and the rest by
+- The copy of a picked time: when CARLOS reports that time taken, the prompt is withdrawn, staff
+  turn the account off, or the time starts before CARLOS answers (the pick lapses), in the same
+  transaction; for a booked time, CARLOS's `slot_id` at booking and the rest by
   `cleanup-transient-auth` one day after the appointment's start. The pick row itself stays, without the time, so a repeated CARLOS result is
   still answered idempotently, and goes with its prompt.
 - The prompt, with its picks: by `cleanup-transient-auth` once it is past its expiry by the

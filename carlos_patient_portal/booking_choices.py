@@ -21,7 +21,7 @@ one prompt, or a pick racing a withdrawal or a result, are serialised, and a par
 refuses a second pending pick even for a writer that skipped the lock.
 """
 
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -264,6 +264,20 @@ def choose_offered_slot(
     reaches the browser. Submitting the pick that is already pending again (a double click) returns
     it unchanged rather than refusing it.
     """
+    # The account first, as staff turning it off do, so a pick cannot slip past the cancellation
+    # of its waiting picks: wait for that, then refuse once the account is off.
+    if (
+        session.scalar(
+            select(PatientPortalAccount.id)
+            .where(
+                PatientPortalAccount.id == account.id,
+                PatientPortalAccount.status == ACCOUNT_STATUS_ACTIVE,
+            )
+            .with_for_update(read=True)
+        )
+        is None
+    ):
+        raise BookingPromptNotFoundError()
     locked_prompt = _lock_prompt(
         session, prompt_id, clinic_id=account.clinic_id, account_id=account.id
     )
@@ -612,7 +626,8 @@ def close_lapsed_choices(
     session: Session,
     *,
     clinic_id: str | None = None,
-    notice: BookingPromptNotice | None = None,
+    notice: Callable[[], BookingPromptNotice | None] | None = None,
+    delete_slots: bool = True,
     limit: int = MAX_PENDING_CHOICE_LIST,
     dry_run: bool = False,
 ) -> int:
@@ -620,10 +635,12 @@ def close_lapsed_choices(
 
     The pick becomes `expired`: CARLOS no longer sees it, its copy of the time is cleared, and the
     patient is told the time did not go through and can pick again from any times still on offer.
-    With a `notice`, the patient also gets the "there is an update" email (the poll passes one;
-    cleanup, its fallback when CARLOS has stopped polling, does not). Prompts another writer holds
-    are skipped and caught next time. Returns how many picks were closed (or would be, in a dry
-    run).
+    `notice` builds the "there is an update" email's details, only once something has lapsed; when
+    it gives None (or none is passed, as for cleanup, the fallback when CARLOS has stopped polling)
+    the portal message is the only notice. With `delete_slots` false the started or expired offered
+    times are left for cleanup's own offered-time pass, so its counts add up. Prompts another writer
+    holds are skipped and caught next time. Returns how many picks were closed (or would be, in a
+    dry run).
     """
     now = utc_now()
     statement = (
@@ -652,6 +669,7 @@ def close_lapsed_choices(
         )
     )
     closed = 0
+    email: BookingPromptNotice | None = None
     for prompt in prompts:
         choice = _pending_choice(session, prompt.id)
         if choice is None or choice.starts_at is None or as_utc(choice.starts_at) > now:
@@ -662,11 +680,10 @@ def close_lapsed_choices(
         if prompt.status == BOOKING_PROMPT_STATUS_CHOICE_PENDING:
             prompt.status = BOOKING_PROMPT_STATUS_READ
         session.flush()
-        if as_utc(prompt.expires_at) <= now:
+        if delete_slots:
             # The patient can no longer pick from an expired prompt, so nothing offered is kept.
-            delete_offered_slots(session, prompt.id)
-        else:
-            delete_offered_slots(session, prompt.id, started_before=now)
+            expired = as_utc(prompt.expires_at) <= now
+            delete_offered_slots(session, prompt.id, started_before=None if expired else now)
         record_audit_event(
             session,
             event_type=AUDIT_EVENT_BOOKING_PROMPT_RESULT,
@@ -680,14 +697,16 @@ def close_lapsed_choices(
             resource_id=str(choice.id),
             reason=BOOKING_CHOICE_STATE_EXPIRED,
         )
-        if notice is not None:
+        if email is None and notice is not None:
+            email = notice()
+        if email is not None:
             enqueue_booking_prompt_update_delivery(
                 session,
                 account_id=prompt.account_id,
                 booking_prompt_id=prompt.id,
-                sign_in_url=notice.sign_in_url,
-                encryption_secret=notice.encryption_secret,
-                encryption_key_id=notice.encryption_key_id,
+                sign_in_url=email.sign_in_url,
+                encryption_secret=email.encryption_secret,
+                encryption_key_id=email.encryption_key_id,
             )
         closed += 1
     return closed

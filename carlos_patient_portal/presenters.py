@@ -413,13 +413,12 @@ def assemble_booking_offer(
         and choice.state in (BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE, BOOKING_CHOICE_STATE_EXPIRED)
         else None
     )
-    taken_notice = (
-        text["booking_slot_taken"]
-        if closed_unanswered == BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE
-        else text["booking_choice_expired"]
-        if closed_unanswered == BOOKING_CHOICE_STATE_EXPIRED
-        else None
-    )
+    # What to say about it: pick another while times remain, otherwise contact the clinic.
+    pick_again_key, contact_key = {
+        BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE: ("booking_slot_taken", "booking_slot_taken_contact"),
+        BOOKING_CHOICE_STATE_EXPIRED: ("booking_choice_expired", "booking_choice_expired_contact"),
+    }.get(closed_unanswered, (None, None))
+    taken_notice = text[pick_again_key] if pick_again_key else None
     slots = current_offered_slots(session, prompt.id, now=now) if open_for_choice else []
     if slots:
         slot_views = []
@@ -437,11 +436,7 @@ def assemble_booking_offer(
     # offered times, but without saying the portal cannot book.
     return BookingOfferViewModel(
         state=BOOKING_VIEW_CONTACT if prompt.offer_digest is None else BOOKING_VIEW_CLOSED,
-        notice=text["booking_slot_taken_contact"]
-        if closed_unanswered == BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE
-        else text["booking_choice_expired_contact"]
-        if closed_unanswered == BOOKING_CHOICE_STATE_EXPIRED
-        else None,
+        notice=text[contact_key] if contact_key else None,
     )
 
 
