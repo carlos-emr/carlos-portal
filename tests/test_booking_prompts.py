@@ -143,6 +143,15 @@ def test_booking_eligibility_exposes_only_scope_and_boolean(state: str) -> None:
         assert len(events) == 1
         assert events[0].demographic_no == 1234
         assert events[0].actor == "Front Desk"
+        assert (events[0].event_type, events[0].outcome, events[0].clinic_id) == (
+            "staff.action", "success", "clinic-a"
+        )
+        # The row names the account it found, and only when the patient is eligible.
+        expected_account = account_id if state in {"active", "locked"} else None
+        assert events[0].account_id == expected_account
+        assert events[0].resource_id == (
+            None if expected_account is None else str(expected_account)
+        )
 
 
 def test_booking_eligibility_does_not_grant_general_account_read() -> None:
@@ -223,6 +232,8 @@ def test_booking_eligibility_agrees_with_prompt_creation(account_state: str) -> 
     created = client.post(PATH, headers=headers(), json=prompt_request())
 
     assert created.status_code in (201, 404), created.text
+    if created.status_code == 404:
+        assert created.json() == {"detail": "portal account not found"}
     assert eligible is (created.status_code == 201)
 
 

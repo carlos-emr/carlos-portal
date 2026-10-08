@@ -196,6 +196,7 @@ def booking_account_conditions(
 
     The one rule for both creating a prompt and the eligibility check CARLOS makes before offering
     to send one, so the two cannot drift apart. A locked account is still active and counts.
+    `clinic_id` must already be normalized (`normalize_clinic_id`).
     """
     return (
         PatientPortalAccount.clinic_id == clinic_id,
