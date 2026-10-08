@@ -275,6 +275,7 @@ def test_postgresql_engine_pins_the_catalog_and_application_search_path(
             "-c search_path=pg_catalog,public"
         ),
     }
+    assert captured["isolation_level"] == "READ COMMITTED"
 
 
 def test_database_preflight_rejects_sqlite_before_running_postgresql_queries() -> None:

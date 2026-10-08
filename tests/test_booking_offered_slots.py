@@ -14,6 +14,7 @@
 
 """Offered times: CARLOS offers slots, the patient picks one, CARLOS reports the result."""
 
+import logging
 import re
 from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
@@ -24,7 +25,7 @@ from alembic.config import Config
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from sqlalchemy import create_engine, func, inspect, select, text
+from sqlalchemy import create_engine, func, inspect, select, text, update
 
 from carlos_patient_portal import delivery_outbox, i18n, internal_routes
 from carlos_patient_portal.booking_choices import (
@@ -2013,7 +2014,10 @@ def start_the_picked_time(app, prompt_id: int, *, slot_id: str = "carlos:slot:1"
             PatientPortalBookingOfferedSlot, slot_row_ids(app, prompt_id)[slot_id]
         ).starts_at = started
         choice = session.scalar(
-            select(PatientPortalBookingChoice).where(PatientPortalBookingChoice.state == "pending")
+            select(PatientPortalBookingChoice).where(
+                PatientPortalBookingChoice.prompt_id == prompt_id,
+                PatientPortalBookingChoice.state == "pending",
+            )
         )
         choice.starts_at = started
 
@@ -2169,32 +2173,50 @@ def test_a_pick_is_refused_once_the_account_is_off() -> None:
     row_id = slot_row_ids(app, prompt_id)["carlos:slot:1"]
     with app.state.session_factory.begin() as session:
         account = session.scalar(select(PatientPortalAccount))
-        account.status = "disabled"
-        account.disabled_at = utc_now()
-        account.disabled_by = "Synthetic Staff"
-    with app.state.session_factory.begin() as session:
-        account = session.scalar(select(PatientPortalAccount))
+        # Turned off after the patient's request loaded the account: the loaded copy still says
+        # active, so only a fresh read of the row refuses the pick.
+        session.execute(
+            update(PatientPortalAccount)
+            .where(PatientPortalAccount.id == account.id)
+            .values(status="disabled", disabled_at=utc_now(), disabled_by="Synthetic Staff")
+            .execution_options(synchronize_session=False)
+        )
+        assert account.status == "active"
         with pytest.raises(BookingPromptNotFoundError):
             choose_offered_slot(session, prompt_id, row_id, account=account)
 
     assert pending_choices(app).json()["items"] == []
 
 
-def test_the_poll_closes_a_started_pick_without_email_when_no_sign_in_address_is_known(
+def test_the_poll_closes_started_picks_without_email_when_no_sign_in_address_is_known(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    app, patient, prompt_id = patient_with_offer()
-    assert pick(app, patient, prompt_id).status_code == 303
-    start_the_picked_time(app, prompt_id)
+    app = booking_app()
+    patient = TestClient(app)
+    browser_sign_in_seeded_patient(app, patient)
+    prompt_ids = [create_prompt(app, operation_id=f"lapsed-{number}") for number in (1, 2)]
+    for prompt_id in prompt_ids:
+        assert pick(app, patient, prompt_id).status_code == 303
+        start_the_picked_time(app, prompt_id)
 
     def no_sign_in_address(*_args: object) -> str:
         raise HTTPException(status_code=503, detail="portal sign-in address is not configured")
 
     monkeypatch.setattr(internal_routes, "_booking_prompt_sign_in_url", no_sign_in_address)
 
-    response = pending_choices(app)
+    with caplog.at_level(logging.WARNING, logger=internal_routes.logger.name):
+        response = pending_choices(app)
 
     assert response.status_code == 200
     assert response.json()["items"] == []
-    assert only_choice(app).state == "expired"
+    with app.state.session_factory() as session:
+        states = list(session.scalars(select(PatientPortalBookingChoice.state)))
+    assert states == ["expired", "expired"]
     assert update_notices(app) == []
+    # One warning for the poll, not one per lapsed pick, and nothing about the patients.
+    assert [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == internal_routes.logger.name
+    ] == ["Booking picks lapsed without an update email: no public sign-in address"]

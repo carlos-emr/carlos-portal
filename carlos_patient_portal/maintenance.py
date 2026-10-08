@@ -22,7 +22,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import ColumnElement, and_, delete, func, or_, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, aliased
 
@@ -31,6 +31,7 @@ from carlos_patient_portal.booking_offers import (
     BOOKED_TIME_RETENTION_AFTER_START,
     closed_after_expiry_notice,
 )
+from carlos_patient_portal.database import Base
 from carlos_patient_portal.models import (
     BOOKING_CHOICE_STATE_BOOKED,
     BOOKING_CHOICE_STATE_EXPIRED,
@@ -292,7 +293,7 @@ def cleanup_transient_auth_rows(
         )
         .exists()
     )
-    predicates = (
+    sign_in_predicates = (
         # Ordered deliberately: outbound deliveries are removed before reset tokens, because
         # PatientPortalOutboundDelivery.reset_token_id is ON DELETE CASCADE. Deleting reset
         # tokens first destroyed delivery history the report never mentioned - it counted only
@@ -343,6 +344,8 @@ def cleanup_transient_auth_rows(
                 ),
             ),
         ),
+    )
+    booking_predicates = (
         (
             PatientPortalBookingOfferedSlot,
             or_(
@@ -368,8 +371,8 @@ def cleanup_transient_auth_rows(
         ),
     )
     # Keyed by field name rather than built positionally: these counts are what the operator reads
-    # to decide whether cleanup did what they expected, and a reordering of `predicates` must not be
-    # able to silently relabel them.
+    # to decide whether cleanup did what they expected, and a reordering of the predicates must not
+    # be able to silently relabel them.
     counts: dict[str, int] = {}
 
     def close_and_clear_booking_choices() -> None:
@@ -391,22 +394,7 @@ def cleanup_transient_auth_rows(
             dry_run=dry_run,
         )
 
-    for field_name, (model, predicate) in zip(
-        (
-            "outbound_deliveries",
-            "sessions",
-            "mfa_challenges",
-            "reset_records",
-            "email_change_requests",
-            "invites",
-            "offered_slots",
-            "booking_prompts",
-        ),
-        predicates,
-        strict=True,
-    ):
-        if field_name == "offered_slots":
-            close_and_clear_booking_choices()
+    def run_pass(field_name: str, model: type[Base], predicate: ColumnElement[bool]) -> None:
         candidates = (
             select(model.id).where(predicate).order_by(model.id).limit(normalized_batch_size)
         )
@@ -428,7 +416,7 @@ def cleanup_transient_auth_rows(
         )
         if dry_run or not record_ids:
             counts[field_name] = len(record_ids)
-            continue
+            return
         # The DELETE re-applies the predicate to close the resend-vs-cleanup race, so the
         # selected count can overstate; report what was actually removed, like prune_audit_events.
         result = session.execute(
@@ -438,6 +426,27 @@ def cleanup_transient_auth_rows(
             )
         )
         counts[field_name] = int(result.rowcount or 0)
+
+    for field_name, (model, predicate) in zip(
+        (
+            "outbound_deliveries",
+            "sessions",
+            "mfa_challenges",
+            "reset_records",
+            "email_change_requests",
+            "invites",
+        ),
+        sign_in_predicates,
+        strict=True,
+    ):
+        run_pass(field_name, model, predicate)
+    close_and_clear_booking_choices()
+    for field_name, (model, predicate) in zip(
+        ("offered_slots", "booking_prompts"),
+        booking_predicates,
+        strict=True,
+    ):
+        run_pass(field_name, model, predicate)
     return TransientCleanupResult(**counts)
 
 

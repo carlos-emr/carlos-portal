@@ -80,6 +80,10 @@ def create_portal_engine(
                 f"-c search_path={POSTGRESQL_SEARCH_PATH}"
             ),
         )
+        # PostgreSQL's default, pinned against a changed server default: locking writers re-read a
+        # row another transaction changed while they waited (a booking pick re-reads the account's
+        # status after locking its prompt), which a REPEATABLE READ snapshot would not see.
+        engine_options["isolation_level"] = "READ COMMITTED"
     engine = create_engine(database_url, connect_args=connect_args, **engine_options)
 
     if is_sqlite:

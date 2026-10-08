@@ -254,12 +254,17 @@ def create_booking_prompt(
     if existing is not None:
         return _retry_result(existing, request)
 
+    # FOR SHARE: staff turning the account off lock it before cancelling its prompts' picks, so a
+    # prompt is either created first (and its picks cancelled there) or waits and finds it off.
+    # The prompt's own foreign key takes only KEY SHARE, which would not wait.
     account = session.scalar(
-        select(PatientPortalAccount).where(
+        select(PatientPortalAccount)
+        .where(
             PatientPortalAccount.clinic_id == normalized_clinic_id,
             PatientPortalAccount.demographic_no == demographic_no,
             PatientPortalAccount.status == ACCOUNT_STATUS_ACTIVE,
         )
+        .with_for_update(read=True)
     )
     if account is None:
         raise BookingPromptAccountUnavailableError()

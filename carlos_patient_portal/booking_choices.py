@@ -18,8 +18,10 @@ The patient picks one offered time, or says none of them work. CARLOS polls for 
 tries to book each one, and reports `booked` or `slot_unavailable`; the portal never calls
 CARLOS. One pick at a time: every write here locks the prompt row before its choices and offered
 times, so two submissions for one prompt, or a pick racing a withdrawal, a result, or staff
-turning the account off (which lock the account, then its prompts), are serialised, and a partial
-unique index refuses a second pending pick even for a writer that skipped the lock.
+turning the account off (which locks the account, then its sessions, sign-in codes and reset
+links, then its prompts), are serialised, and a partial unique index refuses a second pending
+pick even for a writer that skipped the lock. The pick's check that the account is still on
+relies on PostgreSQL's default READ COMMITTED isolation, which the engine pins.
 """
 
 from collections.abc import Callable, Collection, Sequence
@@ -632,12 +634,12 @@ def close_lapsed_choices(
 
     The pick becomes `expired`: CARLOS no longer sees it, its copy of the time is cleared, and the
     patient is told the time did not go through and can pick again from any times still on offer.
-    `notice` builds the "there is an update" email's details, only once something has lapsed; when
-    it gives None (or none is passed, as for cleanup, the fallback when CARLOS has stopped polling)
-    the portal message is the only notice. With `delete_slots` false the started or expired offered
-    times are left for cleanup's own offered-time pass, so its counts add up. Prompts another writer
-    holds are skipped and caught next time. Returns how many picks were closed (or would be, in a
-    dry run).
+    `notice` builds the "there is an update" email's details, once, and only if something has
+    lapsed; when it gives None (or none is passed, as for cleanup, the fallback when CARLOS has
+    stopped polling) the portal message is the only notice. With `delete_slots` false the started
+    or expired offered times are left for cleanup's own offered-time pass, so its counts add up.
+    Prompts another writer holds are skipped and caught next time. Returns how many picks were
+    closed (or would be, in a dry run).
     """
     now = utc_now()
     statement = (
@@ -667,6 +669,8 @@ def close_lapsed_choices(
     )
     closed = 0
     email: BookingPromptNotice | None = None
+    # Built at most once per call, so a missing address is not retried (or logged) for every pick.
+    notice_tried = False
     for prompt in prompts:
         choice = _pending_choice(session, prompt.id)
         if choice is None or choice.starts_at is None or as_utc(choice.starts_at) > now:
@@ -694,7 +698,8 @@ def close_lapsed_choices(
             resource_id=str(choice.id),
             reason=BOOKING_CHOICE_STATE_EXPIRED,
         )
-        if email is None and notice is not None:
+        if not notice_tried and notice is not None:
+            notice_tried = True
             email = notice()
         if email is not None:
             enqueue_booking_prompt_update_delivery(
