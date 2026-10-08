@@ -203,7 +203,7 @@ def test_booking_eligibility_ignores_another_clinics_account_for_the_same_patien
 
 
 @pytest.mark.parametrize("account_state", ["absent", "active", "disabled", "locked"])
-def test_booking_eligibility_agrees_with_whether_a_prompt_can_be_created(account_state: str) -> None:
+def test_booking_eligibility_agrees_with_prompt_creation(account_state: str) -> None:
     app = booking_app()
     client = TestClient(app)
     if account_state != "absent":
