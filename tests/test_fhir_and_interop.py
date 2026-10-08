@@ -724,10 +724,17 @@ def test_oversized_and_malformed_resource_ids_are_audited_not_five_hundreds() ->
         json={"current_password": STRONG_PASSWORD},
         headers=bearer_headers(token),
     )
+    # Ids are 32-bit: one past the largest is refused before PostgreSQL could fail on it (#25).
+    just_over_32_bits = client.post(
+        f"/api/patient/email-passwords/{2**31}/reveal",
+        json={"current_password": STRONG_PASSWORD},
+        headers=bearer_headers(token),
+    )
 
     assert [response.status_code for response in oversized] == [404, 404, 404, 404]
     assert control_character.status_code == 404
     assert huge_numeric.status_code == 422
+    assert just_over_32_bits.status_code == 422
     with app.state.session_factory() as session:
         read_events = list(
             session.scalars(

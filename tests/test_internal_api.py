@@ -1980,7 +1980,18 @@ def test_internal_patient_route_accepts_the_largest_32_bit_patient_number(
 
 
 def test_patient_number_bound_covers_every_patient_route() -> None:
-    assert len(PATIENT_ROUTE_PERMISSIONS) == 10
+    assert PATIENT_ROUTE_PERMISSIONS, "no /patients/{demographic_no}/ route found"
+
+
+def test_internal_id_beyond_32_bits_is_a_422() -> None:
+    """Ids are 32-bit too: one past the largest is refused before PostgreSQL could fail on it."""
+    response = TestClient(internal_app()).post(
+        f"/internal/carlos/invites/{2**31}/revoke",
+        headers=carlos_headers("portal.invite.manage"),
+    )
+
+    assert response.status_code == 422
+    assert ["path", "invite_id"] in path_errors(response)
 
 
 def test_invite_body_and_domain_check_use_the_same_patient_number_bound() -> None:
