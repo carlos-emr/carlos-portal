@@ -143,6 +143,7 @@ def test_booking_eligibility_exposes_only_scope_and_boolean(state: str) -> None:
         assert len(events) == 1
         assert events[0].demographic_no == 1234
         assert events[0].actor == "Front Desk"
+        assert events[0].actor_id == "provider-42"
         assert (events[0].event_type, events[0].outcome, events[0].clinic_id) == (
             "staff.action", "success", "clinic-a"
         )

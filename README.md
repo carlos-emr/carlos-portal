@@ -665,7 +665,8 @@ Permissions are deliberately narrow:
 - `portal.account.manage`: read portal status and disable/re-enable patient access.
 - `portal.secret.manage`: idempotently create, publish, and revoke generated email passphrases.
 - `portal.contact.review`: list and approve/reject pending patient contact changes.
-- `portal.booking_prompt.manage`: check booking eligibility, create, list, and withdraw booking prompts.
+- `portal.booking_prompt.manage`: check booking eligibility, create, list, and withdraw booking
+  prompts.
 - `portal.booking_prompt.sync`: list patients' pending picks of offered times and report whether
   CARLOS booked them. Held only by the CARLOS polling job's dedicated, non-login system provider;
   only the two sync endpoints accept it, and they accept nothing else. That provider is refused by
@@ -782,7 +783,8 @@ account's email as it is when sent. A notice skipped this way ends as `failed` w
 `last_failure_code = booking_prompt_not_needed`, not an outage, and is not sent later: re-enabling
 an account shows its live prompts again, without a new email. Prompts leave the patient's messages after
 `PATIENT_PORTAL_BOOKING_PROMPT_TTL_DAYS` (default 90), and `cleanup-transient-auth` removes them
-once their notices are settled. Creating, listing, delivering, reading, and withdrawing are audited.
+once their notices are settled. Checking eligibility, creating, listing, delivering, reading, and
+withdrawing are audited.
 The notice is email only; SMS notices would need the outbox to deliver SMS, which it does not yet.
 
 #### Offered times (carlos-portal#11)
