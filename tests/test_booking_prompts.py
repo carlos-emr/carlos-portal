@@ -15,6 +15,7 @@ from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.exc import OperationalError
 
 from carlos_patient_portal import delivery_outbox
+from carlos_patient_portal.auth import lock_account
 from carlos_patient_portal.delivery_outbox import (
     OUTBOX_FAILURE_BOOKING_PROMPT_NOT_NEEDED,
     process_one_delivery,
@@ -104,6 +105,158 @@ def audit_events(app, event_type: str) -> list[PatientPortalAuditEvent]:
                 .order_by(PatientPortalAuditEvent.id)
             )
         )
+
+
+@pytest.mark.parametrize("state", ["absent", "active", "disabled", "locked"])
+def test_booking_eligibility_exposes_only_scope_and_boolean(state: str) -> None:
+    app = booking_app()
+    client = TestClient(app)
+    if state != "absent":
+        account_id = activate_seeded_patient_account(app, client)
+        with app.state.session_factory() as session:
+            account = session.get(PatientPortalAccount, account_id)
+            account.status = "disabled" if state == "disabled" else "active"
+            account.disabled_reason = "Synthetic private account reason"
+            if state == "disabled":
+                account.disabled_at = utc_now()
+                account.disabled_by = "Synthetic Staff"
+            if state == "locked":
+                account.locked_at = utc_now()
+                account.locked_by = "Synthetic Staff"
+                account.force_password_reset = True
+            session.commit()
+    response = client.get(
+        "/internal/carlos/patients/1234/booking-eligibility", headers=headers()
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "clinic_id": "clinic-a", "demographic_no": 1234,
+        "eligible": state in {"active", "locked"},
+    }
+    assert "no-store" in response.headers["cache-control"]
+    with app.state.session_factory() as session:
+        assert list(session.scalars(select(PatientPortalBookingPrompt))) == []
+        assert list(session.scalars(select(PatientPortalOutboundDelivery))) == []
+        events = list(session.scalars(select(PatientPortalAuditEvent).where(
+            PatientPortalAuditEvent.reason == "booking_eligibility_viewed"
+        )))
+        assert len(events) == 1
+        assert events[0].demographic_no == 1234
+        assert events[0].actor == "Front Desk"
+        assert events[0].actor_id == "provider-42"
+        assert (events[0].event_type, events[0].outcome, events[0].clinic_id) == (
+            "staff.action", "success", "clinic-a"
+        )
+        # The row names the account it found, and only when the patient is eligible.
+        expected_account = account_id if state in {"active", "locked"} else None
+        assert events[0].account_id == expected_account
+        assert events[0].resource_id == (
+            None if expected_account is None else str(expected_account)
+        )
+
+
+def test_booking_eligibility_does_not_grant_general_account_read() -> None:
+    app = booking_app()
+    client = TestClient(app)
+    activate_seeded_patient_account(app, client)
+    assert client.get(
+        "/internal/carlos/patients/1234/booking-eligibility", headers=headers()
+    ).status_code == 200
+    assert client.get(
+        "/internal/carlos/patients/1234/portal-account", headers=headers()
+    ).status_code == 403
+
+
+@pytest.mark.parametrize("permission", ["portal.account.manage", "portal.invite.manage"])
+def test_booking_eligibility_requires_booking_permission(permission: str) -> None:
+    app = booking_app()
+    client = TestClient(app)
+    response = client.get(
+        "/internal/carlos/patients/1234/booking-eligibility",
+        headers=carlos_staff_headers(permission, clinic_id="clinic-a", token=INTERNAL_API_TOKEN),
+    )
+    assert response.status_code == 403
+    assert "eligible" not in response.json()
+
+
+def test_booking_eligibility_refuses_unsigned_and_foreign_clinic_requests() -> None:
+    app = booking_app()
+    client = TestClient(app)
+    path = "/internal/carlos/patients/1234/booking-eligibility"
+    assert client.get(path).status_code == 404
+    assert client.get(path, headers=headers(clinic_id="clinic-b")).status_code == 404
+    # The route exists: the same request, signed for this clinic, is answered.
+    assert client.get(path, headers=headers()).status_code == 200
+
+
+@pytest.mark.parametrize("demographic_no", ["0", "abc", str(2**63)])
+def test_booking_eligibility_refuses_a_malformed_patient_number(demographic_no: str) -> None:
+    response = TestClient(booking_app()).get(
+        f"/internal/carlos/patients/{demographic_no}/booking-eligibility", headers=headers()
+    )
+
+    assert response.status_code == 422
+
+
+def test_booking_eligibility_ignores_another_clinics_account_for_the_same_patient_number() -> None:
+    app = booking_app()
+    client = TestClient(app)
+    account_id = activate_seeded_patient_account(app, client)
+    with app.state.session_factory.begin() as session:
+        session.get(PatientPortalAccount, account_id).clinic_id = "clinic-b"
+
+    response = client.get(
+        "/internal/carlos/patients/1234/booking-eligibility", headers=headers()
+    )
+
+    assert response.json() == {"clinic_id": "clinic-a", "demographic_no": 1234, "eligible": False}
+
+
+@pytest.mark.parametrize("account_state", ["absent", "active", "disabled", "locked"])
+def test_booking_eligibility_agrees_with_prompt_creation(account_state: str) -> None:
+    app = booking_app()
+    client = TestClient(app)
+    if account_state != "absent":
+        account_id = activate_seeded_patient_account(app, client)
+        with app.state.session_factory.begin() as session:
+            account = session.get(PatientPortalAccount, account_id)
+            if account_state == "disabled":
+                account.status = "disabled"
+                account.disabled_at = utc_now()
+                account.disabled_by = "Synthetic Staff"
+            elif account_state == "locked":
+                lock_account(session, account, reason="synthetic_lock", now=utc_now())
+
+    eligible = client.get(
+        "/internal/carlos/patients/1234/booking-eligibility", headers=headers()
+    ).json()["eligible"]
+    created = client.post(PATH, headers=headers(), json=prompt_request())
+
+    assert created.status_code in (201, 404), created.text
+    if created.status_code == 404:
+        assert created.json() == {"detail": "portal account not found"}
+    assert eligible is (created.status_code == 201)
+
+
+def test_booking_eligibility_is_patient_scoped_and_creation_rechecks_account() -> None:
+    app = booking_app()
+    client = TestClient(app)
+    account_id = activate_seeded_patient_account(app, client)
+    assert client.get(
+        "/internal/carlos/patients/5678/booking-eligibility", headers=headers()
+    ).json() == {"clinic_id": "clinic-a", "demographic_no": 5678, "eligible": False}
+    assert client.get(
+        "/internal/carlos/patients/1234/booking-eligibility", headers=headers()
+    ).json()["eligible"] is True
+    with app.state.session_factory() as session:
+        account = session.get(PatientPortalAccount, account_id)
+        account.status = "disabled"
+        account.disabled_at = utc_now()
+        account.disabled_by = "Synthetic Staff"
+        session.commit()
+    assert client.post(PATH, headers=headers(), json=prompt_request()).status_code == 404
+    with app.state.session_factory() as session:
+        assert list(session.scalars(select(PatientPortalBookingPrompt))) == []
 
 
 def test_prompt_is_created_once_and_a_retry_returns_it_without_a_second_email() -> None:

@@ -665,7 +665,8 @@ Permissions are deliberately narrow:
 - `portal.account.manage`: read portal status and disable/re-enable patient access.
 - `portal.secret.manage`: idempotently create, publish, and revoke generated email passphrases.
 - `portal.contact.review`: list and approve/reject pending patient contact changes.
-- `portal.booking_prompt.manage`: create, list, and withdraw booking prompts.
+- `portal.booking_prompt.manage`: check booking eligibility, create, list, and withdraw booking
+  prompts.
 - `portal.booking_prompt.sync`: list patients' pending picks of offered times and report whether
   CARLOS booked them. Held only by the CARLOS polling job's dedicated, non-login system provider;
   only the two sync endpoints accept it, and they accept nothing else. That provider is refused by
@@ -749,6 +750,18 @@ appointment. Please book as soon as possible." The portal books nothing itself: 
 the patient how to contact the clinic, using `PATIENT_PORTAL_CLINIC_BOOKING_PHONE` when it is set,
 or offers times CARLOS sent with it for the patient to pick (see *Offered times* below).
 
+- `GET /internal/carlos/patients/{demographic_no}/booking-eligibility` returns only the signed
+  clinic/patient scope and `eligible`, which is true for an active portal account. Missing and
+  inactive accounts both return false. This uses `portal.booking_prompt.manage`; it does not
+  grant account-status access or expose account identifiers, lock/reset flags, dates, or reasons.
+  Eligibility is a read-time check using the same rule as create, which rechecks it for a new
+  prompt (a retry of an existing `operation_id` returns that prompt first): a locked account is
+  still active and counts, although the notice email is skipped while staff hold a lock. It
+  reflects only the patient's account, not whether the notice will be delivered. Deploy this
+  endpoint before the CARLOS client that calls it: an older portal answers `404`
+  `{"detail": "Not Found"}`, which CARLOS treats as a refused request (its panel shows the portal
+  did not recognise the request, its log may call it a credentials problem, and the portal audits
+  an `authentication_failed` event per call).
 - `POST /internal/carlos/patients/{demographic_no}/booking-prompts` creates one from a stable
   `operation_id`, an `urgency` (`routine`, `soon`, `as_soon_as_possible`), an `appointment_type`
   (`follow_up`, `annual_exam`, `lab_review`), and an optional `suggested_by` provider name. A retry
@@ -770,7 +783,8 @@ account's email as it is when sent. A notice skipped this way ends as `failed` w
 `last_failure_code = booking_prompt_not_needed`, not an outage, and is not sent later: re-enabling
 an account shows its live prompts again, without a new email. Prompts leave the patient's messages after
 `PATIENT_PORTAL_BOOKING_PROMPT_TTL_DAYS` (default 90), and `cleanup-transient-auth` removes them
-once their notices are settled. Creating, listing, delivering, reading, and withdrawing are audited.
+once their notices are settled. Checking eligibility, creating, listing, delivering, reading, and
+withdrawing are audited.
 The notice is email only; SMS notices would need the outbox to deliver SMS, which it does not yet.
 
 #### Offered times (carlos-portal#11)
