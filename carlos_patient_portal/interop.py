@@ -39,7 +39,11 @@ from carlos_patient_portal.identity import (
     normalize_health_card_number,
 )
 from carlos_patient_portal.invites import normalize_clinic_id
-from carlos_patient_portal.models import PatientPortalAccount, PatientPortalUnlockSecret
+from carlos_patient_portal.models import (
+    MAX_DEMOGRAPHIC_NO,
+    PatientPortalAccount,
+    PatientPortalUnlockSecret,
+)
 
 FHIR_RELEASE = "R4"
 FHIR_VERSION = "4.0.1"
@@ -153,8 +157,8 @@ def build_fhir_id(*parts: object) -> str:
 def normalize_interop_identity(
     identity: PortalPatientInteroperabilityIdentity,
 ) -> PortalPatientInteroperabilityIdentity:
-    if identity.demographic_no <= 0:
-        raise ValueError("demographic_no must be positive")
+    if not 0 < identity.demographic_no <= MAX_DEMOGRAPHIC_NO:
+        raise ValueError(f"demographic_no must be between 1 and {MAX_DEMOGRAPHIC_NO}")
     return PortalPatientInteroperabilityIdentity(
         clinic_id=normalize_clinic_id(identity.clinic_id),
         demographic_no=identity.demographic_no,

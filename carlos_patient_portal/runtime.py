@@ -39,8 +39,9 @@ from carlos_patient_portal.sms_delivery import PortalSmsSender
 from carlos_patient_portal.token_keys import PortalTokenKeys
 
 MAX_PAGE_OFFSET = 100_000
-# Largest value a 64-bit signed integer key can hold; ids beyond this cannot exist in any row.
-MAX_DATABASE_ID = 2**63 - 1
+# Every primary key is a 32-bit Integer, and PostgreSQL binds an id as ::INTEGER: a larger id cannot
+# name a row, and would fail there as "integer out of range" (a 500) instead of a 422 or 404.
+MAX_DATABASE_ID = 2**31 - 1
 
 
 def auth_policy_from_settings(settings: Settings) -> AuthPolicy:

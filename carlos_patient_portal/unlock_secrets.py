@@ -40,6 +40,7 @@ from carlos_patient_portal.models import (
     AUDIT_EVENT_UNLOCK_SECRET_REVOKE,
     AUDIT_OUTCOME_FAILURE,
     AUDIT_OUTCOME_SUCCESS,
+    MAX_DEMOGRAPHIC_NO,
     MAX_UNLOCK_SECRET_ACTOR_LENGTH,
     MAX_UNLOCK_SECRET_KEY_ID_LENGTH,
     MAX_UNLOCK_SECRET_LABEL_LENGTH,
@@ -1114,8 +1115,8 @@ def normalize_actor_type(actor_type: str) -> str:
 
 
 def normalize_demographic_no(demographic_no: int) -> int:
-    if demographic_no <= 0:
-        raise ValueError("demographic_no must be positive")
+    if not 0 < demographic_no <= MAX_DEMOGRAPHIC_NO:
+        raise ValueError(f"demographic_no must be between 1 and {MAX_DEMOGRAPHIC_NO}")
     return demographic_no
 
 

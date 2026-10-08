@@ -47,6 +47,7 @@ from carlos_patient_portal.models import (
     AUDIT_ACTOR_TYPE_STAFF,
     AUDIT_EVENT_INVITE_LIST,
     AUDIT_OUTCOME_SUCCESS,
+    MAX_DEMOGRAPHIC_NO,
 )
 from carlos_patient_portal.runtime import (
     MAX_DATABASE_ID,
@@ -138,7 +139,7 @@ def register_dev_admin_routes(
                 Session,
                 function_scoped_database_dependency(get_app_database_session),
             ],
-            demographic_no: Annotated[int | None, Query(gt=0)] = None,
+            demographic_no: Annotated[int | None, Query(gt=0, le=MAX_DEMOGRAPHIC_NO)] = None,
             limit: Annotated[
                 int,
                 Query(ge=1, le=MAX_INVITE_LIST_LIMIT),

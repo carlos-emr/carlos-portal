@@ -17,6 +17,7 @@ from carlos_patient_portal.models import (
     AUDIT_OUTCOME_THROTTLED,
     INVITE_STATUS_ACCEPTED,
     INVITE_STATUS_PENDING,
+    MAX_DEMOGRAPHIC_NO,
     PatientPortalAccount,
     PatientPortalAuditEvent,
     PatientPortalInvite,
@@ -629,3 +630,12 @@ def test_patient_activation_rate_limit_window_expires() -> None:
     activation_response = client.post("/auth/activate", json=activation_request(invite_token))
 
     assert activation_response.status_code == 201
+
+
+def test_dev_admin_invite_list_refuses_a_patient_number_beyond_32_bits() -> None:
+    app = migrated_development_app()
+    response = TestClient(app).get(
+        f"/dev/admin/invites?demographic_no={MAX_DEMOGRAPHIC_NO + 1}", headers=dev_admin_headers()
+    )
+
+    assert response.status_code == 422

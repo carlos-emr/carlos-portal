@@ -155,6 +155,9 @@ UNLOCK_SECRET_STATUS_REVOKED = "revoked"
 UNLOCK_SECRET_TYPE_EMAIL = "email"
 UNLOCK_SECRET_TYPE_PDF = "pdf"
 MAX_CLINIC_ID_LENGTH = 64
+# Every demographic_no column is a 32-bit Integer, as CARLOS's own demographic_no is. A larger
+# number cannot name a patient, and PostgreSQL refuses it with "integer out of range".
+MAX_DEMOGRAPHIC_NO = 2**31 - 1
 MAX_EMAIL_LENGTH = 254
 MAX_PHONE_NUMBER_LENGTH = 32
 MIN_USERNAME_LENGTH = 3
