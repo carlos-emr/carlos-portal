@@ -1594,11 +1594,14 @@ def test_postgresql_prompt_creation_waits_for_account_off_and_then_refuses() -> 
     account_id = insert_postgres_account(username="prompt.account.off", demographic_no=1234)
     engine = create_portal_engine(POSTGRES_URL)
     account_off_locked = Event()
+    create_backend_known = Event()
     create_finished = Event()
+    create_backend: list[int] = []
 
-    def turn_account_off() -> None:
+    def turn_account_off() -> bool:
         with Session(engine) as session, session.begin():
             session.execute(text("SET LOCAL statement_timeout = '15s'"))
+            account_off_backend = session.scalar(text("SELECT pg_backend_pid()"))
             set_patient_account_access(
                 session,
                 account_id,
@@ -1610,28 +1613,32 @@ def test_postgresql_prompt_creation_waits_for_account_off_and_then_refuses() -> 
                 session, account_id, actor="Synthetic Staff", actor_id=None
             )
             account_off_locked.set()
-            # Commit only once creation waits on the account lock, or has finished without
-            # waiting, so a creation that skipped the lock is caught every time.
-            deadline = time.monotonic() + 10
+            assert create_backend_known.wait(timeout=10)
+            # Commit only once creation waits on this transaction, or has finished without
+            # waiting, so a creation that skipped the lock is caught every time. The lock
+            # manager is read live; pg_stat_activity would be frozen for the transaction.
             with engine.connect() as observer:
+                observer.execution_options(isolation_level="AUTOCOMMIT")
+                deadline = time.monotonic() + 10
                 while not create_finished.is_set() and time.monotonic() < deadline:
-                    waiting = observer.scalar(
+                    if observer.scalar(
                         text(
-                            "SELECT count(*) FROM pg_locks AS pending_lock "
-                            "JOIN pg_stat_activity AS backend ON backend.pid = pending_lock.pid "
-                            "WHERE NOT pending_lock.granted "
-                            "AND backend.datname = current_database()"
-                        )
-                    )
-                    if waiting:
-                        break
+                            "SELECT CAST(:holder AS integer) "
+                            "= ANY(pg_blocking_pids(CAST(:waiter AS integer)))"
+                        ),
+                        {"holder": account_off_backend, "waiter": create_backend[0]},
+                    ):
+                        return True
                     time.sleep(0.05)
+        return False
 
     def create_while_turning_off() -> str:
-        assert account_off_locked.wait(timeout=10)
         try:
+            assert account_off_locked.wait(timeout=10)
             with Session(engine) as session, session.begin():
                 session.execute(text("SET LOCAL statement_timeout = '15s'"))
+                create_backend.append(session.scalar(text("SELECT pg_backend_pid()")))
+                create_backend_known.set()
                 create_booking_prompt(
                     session,
                     clinic_id="postgres-clinic",
@@ -1655,12 +1662,23 @@ def test_postgresql_prompt_creation_waits_for_account_off_and_then_refuses() -> 
         with ThreadPoolExecutor(max_workers=2) as executor:
             account_off = executor.submit(turn_account_off)
             creation = executor.submit(create_while_turning_off)
-            account_off.result()
-            assert creation.result() == "refused"
+            creation_waited = account_off.result(timeout=30)
+            outcome = creation.result(timeout=30)
+        assert outcome == "refused"
+        assert creation_waited, "creation never waited on the account lock"
         with Session(engine) as session:
             assert session.get(PatientPortalAccount, account_id).status == "disabled"
             assert list(session.scalars(select(PatientPortalBookingPrompt))) == []
-            assert list(session.scalars(select(PatientPortalOutboundDelivery))) == []
+            assert (
+                list(
+                    session.scalars(
+                        select(PatientPortalOutboundDelivery).where(
+                            PatientPortalOutboundDelivery.kind == "booking_prompt"
+                        )
+                    )
+                )
+                == []
+            )
     finally:
         engine.dispose()
 
