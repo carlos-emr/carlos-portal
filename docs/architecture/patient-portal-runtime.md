@@ -158,7 +158,9 @@ When it is deleted:
 - The prompt, with its picks: by `cleanup-transient-auth` once it is past its expiry by the
   retention window, any booked time is more than a day past, and any pick CARLOS reported taken
   after the expiry was reported more than 7 days ago (the patient is shown that notice). Unanswered choices and their
-  prompts survive every cleanup until CARLOS reports a result or staff withdraws the prompt.
+  prompts survive every cleanup until CARLOS reports a result, staff withdraws the prompt or turns
+  the account off, or the picked time starts (the pick then closes as `expired`, and its copy goes
+  with it).
   Cleanup locks each prompt before its slots or choices and skips busy prompts, matching result
   processing so concurrent cleanup cannot discard pending work or invert its lock order.
 

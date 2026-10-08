@@ -963,9 +963,10 @@ def test_the_polling_list_has_only_pending_choices_for_its_clinic_oldest_first()
     assert other_clinic.status_code == 404
 
 
-def test_a_disabled_accounts_pick_is_not_listed_while_it_is_disabled() -> None:
+def test_turning_an_account_off_cancels_its_waiting_pick_for_good() -> None:
     app, patient, prompt_id = patient_with_offer()
     assert pick(app, patient, prompt_id).status_code == 303
+    choice_id = only_choice(app).id
 
     def set_access(enabled: bool):
         # A fresh assertion each time: every one is single-use.
@@ -980,11 +981,25 @@ def test_a_disabled_accounts_pick_is_not_listed_while_it_is_disabled() -> None:
     enabled = set_access(True)
     after = pending_choices(app)
 
-    # Disabling is the emergency cut-off: CARLOS is not asked to book for the account meanwhile.
+    # Turning the account off cancels the pick; turning it back on does not revive it, so CARLOS
+    # never books a time the patient may not have chosen.
     assert disabled.status_code == 200
     assert while_disabled.json()["items"] == []
     assert enabled.status_code == 200
-    assert [item["prompt_id"] for item in after.json()["items"]] == [prompt_id]
+    assert after.json()["items"] == []
+    choice = only_choice(app)
+    assert (choice.state, choice.slot_id, choice.starts_at) == ("withdrawn", None, None)
+    assert prompt_state(app, prompt_id) == "read"
+    late = report(app, prompt_id, choice_id, "booked")
+    assert (late.status_code, late.json()["detail"]) == (409, "booking choice was withdrawn")
+    cancelled = [
+        event
+        for event in audit_events(app, AUDIT_EVENT_BOOKING_PROMPT_RESULT)
+        if event.reason == "withdrawn_account_disabled"
+    ]
+    assert [(event.actor_type, event.resource_id) for event in cancelled] == [
+        ("staff", str(choice_id))
+    ]
 
 
 def test_the_polling_list_needs_the_pending_state_and_audits_only_what_it_discloses() -> None:
@@ -1761,7 +1776,8 @@ def test_last_taken_slot_tells_patient_to_contact_clinic() -> None:
 
 
 def delete_prompt_notices(app) -> None:
-    """Drop the prompt's emails, which on their own keep a prompt from cleanup until they age out."""
+    """Drop the prompt's emails, which on their own keep a prompt from cleanup until they age
+    out."""
     with app.state.session_factory.begin() as session:
         for notice in session.scalars(
             select(PatientPortalOutboundDelivery).where(
@@ -1972,3 +1988,121 @@ def test_the_polling_job_is_audited_as_the_system() -> None:
     ]
     results = audit_events(app, AUDIT_EVENT_BOOKING_PROMPT_RESULT)
     assert [event.actor_type for event in listed + results] == ["system", "system"]
+
+
+# --------------------------------------------------------------------------------------
+# A pick whose time starts before CARLOS answers, and the clinic's number while waiting
+# --------------------------------------------------------------------------------------
+
+
+def start_the_picked_time(app, prompt_id: int, *, slot_id: str = "carlos:slot:1") -> None:
+    """Move the picked time (and its offered row) into the past, as if it started unanswered."""
+    started = utc_now() - timedelta(minutes=1)
+    with app.state.session_factory.begin() as session:
+        session.get(
+            PatientPortalBookingOfferedSlot, slot_row_ids(app, prompt_id)[slot_id]
+        ).starts_at = started
+        choice = session.scalar(
+            select(PatientPortalBookingChoice).where(PatientPortalBookingChoice.state == "pending")
+        )
+        choice.starts_at = started
+
+
+def test_a_pick_whose_time_starts_unanswered_is_closed_and_the_patient_can_pick_again() -> None:
+    app, patient, prompt_id = patient_with_offer()
+    assert pick(app, patient, prompt_id).status_code == 303
+    start_the_picked_time(app, prompt_id)
+
+    # Not polled yet: the patient is already told it did not go through.
+    waiting = open_message(patient, prompt_id).text
+    assert (
+        "That time passed before the clinic could confirm it. Please contact the clinic." in waiting
+    )
+
+    # The next poll closes it instead of listing it, and the patient gets the update email.
+    assert pending_choices(app).json()["items"] == []
+    choice = only_choice(app)
+    assert (choice.state, choice.slot_id, choice.starts_at) == ("expired", None, None)
+    assert prompt_state(app, prompt_id) == "read"
+    deliver_all(app, RecordingPortalEmailSender())
+    assert [notice.status for notice in update_notices(app)] == [OUTBOX_STATUS_DELIVERED]
+    closed = [
+        event
+        for event in audit_events(app, AUDIT_EVENT_BOOKING_PROMPT_RESULT)
+        if event.reason == "expired"
+    ]
+    assert [(event.actor_type, event.actor) for event in closed] == [("system", "portal")]
+
+    page = open_message(patient, prompt_id).text
+    assert "That time passed before the clinic could confirm it. Please pick another." in page
+    assert set(slot_row_ids(app, prompt_id)) == {"carlos:slot:2", "carlos:slot:3"}
+    assert pick(app, patient, prompt_id, "carlos:slot:2").status_code == 303
+
+
+def test_a_late_result_for_a_pick_whose_time_started_is_refused() -> None:
+    app, patient, prompt_id = patient_with_offer()
+    assert pick(app, patient, prompt_id).status_code == 303
+    choice_id = only_choice(app).id
+    start_the_picked_time(app, prompt_id)
+
+    before_closing = report(app, prompt_id, choice_id, "booked")
+    assert (before_closing.status_code, before_closing.json()["detail"]) == (
+        409,
+        "booking choice expired",
+    )
+    assert pending_choices(app).json()["items"] == []
+    after_closing = report(app, prompt_id, choice_id, "booked")
+    assert (after_closing.status_code, after_closing.json()["detail"]) == (
+        409,
+        "booking choice expired",
+    )
+    assert prompt_state(app, prompt_id) == "read"
+
+
+def test_cleanup_closes_a_started_pick_when_carlos_has_stopped_polling() -> None:
+    app, patient, prompt_id = patient_with_offer()
+    assert pick(app, patient, prompt_id).status_code == 303
+    start_the_picked_time(app, prompt_id)
+    retention_cutoff = utc_now() - timedelta(days=30)
+
+    with app.state.session_factory.begin() as session:
+        dry_run = cleanup_transient_auth_rows(session, before=retention_cutoff, dry_run=True)
+    assert only_choice(app).state == "pending"
+    with app.state.session_factory.begin() as session:
+        removed = cleanup_transient_auth_rows(session, before=retention_cutoff)
+
+    assert (dry_run.lapsed_booking_choices, removed.lapsed_booking_choices) == (1, 1)
+    assert only_choice(app).state == "expired"
+    # Cleanup has no request to build a sign-in link from: the portal message is the notice.
+    assert update_notices(app) == []
+
+
+def test_a_pick_that_lapses_after_the_prompt_expired_is_still_shown_briefly() -> None:
+    app, patient, prompt_id = patient_with_offer()
+    assert pick(app, patient, prompt_id).status_code == 303
+    move_prompt_expiry(app, prompt_id, expires_at=utc_now() - timedelta(minutes=5))
+    start_the_picked_time(app, prompt_id)
+
+    assert pending_choices(app).json()["items"] == []
+
+    page = open_message(patient, prompt_id).text
+    assert "That time passed before the clinic could confirm it. Please contact the clinic." in page
+    assert 'name="slot"' not in page
+    assert slot_row_ids(app, prompt_id) == {}
+    assert prompt_state(app, prompt_id) == "expired"
+
+
+def test_the_waiting_message_gives_the_clinics_number_when_one_is_set() -> None:
+    app, patient, prompt_id = patient_with_offer(clinic_booking_phone="555-123-4567")
+    assert pick(app, patient, prompt_id).status_code == 303
+    with app.state.session_factory.begin() as session:
+        session.scalar(select(PatientPortalBookingChoice)).chosen_at = utc_now() - timedelta(
+            minutes=20
+        )
+
+    page = open_message(patient, prompt_id).text
+
+    assert (
+        "The clinic will confirm your time. If it is urgent, call the clinic at 555-123-4567."
+        in page
+    )

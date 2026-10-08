@@ -40,6 +40,7 @@ from carlos_patient_portal.i18n import (
 )
 from carlos_patient_portal.models import (
     BOOKING_CHOICE_STATE_BOOKED,
+    BOOKING_CHOICE_STATE_EXPIRED,
     BOOKING_CHOICE_STATE_PENDING,
     BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE,
     BOOKING_PROMPT_STATUS_BOOKED,
@@ -347,6 +348,7 @@ def assemble_booking_offer(
     booking_locations: Mapping[str, str],
     timezone_name: str,
     locale: str,
+    booking_phone: str | None = None,
 ) -> BookingOfferViewModel:
     """The booking part of one opened prompt: the times to pick, the wait, or the booked time."""
 
@@ -380,25 +382,42 @@ def assemble_booking_offer(
         and choice.state == BOOKING_CHOICE_STATE_PENDING
         and choice.starts_at is not None
     ):
+        if as_utc(choice.starts_at) <= now:
+            # The time started unanswered; the next poll or cleanup closes the pick.
+            return BookingOfferViewModel(
+                state=BOOKING_VIEW_CLOSED,
+                notice=text["booking_choice_expired_contact"],
+            )
         # Past the configured wait, the patient is told plainly rather than left on "confirming".
         remaining = as_utc(choice.chosen_at) + timedelta(minutes=wait_minutes) - now
         overdue = remaining <= timedelta(0)
+        overdue_notice = (
+            text["booking_choice_pending_overdue_phone"].format(phone=booking_phone)
+            if booking_phone
+            else text["booking_choice_pending_overdue"]
+        )
         when, details = slot_text(choice)
         return BookingOfferViewModel(
             state=BOOKING_VIEW_PENDING,
-            notice=text[
-                "booking_choice_pending_overdue" if overdue else "booking_choice_pending"
-            ],
+            notice=overdue_notice if overdue else text["booking_choice_pending"],
             chosen=text["booking_slot_detail_separator"].join((when, details)),
             wait_remaining_ms=None if overdue else max(1, int(remaining.total_seconds() * 1000)),
-            overdue_notice=text["booking_choice_pending_overdue"],
+            overdue_notice=overdue_notice,
         )
     open_for_choice = prompt.status in (BOOKING_PROMPT_STATUS_SENT, BOOKING_PROMPT_STATUS_READ)
-    taken_notice = (
-        text["booking_slot_taken"]
+    # The last pick was taken, or its time started before CARLOS answered.
+    closed_unanswered = (
+        choice.state
         if open_for_choice
         and choice is not None
-        and choice.state == BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE
+        and choice.state in (BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE, BOOKING_CHOICE_STATE_EXPIRED)
+        else None
+    )
+    taken_notice = (
+        text["booking_slot_taken"]
+        if closed_unanswered == BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE
+        else text["booking_choice_expired"]
+        if closed_unanswered == BOOKING_CHOICE_STATE_EXPIRED
         else None
     )
     slots = current_offered_slots(session, prompt.id, now=now) if open_for_choice else []
@@ -418,7 +437,11 @@ def assemble_booking_offer(
     # offered times, but without saying the portal cannot book.
     return BookingOfferViewModel(
         state=BOOKING_VIEW_CONTACT if prompt.offer_digest is None else BOOKING_VIEW_CLOSED,
-        notice=text["booking_slot_taken_contact"] if taken_notice else None,
+        notice=text["booking_slot_taken_contact"]
+        if closed_unanswered == BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE
+        else text["booking_choice_expired_contact"]
+        if closed_unanswered == BOOKING_CHOICE_STATE_EXPIRED
+        else None,
     )
 
 
@@ -510,6 +533,7 @@ def assemble_messages(
                 booking_locations=booking_locations or {},
                 timezone_name=timezone_name,
                 locale=locale,
+                booking_phone=booking_phone,
             ),
         )
         if selected_prompt is not None

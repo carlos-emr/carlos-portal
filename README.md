@@ -805,11 +805,15 @@ collects the pick by polling.
 - `GET /internal/carlos/booking-prompts/choices?state=pending` (optional `limit`, 1 to 100, default
   100) returns the clinic's picks waiting for CARLOS, oldest first, as `items` of `prompt_id`,
   `choice_id`, `demographic_no`, `slot_id`, and `chosen_at`, with `has_more`. A pick stays listed
-  until CARLOS reports its result or staff withdraw its prompt, including after the prompt's
-  expiry. It is not listed while staff have the patient's account disabled, because disabling is
-  the emergency cut-off; it is listed again if the account is re-enabled. A poll that returns picks
-  is audited as `staff.action` with reason
-  `pending_choices_listed` and the count; an empty poll writes nothing.
+  until CARLOS reports its result, staff withdraw its prompt, staff turn the patient's account off,
+  or its time starts, including after the prompt's expiry. Turning the account off cancels the pick
+  (`withdrawn`; turning it back on does not revive it). A pick whose time has started is closed as
+  `expired` by the next poll, before listing: CARLOS must not book it, a late result for it is
+  `409` `booking choice expired`, and the patient is told "That time passed before the clinic could
+  confirm it." and can pick again from any times still on offer, with the update email. A poll that
+  returns picks is audited as `staff.action` with reason `pending_choices_listed` and the count, with
+  actor type `system`; an empty poll writes nothing. The sync permission is only accepted on its
+  own: an assertion carrying it with any other permission is refused everywhere.
 - `POST /internal/carlos/booking-prompts/{id}/choice-result` with `{"choice_id": ...,
   "result": "booked" | "slot_unavailable", "offered_slots": [...]}` records the answer. Replacement
   `offered_slots` are accepted only with `slot_unavailable` and are validated as on create; they
@@ -831,7 +835,8 @@ collects the pick by polling.
   time: every write locks the prompt row, and a partial unique index refuses a second pending pick.
 - The patient sees "We are confirming your time with the clinic." while a pick waits, and after
   `PATIENT_PORTAL_BOOKING_CHOICE_WAIT_MINUTES` (default 15, 1 to 1440) "The clinic will confirm your
-  time. If it is urgent, call the clinic." An open page updates this advice at the threshold.
+  time. If it is urgent, call the clinic." (with `PATIENT_PORTAL_CLINIC_BOOKING_PHONE` when set: "...
+  call the clinic at 555-123-4567."). An open page updates this advice at the threshold.
   On `booked`: "Booked for Tuesday 14 October at 10:30."
   in clinic time, until a day after the appointment. On `slot_unavailable`: "That time was just
   taken. Please pick another." with the remaining and replacement times. After **None of these
@@ -853,8 +858,9 @@ collects the pick by polling.
   for the retention window. A pick keeps a copy of its time so the confirmation survives the offer's
   deletion; the copy is cleared when CARLOS reports the time taken or the prompt is withdrawn, and
   for a booked time by `cleanup-transient-auth` a day after the appointment starts. Schedule that
-  command at least daily. Unanswered choices and their prompts remain until CARLOS answers or
-  staff withdraws the prompt, including beyond the retention window. See the amendment in
+  command at least daily; it also closes picks whose time started while CARLOS was not polling.
+  Unanswered choices and their prompts remain until CARLOS answers, staff withdraws the prompt or
+  turns the account off, or the picked time starts, including beyond the retention window. See the amendment in
   [`docs/architecture/patient-portal-runtime.md`](docs/architecture/patient-portal-runtime.md).
 
 `PATIENT_PORTAL_BOOKING_LOCATIONS` lists where an offered time can be, as comma-separated

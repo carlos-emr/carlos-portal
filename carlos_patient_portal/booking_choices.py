@@ -53,6 +53,7 @@ from carlos_patient_portal.invites import (
 from carlos_patient_portal.models import (
     ACCOUNT_STATUS_ACTIVE,
     AUDIT_ACTOR_TYPE_PATIENT,
+    AUDIT_ACTOR_TYPE_STAFF,
     AUDIT_ACTOR_TYPE_SYSTEM,
     AUDIT_EVENT_BOOKING_PROMPT_CHOICE,
     AUDIT_EVENT_BOOKING_PROMPT_DECLINE,
@@ -63,6 +64,7 @@ from carlos_patient_portal.models import (
     AUDIT_OUTCOME_SUCCESS,
     BOOKING_CHOICE_RESULTS,
     BOOKING_CHOICE_STATE_BOOKED,
+    BOOKING_CHOICE_STATE_EXPIRED,
     BOOKING_CHOICE_STATE_PENDING,
     BOOKING_CHOICE_STATE_WITHDRAWN,
     BOOKING_PROMPT_STATUS_BOOKED,
@@ -79,6 +81,8 @@ from carlos_patient_portal.models import (
 )
 
 MAX_PENDING_CHOICE_LIST = 100
+# The portal itself, in the audit trail, when it closes a pick whose time started unanswered.
+LAPSED_CHOICE_ACTOR = "portal"
 # Audit reasons for a refused patient pick or decline; fixed codes, never the submitted value.
 CHOICE_REFUSED_NOT_AVAILABLE = "not_available"
 CHOICE_REFUSED_PROMPT_CLOSED = "prompt_closed"
@@ -98,7 +102,13 @@ class BookingChoiceNotPendingError(Exception):
 
 
 class BookingChoiceWithdrawnError(BookingChoiceNotPendingError):
-    """A result names a choice whose prompt staff withdrew: undo any booking made for it."""
+    """A result names a choice whose prompt staff withdrew, or whose account staff turned off: undo
+    any booking made for it."""
+
+
+class BookingChoiceExpiredError(BookingChoiceNotPendingError):
+    """A result names a choice whose time started before CARLOS answered: undo any booking made for
+    it; the patient has been told the time did not go through."""
 
 
 class BookingChoiceResultConflictError(Exception):
@@ -396,15 +406,15 @@ def list_pending_choices(
 ) -> PendingBookingChoicePage:
     """The clinic's picks waiting for CARLOS, oldest first, for the polling job.
 
-    A pick stays listed until CARLOS reports its result or staff withdraw its prompt, including
-    after the prompt's expiry: the patient chose while it was live and is still waiting. It is not
-    listed while staff have the account disabled: disabling is the emergency cut-off, and a pick
-    made just before it may not have been the patient's.
+    A pick stays listed until CARLOS reports its result, staff withdraw its prompt or turn the
+    account off, or its time starts (then it is closed by `close_lapsed_choices`), including after
+    the prompt's expiry: the patient chose while it was live and is still waiting.
     """
     if not 1 <= limit <= MAX_PENDING_CHOICE_LIST:
         raise ValueError(f"limit must be between 1 and {MAX_PENDING_CHOICE_LIST}")
     normalized_clinic_id = normalize_clinic_id(clinic_id)
     normalized_actor = normalize_staff_actor(actor)
+    now = utc_now()
     rows = session.execute(
         select(PatientPortalBookingChoice, PatientPortalBookingPrompt.demographic_no)
         .join(
@@ -418,6 +428,7 @@ def list_pending_choices(
         .where(
             PatientPortalBookingChoice.clinic_id == normalized_clinic_id,
             PatientPortalBookingChoice.state == BOOKING_CHOICE_STATE_PENDING,
+            PatientPortalBookingChoice.starts_at > now,
             PatientPortalBookingPrompt.clinic_id == normalized_clinic_id,
             PatientPortalAccount.status == ACCOUNT_STATUS_ACTIVE,
         )
@@ -494,6 +505,8 @@ def record_choice_result(
         raise BookingChoiceNotPendingError()
     if choice.state == BOOKING_CHOICE_STATE_WITHDRAWN:
         raise BookingChoiceWithdrawnError()
+    if choice.state == BOOKING_CHOICE_STATE_EXPIRED:
+        raise BookingChoiceExpiredError()
     if choice.state == result:
         return BookingChoiceResultOutcome(
             prompt=prompt,
@@ -503,6 +516,10 @@ def record_choice_result(
         )
     if choice.state != BOOKING_CHOICE_STATE_PENDING:
         raise BookingChoiceResultConflictError()
+    if choice.starts_at is not None and as_utc(choice.starts_at) <= now:
+        # Its time has started: it lapses rather than being booked late (closed by the next poll
+        # or cleanup, which tells the patient).
+        raise BookingChoiceExpiredError()
 
     prompt_expired = as_utc(prompt.expires_at) <= now
     store_replacements = bool(replacements) and not prompt_expired
@@ -589,3 +606,146 @@ def record_choice_result(
         recorded=True,
         offered_slot_count=_pickable_slot_count(session, prompt, now=now),
     )
+
+
+def close_lapsed_choices(
+    session: Session,
+    *,
+    clinic_id: str | None = None,
+    notice: BookingPromptNotice | None = None,
+    limit: int = MAX_PENDING_CHOICE_LIST,
+    dry_run: bool = False,
+) -> int:
+    """Close picks whose time started before CARLOS answered.
+
+    The pick becomes `expired`: CARLOS no longer sees it, its copy of the time is cleared, and the
+    patient is told the time did not go through and can pick again from any times still on offer.
+    With a `notice`, the patient also gets the "there is an update" email (the poll passes one;
+    cleanup, its fallback when CARLOS has stopped polling, does not). Prompts another writer holds
+    are skipped and caught next time. Returns how many picks were closed (or would be, in a dry
+    run).
+    """
+    now = utc_now()
+    statement = (
+        select(PatientPortalBookingPrompt)
+        .join(
+            PatientPortalBookingChoice,
+            PatientPortalBookingChoice.prompt_id == PatientPortalBookingPrompt.id,
+        )
+        .where(
+            PatientPortalBookingChoice.state == BOOKING_CHOICE_STATE_PENDING,
+            PatientPortalBookingChoice.starts_at <= now,
+        )
+        .order_by(PatientPortalBookingPrompt.id)
+        .limit(limit)
+    )
+    if clinic_id is not None:
+        statement = statement.where(
+            PatientPortalBookingPrompt.clinic_id == normalize_clinic_id(clinic_id)
+        )
+    if dry_run:
+        return len(list(session.scalars(statement)))
+    prompts = list(
+        session.scalars(
+            statement.with_for_update(of=PatientPortalBookingPrompt, skip_locked=True)
+            .execution_options(populate_existing=True)
+        )
+    )
+    closed = 0
+    for prompt in prompts:
+        choice = _pending_choice(session, prompt.id)
+        if choice is None or choice.starts_at is None or as_utc(choice.starts_at) > now:
+            continue
+        choice.state = BOOKING_CHOICE_STATE_EXPIRED
+        choice.result_at = now
+        clear_choice_copy(choice)
+        if prompt.status == BOOKING_PROMPT_STATUS_CHOICE_PENDING:
+            prompt.status = BOOKING_PROMPT_STATUS_READ
+        session.flush()
+        if as_utc(prompt.expires_at) <= now:
+            # The patient can no longer pick from an expired prompt, so nothing offered is kept.
+            delete_offered_slots(session, prompt.id)
+        else:
+            delete_offered_slots(session, prompt.id, started_before=now)
+        record_audit_event(
+            session,
+            event_type=AUDIT_EVENT_BOOKING_PROMPT_RESULT,
+            outcome=AUDIT_OUTCOME_SUCCESS,
+            actor_type=AUDIT_ACTOR_TYPE_SYSTEM,
+            actor=LAPSED_CHOICE_ACTOR,
+            clinic_id=prompt.clinic_id,
+            demographic_no=prompt.demographic_no,
+            account_id=prompt.account_id,
+            resource_type="booking_choice",
+            resource_id=str(choice.id),
+            reason=BOOKING_CHOICE_STATE_EXPIRED,
+        )
+        if notice is not None:
+            enqueue_booking_prompt_update_delivery(
+                session,
+                account_id=prompt.account_id,
+                booking_prompt_id=prompt.id,
+                sign_in_url=notice.sign_in_url,
+                encryption_secret=notice.encryption_secret,
+                encryption_key_id=notice.encryption_key_id,
+            )
+        closed += 1
+    return closed
+
+
+def cancel_pending_choices_for_account(
+    session: Session,
+    account_id: int,
+    *,
+    actor: str,
+    actor_id: str | None,
+) -> int:
+    """Cancel the picks an account is waiting on when staff turn it off.
+
+    Each becomes `withdrawn`, so CARLOS stops seeing it and turning the account back on does not
+    bring it back: the patient picks again if times are still on offer. The caller has locked the
+    account; prompts are locked before their choices, as every booking writer does.
+    """
+    normalized_actor = normalize_staff_actor(actor)
+    normalized_actor_id = normalize_staff_actor_id(actor_id, normalized_actor)
+    now = utc_now()
+    prompts = list(
+        session.scalars(
+            select(PatientPortalBookingPrompt)
+            .where(
+                PatientPortalBookingPrompt.account_id == account_id,
+                PatientPortalBookingPrompt.status == BOOKING_PROMPT_STATUS_CHOICE_PENDING,
+            )
+            .order_by(PatientPortalBookingPrompt.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    )
+    cancelled = 0
+    for prompt in prompts:
+        choice = _pending_choice(session, prompt.id)
+        if choice is None:
+            continue
+        choice.state = BOOKING_CHOICE_STATE_WITHDRAWN
+        choice.result_at = now
+        clear_choice_copy(choice)
+        prompt.status = BOOKING_PROMPT_STATUS_READ
+        session.flush()
+        if as_utc(prompt.expires_at) <= now:
+            delete_offered_slots(session, prompt.id)
+        record_audit_event(
+            session,
+            event_type=AUDIT_EVENT_BOOKING_PROMPT_RESULT,
+            outcome=AUDIT_OUTCOME_SUCCESS,
+            actor_type=AUDIT_ACTOR_TYPE_STAFF,
+            actor=normalized_actor,
+            actor_id=normalized_actor_id,
+            clinic_id=prompt.clinic_id,
+            demographic_no=prompt.demographic_no,
+            account_id=prompt.account_id,
+            resource_type="booking_choice",
+            resource_id=str(choice.id),
+            reason="withdrawn_account_disabled",
+        )
+        cancelled += 1
+    return cancelled

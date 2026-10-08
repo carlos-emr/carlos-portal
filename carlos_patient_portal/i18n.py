@@ -134,6 +134,15 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
         "booking_choice_pending_overdue": (
             "The clinic will confirm your time. If it is urgent, call the clinic."
         ),
+        "booking_choice_pending_overdue_phone": (
+            "The clinic will confirm your time. If it is urgent, call the clinic at {phone}."
+        ),
+        "booking_choice_expired": (
+            "That time passed before the clinic could confirm it. Please pick another."
+        ),
+        "booking_choice_expired_contact": (
+            "That time passed before the clinic could confirm it. Please contact the clinic."
+        ),
         "booking_choose": "Choose this time",
         "booking_decline": "None of these work",
         "booking_month_1": "January",

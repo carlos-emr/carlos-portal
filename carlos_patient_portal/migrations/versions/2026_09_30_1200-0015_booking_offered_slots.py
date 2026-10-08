@@ -205,7 +205,7 @@ def upgrade() -> None:
             name="ck_pp_booking_choices_clinic_id_length",
         ),
         sa.CheckConstraint(
-            "state in ('pending', 'booked', 'slot_unavailable', 'withdrawn')",
+            "state in ('pending', 'booked', 'slot_unavailable', 'withdrawn', 'expired')",
             name="ck_pp_booking_choices_state",
         ),
         sa.CheckConstraint(

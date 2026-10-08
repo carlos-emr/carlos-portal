@@ -36,13 +36,14 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from carlos_patient_portal.audit import hash_sensitive_reference
 from carlos_patient_portal.models import (
+    BOOKING_CHOICE_STATE_EXPIRED,
+    BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE,
     BOOKING_VISIT_MODES,
     MAX_BOOKING_LOCATION_CODE_LENGTH,
     MAX_BOOKING_SLOT_DURATION_MINUTES,
     MAX_BOOKING_SLOT_ID_LENGTH,
     MAX_OFFERED_SLOTS,
     MIN_BOOKING_SLOT_DURATION_MINUTES,
-    BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE,
     PatientPortalBookingChoice,
     PatientPortalBookingOfferedSlot,
     PatientPortalBookingPrompt,
@@ -53,9 +54,9 @@ SLOT_ID_PATTERN = re.compile(rf"[A-Za-z0-9._:-]{{1,{MAX_BOOKING_SLOT_ID_LENGTH}}
 LOCATION_CODE_PATTERN = re.compile(rf"[a-z0-9_-]{{1,{MAX_BOOKING_LOCATION_CODE_LENGTH}}}")
 # A booked time stays shown to the patient, and its copy stays stored, until a day after it starts.
 BOOKED_TIME_RETENTION_AFTER_START = timedelta(days=1)
-# A prompt that expired while the patient waited on their pick, and whose pick CARLOS then reported
-# taken, stays shown this long so the patient learns it fell through and to contact the clinic.
-TAKEN_AFTER_EXPIRY_NOTICE = timedelta(days=7)
+# A prompt that expired while the patient waited on their pick, whose pick was then reported taken
+# or lapsed, stays shown this long so the patient learns it fell through and to contact the clinic.
+CLOSED_AFTER_EXPIRY_NOTICE = timedelta(days=7)
 # How far ahead an offered time may start.
 MAX_OFFER_HORIZON = timedelta(days=366)
 OFFER_DIGEST_PURPOSE = "booking_offer"
@@ -137,16 +138,19 @@ def require_future_slots(slots: Sequence[OfferedSlotSpec], *, now: datetime) -> 
         raise ValueError(f"offered times must start within {MAX_OFFER_HORIZON.days} days")
 
 
-def taken_after_expiry_notice(now: datetime) -> ColumnElement[bool]:
-    """A prompt whose pick CARLOS reported taken after the prompt had expired, recently enough to tell
-    the patient: they were waiting on that pick and would otherwise never learn it fell through."""
+def closed_after_expiry_notice(now: datetime) -> ColumnElement[bool]:
+    """A prompt whose pick was reported taken, or lapsed, after the prompt had expired, recently
+    enough to tell the patient: they were waiting on that pick and would otherwise never learn it
+    fell through."""
     return (
         select(PatientPortalBookingChoice.id)
         .where(
             PatientPortalBookingChoice.prompt_id == PatientPortalBookingPrompt.id,
-            PatientPortalBookingChoice.state == BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE,
+            PatientPortalBookingChoice.state.in_(
+                (BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE, BOOKING_CHOICE_STATE_EXPIRED)
+            ),
             PatientPortalBookingChoice.result_at >= PatientPortalBookingPrompt.expires_at,
-            PatientPortalBookingChoice.result_at > now - TAKEN_AFTER_EXPIRY_NOTICE,
+            PatientPortalBookingChoice.result_at > now - CLOSED_AFTER_EXPIRY_NOTICE,
         )
         .exists()
     )

@@ -124,11 +124,13 @@ BOOKING_PROMPT_STATUS_DECLINED_ALL = "declined_all"
 # still waiting for CARLOS.
 BOOKING_PROMPT_STATE_EXPIRED = "expired"
 # A patient's pick of one offered time. `withdrawn` is a choice still pending when staff withdrew
-# its prompt: CARLOS can no longer report a result for it.
+# its prompt or turned the account off; `expired` is one whose time started before CARLOS answered.
+# CARLOS can no longer report a result for either.
 BOOKING_CHOICE_STATE_PENDING = "pending"
 BOOKING_CHOICE_STATE_BOOKED = "booked"
 BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE = "slot_unavailable"
 BOOKING_CHOICE_STATE_WITHDRAWN = "withdrawn"
+BOOKING_CHOICE_STATE_EXPIRED = "expired"
 BOOKING_CHOICE_RESULTS = (BOOKING_CHOICE_STATE_BOOKED, BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE)
 BOOKING_VISIT_MODES = ("in_person", "phone", "video")
 MAX_OFFERED_SLOTS = 8
@@ -1492,7 +1494,7 @@ class PatientPortalBookingChoice(Base):
             name="ck_pp_booking_choices_clinic_id_length",
         ),
         CheckConstraint(
-            "state in ('pending', 'booked', 'slot_unavailable', 'withdrawn')",
+            "state in ('pending', 'booked', 'slot_unavailable', 'withdrawn', 'expired')",
             name="ck_pp_booking_choices_state",
         ),
         CheckConstraint(
