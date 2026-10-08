@@ -794,8 +794,12 @@ collects the pick by polling.
 
 - The create endpoint accepts an optional `offered_slots` list. Each entry has a `slot_id` issued by
   CARLOS (1 to 64 of `A-Z a-z 0-9 . _ : -`, unique within the prompt, never interpreted by the
-  portal), a `starts_at` in ISO 8601 with an explicit UTC offset (a time without an offset, a
-  number, or a time that has already started is a `422`), a `duration_minutes` from 5 to 480, a
+  portal). The `slot_id` must be opaque: a random or sequence identifier that encodes no provider,
+  patient, time, or anything else readable, because the portal stores it and the amendment below
+  rests on it carrying nothing. Once a pick is booked the portal clears its `slot_id`. Each entry
+  also has a `starts_at` in ISO 8601 with an explicit UTC offset (a time without an offset, a
+  number, a time that has already started, or one more than 366 days ahead is a `422`), a
+  `duration_minutes` from 5 to 480, a
   `visit_mode` of `in_person`, `phone`, or `video`, and an optional `location_code` that must be one
   of the codes in `PATIENT_PORTAL_BOOKING_LOCATIONS` (refused when none are configured). Nothing
   else is accepted: no provider, no reason for the visit, no free text. More than 8 entries is a
@@ -813,11 +817,15 @@ collects the pick by polling.
 - `GET /internal/carlos/booking-prompts/choices?state=pending` (optional `limit`, 1 to 100, default
   100) returns the clinic's picks waiting for CARLOS, oldest first, as `items` of `prompt_id`,
   `choice_id`, `demographic_no`, `slot_id`, and `chosen_at`, with `has_more`. A pick stays listed
-  until CARLOS reports its result or staff withdraw its prompt, including after the prompt's
-  expiry. It is not listed while staff have the patient's account disabled, because disabling is
-  the emergency cut-off; it is listed again if the account is re-enabled. A poll that returns picks
-  is audited as `staff.action` with reason
-  `pending_choices_listed` and the count; an empty poll writes nothing.
+  until CARLOS reports its result, staff withdraw its prompt, staff turn the patient's account off,
+  or its time starts, including after the prompt's expiry. Turning the account off cancels the pick
+  (`withdrawn`; turning it back on does not revive it). A pick whose time has started is closed as
+  `expired` by the next poll, before listing: CARLOS must not book it, a late result for it is
+  `409` `booking choice expired`, and the patient is told "That time passed before the clinic could
+  confirm it." and can pick again from any times still on offer, with the update email. A poll that
+  returns picks is audited as `staff.action` with reason `pending_choices_listed` and the count, with
+  actor type `system`; an empty poll writes nothing. The sync permission is only accepted on its
+  own: an assertion carrying it with any other permission is refused everywhere.
 - `POST /internal/carlos/booking-prompts/{id}/choice-result` with `{"choice_id": ...,
   "result": "booked" | "slot_unavailable", "offered_slots": [...]}` records the answer. Replacement
   `offered_slots` are accepted only with `slot_unavailable` and are validated as on create; they
@@ -826,10 +834,15 @@ collects the pick by polling.
   many times the patient can pick now). It is idempotent per choice: the same result again returns
   `200` with `recorded: false`, changes nothing (replacements sent with a repeat are ignored), and
   sends nothing. A different result for an already answered choice is `409` `booking choice already
-  has a different result`; a `choice_id` that is not this prompt's pending pick, including one
-  closed by a withdrawal, is `409` `booking choice is not pending`; an unknown prompt in the clinic
-  is `404`. On an expired prompt, `slot_unavailable` is recorded but replacements are not stored,
-  because the patient can no longer pick.
+  has a different result`; a `choice_id` whose prompt staff withdrew, or whose account staff
+  turned off, is `409` `booking choice was withdrawn`, and one whose time started before the result
+  arrived is `409` `booking choice expired`: for both, CARLOS must undo any booking it made, because
+  the portal will never show that pick as booked. Any other `choice_id` that is not this
+  prompt's pending pick is `409` `booking choice is not pending`; an unknown prompt in the clinic is
+  `404`. CARLOS should tell these apart by the `detail` text, which is part of the contract.
+  On an expired prompt, `slot_unavailable` is recorded but replacements are not stored, because the
+  patient can no longer pick; the patient still sees the message for 7 days, saying the time was
+  taken and to contact the clinic, and gets the update email.
 - States: a prompt is `sent`, `read`, `choice_pending` (a pick waits for CARLOS), `booked`,
   `declined_all` (none of the times work), `withdrawn`, or `expired`. `expired` is computed from
   `expires_at` for `sent`, `read`, and `declined_all`; a `booked` prompt stays `booked`, and a
@@ -837,30 +850,39 @@ collects the pick by polling.
   time: every write locks the prompt row, and a partial unique index refuses a second pending pick.
 - The patient sees "We are confirming your time with the clinic." while a pick waits, and after
   `PATIENT_PORTAL_BOOKING_CHOICE_WAIT_MINUTES` (default 15, 1 to 1440) "The clinic will confirm your
-  time. If it is urgent, call the clinic." An open page updates this advice at the threshold.
+  time. If it is urgent, call the clinic." (with `PATIENT_PORTAL_CLINIC_BOOKING_PHONE` when set: "...
+  call the clinic at 555-123-4567."). An open page updates this advice at the threshold.
   On `booked`: "Booked for Tuesday 14 October at 10:30."
   in clinic time, until a day after the appointment. On `slot_unavailable`: "That time was just
   taken. Please pick another." with the remaining and replacement times. After **None of these
   work**, or when no time is left, the prompt tells them to contact the clinic. Cancelling or
   moving a booked time is not offered in the portal.
-- The first `booked` or `slot_unavailable` result queues one `booking_prompt_update` email saying
-  only that there is an update in the portal, with a sign-in link: no time, provider, visit type,
-  or location. It is not sent if the prompt has since been withdrawn or has expired unbooked, or if
-  staff disabled or locked the account. A booked confirmation must still be visible (until a day
-  after the appointment starts); delayed notices after that point are suppressed. An update does
+- The first `booked` or `slot_unavailable` result, and a pick the poll closes because its time
+  started, each queue one `booking_prompt_update` email saying only that there is an update in the
+  portal, with a sign-in link: no time, provider, visit type, or location. It is not sent if the
+  prompt has since been withdrawn, or has expired unbooked (except a pick taken or lapsed after the
+  expiry, which the patient is still shown for 7 days), or if staff disabled or locked the account.
+  A pick closed by cleanup rather than the poll gets no email: the portal message is the notice. A
+  booked confirmation must still be visible (until a day after the appointment starts); delayed
+  notices after that point are suppressed. An update does
   not change `notified_at`.
 - Offers, picks, results, and declines are audited as `booking_prompt.offer` (reason
   `initial:<count>` or `replacement:<count>`), `booking_prompt.choice`, `booking_prompt.result`
-  (reason `booked` or `slot_unavailable`), and `booking_prompt.decline` (reason
+  (reason `booked` or `slot_unavailable` from CARLOS, actor type `system`; `expired` when a pick's
+  time started unanswered, actor type `system`, actor `portal`; `withdrawn_account_disabled` when
+  staff turned the account off, actor type `staff`), and `booking_prompt.decline` (reason
   `offered:<count>`), with keyed ids only: no slot ids, times, or other slot details. A refused
   pick or decline is audited with a fixed reason code.
 - Retention: offered times are deleted when the prompt is booked, withdrawn, or declined, and by
   `cleanup-transient-auth` at its first run after they start or the prompt expires, without waiting
   for the retention window. A pick keeps a copy of its time so the confirmation survives the offer's
-  deletion; the copy is cleared when CARLOS reports the time taken or the prompt is withdrawn, and
-  for a booked time by `cleanup-transient-auth` a day after the appointment starts. Schedule that
-  command at least daily. Unanswered choices and their prompts remain until CARLOS answers or
-  staff withdraws the prompt, including beyond the retention window. See the amendment in
+  deletion; the copy is cleared when CARLOS reports the time taken, the prompt is withdrawn, staff
+  turn the account off, or the time starts unanswered (the pick lapses); for a booked time CARLOS's
+  `slot_id` goes at booking and the rest by `cleanup-transient-auth` a day after the appointment
+  starts. Schedule that
+  command at least daily; it also closes picks whose time started while CARLOS was not polling.
+  Unanswered choices and their prompts remain until CARLOS answers, staff withdraws the prompt or
+  turns the account off, or the picked time starts, including beyond the retention window. See the amendment in
   [`docs/architecture/patient-portal-runtime.md`](docs/architecture/patient-portal-runtime.md).
 
 `PATIENT_PORTAL_BOOKING_LOCATIONS` lists where an offered time can be, as comma-separated

@@ -22,13 +22,19 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import ColumnElement, and_, delete, func, or_, select, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, aliased
 
-from carlos_patient_portal.booking_offers import BOOKED_TIME_RETENTION_AFTER_START
+from carlos_patient_portal.booking_choices import close_lapsed_choices
+from carlos_patient_portal.booking_offers import (
+    BOOKED_TIME_RETENTION_AFTER_START,
+    closed_after_expiry_notice,
+)
+from carlos_patient_portal.database import Base
 from carlos_patient_portal.models import (
     BOOKING_CHOICE_STATE_BOOKED,
+    BOOKING_CHOICE_STATE_EXPIRED,
     BOOKING_CHOICE_STATE_PENDING,
     BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE,
     BOOKING_CHOICE_STATE_WITHDRAWN,
@@ -76,6 +82,8 @@ class TransientCleanupResult:
     offered_slots: int = 0
     # Choices whose copy of the chosen time was cleared: booked ones a day after the appointment.
     booking_choice_times: int = 0
+    # Picks whose time started before CARLOS answered, closed so they are neither booked nor kept.
+    lapsed_booking_choices: int = 0
 
     @property
     def total(self) -> int:
@@ -89,6 +97,7 @@ class TransientCleanupResult:
             + self.booking_prompts
             + self.offered_slots
             + self.booking_choice_times
+            + self.lapsed_booking_choices
         )
 
 
@@ -284,7 +293,7 @@ def cleanup_transient_auth_rows(
         )
         .exists()
     )
-    predicates = (
+    sign_in_predicates = (
         # Ordered deliberately: outbound deliveries are removed before reset tokens, because
         # PatientPortalOutboundDelivery.reset_token_id is ON DELETE CASCADE. Deleting reset
         # tokens first destroyed delivery history the report never mentioned - it counted only
@@ -335,6 +344,8 @@ def cleanup_transient_auth_rows(
                 ),
             ),
         ),
+    )
+    booking_predicates = (
         (
             PatientPortalBookingOfferedSlot,
             or_(
@@ -354,36 +365,36 @@ def cleanup_transient_auth_rows(
                 # A booked appointment stays shown to the patient until a day after it starts,
                 # however long ago the prompt expired.
                 ~booked_time_upcoming,
+                # So does a pick reported taken, or lapsed, after the expiry, for its short notice.
+                ~closed_after_expiry_notice(current_time),
             ),
         ),
     )
     # Keyed by field name rather than built positionally: these counts are what the operator reads
-    # to decide whether cleanup did what they expected, and a reordering of `predicates` must not be
-    # able to silently relabel them.
-    counts: dict[str, int] = {
-        # Before the prompt pass, which can delete a prompt and its choices with it; clearing
-        # first keeps the reported count the same in a dry run and a live one.
-        "booking_choice_times": _clear_booking_choice_times(
+    # to decide whether cleanup did what they expected, and a reordering of the predicates must not
+    # be able to silently relabel them.
+    counts: dict[str, int] = {}
+
+    def close_and_clear_booking_choices() -> None:
+        # The fallback for when CARLOS has stopped polling (the poll closes lapsed picks first, and
+        # emails the patient), then the choice-time clearing. Both before the prompt pass, which can
+        # delete a prompt and its choices with it, so the reported counts match a dry run; and after
+        # the sign-in passes, so this transaction locks sessions before prompts, as turning an
+        # account off does.
+        counts["lapsed_booking_choices"] = close_lapsed_choices(
+            session,
+            delete_slots=False,
+            limit=normalized_batch_size,
+            dry_run=dry_run,
+        )
+        counts["booking_choice_times"] = _clear_booking_choice_times(
             session,
             booked_time_cutoff=booked_time_cutoff,
             batch_size=normalized_batch_size,
             dry_run=dry_run,
-        ),
-    }
-    for field_name, (model, predicate) in zip(
-        (
-            "outbound_deliveries",
-            "sessions",
-            "mfa_challenges",
-            "reset_records",
-            "email_change_requests",
-            "invites",
-            "offered_slots",
-            "booking_prompts",
-        ),
-        predicates,
-        strict=True,
-    ):
+        )
+
+    def run_pass(field_name: str, model: type[Base], predicate: ColumnElement[bool]) -> None:
         candidates = (
             select(model.id).where(predicate).order_by(model.id).limit(normalized_batch_size)
         )
@@ -405,7 +416,7 @@ def cleanup_transient_auth_rows(
         )
         if dry_run or not record_ids:
             counts[field_name] = len(record_ids)
-            continue
+            return
         # The DELETE re-applies the predicate to close the resend-vs-cleanup race, so the
         # selected count can overstate; report what was actually removed, like prune_audit_events.
         result = session.execute(
@@ -415,6 +426,27 @@ def cleanup_transient_auth_rows(
             )
         )
         counts[field_name] = int(result.rowcount or 0)
+
+    for field_name, (model, predicate) in zip(
+        (
+            "outbound_deliveries",
+            "sessions",
+            "mfa_challenges",
+            "reset_records",
+            "email_change_requests",
+            "invites",
+        ),
+        sign_in_predicates,
+        strict=True,
+    ):
+        run_pass(field_name, model, predicate)
+    close_and_clear_booking_choices()
+    for field_name, (model, predicate) in zip(
+        ("offered_slots", "booking_prompts"),
+        booking_predicates,
+        strict=True,
+    ):
+        run_pass(field_name, model, predicate)
     return TransientCleanupResult(**counts)
 
 
@@ -439,7 +471,11 @@ def _clear_booking_choice_times(
         ),
         and_(
             PatientPortalBookingChoice.state.in_(
-                (BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE, BOOKING_CHOICE_STATE_WITHDRAWN)
+                (
+                    BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE,
+                    BOOKING_CHOICE_STATE_WITHDRAWN,
+                    BOOKING_CHOICE_STATE_EXPIRED,
+                )
             ),
             PatientPortalBookingChoice.slot_id.is_not(None),
         ),

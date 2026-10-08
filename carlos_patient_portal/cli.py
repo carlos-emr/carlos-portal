@@ -608,6 +608,7 @@ def maintenance(argv: Sequence[str] | None = None) -> None:
                     f"booking_prompts={cleanup_result.booking_prompts} "
                     f"offered_slots={cleanup_result.offered_slots} "
                     f"booking_choice_times={cleanup_result.booking_choice_times} "
+                    f"lapsed_booking_choices={cleanup_result.lapsed_booking_choices} "
                     f"total={cleanup_result.total}"
                 )
                 return

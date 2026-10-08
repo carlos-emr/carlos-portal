@@ -124,11 +124,13 @@ BOOKING_PROMPT_STATUS_DECLINED_ALL = "declined_all"
 # still waiting for CARLOS.
 BOOKING_PROMPT_STATE_EXPIRED = "expired"
 # A patient's pick of one offered time. `withdrawn` is a choice still pending when staff withdrew
-# its prompt: CARLOS can no longer report a result for it.
+# its prompt or turned the account off; `expired` is one whose time started before CARLOS answered.
+# CARLOS can no longer report a result for either.
 BOOKING_CHOICE_STATE_PENDING = "pending"
 BOOKING_CHOICE_STATE_BOOKED = "booked"
 BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE = "slot_unavailable"
 BOOKING_CHOICE_STATE_WITHDRAWN = "withdrawn"
+BOOKING_CHOICE_STATE_EXPIRED = "expired"
 BOOKING_CHOICE_RESULTS = (BOOKING_CHOICE_STATE_BOOKED, BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE)
 BOOKING_VISIT_MODES = ("in_person", "phone", "video")
 MAX_OFFERED_SLOTS = 8
@@ -1397,9 +1399,11 @@ BOOKING_SLOT_COPY_ABSENT_SQL = (
     "slot_id is null and starts_at is null and duration_minutes is null and "
     "visit_mode is null and location_code is null"
 )
+# A booked pick keeps its time for the patient but not CARLOS's slot id, which nothing needs after
+# booking.
 BOOKING_SLOT_COPY_PRESENT_SQL = (
-    "slot_id is not null and starts_at is not null and duration_minutes is not null and "
-    "visit_mode is not null"
+    "(slot_id is not null or state = 'booked') and starts_at is not null and "
+    "duration_minutes is not null and visit_mode is not null"
 )
 
 
@@ -1480,7 +1484,9 @@ class PatientPortalBookingChoice(Base):
 
     Holds a copy of the chosen time so the confirmation survives the offered rows being deleted.
     The copy is kept only while it is needed: it is cleared when CARLOS reports the time was taken,
-    when the prompt is withdrawn, and one day after a booked appointment's start.
+    when the prompt is withdrawn or staff turn the account off, when the time starts unanswered
+    (the pick lapses as `expired`), and one day after a booked appointment's start; CARLOS's
+    `slot_id` is cleared as soon as the pick is booked.
     """
 
     __tablename__ = "patient_portal_booking_choices"
@@ -1490,7 +1496,7 @@ class PatientPortalBookingChoice(Base):
             name="ck_pp_booking_choices_clinic_id_length",
         ),
         CheckConstraint(
-            "state in ('pending', 'booked', 'slot_unavailable', 'withdrawn')",
+            "state in ('pending', 'booked', 'slot_unavailable', 'withdrawn', 'expired')",
             name="ck_pp_booking_choices_state",
         ),
         CheckConstraint(

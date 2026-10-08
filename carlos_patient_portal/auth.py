@@ -1846,7 +1846,9 @@ def set_patient_account_access(
             PatientPortalAccount.id == account_id,
             PatientPortalAccount.clinic_id == normalized_clinic_id,
         )
-        .with_for_update()
+        # FOR NO KEY UPDATE: the status change touches no key, and it must not conflict with
+        # the key-share lock a booking writer's outbox insert takes on this row (deadlock).
+        .with_for_update(key_share=True)
     )
     if account is None:
         raise AccountNotFoundError()

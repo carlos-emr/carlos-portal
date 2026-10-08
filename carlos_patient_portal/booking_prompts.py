@@ -35,6 +35,7 @@ from carlos_patient_portal.booking_offers import (
     OfferedSlotSpec,
     add_offered_slots,
     as_utc,
+    closed_after_expiry_notice,
     delete_offered_slots,
     normalize_offered_slots,
     offer_digest,
@@ -270,10 +271,13 @@ def create_booking_prompt(
     if existing is not None:
         return _retry_result(existing, request)
 
+    # FOR SHARE: staff turning the account off lock it before cancelling its prompts' picks, so a
+    # prompt is either created first (and its picks cancelled there) or waits and finds it off.
+    # The prompt's own foreign key takes only KEY SHARE, which would not wait.
     account = session.scalar(
-        select(PatientPortalAccount).where(
-            *booking_account_conditions(normalized_clinic_id, demographic_no)
-        )
+        select(PatientPortalAccount)
+        .where(*booking_account_conditions(normalized_clinic_id, demographic_no))
+        .with_for_update(read=True)
     )
     if account is None:
         raise BookingPromptAccountUnavailableError()
@@ -470,8 +474,9 @@ def _active_for_account(account_id: int, now: datetime) -> tuple[ColumnElement[b
     """Which of an account's prompts the patient sees.
 
     A live sent, read, or declined prompt; a prompt whose chosen time CARLOS has not answered yet,
-    even past its expiry, so the patient is not left without an answer; and a booked prompt until
-    a day after the booked time.
+    even past its expiry, so the patient is not left without an answer; for a few days, a prompt
+    whose pick was reported taken, or lapsed, after it expired, so the patient learns to contact
+    the clinic; and a booked prompt until a day after the booked time.
     """
     booked_time_upcoming = (
         select(PatientPortalBookingChoice.id)
@@ -499,6 +504,10 @@ def _active_for_account(account_id: int, now: datetime) -> tuple[ColumnElement[b
             and_(
                 PatientPortalBookingPrompt.status == BOOKING_PROMPT_STATUS_BOOKED,
                 booked_time_upcoming,
+            ),
+            and_(
+                PatientPortalBookingPrompt.status == BOOKING_PROMPT_STATUS_READ,
+                closed_after_expiry_notice(now),
             ),
         ),
     )
