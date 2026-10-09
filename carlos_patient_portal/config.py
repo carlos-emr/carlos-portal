@@ -19,6 +19,7 @@ from binascii import Error as Base64DecodeError
 from email.utils import parseaddr
 from functools import lru_cache
 from ipaddress import ip_address, ip_network
+from pathlib import Path
 from typing import Literal
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -350,6 +351,11 @@ class Settings(BaseSettings):
     smtp_username: str | None = Field(default=None, max_length=254)
     smtp_password: SecretStr | None = None
     smtp_timeout_seconds: int = Field(default=10, ge=1, le=60)
+    email_footer_url: str | None = Field(default=None, max_length=2048)
+    email_footer_read_token: SecretStr | None = None
+    email_footer_ca_file: str | None = None
+    email_footer_timeout_seconds: int = Field(default=5, ge=1, le=10)
+    email_footer_audit_directory: str | None = None
     sms_webhook_url: str | None = Field(default=None, max_length=2048)
     sms_webhook_token: SecretStr | None = None
     sms_sender_id: str = Field(default="CARLOS", min_length=1, max_length=32)
@@ -896,6 +902,7 @@ class Settings(BaseSettings):
             "internal_health_token": "PATIENT_PORTAL_INTERNAL_HEALTH_TOKEN",
             "internal_api_token": "PATIENT_PORTAL_INTERNAL_API_TOKEN",
             "internal_api_token_previous": "PATIENT_PORTAL_INTERNAL_API_TOKEN_PREVIOUS",
+            "email_footer_read_token": "PATIENT_PORTAL_EMAIL_FOOTER_READ_TOKEN",
             "dev_admin_token": "PATIENT_PORTAL_DEV_ADMIN_TOKEN",
             "sms_webhook_token": "PATIENT_PORTAL_SMS_WEBHOOK_TOKEN",
         }
@@ -993,6 +1000,75 @@ class Settings(BaseSettings):
         self.validate_smtp_credentials()
         self.validate_smtp_sender()
         self.validate_smtp_transport()
+        self.validate_email_footer_policy()
+
+    def validate_email_footer_policy(self) -> None:
+        if self.email_footer_url is not None:
+            try:
+                parsed = urlsplit(self.email_footer_url)
+                invalid = (
+                    parsed.scheme != "https"
+                    or not parsed.hostname
+                    or parsed.username is not None
+                    or parsed.password is not None
+                    or parsed.query
+                    or parsed.fragment
+                    or not parsed.path.endswith("/ws/portal/email-footer")
+                    or any(is_hidden_character(c) or c.isspace() for c in self.email_footer_url)
+                    or parsed.port == 0
+                )
+            except ValueError:
+                invalid = True
+            if invalid:
+                raise ValueError(
+                    "PATIENT_PORTAL_EMAIL_FOOTER_URL must be an exact HTTPS footer endpoint "
+                    "without credentials, query or fragment"
+                )
+        token = self.secret_value("email_footer_read_token")
+        if token is not None:
+            if re.fullmatch(r"[0-9a-f]{64}", token) is None:
+                raise ValueError(
+                    "PATIENT_PORTAL_EMAIL_FOOTER_READ_TOKEN must be the clinic-scoped "
+                    "derived lowercase-hex read credential"
+                )
+            if token in {
+                self.secret_value("internal_api_token"),
+                self.secret_value("internal_api_token_previous"),
+            }:
+                raise ValueError(
+                    "PATIENT_PORTAL_EMAIL_FOOTER_READ_TOKEN must not be "
+                    "a full internal API credential"
+                )
+        if (
+            self.email_footer_audit_directory is not None
+            and not Path(self.email_footer_audit_directory).is_absolute()
+        ):
+            raise ValueError("PATIENT_PORTAL_EMAIL_FOOTER_AUDIT_DIRECTORY must be absolute")
+        if (
+            self.email_footer_ca_file is not None
+            and not Path(self.email_footer_ca_file).is_absolute()
+        ):
+            raise ValueError("PATIENT_PORTAL_EMAIL_FOOTER_CA_FILE must be absolute")
+        # Development may construct a sender before configuring it, but the actual
+        # provider refuses every send until all mandatory trust/storage is available.
+        if self.smtp_host is not None and not self.is_development:
+            if (
+                self.email_footer_url is None
+                or token is None
+                or self.email_footer_audit_directory is None
+            ):
+                raise ValueError(
+                    "SMTP requires PATIENT_PORTAL_EMAIL_FOOTER_URL, "
+                    "PATIENT_PORTAL_EMAIL_FOOTER_READ_TOKEN and "
+                    "PATIENT_PORTAL_EMAIL_FOOTER_AUDIT_DIRECTORY"
+                )
+            if self.internal_staff_assertion_public_keyring is None:
+                raise ValueError(
+                    "SMTP requires PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING "
+                    "for signed clinic footer verification"
+                )
+            if not self.resolved_internal_staff_assertion_public_keys:
+                raise ValueError("SMTP requires a nonempty CARLOS public keyring")
 
     def validate_smtp_credentials(self) -> None:
         smtp_password_value = self.secret_value("smtp_password")
