@@ -260,6 +260,14 @@ def _outbox_configuration_digest(settings: Settings) -> str:
         "smtp_username": settings.smtp_username,
         "smtp_password": settings.secret_value("smtp_password"),
         "smtp_timeout_seconds": settings.smtp_timeout_seconds,
+        # Web and worker must agree on the trusted footer source, read-only
+        # capability and retained evidence volume. Only this digest leaves the process.
+        "email_footer_url": settings.email_footer_url,
+        "email_footer_read_token": settings.secret_value("email_footer_read_token"),
+        "email_footer_ca_file": settings.email_footer_ca_file,
+        "email_footer_timeout_seconds": settings.email_footer_timeout_seconds,
+        "email_footer_audit_directory": settings.email_footer_audit_directory,
+        "email_footer_public_keys": settings.resolved_internal_staff_assertion_public_keys,
     }
     encoded_values = json.dumps(
         compatibility_values,

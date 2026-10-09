@@ -47,6 +47,7 @@ from tests.support import (
     SEEDED_INVITE_EMAIL,
     STRONG_PASSWORD,
     TEST_STAFF_ASSERTION_PUBLIC_KEY,
+    TEST_STAFF_ASSERTION_PUBLIC_KEYRING,
     RecordingPortalSmsSender,
     browser_sign_in_seeded_patient,
     csrf_token_from_response,
@@ -376,6 +377,10 @@ def test_outbox_settings_need_no_web_only_secrets() -> None:
         smtp_host="mail.internal",
         smtp_from_address="portal@example.test",
         smtp_starttls=True,
+        email_footer_url="https://carlos.example.test/ws/portal/email-footer",
+        email_footer_read_token="d" * 64,
+        email_footer_audit_directory="/FAKE/footer-audit",
+        internal_staff_assertion_public_keyring=TEST_STAFF_ASSERTION_PUBLIC_KEYRING,
     )
 
     assert settings.identity_proof_secret is None

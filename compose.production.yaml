@@ -16,7 +16,8 @@ x-portal-service: &portal-service
     # while crossing back to an image that predates assertion keyrings.
     PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY: ${PORTAL_LEGACY_STAFF_ASSERTION_PUBLIC_KEY:-}
   volumes:
-    - type: bind
+    - &database-ca-volume
+      type: bind
       source: ${PORTAL_DB_CA_FILE:?Set PORTAL_DB_CA_FILE to the PostgreSQL CA certificate}
       target: /run/secrets/postgresql-ca.pem
       read_only: true
@@ -36,9 +37,18 @@ x-portal-service: &portal-service
       max-size: 10m
       max-file: "5"
 
+x-footer-audit-volume: &footer-audit-volume
+  type: bind
+  source: ${PORTAL_EMAIL_FOOTER_AUDIT_DIR:?Set PORTAL_EMAIL_FOOTER_AUDIT_DIR to private durable audit storage}
+  target: /var/lib/carlos-portal/email-footer-audit
+  read_only: false
+
 services:
   web:
     <<: *portal-service
+    volumes:
+      - *database-ca-volume
+      - *footer-audit-volume
     command:
       - uvicorn
       - carlos_patient_portal.main:create_app
@@ -71,6 +81,9 @@ services:
 
   outbox:
     <<: *portal-service
+    volumes:
+      - *database-ca-volume
+      - *footer-audit-volume
     env_file:
       - ${PORTAL_OUTBOX_ENV_FILE:-deploy/outbox.env}
     # The worker does not accept client traffic and must not inherit proxy configuration. The sole
@@ -114,6 +127,9 @@ services:
   # connection uses TLS, the schema is current, and the audit table is append-only.
   preflight:
     <<: *portal-service
+    volumes:
+      - *database-ca-volume
+      - *footer-audit-volume
     profiles:
       - operations
     command:
