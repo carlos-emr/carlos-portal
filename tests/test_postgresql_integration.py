@@ -2044,7 +2044,9 @@ def test_postgresql_self_signup_page_answers_alike_when_workers_race_one_card() 
                 data={
                     "csrf_token": token,
                     "health_card_number": "5550 001 234 AB",
-                    "date_of_birth": "1975-03-14",
+                    "date_of_birth_day": "14",
+                    "date_of_birth_month": "3",
+                    "date_of_birth_year": "1975",
                     "email": "fake.patient@example.test",
                 },
             )

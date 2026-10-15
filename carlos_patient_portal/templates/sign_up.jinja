@@ -35,16 +35,7 @@
                 required
               >
             </label>
-            <label>
-              <span>{{ text.date_of_birth }}</span>
-              <input
-                type="date"
-                name="date_of_birth"
-                value="{{ form_values.date_of_birth or '' }}"
-                autocomplete="bday"
-                required
-              >
-            </label>
+            {% include "_date_of_birth_fields.jinja" %}
             <label>
               <span>{{ text.sign_up_email }}</span>
               <input

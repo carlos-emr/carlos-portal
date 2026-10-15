@@ -90,13 +90,23 @@ def client_at(app, address: str = FAKE_CLIENT_IP) -> TestClient:
     return TestClient(app, client=(address, 50000))
 
 
-def sign_up(client: TestClient, **fields: str):
+def date_boxes(iso_date: str) -> dict[str, str]:
+    """An ISO date as the page's Day, Month and Year boxes would post it."""
+    year, month, day = iso_date.split("-")
+    return {
+        "date_of_birth_day": str(int(day)),
+        "date_of_birth_month": str(int(month)),
+        "date_of_birth_year": year,
+    }
+
+
+def sign_up(client: TestClient, *, date_of_birth: str = FAKE_DOB, **fields: str):
     page = client.get(SIGN_UP_PATH)
     assert page.status_code == 200
     data = {
         "csrf_token": csrf_token_from_response(page),
         "health_card_number": FAKE_HCN,
-        "date_of_birth": FAKE_DOB,
+        **date_boxes(date_of_birth),
         "email": FAKE_EMAIL,
         **fields,
     }
@@ -222,8 +232,18 @@ def test_sign_up_page_has_the_auth_page_headers_csrf_and_a_sign_in_link() -> Non
     assert "Path=/auth" in set_cookie
     assert "SameSite=strict" in set_cookie
     assert f'action="http://testserver{SIGN_UP_PATH}"' in page.text
-    for field_name in ("health_card_number", "date_of_birth", "email", "csrf_token"):
+    for field_name in (
+        "health_card_number",
+        "date_of_birth_day",
+        "date_of_birth_month",
+        "date_of_birth_year",
+        "email",
+        "csrf_token",
+    ):
         assert f'name="{field_name}"' in page.text
+    # The Day, Month and Year boxes activation uses, never a browser date field.
+    assert 'type="date"' not in page.text
+    assert i18n.TEXT_CATALOG["en"]["date_of_birth_hint"] in page.text
     assert i18n.TEXT_CATALOG["en"]["sign_up_email_hint"].replace("'", "&#39;") in page.text
     assert f'href="http://testserver{SIGN_UP_PATH}"' in client.get("/").text
 
@@ -237,6 +257,8 @@ def test_sign_up_page_is_translated() -> None:
     result = sign_up(client)
 
     assert "Demander un compte du portail" in page.text
+    # The shared date boxes come translated from activation (carlos-portal#30, #31).
+    assert "Choisissez un mois" in page.text
     assert '<html lang="fr">' in page.text
     assert result.status_code == 202
     assert "Demande reçue" in result.text
@@ -269,7 +291,7 @@ def test_post_without_a_valid_csrf_token_is_refused_and_stores_nothing() -> None
     app = signup_app()
     details = {
         "health_card_number": FAKE_HCN,
-        "date_of_birth": FAKE_DOB,
+        **date_boxes(FAKE_DOB),
         "email": FAKE_EMAIL,
     }
 
@@ -310,30 +332,67 @@ def test_json_is_not_accepted() -> None:
 
 
 @pytest.mark.parametrize(
-    "field_override",
+    ("field_override", "message_key"),
     [
-        {"date_of_birth": "1975-02-30"},
-        {"date_of_birth": "14/03/1975"},
-        {"health_card_number": "12"},
-        {"health_card_number": "9876-543-210-ÉÉ"},
-        {"email": "not-an-email"},
-        {"email": ""},
+        # The date of birth alone: activation's own "Check the date of birth" message.
+        ({"date_of_birth_day": "30"}, "activation_date_of_birth_invalid"),
+        ({"date_of_birth_year": "75"}, "activation_date_of_birth_invalid"),
+        ({"date_of_birth_day": ""}, "activation_date_of_birth_invalid"),
+        ({"date_of_birth_year": "1890"}, "activation_date_of_birth_invalid"),
+        ({"health_card_number": "12"}, "sign_up_details_invalid"),
+        ({"health_card_number": "9876-543-210-ÉÉ"}, "sign_up_details_invalid"),
+        ({"email": "not-an-email"}, "sign_up_details_invalid"),
+        ({"email": ""}, "sign_up_details_invalid"),
+        # More than the date: the message that names every detail.
+        ({"date_of_birth_day": "31", "email": "not-an-email"}, "sign_up_details_invalid"),
     ],
 )
-def test_a_detail_in_the_wrong_format_is_named_kept_and_not_stored(field_override) -> None:
+def test_a_detail_in_the_wrong_format_is_named_kept_and_not_stored(
+    field_override, message_key
+) -> None:
     app = signup_app()
     client = client_at(app)
 
-    response = sign_up(client, **field_override)
+    response = sign_up(client, **{"date_of_birth_month": "2", **field_override})
 
     assert response.status_code == 400
     assert response.headers["cache-control"] == "no-store"
-    assert i18n.TEXT_CATALOG["en"]["sign_up_details_invalid"] in response.text
-    kept_email = field_override.get("email", FAKE_EMAIL)
-    if kept_email:
-        assert f'value="{kept_email}"' in response.text
+    assert i18n.TEXT_CATALOG["en"][message_key] in response.text
+    kept = {
+        "health_card_number": FAKE_HCN,
+        **date_boxes(FAKE_DOB),
+        "date_of_birth_month": "2",
+        "email": FAKE_EMAIL,
+        **field_override,
+    }
+    for field_name in ("health_card_number", "date_of_birth_day", "date_of_birth_year", "email"):
+        if kept[field_name]:
+            assert f'value="{kept[field_name]}"' in response.text
+    assert '<option value="2" selected>' in response.text
     assert stored_requests(app) == []
     assert signup_events(app) == []
+
+
+def test_a_single_iso_date_of_birth_is_still_read() -> None:
+    """date_of_birth_from_form, shared with activation, reads a lone ISO date as before."""
+    app = signup_app()
+    client = client_at(app)
+    page = client.get(SIGN_UP_PATH)
+
+    response = client.post(
+        SIGN_UP_PATH,
+        data={
+            "csrf_token": csrf_token_from_response(page),
+            "health_card_number": FAKE_HCN,
+            "date_of_birth": FAKE_DOB,
+            "email": FAKE_EMAIL,
+        },
+    )
+
+    assert response.status_code == 202
+    (row,) = stored_requests(app)
+    details = decrypt_signup_request(row, encryption_keys={"primary": OUTBOX_ENCRYPTION_SECRET})
+    assert details.date_of_birth == date(1975, 3, 14)
 
 
 # --------------------------------------------------------------------------------------------
@@ -425,7 +484,7 @@ def test_a_stored_and_a_refused_request_take_the_same_minimum_time() -> None:
             data={
                 "csrf_token": csrf_token_from_response(page),
                 "health_card_number": card,
-                "date_of_birth": FAKE_DOB,
+                **date_boxes(FAKE_DOB),
                 "email": FAKE_EMAIL,
             },
         )

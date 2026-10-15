@@ -47,6 +47,7 @@ from carlos_patient_portal.self_signup import (
     submit_signup_request,
 )
 from carlos_patient_portal.web_support import (
+    date_of_birth_from_form,
     first_form_value,
     first_form_value_or_empty,
     get_csrf_urlencoded_form_values,
@@ -57,9 +58,21 @@ from carlos_patient_portal.web_support import (
 
 SIGN_UP_TEMPLATE = "sign_up.jinja"
 SIGN_UP_RESULT_TEMPLATE = "auth_result.jinja"
-# What a form error shows again. Only a typing aid, so each value is capped.
-SIGN_UP_KEPT_FIELDS = ("health_card_number", "date_of_birth", "email")
+# What a form error shows again. Only a typing aid, so each value is capped. The date of birth is
+# the Day, Month and Year boxes activation uses (carlos-portal#30).
+SIGN_UP_KEPT_FIELDS = (
+    "health_card_number",
+    "date_of_birth_day",
+    "date_of_birth_month",
+    "date_of_birth_year",
+    "email",
+)
 MAX_KEPT_SIGN_UP_VALUE_LENGTH = 256
+
+
+def is_only_a_date_of_birth_error(exc: ValidationError) -> bool:
+    """Whether the date of birth is the only detail in the wrong format."""
+    return all("date_of_birth" in tuple(error.get("loc") or ()) for error in exc.errors())
 
 
 async def hold_response_floor(started_at: float, floor_seconds: float) -> None:
@@ -129,17 +142,24 @@ def register_signup_routes(
         try:
             payload = SignupRequest.model_validate(
                 {
-                    field_name: first_form_value(form_values, field_name)
-                    for field_name in SIGN_UP_KEPT_FIELDS
+                    "health_card_number": first_form_value(form_values, "health_card_number"),
+                    # Shared with activation: the three boxes as one ISO date, or a value the
+                    # model refuses when they are not a real date.
+                    "date_of_birth": date_of_birth_from_form(form_values),
+                    "email": first_form_value(form_values, "email"),
                 }
             )
-        except ValidationError:
+        except ValidationError as exc:
             # A format problem says nothing about any patient, so it is named, and the entries are
             # shown again. Nothing is stored or counted.
             return render_sign_up_page(
                 request,
                 status_code=status.HTTP_400_BAD_REQUEST,
-                error_message=text["sign_up_details_invalid"],
+                error_message=(
+                    text["activation_date_of_birth_invalid"]
+                    if is_only_a_date_of_birth_error(exc)
+                    else text["sign_up_details_invalid"]
+                ),
                 form_values={
                     field_name: value[:MAX_KEPT_SIGN_UP_VALUE_LENGTH]
                     for field_name in SIGN_UP_KEPT_FIELDS

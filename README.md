@@ -998,10 +998,12 @@ up, sends nothing, and never calls CARLOS. CARLOS collects stored requests (carl
 matches them against a chart, and sends a normal invite to the email already on file
 (carlos-emr/carlos#3932). The typed email is kept only so CARLOS can compare it.
 
-`POST /auth/sign-up` takes the CSRF-protected browser form only; there is no JSON variant. A
-detail in the wrong format (an impossible date, a malformed email or health card number) is
+`POST /auth/sign-up` takes the CSRF-protected browser form only; there is no JSON variant. The
+date of birth is the Day, Month and Year boxes activation uses, combined on the server by the same
+code. A detail in the wrong format (an impossible date, a malformed email or health card number) is
 answered `400` with the entries shown again, because a format problem says nothing about any
-patient; nothing is stored or counted. Every other request gets the same `202` page ("If your
+patient; nothing is stored or counted. A date alone gets activation's "Check the date of birth"
+message. Every other request gets the same `202` page ("If your
 details match our records, we have emailed you a link to finish setting up your account. If
 nothing arrives, contact the clinic."), the same headers, and takes at least
 `PATIENT_PORTAL_SELF_SIGNUP_RESPONSE_FLOOR_MS` (250 by default): a matching patient, an unknown
