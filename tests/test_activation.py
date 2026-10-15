@@ -202,7 +202,7 @@ def test_browser_activation_keeps_entries_when_the_password_is_too_weak() -> Non
     response = post_browser_activation(client, entries)
 
     assert response.status_code == 400
-    assert "The activation details could not be verified." in response.text
+    assert "Choose a different password" in response.text
     assert_entries_kept_but_not_passwords(response, entries)
 
 
@@ -636,23 +636,89 @@ def test_patient_activation_rejects_identity_mismatch_without_account_leak() -> 
         assert audit_event.reason == "invalid_details"
 
 
-def test_invalid_activation_proof_skips_expensive_password_strength_analysis(
+def test_throttled_activation_skips_expensive_password_strength_analysis(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    app = migrated_development_app()
+    # The password is judged before the invite, so the rate limit (checked first) is what bounds
+    # the strength analysis: once a client is throttled it must not run at all.
+    app = migrated_development_app(
+        session_secret=NON_DEVELOPMENT_SESSION_SECRET,
+        activation_max_failures_per_invite=50,
+        activation_max_failures_per_client=1,
+    )
     client = TestClient(app)
+    assert client.post(
+        "/auth/activate", json=activation_request("forged-invite-token")
+    ).status_code == 400
 
     def fail_if_called(*_args: object, **_kwargs: object) -> dict[str, object]:
-        pytest.fail("password strength analysis ran before invite proof was verified")
+        pytest.fail("password strength analysis ran for a throttled activation")
 
     monkeypatch.setattr(credentials, "zxcvbn", fail_if_called)
+    response = client.post("/auth/activate", json=activation_request("another-forged-token"))
+
+    assert response.status_code == 429
+
+
+def test_password_rejection_names_the_password_whether_or_not_the_identity_matches() -> None:
+    client = TestClient(migrated_development_app())
+    invite_code = create_browser_invite(client)
+    weak = {"password": "password1234", "password_confirmation": "password1234"}  # ggignore
+
+    right_identity = post_browser_activation(
+        client, browser_activation_entries(invite_code, **weak)
+    )
+    wrong_identity = post_browser_activation(
+        client,
+        browser_activation_entries(invite_code, health_card_number="WRONG1234", **weak),
+    )
+
+    # Same status and the same message either way: the password message is no identity oracle.
+    for response in (right_identity, wrong_identity):
+        assert response.status_code == 400
+        assert "Choose a different password: use at least 12 characters" in response.text
+        assert "could not be verified" not in response.text
+
+
+def test_good_password_with_the_wrong_identity_stays_generic() -> None:
+    client = TestClient(migrated_development_app())
+    entries = browser_activation_entries(
+        create_browser_invite(client), health_card_number="WRONG1234"
+    )
+
+    response = post_browser_activation(client, entries)
+
+    assert response.status_code == 400
+    assert "The activation details could not be verified." in response.text
+    assert "Choose a different password" not in response.text
+
+
+def test_password_rejection_is_shown_in_the_patients_language() -> None:
+    client = TestClient(migrated_development_app())
+    client.cookies.set("portal_locale", "fr")
+    entries = browser_activation_entries(
+        create_browser_invite(client),
+        password="password1234",  # ggignore
+        password_confirmation="password1234",  # ggignore
+    )
+
+    response = post_browser_activation(client, entries)
+
+    assert response.status_code == 400
+    assert "Choisissez un autre mot de passe" in html.unescape(response.text)
+
+
+def test_password_rejection_from_a_forged_invite_still_names_the_password() -> None:
+    # Judged before the invite lookup, so a weak password does not reveal the invite is unknown.
+    client = TestClient(migrated_development_app())
+
     response = client.post(
         "/auth/activate",
-        json=activation_request("forged-invite-token"),
+        json=activation_request("forged-invite-token", password="password1234"),  # ggignore
     )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "activation details could not be verified"
+    assert response.json()["detail"] == "password does not meet the password rules"
 
 
 def test_patient_activation_rejects_expired_invite() -> None:
@@ -732,6 +798,7 @@ def test_patient_activation_rejects_weak_password() -> None:
     )
 
     assert activation_response.status_code == 400
+    assert activation_response.json()["detail"] == "password does not meet the password rules"
     assert "weak" not in activation_response.text
 
 

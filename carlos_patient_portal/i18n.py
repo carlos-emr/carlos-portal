@@ -111,6 +111,10 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
             "Check the date of birth: enter a real date, for example 15 June 1985."
         ),
         "activation_error": "The activation details could not be verified.",
+        "activation_password_rejected": (
+            "Choose a different password: use at least 12 characters, avoid common words or "
+            "patterns, and don't include your username, email, birth date or health card number."
+        ),
         "activation_reenter_password": "Your other entries are kept: enter your password again.",
         "activation_heading": "Activate your account",
         "activation_rate_limited": (
@@ -395,10 +399,39 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
     }
 }
 
+# The first translated strings. Every key a locale does not define still falls back to English.
+TEXT_CATALOG["fr"] = {
+    "activation_password_rejected": (
+        "Choisissez un autre mot de passe : utilisez au moins 12 caractères, évitez les mots ou "
+        "les suites courants, et n’y mettez pas votre nom d’utilisateur, votre courriel, votre "
+        "date de naissance ni votre numéro de carte santé."
+    ),
+}
+TEXT_CATALOG["es"] = {
+    "activation_password_rejected": (
+        "Elija otra contraseña: use al menos 12 caracteres, evite palabras o patrones comunes y "
+        "no incluya su nombre de usuario, correo electrónico, fecha de nacimiento ni número de "
+        "tarjeta de salud."
+    ),
+}
+TEXT_CATALOG["pl"] = {
+    "activation_password_rejected": (
+        "Wybierz inne hasło: użyj co najmniej 12 znaków, unikaj popularnych słów i schematów "
+        "oraz nie umieszczaj w nim nazwy użytkownika, adresu e-mail, daty urodzenia ani numeru "
+        "karty zdrowia."
+    ),
+}
+TEXT_CATALOG["pt-BR"] = {
+    "activation_password_rejected": (
+        "Escolha outra senha: use pelo menos 12 caracteres, evite palavras ou padrões comuns e "
+        "não inclua seu nome de usuário, e-mail, data de nascimento nem número do cartão de saúde."
+    ),
+}
+
 # Every supported locale gets an entry so `portal_text` never falls back wholesale to English and
-# a translator can start filling one in without touching anything else. Empty today: the per-key
-# merge in `portal_text` supplies the English string for anything a locale has not defined, which
-# is what makes a half-finished translation render instead of raising KeyError.
+# a translator can start filling one in without touching anything else. Nearly empty today: the
+# per-key merge in `portal_text` supplies the English string for anything a locale has not defined,
+# which is what makes a half-finished translation render instead of raising KeyError.
 for _locale in SUPPORTED_LOCALES:
     TEXT_CATALOG.setdefault(_locale.code, {})
 
