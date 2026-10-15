@@ -1024,10 +1024,14 @@ async def get_activation_request_from_request(
             "activation requires an application/json or form request body"
         ),
     )
+    # Every way activation can fail re-shows the form with these; the body cannot be read again.
+    request.state.activation_form_values = activation_form_values_to_keep(form_values)
     password = first_form_value_or_empty(form_values, "password")
     if password != first_form_value_or_empty(form_values, "password_confirmation"):
         raise BrowserFormValidationError(
             "password confirmation does not match",
+            # Only the invite code is read from this (to charge the rate limit); the entries the
+            # page shows again come from request.state.
             safe_form_values={
                 "invite_code": first_form_value_or_empty(form_values, "invite_code")
             },
@@ -1037,7 +1041,7 @@ async def get_activation_request_from_request(
             {
                 "invite_code": first_form_value(form_values, "invite_code"),
                 "email": first_form_value(form_values, "email"),
-                "date_of_birth": first_form_value(form_values, "date_of_birth"),
+                "date_of_birth": date_of_birth_from_form(form_values),
                 "health_card_number": first_form_value(form_values, "health_card_number"),
                 "username": first_form_value(form_values, "username"),
                 "password": password,
@@ -1267,6 +1271,79 @@ def first_form_value(form_values: dict[str, list[str]], field_name: str) -> str 
 
 def first_form_value_or_empty(form_values: dict[str, list[str]], field_name: str) -> str:
     return first_form_value(form_values, field_name) or ""
+
+
+# Not a date, so the request model refuses it as a date of birth (and the form says so).
+UNREADABLE_DATE_OF_BIRTH = "unreadable"
+
+# What a failed activation shows again, so the patient fixes one detail rather than retyping
+# them all. Never the two password boxes. Each value is capped: it is only a typing aid.
+ACTIVATION_KEPT_FIELDS = (
+    "invite_code",
+    "email",
+    "date_of_birth_day",
+    "date_of_birth_month",
+    "date_of_birth_year",
+    "health_card_number",
+    "username",
+    "mfa_delivery_method",
+    "phone_number",
+)
+MAX_KEPT_ACTIVATION_VALUE_LENGTH = 256
+
+
+def activation_form_values_to_keep(form_values: dict[str, list[str]]) -> dict[str, str]:
+    """The activation form's entries to show again after a failure, passwords excluded."""
+    kept = {
+        field_name: value[:MAX_KEPT_ACTIVATION_VALUE_LENGTH]
+        for field_name in ACTIVATION_KEPT_FIELDS
+        if (value := first_form_value_or_empty(form_values, field_name))
+    }
+    single_date_of_birth = first_form_value_or_empty(form_values, "date_of_birth")
+    if single_date_of_birth and not any(
+        field_name.startswith("date_of_birth_") for field_name in kept
+    ):
+        # A page opened before the three boxes: show its ISO date in them.
+        try:
+            parsed = date.fromisoformat(single_date_of_birth)
+        except ValueError:
+            pass
+        else:
+            kept["date_of_birth_day"] = str(parsed.day)
+            kept["date_of_birth_month"] = str(parsed.month)
+            kept["date_of_birth_year"] = f"{parsed.year:04d}"
+    return kept
+
+
+def kept_activation_form_values(request: Request) -> dict[str, str]:
+    """The entries a failed browser activation shows again (none for a JSON request)."""
+    return dict(getattr(request.state, "activation_form_values", {}))
+
+
+def date_of_birth_from_form(form_values: dict[str, list[str]]) -> str | None:
+    """The activation form's day, month and year boxes as one ISO date.
+
+    Parts that are missing, not digits, or no real date (31 February) give a value the request
+    model refuses as a date of birth; the range check is the model's. A form that sends a single
+    ISO ``date_of_birth`` (a page opened before the boxes) is read as before.
+    """
+    parts = [
+        first_form_value_or_empty(form_values, field_name).strip()
+        for field_name in ("date_of_birth_day", "date_of_birth_month", "date_of_birth_year")
+    ]
+    if not any(parts):
+        return first_form_value(form_values, "date_of_birth")
+    day, month, year = parts
+    if not (
+        re.fullmatch(r"[0-9]{1,2}", day)
+        and re.fullmatch(r"[0-9]{1,2}", month)
+        and re.fullmatch(r"[0-9]{4}", year)
+    ):
+        return UNREADABLE_DATE_OF_BIRTH
+    try:
+        return date(int(year), int(month), int(day)).isoformat()
+    except ValueError:
+        return UNREADABLE_DATE_OF_BIRTH
 
 
 async def get_login_request_from_request(request: Request, csrf_secret: str) -> LoginRequest:

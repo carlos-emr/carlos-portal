@@ -217,6 +217,8 @@ function screenshotPath(name) {
   let expectedAuthFailures = 0;
   let expectedResetConsoleErrors = 0;
   let expectedResetFailures = 0;
+  let expectedActivationFailures = 0;
+  let expectedActivationConsoleErrors = 0;
   let expectedRevealFailures = 0;
   const browser = await chromium.launch({
     headless: true,
@@ -302,6 +304,12 @@ function screenshotPath(name) {
     if (isExpectedResetFailure) {
       expectedResetFailures -= 1;
     }
+    const isExpectedActivationFailure = response.status() === 400
+      && expectedActivationFailures > 0
+      && responsePath === portalPathname('/auth/activate');
+    if (isExpectedActivationFailure) {
+      expectedActivationFailures -= 1;
+    }
     const isExpectedRevealFailure = response.status() === 503
       && expectedRevealFailures > 0
       && responsePath.startsWith(portalPathname('/portal/email-passwords/'))
@@ -314,6 +322,7 @@ function screenshotPath(name) {
       && !isExpectedMfaCooldown
       && !isExpectedAuthFailure
       && !isExpectedResetFailure
+      && !isExpectedActivationFailure
       && !isExpectedRevealFailure
     ) {
       badResponses.push({ status: response.status(), url: response.url() });
@@ -332,6 +341,13 @@ function screenshotPath(name) {
     if (isExpectedResetFailureConsoleError) {
       expectedResetConsoleErrors -= 1;
     }
+    const isExpectedActivationFailureConsoleError = !isExpectedResetFailureConsoleError
+      && message.text().includes(
+        'Failed to load resource: the server responded with a status of 400'
+      ) && expectedActivationConsoleErrors > 0;
+    if (isExpectedActivationFailureConsoleError) {
+      expectedActivationConsoleErrors -= 1;
+    }
     const isExpectedMfaCooldownConsoleError = message.text().includes(
       'Failed to load resource: the server responded with a status of 429'
     );
@@ -342,6 +358,7 @@ function screenshotPath(name) {
       message.type() === 'error'
       && !isExpectedAuthFailureConsoleError
       && !isExpectedResetFailureConsoleError
+      && !isExpectedActivationFailureConsoleError
       && !isExpectedMfaCooldownConsoleError
       && !isExpectedRevealFailureConsoleError
     ) {
@@ -489,9 +506,31 @@ function screenshotPath(name) {
     await page.getByRole('link', { name: 'Activate account' }).click();
     await page.getByRole('heading', { name: 'Activate your account' }).waitFor();
     await assertAccessiblePage(page, 'activation page');
+    // Date of birth is three boxes (Day, Month by name, Year) in a fieldset whose legend names
+    // it and whose hint gives an example, not a date field that reads typed digits month-first.
+    const dateOfBirth = page.locator('fieldset.date-of-birth');
     assert(
-      await page.locator('input[name="date_of_birth"][type="date"]').count() === 1,
-      'activation date-of-birth control is missing'
+      await dateOfBirth.count() === 1
+        && (await dateOfBirth.locator('legend').innerText()).trim() === 'Date of birth'
+        && await page.locator('input[name="date_of_birth"]').count() === 0
+        && await page.locator('input[type="date"]').count() === 0,
+      'activation must ask for the date of birth in a "Date of birth" fieldset, not a date field'
+    );
+    const dateOfBirthHint = await dateOfBirth.evaluate((fieldset) => {
+      const hint = document.getElementById(fieldset.getAttribute('aria-describedby') || '');
+      return hint ? hint.textContent.trim() : '';
+    });
+    assert(
+      dateOfBirthHint === 'For example, 15 June 1985.',
+      `the date-of-birth fieldset is not described by its hint (got "${dateOfBirthHint}")`
+    );
+    assert(
+      await page.getByRole('group', { name: 'Date of birth', exact: true }).count() === 1
+        && await page.getByRole('textbox', { name: 'Day', exact: true }).count() === 1
+        && await page.getByRole('combobox', { name: 'Month', exact: true }).count() === 1
+        && await page.getByRole('textbox', { name: 'Year', exact: true }).count() === 1
+        && await page.locator('select[name="date_of_birth_month"] option[value]:not([value=""])').count() === 12,
+      'the Day, Month (12 named months) and Year boxes are not each labelled'
     );
     await page.setViewportSize({ width: 390, height: 844 });
     const activationMobileLayout = await page.evaluate(() => ({
@@ -515,17 +554,77 @@ function screenshotPath(name) {
         ).count() === 1,
       'activation must render both MFA delivery methods'
     );
-    await page.locator('input[name="invite_code"]').fill(activationFixture.inviteCode);
-    await page.locator('input[name="email"]').fill(activationFixture.email);
-    await page.locator('input[name="date_of_birth"]').fill(activationFixture.dateOfBirth);
-    await page.locator('input[name="health_card_number"]').fill(
-      activationFixture.healthCardNumber
+    const [birthYear, birthMonth, birthDay] = activationFixture.dateOfBirth.split('-');
+    const fillActivationForm = async ({ day, month, year }) => {
+      await page.locator('input[name="invite_code"]').fill(activationFixture.inviteCode);
+      await page.locator('input[name="email"]').fill(activationFixture.email);
+      // By accessible name: the Month label wraps its select, so its plain text holds every
+      // month name, but its accessible name is just "Month".
+      await page.getByRole('textbox', { name: 'Day', exact: true }).fill(day);
+      await page.getByRole('combobox', { name: 'Month', exact: true }).selectOption(month);
+      await page.getByRole('textbox', { name: 'Year', exact: true }).fill(year);
+      await page.locator('input[name="health_card_number"]').fill(
+        activationFixture.healthCardNumber
+      );
+      await page.locator('input[name="username"]').fill(activationFixture.username);
+      await page.locator('input[name="password"]').fill(activationFixture.password);
+      await page.locator('input[name="password_confirmation"]').fill(
+        activationFixture.password
+      );
+    };
+    // 31 February: every box is filled correctly, but there is no such date. The page must say
+    // to check the date of birth, and the invite must stay usable.
+    await fillActivationForm({ day: '31', month: '2', year: birthYear });
+    expectedActivationFailures += 1;
+    expectedActivationConsoleErrors += 1;
+    const impossibleDateResponsePromise = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === portalPathname('/auth/activate')
+        && response.request().method() === 'POST'
     );
-    await page.locator('input[name="username"]').fill(activationFixture.username);
+    await page.getByRole('button', { name: 'Activate account' }).click();
+    const impossibleDateResponse = await impossibleDateResponsePromise;
+    assert(
+      impossibleDateResponse.status() === 400,
+      `an impossible date of birth returned ${impossibleDateResponse.status()}`
+    );
+    const impossibleDateAlert = (await page.getByRole('alert').innerText()).trim();
+    assert(
+      impossibleDateAlert === 'Check the date of birth: enter a real date, for example 15 June 1985.'
+        + ' Your other entries are kept: enter your password again.',
+      `an impossible date of birth showed "${impossibleDateAlert}"`
+    );
+    // Everything typed comes back except the two passwords, so only the mistake needs fixing.
+    const keptEntries = {
+      invite_code: await page.locator('input[name="invite_code"]').inputValue(),
+      email: await page.locator('input[name="email"]').inputValue(),
+      day: await page.getByRole('textbox', { name: 'Day', exact: true }).inputValue(),
+      month: await page.getByRole('combobox', { name: 'Month', exact: true }).inputValue(),
+      year: await page.getByRole('textbox', { name: 'Year', exact: true }).inputValue(),
+      health_card_number: await page.locator('input[name="health_card_number"]').inputValue(),
+      username: await page.locator('input[name="username"]').inputValue(),
+      password: await page.locator('input[name="password"]').inputValue(),
+      password_confirmation: await page.locator('input[name="password_confirmation"]').inputValue(),
+    };
+    assert(
+      JSON.stringify(keptEntries) === JSON.stringify({
+        invite_code: activationFixture.inviteCode,
+        email: activationFixture.email,
+        day: '31',
+        month: '2',
+        year: birthYear,
+        health_card_number: activationFixture.healthCardNumber,
+        username: activationFixture.username,
+        password: '',
+        password_confirmation: '',
+      }),
+      'a refused activation did not keep the entries (or kept a password)'
+    );
+    await page.getByRole('textbox', { name: 'Day', exact: true }).fill(String(Number(birthDay)));
+    await page.getByRole('combobox', { name: 'Month', exact: true }).selectOption(
+      String(Number(birthMonth))
+    );
     await page.locator('input[name="password"]').fill(activationFixture.password);
-    await page.locator('input[name="password_confirmation"]').fill(
-      activationFixture.password
-    );
+    await page.locator('input[name="password_confirmation"]').fill(activationFixture.password);
     const activationResponsePromise = page.waitForResponse(
       (response) => new URL(response.url()).pathname === portalPathname('/auth/activate')
         && response.request().method() === 'POST'
@@ -1275,6 +1374,9 @@ function screenshotPath(name) {
     assert(expectedResetFailures === 0, 'expected password-reset failures were not observed');
     assert(expectedResetConsoleErrors === 0,
       'expected password-reset console errors were not observed');
+    assert(expectedActivationFailures === 0, 'the expected refused activation was not observed');
+    assert(expectedActivationConsoleErrors === 0,
+      'the expected refused-activation console error was not observed');
     assert(badResponses.length === 0, `unexpected HTTP errors: ${JSON.stringify(badResponses)}`);
     assert(browserIssues.length === 0, `browser errors: ${JSON.stringify(browserIssues)}`);
     console.log('Patient portal Playwright checks passed');

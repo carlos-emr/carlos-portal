@@ -91,19 +91,27 @@ def normalize_email(email: str) -> str:
     return normalized_email
 
 
-def normalize_date_of_birth(date_of_birth: date) -> str:
-    if isinstance(date_of_birth, datetime):
-        normalized_date = date_of_birth.date()
-    else:
-        normalized_date = date_of_birth
-    today = datetime.now(UTC).date()
+def date_of_birth_bounds(today: date | None = None) -> tuple[date, date]:
+    """The earliest and latest date of birth the portal accepts, both inclusive."""
+    if today is None:
+        today = datetime.now(UTC).date()
     try:
         earliest = today.replace(year=today.year - 126)
     except ValueError:
         # February 29 has no direct counterpart in most years. Treat February 28 as the
         # inclusive anniversary boundary rather than crashing during leap years.
         earliest = date(today.year - 126, 2, 28)
+    # One day of slack: "today" is UTC here, and a patient east of UTC may already be a day on.
     latest = today + timedelta(days=1)
+    return earliest, latest
+
+
+def normalize_date_of_birth(date_of_birth: date) -> str:
+    if isinstance(date_of_birth, datetime):
+        normalized_date = date_of_birth.date()
+    else:
+        normalized_date = date_of_birth
+    earliest, latest = date_of_birth_bounds()
     if normalized_date < earliest or normalized_date > latest:
         raise ValueError("date_of_birth must be within the supported range")
     return normalized_date.isoformat()
