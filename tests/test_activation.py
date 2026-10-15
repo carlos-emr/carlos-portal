@@ -1,13 +1,15 @@
 """Invite activation: turning an invite plus identity proof into a portal account."""
 
+import html
 import json
-from datetime import timedelta
+import re
+from datetime import date, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from carlos_patient_portal import credentials, web_support
+from carlos_patient_portal import credentials, identity, web_support
 from carlos_patient_portal.audit import hash_sensitive_reference
 from carlos_patient_portal.models import (
     AUDIT_EVENT_ACTIVATION,
@@ -42,6 +44,13 @@ from tests.support import (
     seeded_invite_request,
 )
 
+# SEEDED_INVITE_DOB (1980-05-20) as the activation form's three boxes send it.
+SEEDED_INVITE_DOB_PARTS = {
+    "date_of_birth_day": "20",
+    "date_of_birth_month": "5",
+    "date_of_birth_year": "1980",
+}
+
 
 def test_browser_activation_form_creates_account_without_repopulating_proof_values() -> None:
     app = migrated_development_app()
@@ -54,7 +63,7 @@ def test_browser_activation_form_creates_account_without_repopulating_proof_valu
     activation_page = client.get("/auth/activate")
 
     assert activation_page.status_code == 200
-    assert 'type="date"' in activation_page.text
+    assert 'type="date"' not in activation_page.text
     assert "Activate your account" in activation_page.text
 
     activation_response = client.post(
@@ -63,7 +72,7 @@ def test_browser_activation_form_creates_account_without_repopulating_proof_valu
             "csrf_token": csrf_token_from_response(activation_page),
             "invite_code": invite_response.json()["invite_token"],
             "email": SEEDED_INVITE_EMAIL,
-            "date_of_birth": SEEDED_INVITE_DOB,
+            **SEEDED_INVITE_DOB_PARTS,
             "health_card_number": SEEDED_INVITE_HCN,
             "username": "browser.patient",
             "password": STRONG_PASSWORD,
@@ -82,30 +91,320 @@ def test_browser_activation_form_creates_account_without_repopulating_proof_valu
         assert account is not None
 
 
-def test_browser_activation_rejects_password_mismatch_without_echoing_secrets() -> None:
+def browser_activation_entries(invite_code: str, **overrides: str) -> dict[str, str]:
+    """Everything the activation form posts, as a patient would type it."""
+    entries = {
+        "invite_code": invite_code,
+        "email": SEEDED_INVITE_EMAIL,
+        **SEEDED_INVITE_DOB_PARTS,
+        "health_card_number": SEEDED_INVITE_HCN,
+        "username": "browser.patient",
+        "mfa_delivery_method": "email",
+        "phone_number": "+16135550199",
+        "password": STRONG_PASSWORD,
+        "password_confirmation": STRONG_PASSWORD,
+    }
+    entries.update(overrides)
+    return entries
+
+
+def post_browser_activation(client: TestClient, entries: dict[str, str]):
+    activation_page = client.get("/auth/activate")
+    return client.post(
+        "/auth/activate",
+        data={"csrf_token": csrf_token_from_response(activation_page), **entries},
+    )
+
+
+def assert_entries_kept_but_not_passwords(response, entries: dict[str, str]) -> None:
+    text = response.text
+    # The kept entries must not sit in a cache.
+    assert response.headers["cache-control"] == "no-store"
+    assert "enter your password again" in text
+    for field_name in (
+        "invite_code",
+        "email",
+        "date_of_birth_day",
+        "date_of_birth_year",
+        "health_card_number",
+        "username",
+        "phone_number",
+    ):
+        expected = re.escape(html.escape(entries[field_name]))
+        assert re.search(rf'name="{field_name}"\s+value="{expected}"', text), field_name
+    month = entries["date_of_birth_month"]
+    assert re.search(rf'<option value="{month}" selected>', text)
+    if entries["mfa_delivery_method"] == "email":
+        assert '<option value="email" selected>' in text
+    else:
+        # SMS chosen on a portal that cannot send it: the option stays disabled, never selected.
+        assert re.search(r'<option value="sms" disabled>', text)
+    for field_name in ("password", "password_confirmation"):
+        tag = re.search(rf'<input[^>]*name="{field_name}"[^>]*>', text)
+        assert tag is not None and "value=" not in tag.group(0), field_name
+    assert entries["password"] not in text
+    assert entries["password_confirmation"] not in text
+
+
+def create_browser_invite(client: TestClient) -> str:
+    return client.post(
+        "/dev/admin/invites", headers=dev_admin_headers(), json=seeded_invite_request()
+    ).json()["invite_token"]
+
+
+def test_browser_activation_keeps_entries_when_the_details_could_not_be_verified() -> None:
+    client = TestClient(migrated_development_app())
+    entries = browser_activation_entries(create_browser_invite(client), date_of_birth_day="21")
+
+    response = post_browser_activation(client, entries)
+
+    assert response.status_code == 400
+    assert "The activation details could not be verified." in response.text
+    assert_entries_kept_but_not_passwords(response, entries)
+
+
+def test_browser_activation_keeps_entries_when_the_date_of_birth_is_no_real_date() -> None:
+    client = TestClient(migrated_development_app())
+    entries = browser_activation_entries(
+        create_browser_invite(client), date_of_birth_day="31", date_of_birth_month="2"
+    )
+
+    response = post_browser_activation(client, entries)
+
+    assert response.status_code == 400
+    assert "Check the date of birth: enter a real date" in response.text
+    # What was typed comes back as typed, so the patient can see what to fix.
+    assert_entries_kept_but_not_passwords(response, entries)
+
+
+def test_browser_activation_keeps_entries_when_the_passwords_differ() -> None:
+    client = TestClient(migrated_development_app())
+    entries = browser_activation_entries(
+        create_browser_invite(client),
+        password_confirmation="Different1!word",  # ggignore
+    )
+
+    response = post_browser_activation(client, entries)
+
+    assert response.status_code == 400
+    assert "password confirmation does not match" in response.text.lower()
+    assert_entries_kept_but_not_passwords(response, entries)
+
+
+def test_browser_activation_keeps_entries_when_the_password_is_too_weak() -> None:
+    client = TestClient(migrated_development_app())
+    entries = browser_activation_entries(
+        create_browser_invite(client),
+        password="password1234",  # ggignore
+        password_confirmation="password1234",  # ggignore
+    )
+
+    response = post_browser_activation(client, entries)
+
+    assert response.status_code == 400
+    assert "The activation details could not be verified." in response.text
+    assert_entries_kept_but_not_passwords(response, entries)
+
+
+def test_browser_activation_keeps_entries_when_sms_cannot_be_sent() -> None:
+    client = TestClient(migrated_development_app())
+    entries = browser_activation_entries(create_browser_invite(client), mfa_delivery_method="sms")
+
+    response = post_browser_activation(client, entries)
+
+    assert response.status_code == 400
+    # SMS is not offered by this portal, so the form falls back to email.
+    assert_entries_kept_but_not_passwords(response, entries)
+
+
+def test_browser_activation_keeps_entries_when_attempts_are_rate_limited() -> None:
+    client = TestClient(
+        migrated_development_app(
+            session_secret=NON_DEVELOPMENT_SESSION_SECRET,
+            activation_max_failures_per_invite=1,
+            activation_max_failures_per_client=50,
+        )
+    )
+    entries = browser_activation_entries(
+        create_browser_invite(client), health_card_number="WRONG1234"
+    )
+    assert post_browser_activation(client, entries).status_code == 400
+
+    response = post_browser_activation(client, entries)
+
+    assert response.status_code == 429
+    assert_entries_kept_but_not_passwords(response, entries)
+
+
+@pytest.mark.parametrize(
+    ("day", "month", "year"),
+    [
+        ("31", "2", "1985"),  # no such day
+        ("15", "13", "1985"),  # no such month
+        ("15", "6", "85"),  # a two-digit year
+        ("15", "6", "0615"),  # a real date, but 1,400 years ago
+        ("", "6", "1985"),  # a box left empty
+        ("1x", "6", "1985"),  # not digits
+        # Later than any real birth date (the server allows one day for time zones).
+        tuple(
+            str(part)
+            for part in (
+                (utc_now().date() + timedelta(days=2)).day,
+                (utc_now().date() + timedelta(days=2)).month,
+                (utc_now().date() + timedelta(days=2)).year,
+            )
+        ),
+    ],
+)
+def test_browser_activation_names_the_date_of_birth_when_it_is_no_real_date(
+    day: str, month: str, year: str
+) -> None:
     app = migrated_development_app()
     client = TestClient(app)
+    invite_response = client.post(
+        "/dev/admin/invites",
+        headers=dev_admin_headers(),
+        json=seeded_invite_request(),
+    )
     activation_page = client.get("/auth/activate")
 
     response = client.post(
         "/auth/activate",
         data={
             "csrf_token": csrf_token_from_response(activation_page),
-            "invite_code": "sensitive-invite-code",
+            "invite_code": invite_response.json()["invite_token"],
+            "email": SEEDED_INVITE_EMAIL,
+            "date_of_birth_day": day,
+            "date_of_birth_month": month,
+            "date_of_birth_year": year,
+            "health_card_number": SEEDED_INVITE_HCN,
+            "username": "browser.patient",
+            "password": STRONG_PASSWORD,
+            "password_confirmation": STRONG_PASSWORD,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Check the date of birth: enter a real date" in response.text
+    assert "could not be verified" not in response.text
+    assert STRONG_PASSWORD not in response.text
+
+
+def test_browser_activation_keeps_a_wrong_but_real_date_of_birth_generic() -> None:
+    app = migrated_development_app()
+    client = TestClient(app)
+    invite_response = client.post(
+        "/dev/admin/invites",
+        headers=dev_admin_headers(),
+        json=seeded_invite_request(),
+    )
+    activation_page = client.get("/auth/activate")
+
+    response = client.post(
+        "/auth/activate",
+        data={
+            "csrf_token": csrf_token_from_response(activation_page),
+            "invite_code": invite_response.json()["invite_token"],
+            "email": SEEDED_INVITE_EMAIL,
+            # A real date in range, but not the invited patient's: never say which detail failed.
+            "date_of_birth_day": "21",
+            "date_of_birth_month": "5",
+            "date_of_birth_year": "1980",
+            "health_card_number": SEEDED_INVITE_HCN,
+            "username": "browser.patient",
+            "password": STRONG_PASSWORD,
+            "password_confirmation": STRONG_PASSWORD,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "The activation details could not be verified." in response.text
+    assert "Check the date of birth" not in response.text
+
+
+def test_activation_page_asks_for_the_date_of_birth_as_day_month_and_year() -> None:
+    page = TestClient(migrated_development_app()).get("/auth/activate")
+
+    assert page.status_code == 200
+    text = page.text
+    assert '<fieldset class="date-of-birth" aria-describedby="date-of-birth-hint">' in text
+    assert "<legend>Date of birth</legend>" in text
+    assert '<small id="date-of-birth-hint">For example, 15 June 1985.</small>' in text
+    assert 'name="date_of_birth_day"' in text and 'autocomplete="bday-day"' in text
+    assert 'name="date_of_birth_year"' in text and 'autocomplete="bday-year"' in text
+    assert '<select name="date_of_birth_month" autocomplete="bday-month" required>' in text
+    assert '<option value="1">January</option>' in text
+    assert '<option value="12">December</option>' in text
+    assert 'name="date_of_birth"' not in text
+
+
+def test_browser_activation_still_reads_a_single_date_of_birth_field() -> None:
+    # A page opened before the three boxes posts one ISO date; it must keep working.
+    app = migrated_development_app()
+    client = TestClient(app)
+    invite_response = client.post(
+        "/dev/admin/invites",
+        headers=dev_admin_headers(),
+        json=seeded_invite_request(),
+    )
+    activation_page = client.get("/auth/activate")
+
+    response = client.post(
+        "/auth/activate",
+        data={
+            "csrf_token": csrf_token_from_response(activation_page),
+            "invite_code": invite_response.json()["invite_token"],
             "email": SEEDED_INVITE_EMAIL,
             "date_of_birth": SEEDED_INVITE_DOB,
             "health_card_number": SEEDED_INVITE_HCN,
             "username": "browser.patient",
             "password": STRONG_PASSWORD,
-            "password_confirmation": "Different1!word",  # ggignore
+            "password_confirmation": STRONG_PASSWORD,
         },
     )
 
-    assert response.status_code == 400
-    assert "password confirmation does not match" in response.text.lower()
-    assert "sensitive-invite-code" not in response.text
-    assert SEEDED_INVITE_HCN not in response.text
-    assert STRONG_PASSWORD not in response.text
+    assert response.status_code == 201
+
+
+def test_browser_activation_keeps_entries_when_the_username_is_taken() -> None:
+    app = migrated_development_app()
+    client = TestClient(app)
+    first_token = create_browser_invite(client)
+    second_token = client.post(
+        "/dev/admin/invites",
+        headers=dev_admin_headers(),
+        json=seeded_invite_request(
+            demographic_no=5678,
+            email="second.patient@example.com",
+            health_card_number="ZXCV 1234",
+        ),
+    ).json()["invite_token"]
+    assert client.post("/auth/activate", json=activation_request(first_token)).status_code == 201
+    entries = browser_activation_entries(
+        second_token,
+        email="second.patient@example.com",
+        health_card_number="ZXCV-1234",
+        username=str(activation_request(first_token)["username"]),
+    )
+
+    response = post_browser_activation(client, entries)
+
+    assert response.status_code == 409
+    assert_entries_kept_but_not_passwords(response, entries)
+
+
+@pytest.mark.parametrize(
+    ("today", "earliest", "latest"),
+    [
+        (date(2026, 10, 15), date(1900, 10, 15), date(2026, 10, 16)),
+        # No February 29 in 1902: the anniversary falls back to February 28.
+        (date(2028, 2, 29), date(1902, 2, 28), date(2028, 3, 1)),
+    ],
+)
+def test_date_of_birth_bounds_follow_the_server_rule(
+    today: date, earliest: date, latest: date
+) -> None:
+    assert identity.date_of_birth_bounds(today) == (earliest, latest)
 
 
 def test_patient_activation_creates_account_from_seeded_invite() -> None:
