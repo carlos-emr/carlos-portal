@@ -210,6 +210,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.patient_portal_outbound_deliveries,
   public.patient_portal_password_reset_tokens,
   public.patient_portal_sessions,
+  public.patient_portal_signup_requests,
   public.patient_portal_staff_assertion_uses,
   public.patient_portal_unlock_secrets
 TO :"runtime_role";
@@ -226,6 +227,7 @@ GRANT USAGE, SELECT ON SEQUENCE
   public.patient_portal_outbound_deliveries_id_seq,
   public.patient_portal_password_reset_tokens_id_seq,
   public.patient_portal_sessions_id_seq,
+  public.patient_portal_signup_requests_id_seq,
   public.patient_portal_unlock_secrets_id_seq
 TO :"runtime_role";
 

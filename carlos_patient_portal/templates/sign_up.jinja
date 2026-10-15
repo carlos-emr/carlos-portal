@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="{{ locale }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ service_name }}</title>
+  {% include "_head_assets.jinja" %}
+  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
+  <script src="{{ url_for('static', path='/portal.js') }}" defer></script>
+</head>
+<body>
+  <main class="app-shell">
+    <section class="portal-screen" aria-label="{{ text.sign_up_heading }}">
+      {% include "_public_header.jinja" %}
+      <div class="auth-layout">
+        <section class="auth-panel" aria-labelledby="sign-up-title">
+          <h1 id="sign-up-title">{{ text.sign_up_heading }}</h1>
+          <p class="auth-intro">{{ text.sign_up_intro }}</p>
+          <p class="clinic-help-line">{{ text.sign_up_contact_clinic }}</p>
+          {% if error_message %}
+            <p class="form-error" role="alert">{{ error_message }}</p>
+          {% endif %}
+          {# Nothing typed here is ever used as a destination: CARLOS compares the email with the
+             one on file and, on a match, invites the patient at the address it already has. #}
+          <form class="form-stack" method="post" action="{{ url_for('submit_sign_up') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label>
+              <span>{{ text.health_card_number }}</span>
+              <input
+                type="text"
+                name="health_card_number"
+                value="{{ form_values.health_card_number or '' }}"
+                maxlength="64"
+                autocomplete="off"
+                required
+              >
+            </label>
+            <label>
+              <span>{{ text.date_of_birth }}</span>
+              <input
+                type="date"
+                name="date_of_birth"
+                value="{{ form_values.date_of_birth or '' }}"
+                autocomplete="bday"
+                required
+              >
+            </label>
+            <label>
+              <span>{{ text.sign_up_email }}</span>
+              <input
+                type="email"
+                name="email"
+                value="{{ form_values.email or '' }}"
+                maxlength="254"
+                autocomplete="email"
+                aria-describedby="sign-up-email-hint"
+                required
+              >
+            </label>
+            <p class="clinic-help-line" id="sign-up-email-hint">{{ text.sign_up_email_hint }}</p>
+            <button class="primary-action" type="submit">{{ text.sign_up_submit }}</button>
+          </form>
+          <button
+            class="link-action modal-trigger"
+            type="button"
+            data-modal-title="{{ text.clinic_help }}"
+            data-modal-message="{{ text.clinic_help_message }}"
+          >{{ text.clinic_help }}</button>
+          <a class="auth-back-link" href="{{ url_for('index').path }}">{{ text.back_to_sign_in }}</a>
+        </section>
+      </div>
+      {% include "_public_modal.jinja" %}
+    </section>
+  </main>
+  {% include "_page_footer.jinja" %}
+</body>
+</html>

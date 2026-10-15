@@ -56,6 +56,9 @@
             <div class="auth-link-group">
               <a class="link-action" href="{{ url_for('password_reset_request_page') }}">{{ text.forgot_username_password }}</a>
               <a class="link-action" href="{{ url_for('activation_page') }}">{{ text.activate_account }}</a>
+              {% if self_signup_enabled %}
+                <a class="link-action" href="{{ url_for('sign_up_page') }}">{{ text.sign_up_heading }}</a>
+              {% endif %}
               <button
                 class="link-action modal-trigger"
                 type="button"

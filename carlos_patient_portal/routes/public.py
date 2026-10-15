@@ -36,11 +36,13 @@ from carlos_patient_portal.i18n import (
     LOCALE_COOKIE_NAME,
     normalize_locale,
 )
+from carlos_patient_portal.models import utc_now
 from carlos_patient_portal.runtime import (
     PortalRuntime,
     RouteDependencies,
     function_scoped_database_dependency,
 )
+from carlos_patient_portal.self_signup import summarize_signup_backlog
 from carlos_patient_portal.web_support import NOT_FOUND_DETAIL, is_safe_local_redirect
 
 
@@ -111,6 +113,24 @@ def register_public_routes(
             ) from exc
         return {"status": "ok", "database": "ok"}
 
+    def self_signup_backlog(session: Session) -> dict[str, object]:
+        """Requests waiting for CARLOS, so a stopped poller is noticed. Counts only, never PHI.
+
+        Informational: a growing backlog never makes the service unready, because taking the
+        portal out of rotation would not bring the poller back.
+        """
+        if not settings.self_signup_enabled:
+            return {}
+        now = utc_now()
+        backlog = summarize_signup_backlog(session, now=now)
+        return {
+            "self_signup": {
+                "pending": backlog.pending,
+                "max_pending": settings.self_signup_queue_max_pending,
+                "oldest_pending_age_seconds": backlog.oldest_age_seconds(now),
+            }
+        }
+
     @app.get("/internal/readiness", include_in_schema=False)
     def readiness(
         _: Annotated[None, Depends(require_internal_health_token)],
@@ -143,6 +163,7 @@ def register_public_routes(
                 },
             )
 
+        backlog = self_signup_backlog(session)
         if settings.maintenance_mode:
             return JSONResponse(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -151,6 +172,7 @@ def register_public_routes(
                     "database": "ok",
                     "schema": "ok",
                     "maintenance": True,
+                    **backlog,
                 },
                 headers={"Retry-After": str(settings.maintenance_retry_after_seconds)},
             )
@@ -160,6 +182,7 @@ def register_public_routes(
                 "database": "ok",
                 "schema": "ok",
                 "maintenance": False,
+                **backlog,
             }
         )
 

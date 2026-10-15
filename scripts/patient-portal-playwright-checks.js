@@ -18,6 +18,8 @@
  *   PORTAL_CHROME_PATH=/path/to/chrome-or-chromium
  *   PORTAL_PYTHON=python, run with the portal's environment to stand in for the CARLOS polling job
  *   PORTAL_ALLOW_NON_LOCAL_BASE_URL=true only for an intentional non-production test target
+ *   PORTAL_EXPECT_SELF_SIGNUP=true when the server runs with PATIENT_PORTAL_SELF_SIGNUP_ENABLED=true;
+ *     otherwise the check expects the sign-up page to be off (404, no link)
  */
 
 const { execFileSync } = require('node:child_process');
@@ -43,6 +45,7 @@ const useDevelopmentMfaCode = process.env.PORTAL_USE_DEVELOPMENT_MFA_CODE === 't
 const screenshotDir = path.resolve(process.env.PORTAL_SCREENSHOT_DIR || os.tmpdir());
 const chromePath = process.env.PORTAL_CHROME_PATH || process.env.CHROME_PATH || '';
 const pythonCommand = process.env.PORTAL_PYTHON || 'python';
+const expectSelfSignup = process.env.PORTAL_EXPECT_SELF_SIGNUP === 'true';
 const browserSeedScript = path.join(__dirname, '..', 'tests', 'seed_browser.py');
 const fixturePath = process.env.PORTAL_BROWSER_FIXTURE_FILE
   || path.join(os.tmpdir(), 'patient-portal-browser-fixtures.json');
@@ -433,6 +436,56 @@ function screenshotPath(name) {
       path: screenshotPath('patient-portal-sign-in-mobile'),
       fullPage: true,
     });
+
+    // Self sign-up (carlos-portal#15) is off unless the server enables it. Off, the page must not
+    // exist at all; on, every request gets the same "if your details match" page.
+    const signUpLink = page.getByRole('link', { name: 'Request a portal account' });
+    if (!expectSelfSignup) {
+      assert(await signUpLink.count() === 0, 'sign-in page links self sign-up while it is off');
+      const offResponse = await page.request.get(portalUrl('/auth/sign-up'));
+      assert(offResponse.status() === 404, `self sign-up answered ${offResponse.status()} while off`);
+    } else {
+      await signUpLink.click();
+      await page.getByRole('heading', { name: 'Request a portal account' }).waitFor();
+      await assertAccessiblePage(page, 'self sign-up page');
+      const signUpMobileLayout = await page.evaluate(() => ({
+        viewportWidth: window.innerWidth,
+        documentWidth: document.documentElement.scrollWidth,
+      }));
+      assert(
+        signUpMobileLayout.documentWidth <= signUpMobileLayout.viewportWidth + 1,
+        `mobile self sign-up page overflows horizontally: ${signUpMobileLayout.documentWidth}px > ${signUpMobileLayout.viewportWidth}px`
+      );
+      await page.screenshot({
+        path: screenshotPath('patient-portal-sign-up-mobile'),
+        fullPage: true,
+      });
+      // FAKE details: no chart has them, and the answer must not say so.
+      await page.locator('input[name="health_card_number"]').fill('9876 543 210 XY');
+      await page.locator('input[name="date_of_birth"]').fill('1975-03-14');
+      await page.locator('input[name="email"]').fill('fake.patient@example.test');
+      const [signUpResponse] = await Promise.all([
+        page.waitForResponse((response) => (
+          new URL(response.url()).pathname === portalPathname('/auth/sign-up')
+          && response.request().method() === 'POST'
+        )),
+        page.getByRole('button', { name: 'Request account' }).click(),
+      ]);
+      assert(signUpResponse.status() === 202, `self sign-up answered ${signUpResponse.status()}`);
+      assert(
+        (await signUpResponse.headerValue('cache-control')) === 'no-store',
+        'self sign-up answer is cacheable'
+      );
+      await page.getByRole('heading', { name: 'Request received' }).waitFor();
+      await page.getByText('If your details match our records').waitFor();
+      await assertAccessiblePage(page, 'self sign-up answer');
+      await page.screenshot({
+        path: screenshotPath('patient-portal-sign-up-result-mobile'),
+        fullPage: true,
+      });
+      await page.goto(portalUrl('/'), { waitUntil: 'networkidle', timeout: 30000 }); // nosemgrep: javascript.playwright.security.audit.playwright-goto-injection.playwright-goto-injection -- portalUrl requires a root-relative path and validateBaseUrl restricts targets to local/private hosts by default
+      await page.getByRole('heading', { name: 'Sign in' }).waitFor();
+    }
     await page.getByRole('link', { name: 'Activate account' }).click();
     await page.getByRole('heading', { name: 'Activate your account' }).waitFor();
     await assertAccessiblePage(page, 'activation page');
@@ -1227,6 +1280,9 @@ function screenshotPath(name) {
     console.log('Patient portal Playwright checks passed');
     console.log(`Sign-in mobile screenshot: ${screenshotPath('patient-portal-sign-in-mobile')}`);
     console.log(`Activation mobile screenshot: ${screenshotPath('patient-portal-activation-mobile')}`);
+    if (expectSelfSignup) {
+      console.log(`Self sign-up mobile screenshot: ${screenshotPath('patient-portal-sign-up-mobile')}`);
+    }
     console.log(`Password-reset mobile screenshot: ${screenshotPath('patient-portal-password-reset-mobile')}`);
     console.log(`MFA mobile screenshot: ${screenshotPath('patient-portal-mfa-mobile')}`);
     console.log(`Desktop screenshot: ${screenshotPath('patient-portal-live-desktop')}`);

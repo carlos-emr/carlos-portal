@@ -60,6 +60,7 @@ from carlos_patient_portal.models import (
     PatientPortalSession,
     utc_now,
 )
+from carlos_patient_portal.self_signup import purge_expired_signup_requests
 
 DEFAULT_AUDIT_PRUNE_BATCH_SIZE = 1000
 MIN_AUDIT_PRUNE_BATCH_SIZE = 1
@@ -84,6 +85,8 @@ class TransientCleanupResult:
     booking_choice_times: int = 0
     # Picks whose time started before CARLOS answered, closed so they are neither booked nor kept.
     lapsed_booking_choices: int = 0
+    # Self sign-up requests past their TTL that CARLOS never collected.
+    signup_requests: int = 0
 
     @property
     def total(self) -> int:
@@ -98,6 +101,7 @@ class TransientCleanupResult:
             + self.offered_slots
             + self.booking_choice_times
             + self.lapsed_booking_choices
+            + self.signup_requests
         )
 
 
@@ -211,7 +215,9 @@ def cleanup_transient_auth_rows(
 
     Most rows wait `before`, the retention cutoff. Offered appointment times and copies of chosen
     times do not: they are the portal's only appointment data, so they go at the first run after
-    they stop being useful, whatever the retention window.
+    they stop being useful, whatever the retention window. Nor do self sign-up requests, which
+    hold a health card number, a date of birth and an email address: they go at the first run
+    after their TTL passes.
     """
     normalized_batch_size = normalize_prune_batch_size(batch_size)
     current_time = now or utc_now()
@@ -447,6 +453,12 @@ def cleanup_transient_auth_rows(
         strict=True,
     ):
         run_pass(field_name, model, predicate)
+    counts["signup_requests"] = purge_expired_signup_requests(
+        session,
+        now=current_time,
+        batch_size=normalized_batch_size,
+        dry_run=dry_run,
+    )
     return TransientCleanupResult(**counts)
 
 

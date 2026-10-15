@@ -16,6 +16,8 @@ The MVP foundation currently includes:
   create/revoke operations, plus a development-only staff API for local testing.
 - Seven-day invite expiry metadata; resend supersedes the old issuance and creates a linked record.
 - Patient invite activation using invite code, email, date of birth, and HCN/HIN proof.
+- An optional self sign-up request page, off by default: a patient asks for an account, the request
+  is stored encrypted for CARLOS to collect, and every request gets the same answer.
 - Activation attempt throttling backed by portal audit events and PostgreSQL transaction locks.
 - Patient login with Argon2id password verification, MFA challenge/verify, opaque bearer sessions,
   logout, password reset, lockout, staff unlock, and forced reset after unlock.
@@ -308,7 +310,9 @@ Restart the web and worker processes with the same keyring. Retain the old membe
 or processing outbox row and no prepared invite carries its key ID; removing it sooner makes those
 deliveries or prepare retries fail with `encryption_key_unavailable`. A prepared invite stops
 disclosing its token when it expires, so seven days after the rotation no prepare retry can still
-need the old member. Once the old rows have drained,
+need the old member. Self sign-up requests are encrypted with the same keyring and live at most
+`PATIENT_PORTAL_SELF_SIGNUP_REQUEST_TTL_SECONDS` (one day by default), so keep the old member at
+least that long too. Once the old rows have drained,
 remove the old member and restart both processes again.
 
 Production SMS uses an authenticated HTTPS JSON webhook configured with
@@ -618,7 +622,8 @@ The remaining secrets have deliberately different rotation behavior:
 - Rotating `PATIENT_PORTAL_IDENTITY_PROOF_SECRET` invalidates pending invitations; reissue them
   after cutover.
 - Rotating `PATIENT_PORTAL_AUDIT_HASH_SECRET` changes pseudonymous client/invite correlations;
-  record the cutover time for investigations.
+  record the cutover time for investigations. It also restarts the self sign-up rate-limit counts,
+  which are keyed by those hashes.
 - Rotating `PATIENT_PORTAL_INTERNAL_API_TOKEN` does not require a synchronised restart. Set
   `PATIENT_PORTAL_INTERNAL_API_TOKEN` to the new value and
   `PATIENT_PORTAL_INTERNAL_API_TOKEN_PREVIOUS` to the outgoing one, restart the portal, cut CARLOS
@@ -979,6 +984,62 @@ Activation accepts the CSRF-protected browser form or `application/json`; reques
 at 16 KiB before validation. Failed activation attempts are audited and rate-limited without storing
 raw HCN/HIN, date-of-birth, invite-code, or raw client address values. Client address hashes use
 `PATIENT_PORTAL_AUDIT_HASH_SECRET`.
+
+## Patient Self Sign-up
+
+Off by default. With `PATIENT_PORTAL_SELF_SIGNUP_ENABLED=true`, `GET /auth/sign-up` shows a form
+asking for the health card number, date of birth, and the email address the clinic has on file,
+and the sign-in page links to it. While it is off the route is not registered at all, so
+`/auth/sign-up` answers `404` exactly as an unknown path does, nothing can be stored, and staff
+invites are unaffected (carlos-portal#15, designed in #10).
+
+The rule: **nothing typed on this page is ever used as a destination.** The portal looks nothing
+up, sends nothing, and never calls CARLOS. CARLOS collects stored requests (carlos-portal#16),
+matches them against a chart, and sends a normal invite to the email already on file
+(carlos-emr/carlos#3932). The typed email is kept only so CARLOS can compare it.
+
+`POST /auth/sign-up` takes the CSRF-protected browser form only; there is no JSON variant. A
+detail in the wrong format (an impossible date, a malformed email or health card number) is
+answered `400` with the entries shown again, because a format problem says nothing about any
+patient; nothing is stored or counted. Every other request gets the same `202` page ("If your
+details match our records, we have emailed you a link to finish setting up your account. If
+nothing arrives, contact the clinic."), the same headers, and takes at least
+`PATIENT_PORTAL_SELF_SIGNUP_RESPONSE_FLOOR_MS` (250 by default): a matching patient, an unknown
+card, an existing account, a pending invite, a duplicate, and a request refused by a rate limit
+are indistinguishable to the caller.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `PATIENT_PORTAL_SELF_SIGNUP_ENABLED` | `false` | Registers the page. |
+| `PATIENT_PORTAL_SELF_SIGNUP_REQUEST_TTL_SECONDS` | `86400` | A stored request is deleted unread after this long. |
+| `PATIENT_PORTAL_SELF_SIGNUP_MAX_REQUESTS_PER_CLIENT` | `5` | Stored requests per client address per window. |
+| `PATIENT_PORTAL_SELF_SIGNUP_CLIENT_WINDOW_SECONDS` | `3600` | The per-client window. |
+| `PATIENT_PORTAL_SELF_SIGNUP_MAX_REQUESTS_PER_HEALTH_CARD` | `3` | Stored requests per health card per window. |
+| `PATIENT_PORTAL_SELF_SIGNUP_HEALTH_CARD_WINDOW_SECONDS` | `86400` | The per-card window. |
+| `PATIENT_PORTAL_SELF_SIGNUP_QUEUE_MAX_PENDING` | `1000` | Unexpired requests waiting for CARLOS. |
+| `PATIENT_PORTAL_SELF_SIGNUP_QUEUE_RETRY_AFTER_SECONDS` | `300` | `Retry-After` on the full-backlog `503`. |
+| `PATIENT_PORTAL_SELF_SIGNUP_RESPONSE_FLOOR_MS` | `250` | Minimum time for every answered request. |
+
+- **Rate limits** live in the database, so every web worker shares them. They are counted from
+  `signup.request` audit events, as activation failures are, under one PostgreSQL transaction
+  advisory lock that also covers the backlog count and the insert. Only stored requests count: a
+  refused one is audited but does not extend the limit. The per-card count ignores one or two
+  trailing letters (an Ontario version code), so adding or dropping them does not reset it.
+- **Storage.** The health card number, date of birth, and typed email are stored only inside an
+  AES-256-GCM payload under the outbox keyring (its own HKDF-derived key, bound to the clinic and
+  the card hash). The row's only other identifier is the keyed card hash. A request is deleted
+  when CARLOS reports a result (carlos-portal#16) or at the first submission or
+  `cleanup-transient-auth` run after its TTL passes, whichever comes first.
+- **Audit.** Each stored or refused request writes one `signup.request` event (`success` or
+  `throttled`, with `client_rate_limited` or `health_card_rate_limited`) carrying only keyed
+  hashes: the client address in `client_reference_hash`, the health card in `resource_id` with
+  `resource_type` `signup_health_card`. Never the number, the date of birth, or the email.
+- **Backlog.** A full backlog answers one global `503` with `Retry-After` for every request, as a
+  full password-reset queue does, and counts `self_signup_queue_full` in `/internal/metrics`.
+  While the page is on, `/internal/readiness` reports `self_signup.pending`, `max_pending`, and
+  `oldest_pending_age_seconds`, so a stopped CARLOS poller is noticed. Alert when the oldest
+  request is older than a few polling intervals. The backlog never makes the service unready.
+- The reference nginx configuration limits `/auth/sign-up` at the edge as well.
 
 ## Patient Auth API
 

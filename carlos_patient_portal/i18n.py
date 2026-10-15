@@ -370,6 +370,35 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
         "sign_in_aria_label": SIGN_IN_LABEL,
         "sign_in_button": SIGN_IN_LABEL,
         "sign_in_heading": SIGN_IN_LABEL,
+        "sign_up_contact_clinic": (
+            "If your clinic does not have your email address, or has an old one, contact the "
+            "clinic before you request an account."
+        ),
+        "sign_up_details_invalid": (
+            "Check your details: enter your health card number, a real date of birth and a valid "
+            "email address."
+        ),
+        "sign_up_email": "Email address your clinic has for you",
+        "sign_up_email_hint": (
+            "Used only to check your details. The link is sent only to the email address already "
+            "in your clinic's records."
+        ),
+        "sign_up_heading": "Request a portal account",
+        "sign_up_intro": (
+            "Enter your health card number, your date of birth and the email address your clinic "
+            "has for you. If they match your clinic's records, you will be emailed a link to "
+            "finish setting up your account."
+        ),
+        # Worded as carlos-portal#15 specifies. Shown for every accepted request, matched or not.
+        "sign_up_result": (
+            "If your details match our records, we have emailed you a link to finish setting up "
+            "your account. If nothing arrives, contact the clinic."
+        ),
+        "sign_up_result_heading": "Request received",
+        "sign_up_submit": "Request account",
+        "sign_up_unavailable": (
+            "Account requests are temporarily unavailable. Try again later, or contact the clinic."
+        ),
         "show_password": "Show password",
         "source_code": "Source code",
         "subject": "Subject",
@@ -392,6 +421,142 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
 # is what makes a half-finished translation render instead of raising KeyError.
 for _locale in SUPPORTED_LOCALES:
     TEXT_CATALOG.setdefault(_locale.code, {})
+
+# Self sign-up (carlos-portal#15). Merged into each locale rather than assigned, and after every
+# locale exists, so translations defined above for other pages are kept.
+_SIGN_UP_TEXT: dict[str, dict[str, str]] = {
+    "fr": {
+        "sign_up_contact_clinic": (
+            "Si votre clinique n’a pas votre adresse courriel, ou en a une ancienne, communiquez "
+            "avec la clinique avant de demander un compte."
+        ),
+        "sign_up_details_invalid": (
+            "Vérifiez vos renseignements : entrez votre numéro de carte santé, une date de "
+            "naissance réelle et une adresse courriel valide."
+        ),
+        "sign_up_email": "Adresse courriel inscrite à votre dossier à la clinique",
+        "sign_up_email_hint": (
+            "Sert seulement à vérifier vos renseignements. Le lien est envoyé uniquement à "
+            "l’adresse courriel déjà inscrite au dossier de la clinique."
+        ),
+        "sign_up_heading": "Demander un compte du portail",
+        "sign_up_intro": (
+            "Entrez votre numéro de carte santé, votre date de naissance et l’adresse courriel "
+            "inscrite à votre dossier à la clinique. Si ces renseignements correspondent au "
+            "dossier de la clinique, vous recevrez par courriel un lien pour terminer la "
+            "configuration de votre compte."
+        ),
+        "sign_up_result": (
+            "Si vos renseignements correspondent à notre dossier, nous vous avons envoyé par "
+            "courriel un lien pour terminer la configuration de votre compte. Si vous ne recevez "
+            "rien, communiquez avec la clinique."
+        ),
+        "sign_up_result_heading": "Demande reçue",
+        "sign_up_submit": "Demander un compte",
+        "sign_up_unavailable": (
+            "Les demandes de compte sont temporairement indisponibles. Réessayez plus tard ou "
+            "communiquez avec la clinique."
+        ),
+    },
+    "es": {
+        "sign_up_contact_clinic": (
+            "Si su clínica no tiene su correo electrónico, o tiene uno antiguo, comuníquese con la "
+            "clínica antes de solicitar una cuenta."
+        ),
+        "sign_up_details_invalid": (
+            "Revise sus datos: introduzca su número de tarjeta de salud, una fecha de nacimiento "
+            "real y un correo electrónico válido."
+        ),
+        "sign_up_email": "Correo electrónico registrado en su clínica",
+        "sign_up_email_hint": (
+            "Solo se usa para comprobar sus datos. El enlace se envía únicamente al correo "
+            "electrónico que ya figura en los registros de su clínica."
+        ),
+        "sign_up_heading": "Solicitar una cuenta del portal",
+        "sign_up_intro": (
+            "Introduzca su número de tarjeta de salud, su fecha de nacimiento y el correo "
+            "electrónico que su clínica tiene registrado. Si coinciden con los registros de la "
+            "clínica, recibirá por correo electrónico un enlace para terminar de configurar su "
+            "cuenta."
+        ),
+        "sign_up_result": (
+            "Si sus datos coinciden con nuestros registros, le hemos enviado por correo "
+            "electrónico un enlace para terminar de configurar su cuenta. Si no recibe nada, "
+            "comuníquese con la clínica."
+        ),
+        "sign_up_result_heading": "Solicitud recibida",
+        "sign_up_submit": "Solicitar cuenta",
+        "sign_up_unavailable": (
+            "Las solicitudes de cuenta no están disponibles por el momento. Inténtelo de nuevo más "
+            "tarde o comuníquese con la clínica."
+        ),
+    },
+    "pl": {
+        "sign_up_contact_clinic": (
+            "Jeśli przychodnia nie ma Twojego adresu e-mail albo ma nieaktualny, skontaktuj się "
+            "z przychodnią, zanim poprosisz o założenie konta."
+        ),
+        "sign_up_details_invalid": (
+            "Sprawdź swoje dane: wpisz numer karty zdrowia, poprawną datę urodzenia i prawidłowy "
+            "adres e-mail."
+        ),
+        "sign_up_email": "Adres e-mail zapisany w przychodni",
+        "sign_up_email_hint": (
+            "Służy tylko do sprawdzenia Twoich danych. Link jest wysyłany wyłącznie na adres "
+            "e-mail, który przychodnia ma już w dokumentacji."
+        ),
+        "sign_up_heading": "Poproś o założenie konta w portalu",
+        "sign_up_intro": (
+            "Wpisz numer karty zdrowia, datę urodzenia i adres e-mail, który przychodnia ma w "
+            "Twojej dokumentacji. Jeśli dane zgadzają się z dokumentacją przychodni, otrzymasz "
+            "e-mailem link do dokończenia konfiguracji konta."
+        ),
+        "sign_up_result": (
+            "Jeśli Twoje dane zgadzają się z naszą dokumentacją, wysłaliśmy Ci e-mailem link do "
+            "dokończenia konfiguracji konta. Jeśli nic nie dotrze, skontaktuj się z przychodnią."
+        ),
+        "sign_up_result_heading": "Prośba otrzymana",
+        "sign_up_submit": "Wyślij prośbę",
+        "sign_up_unavailable": (
+            "Chwilowo nie można wysłać prośby o założenie konta. Spróbuj ponownie później lub "
+            "skontaktuj się z przychodnią."
+        ),
+    },
+    "pt-BR": {
+        "sign_up_contact_clinic": (
+            "Se a sua clínica não tiver o seu e-mail, ou tiver um antigo, entre em contato com a "
+            "clínica antes de solicitar uma conta."
+        ),
+        "sign_up_details_invalid": (
+            "Verifique seus dados: informe o número do cartão de saúde, uma data de nascimento "
+            "real e um e-mail válido."
+        ),
+        "sign_up_email": "E-mail cadastrado na sua clínica",
+        "sign_up_email_hint": (
+            "Usado apenas para conferir seus dados. O link é enviado somente para o e-mail que já "
+            "consta no cadastro da sua clínica."
+        ),
+        "sign_up_heading": "Solicitar uma conta no portal",
+        "sign_up_intro": (
+            "Informe o número do seu cartão de saúde, sua data de nascimento e o e-mail que consta "
+            "no seu cadastro na clínica. Se os dados conferirem com os registros da clínica, você "
+            "receberá por e-mail um link para concluir a configuração da sua conta."
+        ),
+        "sign_up_result": (
+            "Se seus dados conferirem com nossos registros, enviamos para você por e-mail um link "
+            "para concluir a configuração da sua conta. Se nada chegar, entre em contato com a "
+            "clínica."
+        ),
+        "sign_up_result_heading": "Solicitação recebida",
+        "sign_up_submit": "Solicitar conta",
+        "sign_up_unavailable": (
+            "As solicitações de conta estão temporariamente indisponíveis. Tente novamente mais "
+            "tarde ou entre em contato com a clínica."
+        ),
+    },
+}
+for _locale_code, _sign_up_text in _SIGN_UP_TEXT.items():
+    TEXT_CATALOG.setdefault(_locale_code, {}).update(_sign_up_text)
 
 def normalize_locale(value: str | None) -> str | None:
     """Match a requested locale to a supported one, case- and separator-insensitively.

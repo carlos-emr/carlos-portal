@@ -47,6 +47,7 @@ EXPECTED_TABLE_PRIVILEGES = {
     "patient_portal_outbound_deliveries": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_password_reset_tokens": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_sessions": ORDINARY_TABLE_PRIVILEGES,
+    "patient_portal_signup_requests": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_staff_assertion_uses": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_unlock_secrets": ORDINARY_TABLE_PRIVILEGES,
 }
