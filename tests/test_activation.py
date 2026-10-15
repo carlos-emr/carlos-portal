@@ -680,6 +680,110 @@ def test_password_rejection_names_the_password_whether_or_not_the_identity_match
         assert "could not be verified" not in response.text
 
 
+def invite_in_every_state(app, client: TestClient) -> dict[str, tuple[str, dict[str, str]]]:
+    """An invite code, and any changed entries, for every state an invite can be in."""
+    valid = create_browser_invite(client)
+    expired = client.post(
+        "/dev/admin/invites", headers=dev_admin_headers(), json=seeded_invite_request()
+    ).json()
+    with app.state.session_factory() as session:
+        row = session.get(PatientPortalInvite, expired["id"])
+        row.created_at = utc_now() - timedelta(days=8)
+        row.expires_at = utc_now() - timedelta(days=1)
+        session.commit()
+    used = create_browser_invite(client)
+    assert client.post("/auth/activate", json=activation_request(used)).status_code == 201
+    return {
+        "forged": ("forged-invite-token", {}),
+        "right identity": (valid, {}),
+        "wrong identity": (valid, {"health_card_number": "WRONG1234"}),
+        "expired": (expired["invite_token"], {}),
+        "used": (used, {"username": "other.patient"}),
+    }
+
+
+def test_weak_password_page_is_the_same_for_every_invite_state() -> None:
+    app = migrated_development_app()
+    client = TestClient(app)
+    weak = {"password": "password1234", "password_confirmation": "password1234"}  # ggignore
+    seen = {}
+    for state, (invite_code, changes) in invite_in_every_state(app, client).items():
+        response = post_browser_activation(
+            client, browser_activation_entries(invite_code, **weak, **changes)
+        )
+        alert = re.search(r'role="alert">(.*?)</p>', response.text, re.S)
+        assert alert is not None, state
+        seen[state] = (response.status_code, alert.group(1), response.headers["cache-control"])
+
+    # One status, one complete alert and one cache policy, whatever the invite or identity.
+    assert len(set(seen.values())) == 1, seen
+    assert "Choose a different password" in next(iter(seen.values()))[1]
+
+
+def test_weak_password_json_is_the_same_for_every_invite_state() -> None:
+    app = migrated_development_app()
+    client = TestClient(app)
+    seen = {}
+    for state, (invite_code, changes) in invite_in_every_state(app, client).items():
+        body = activation_request(invite_code, password="password1234")  # ggignore
+        body.update(changes)
+        response = client.post("/auth/activate", json=body)
+        seen[state] = (response.status_code, response.text)
+
+    assert len(set(seen.values())) == 1, seen
+
+
+def test_weak_password_attempt_counts_toward_the_invite_limit() -> None:
+    app = migrated_development_app(
+        session_secret=NON_DEVELOPMENT_SESSION_SECRET,
+        activation_max_failures_per_invite=1,
+        activation_max_failures_per_client=50,
+    )
+    client = TestClient(app)
+    invite_code = create_browser_invite(client)
+    weak = activation_request(invite_code, password="password1234")  # ggignore
+
+    assert client.post("/auth/activate", json=weak).status_code == 400
+    assert client.post("/auth/activate", json=activation_request(invite_code)).status_code == 429
+
+
+def test_the_whole_password_alert_is_in_the_patients_language() -> None:
+    client = TestClient(migrated_development_app())
+    client.cookies.set("portal_locale", "fr")
+    entries = browser_activation_entries(
+        create_browser_invite(client),
+        password="password1234",  # ggignore
+        password_confirmation="password1234",  # ggignore
+    )
+
+    response = post_browser_activation(client, entries)
+
+    alert = html.unescape(re.search(r'role="alert">(.*?)</p>', response.text, re.S).group(1))
+    assert alert.startswith("Choisissez un autre mot de passe")
+    assert alert.endswith("saisissez de nouveau votre mot de passe.")
+
+
+def test_date_of_birth_form_and_its_error_are_in_the_patients_language() -> None:
+    client = TestClient(migrated_development_app())
+    client.cookies.set("portal_locale", "fr")
+
+    page = html.unescape(client.get("/auth/activate").text)
+    entries = browser_activation_entries(
+        create_browser_invite(client), date_of_birth_day="31", date_of_birth_month="2"
+    )
+    response = post_browser_activation(client, entries)
+
+    assert "<legend>Date de naissance</legend>" in page
+    assert "Par exemple, 15 juin 1985." in page
+    for label in ("Jour", "Mois", "Année"):
+        assert f"<span>{label}</span>" in page
+    alert = html.unescape(re.search(r'role="alert">(.*?)</p>', response.text, re.S).group(1))
+    assert alert == (
+        "Vérifiez la date de naissance : entrez une date réelle, par exemple 15 juin 1985. "
+        "Vos autres renseignements sont conservés : saisissez de nouveau votre mot de passe."
+    )
+
+
 def test_good_password_with_the_wrong_identity_stays_generic() -> None:
     client = TestClient(migrated_development_app())
     entries = browser_activation_entries(

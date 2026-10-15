@@ -401,31 +401,75 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
 
 # The first translated strings. Every key a locale does not define still falls back to English.
 TEXT_CATALOG["fr"] = {
+    "activation_date_of_birth_invalid": (
+        "Vérifiez la date de naissance : entrez une date réelle, par exemple 15 juin 1985."
+    ),
+    "date_of_birth": "Date de naissance",
+    "date_of_birth_day": "Jour",
+    "date_of_birth_hint": "Par exemple, 15 juin 1985.",
+    "date_of_birth_month": "Mois",
+    "date_of_birth_month_choose": "Choisissez un mois",
+    "date_of_birth_year": "Année",
     "activation_password_rejected": (
         "Choisissez un autre mot de passe : utilisez au moins 12 caractères, évitez les mots ou "
         "les suites courants, et n’y mettez pas votre nom d’utilisateur, votre courriel, votre "
         "date de naissance ni votre numéro de carte santé."
     ),
+    "activation_reenter_password": (
+        "Vos autres renseignements sont conservés : saisissez de nouveau votre mot de passe."
+    ),
 }
 TEXT_CATALOG["es"] = {
+    "activation_date_of_birth_invalid": (
+        "Revise la fecha de nacimiento: introduzca una fecha real, por ejemplo, 15 de junio de "
+        "1985."
+    ),
+    "date_of_birth": "Fecha de nacimiento",
+    "date_of_birth_day": "Día",
+    "date_of_birth_hint": "Por ejemplo, 15 de junio de 1985.",
+    "date_of_birth_month": "Mes",
+    "date_of_birth_month_choose": "Elija un mes",
+    "date_of_birth_year": "Año",
     "activation_password_rejected": (
         "Elija otra contraseña: use al menos 12 caracteres, evite palabras o patrones comunes y "
         "no incluya su nombre de usuario, correo electrónico, fecha de nacimiento ni número de "
         "tarjeta de salud."
     ),
+    "activation_reenter_password": "Sus demás datos se conservan: vuelva a escribir su contraseña.",
 }
 TEXT_CATALOG["pl"] = {
+    "activation_date_of_birth_invalid": (
+        "Sprawdź datę urodzenia: wpisz prawdziwą datę, na przykład 15 czerwca 1985."
+    ),
+    "date_of_birth": "Data urodzenia",
+    "date_of_birth_day": "Dzień",
+    "date_of_birth_hint": "Na przykład 15 czerwca 1985.",
+    "date_of_birth_month": "Miesiąc",
+    "date_of_birth_month_choose": "Wybierz miesiąc",
+    "date_of_birth_year": "Rok",
     "activation_password_rejected": (
         "Wybierz inne hasło: użyj co najmniej 12 znaków, unikaj popularnych słów i schematów "
         "oraz nie umieszczaj w nim nazwy użytkownika, adresu e-mail, daty urodzenia ani numeru "
         "karty zdrowia."
     ),
+    "activation_reenter_password": "Pozostałe dane zostały zachowane: wpisz ponownie hasło.",
 }
 TEXT_CATALOG["pt-BR"] = {
+    "activation_date_of_birth_invalid": (
+        "Verifique a data de nascimento: informe uma data real, por exemplo, 15 de junho de "
+        "1985."
+    ),
+    "date_of_birth": "Data de nascimento",
+    "date_of_birth_day": "Dia",
+    "date_of_birth_hint": "Por exemplo, 15 de junho de 1985.",
+    "date_of_birth_month": "Mês",
+    "date_of_birth_month_choose": "Escolha um mês",
+    "date_of_birth_year": "Ano",
     "activation_password_rejected": (
         "Escolha outra senha: use pelo menos 12 caracteres, evite palavras ou padrões comuns e "
         "não inclua seu nome de usuário, e-mail, data de nascimento nem número do cartão de saúde."
     ),
+    "activation_reenter_password": "Seus outros dados foram mantidos: digite sua senha novamente.",
 }
 
 # Every supported locale gets an entry so `portal_text` never falls back wholesale to English and
