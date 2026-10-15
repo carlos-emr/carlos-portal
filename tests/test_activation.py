@@ -815,6 +815,7 @@ def test_date_of_birth_form_and_its_error_are_in_the_patients_language() -> None
     assert "Par exemple, 15 juin 1985." in page
     for label in ("Jour", "Mois", "Année"):
         assert f"<span>{label}</span>" in page
+    assert '<option value="6">Juin</option>' in page
     alert = html.unescape(re.search(r'role="alert">(.*?)</p>', response.text, re.S).group(1))
     assert alert == (
         "Vérifiez la date de naissance : entrez une date réelle, par exemple 15 juin 1985. "
