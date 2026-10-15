@@ -401,6 +401,8 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
 
 # The first translated strings. Every key a locale does not define still falls back to English.
 TEXT_CATALOG["fr"] = {
+    "hide_password": "Masquer le mot de passe",
+    "show_password": "Afficher le mot de passe",
     "activation_date_of_birth_invalid": (
         "Vérifiez la date de naissance : entrez une date réelle, par exemple 15 juin 1985."
     ),
@@ -420,6 +422,8 @@ TEXT_CATALOG["fr"] = {
     ),
 }
 TEXT_CATALOG["es"] = {
+    "hide_password": "Ocultar contraseña",
+    "show_password": "Mostrar contraseña",
     "activation_date_of_birth_invalid": (
         "Revise la fecha de nacimiento: introduzca una fecha real, por ejemplo, 15 de junio de "
         "1985."
@@ -438,6 +442,8 @@ TEXT_CATALOG["es"] = {
     "activation_reenter_password": "Sus demás datos se conservan: vuelva a escribir su contraseña.",
 }
 TEXT_CATALOG["pl"] = {
+    "hide_password": "Ukryj hasło",
+    "show_password": "Pokaż hasło",
     "activation_date_of_birth_invalid": (
         "Sprawdź datę urodzenia: wpisz prawdziwą datę, na przykład 15 czerwca 1985."
     ),
@@ -455,6 +461,8 @@ TEXT_CATALOG["pl"] = {
     "activation_reenter_password": "Pozostałe dane zostały zachowane: wpisz ponownie hasło.",
 }
 TEXT_CATALOG["pt-BR"] = {
+    "hide_password": "Ocultar senha",
+    "show_password": "Mostrar senha",
     "activation_date_of_birth_invalid": (
         "Verifique a data de nascimento: informe uma data real, por exemplo, 15 de junho de "
         "1985."

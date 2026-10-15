@@ -245,6 +245,20 @@ h2 {
   font-weight: bold;
 }
 
+/* .link-action sets a display, which would otherwise win over the hidden attribute. */
+.password-toggle[hidden] {
+  display: none;
+}
+
+.password-toggle {
+  justify-self: start;
+}
+
+.password-toggle:focus-visible {
+  outline: 3px solid #f5b82e;
+  outline-offset: 2px;
+}
+
 .link-action {
   display: inline-flex;
   align-items: center;
