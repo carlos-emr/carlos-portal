@@ -1041,7 +1041,8 @@ are indistinguishable to the caller.
   While the page is on, `/internal/readiness` reports `self_signup.pending`, `max_pending`, and
   `oldest_pending_age_seconds`, so a stopped CARLOS poller is noticed. Alert when the oldest
   request is older than a few polling intervals. The backlog never makes the service unready.
-- The reference nginx configuration limits `/auth/sign-up` at the edge as well.
+- The reference nginx configuration limits `/auth/sign-up` submissions at the edge as well. Only a
+  POST counts, so opening the page again after a typo never uses the budget.
 
 ## Patient Auth API
 
