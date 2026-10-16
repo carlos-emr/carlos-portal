@@ -1,3 +1,4 @@
+{% from "_password_toggle.jinja" import password_toggle -%}
 <!doctype html>
 <html lang="{{ locale }}">
 <head>
@@ -41,17 +42,10 @@
                 placeholder="{{ text.password_placeholder }}"
                 autocomplete="current-password"
                 required
-                data-password-input
+                id="sign-in-password"
               >
             </label>
-            <button
-              class="link-action"
-              type="button"
-              data-password-toggle
-              data-show-label="{{ text.show_password }}"
-              data-hide-label="{{ text.hide_password }}"
-              aria-pressed="false"
-            >{{ text.show_password }}</button>
+            {{ password_toggle("sign-in-password", text) }}
             <button class="primary-action" type="submit">{{ text.sign_in_button }}</button>
             <div class="auth-link-group">
               <a class="link-action" href="{{ url_for('password_reset_request_page') }}">{{ text.forgot_username_password }}</a>
