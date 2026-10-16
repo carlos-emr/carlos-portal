@@ -3,6 +3,7 @@ from email.message import EmailMessage
 
 import pytest
 
+from carlos_patient_portal import email_delivery
 from carlos_patient_portal.config import (
     DEFAULT_DEVELOPMENT_SMTP_FROM_ADDRESS,
     Settings,
@@ -12,7 +13,24 @@ from carlos_patient_portal.email_delivery import (
     SmtpPortalEmailSender,
     build_portal_email_sender,
 )
+from carlos_patient_portal.footer_audit import FooterAuditStore
+from tests.footer_support import FakeFooterProvider, fake_footer
 from tests.support import TEST_STAFF_ASSERTION_PUBLIC_KEYRING
+
+
+@pytest.fixture(autouse=True)
+def trusted_clinic_footer(monkeypatch, tmp_path):
+    tmp_path.chmod(0o700)
+    monkeypatch.setattr(
+        email_delivery,
+        "HttpsClinicFooterProvider",
+        lambda settings: FakeFooterProvider(fake_footer(settings.clinic_id)),
+    )
+    monkeypatch.setattr(
+        email_delivery,
+        "FooterAuditStore",
+        lambda directory, clinic_id: FooterAuditStore(str(tmp_path), clinic_id),
+    )
 
 
 class RecordingSmtp:
@@ -85,8 +103,8 @@ def test_smtp_sender_delivers_plain_text_code_with_tls_and_auth(
     assert smtp.message["To"] == "patient@example.test"
     assert smtp.message["Subject"] == "Your CARLOS Patient Portal verification code"
     assert smtp.message["Auto-Submitted"] == "auto-generated"
-    assert "123456" in smtp.message.get_content()
-    assert "10 minutes" in smtp.message.get_content()
+    assert "123456" in smtp.message.get_body(preferencelist=("plain",)).get_content()
+    assert "10 minutes" in smtp.message.get_body(preferencelist=("plain",)).get_content()
 
 
 def test_smtp_sender_wraps_refused_recipient_without_exposing_code(
@@ -126,8 +144,8 @@ def test_smtp_sender_delivers_password_reset_link(
     assert smtp is not None
     assert smtp.message is not None
     assert smtp.message["Subject"] == "Reset your CARLOS Patient Portal password"
-    assert reset_url in smtp.message.get_content()
-    assert "60 minutes" in smtp.message.get_content()
+    assert reset_url in smtp.message.get_body(preferencelist=("plain",)).get_content()
+    assert "60 minutes" in smtp.message.get_body(preferencelist=("plain",)).get_content()
     assert smtp.message["Auto-Submitted"] == "auto-generated"
 
 
@@ -144,7 +162,7 @@ def test_contact_change_notice_describes_immediate_portal_change(
     assert smtp is not None
     assert smtp.message is not None
     assert smtp.message["Subject"] == ("Contact information changed for CARLOS Patient Portal")
-    content = smtp.message.get_content()
+    content = smtp.message.get_body(preferencelist=("plain",)).get_content()
     assert "in use now" in content
     assert "separately review the matching CARLOS chart" in content
     assert "before the new details are used" not in content
@@ -257,6 +275,9 @@ def test_non_development_smtp_requires_https_public_base_url() -> None:
         environment="staging",
         clinic_id="test-clinic",
         clinic_name="Test Clinic",
+        email_footer_url="https://carlos.example.test/ws/portal/email-footer",
+        email_footer_read_token="d" * 64,
+        email_footer_audit_directory="/FAKE/footer-audit",
         public_base_url="https://portal.example.test/",
         smtp_host="mail.internal",
         smtp_from_address="portal@example.test",

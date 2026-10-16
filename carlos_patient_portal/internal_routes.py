@@ -72,6 +72,7 @@ from carlos_patient_portal.booking_prompts import (
     withdraw_booking_prompt,
 )
 from carlos_patient_portal.config import Settings
+from carlos_patient_portal.footer_audit_routes import register_footer_audit_routes
 from carlos_patient_portal.identity import IdentityProof, reject_hidden_characters
 from carlos_patient_portal.invites import (
     AcceptedInviteError,
@@ -1787,3 +1788,4 @@ def register_carlos_internal_routes(app: FastAPI, runtime: InternalRuntime) -> N
     register_internal_contact_review_routes(app, deps)
     register_internal_booking_prompt_routes(app, runtime, deps)
     register_internal_booking_sync_routes(app, runtime, deps)
+    register_footer_audit_routes(app, runtime, deps)

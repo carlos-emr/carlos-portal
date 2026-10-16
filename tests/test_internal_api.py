@@ -1818,6 +1818,7 @@ def test_internal_contact_review_feed_pages_beyond_one_hundred_requests() -> Non
 # the dependency phase, so a caller lacking the permission is rejected before the request model is
 # ever validated. That ordering is itself asserted below.
 INTERNAL_ROUTE_PERMISSIONS = (
+    ("GET", "/internal/carlos/email-footer-attempts", "portal.email.audit.read"),
     ("POST", "/internal/carlos/patients/1234/invites", "portal.invite.manage"),
     ("POST", "/internal/carlos/patients/1234/invites/prepare", "portal.invite.manage"),
     ("GET", "/internal/carlos/patients/1234/invites", "portal.invite.manage"),
@@ -1863,6 +1864,7 @@ def test_internal_openapi_contract_is_stable() -> None:
         "/internal/carlos/booking-prompts/{prompt_id}/withdraw": ["post"],
         "/internal/carlos/contact-reviews": ["get"],
         "/internal/carlos/contact-reviews/{review_request_id}/decision": ["post"],
+        "/internal/carlos/email-footer-attempts": ["get"],
         "/internal/carlos/invites/{invite_id}/commit-delivery": ["post"],
         "/internal/carlos/invites/{invite_id}/resend": ["post"],
         "/internal/carlos/invites/{invite_id}/resend/prepare": ["post"],
