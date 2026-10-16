@@ -111,6 +111,10 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
             "Check the date of birth: enter a real date, for example 15 June 1985."
         ),
         "activation_error": "The activation details could not be verified.",
+        "activation_password_rejected": (
+            "Choose a different password: use at least 12 characters, avoid common words or "
+            "patterns, and don't include your username, email, birth date or health card number."
+        ),
         "activation_reenter_password": "Your other entries are kept: enter your password again.",
         "activation_heading": "Activate your account",
         "activation_rate_limited": (
@@ -242,6 +246,18 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
         "date_of_birth_day": "Day",
         "date_of_birth_hint": "For example, 15 June 1985.",
         "date_of_birth_month": "Month",
+        "date_of_birth_month_1": "January",
+        "date_of_birth_month_2": "February",
+        "date_of_birth_month_3": "March",
+        "date_of_birth_month_4": "April",
+        "date_of_birth_month_5": "May",
+        "date_of_birth_month_6": "June",
+        "date_of_birth_month_7": "July",
+        "date_of_birth_month_8": "August",
+        "date_of_birth_month_9": "September",
+        "date_of_birth_month_10": "October",
+        "date_of_birth_month_11": "November",
+        "date_of_birth_month_12": "December",
         "date_of_birth_month_choose": "Choose a month",
         "date_of_birth_year": "Year",
         "date_to": "To date",
@@ -395,10 +411,211 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
     }
 }
 
+# The first translated strings. Every key a locale does not define still falls back to English.
+TEXT_CATALOG["fr"] = {
+    "booking_month_1": "janvier",
+    "booking_month_2": "février",
+    "booking_month_3": "mars",
+    "booking_month_4": "avril",
+    "booking_month_5": "mai",
+    "booking_month_6": "juin",
+    "booking_month_7": "juillet",
+    "booking_month_8": "août",
+    "booking_month_9": "septembre",
+    "booking_month_10": "octobre",
+    "booking_month_11": "novembre",
+    "booking_month_12": "décembre",
+    "booking_slot_date": "{weekday} {day} {month}",
+    "booking_weekday_0": "Lundi",
+    "booking_weekday_1": "Mardi",
+    "booking_weekday_2": "Mercredi",
+    "booking_weekday_3": "Jeudi",
+    "booking_weekday_4": "Vendredi",
+    "booking_weekday_5": "Samedi",
+    "booking_weekday_6": "Dimanche",
+    "date_of_birth_month_1": "Janvier",
+    "date_of_birth_month_2": "Février",
+    "date_of_birth_month_3": "Mars",
+    "date_of_birth_month_4": "Avril",
+    "date_of_birth_month_5": "Mai",
+    "date_of_birth_month_6": "Juin",
+    "date_of_birth_month_7": "Juillet",
+    "date_of_birth_month_8": "Août",
+    "date_of_birth_month_9": "Septembre",
+    "date_of_birth_month_10": "Octobre",
+    "date_of_birth_month_11": "Novembre",
+    "date_of_birth_month_12": "Décembre",
+    "activation_date_of_birth_invalid": (
+        "Vérifiez la date de naissance : entrez une date réelle, par exemple 15 juin 1985."
+    ),
+    "date_of_birth": "Date de naissance",
+    "date_of_birth_day": "Jour",
+    "date_of_birth_hint": "Par exemple, 15 juin 1985.",
+    "date_of_birth_month": "Mois",
+    "date_of_birth_month_choose": "Choisissez un mois",
+    "date_of_birth_year": "Année",
+    "activation_password_rejected": (
+        "Choisissez un autre mot de passe : utilisez au moins 12 caractères, évitez les mots ou "
+        "les suites courants, et n’y mettez pas votre nom d’utilisateur, votre courriel, votre "
+        "date de naissance ni votre numéro de carte santé."
+    ),
+    "activation_reenter_password": (
+        "Vos autres renseignements sont conservés : saisissez de nouveau votre mot de passe."
+    ),
+}
+TEXT_CATALOG["es"] = {
+    "booking_month_1": "enero",
+    "booking_month_2": "febrero",
+    "booking_month_3": "marzo",
+    "booking_month_4": "abril",
+    "booking_month_5": "mayo",
+    "booking_month_6": "junio",
+    "booking_month_7": "julio",
+    "booking_month_8": "agosto",
+    "booking_month_9": "septiembre",
+    "booking_month_10": "octubre",
+    "booking_month_11": "noviembre",
+    "booking_month_12": "diciembre",
+    "booking_slot_date": "{weekday} {day} de {month}",
+    "booking_weekday_0": "Lunes",
+    "booking_weekday_1": "Martes",
+    "booking_weekday_2": "Miércoles",
+    "booking_weekday_3": "Jueves",
+    "booking_weekday_4": "Viernes",
+    "booking_weekday_5": "Sábado",
+    "booking_weekday_6": "Domingo",
+    "date_of_birth_month_1": "Enero",
+    "date_of_birth_month_2": "Febrero",
+    "date_of_birth_month_3": "Marzo",
+    "date_of_birth_month_4": "Abril",
+    "date_of_birth_month_5": "Mayo",
+    "date_of_birth_month_6": "Junio",
+    "date_of_birth_month_7": "Julio",
+    "date_of_birth_month_8": "Agosto",
+    "date_of_birth_month_9": "Septiembre",
+    "date_of_birth_month_10": "Octubre",
+    "date_of_birth_month_11": "Noviembre",
+    "date_of_birth_month_12": "Diciembre",
+    "activation_date_of_birth_invalid": (
+        "Revise la fecha de nacimiento: introduzca una fecha real, por ejemplo, 15 de junio de "
+        "1985."
+    ),
+    "date_of_birth": "Fecha de nacimiento",
+    "date_of_birth_day": "Día",
+    "date_of_birth_hint": "Por ejemplo, 15 de junio de 1985.",
+    "date_of_birth_month": "Mes",
+    "date_of_birth_month_choose": "Elija un mes",
+    "date_of_birth_year": "Año",
+    "activation_password_rejected": (
+        "Elija otra contraseña: use al menos 12 caracteres, evite palabras o patrones comunes y "
+        "no incluya su nombre de usuario, correo electrónico, fecha de nacimiento ni número de "
+        "tarjeta de salud."
+    ),
+    "activation_reenter_password": "Sus demás datos se conservan: vuelva a escribir su contraseña.",
+}
+TEXT_CATALOG["pl"] = {
+    "booking_month_1": "stycznia",
+    "booking_month_2": "lutego",
+    "booking_month_3": "marca",
+    "booking_month_4": "kwietnia",
+    "booking_month_5": "maja",
+    "booking_month_6": "czerwca",
+    "booking_month_7": "lipca",
+    "booking_month_8": "sierpnia",
+    "booking_month_9": "września",
+    "booking_month_10": "października",
+    "booking_month_11": "listopada",
+    "booking_month_12": "grudnia",
+    "booking_slot_date": "{weekday}, {day} {month}",
+    "booking_weekday_0": "Poniedziałek",
+    "booking_weekday_1": "Wtorek",
+    "booking_weekday_2": "Środa",
+    "booking_weekday_3": "Czwartek",
+    "booking_weekday_4": "Piątek",
+    "booking_weekday_5": "Sobota",
+    "booking_weekday_6": "Niedziela",
+    "date_of_birth_month_1": "Styczeń",
+    "date_of_birth_month_2": "Luty",
+    "date_of_birth_month_3": "Marzec",
+    "date_of_birth_month_4": "Kwiecień",
+    "date_of_birth_month_5": "Maj",
+    "date_of_birth_month_6": "Czerwiec",
+    "date_of_birth_month_7": "Lipiec",
+    "date_of_birth_month_8": "Sierpień",
+    "date_of_birth_month_9": "Wrzesień",
+    "date_of_birth_month_10": "Październik",
+    "date_of_birth_month_11": "Listopad",
+    "date_of_birth_month_12": "Grudzień",
+    "activation_date_of_birth_invalid": (
+        "Sprawdź datę urodzenia: wpisz prawdziwą datę, na przykład 15 czerwca 1985."
+    ),
+    "date_of_birth": "Data urodzenia",
+    "date_of_birth_day": "Dzień",
+    "date_of_birth_hint": "Na przykład 15 czerwca 1985.",
+    "date_of_birth_month": "Miesiąc",
+    "date_of_birth_month_choose": "Wybierz miesiąc",
+    "date_of_birth_year": "Rok",
+    "activation_password_rejected": (
+        "Wybierz inne hasło: użyj co najmniej 12 znaków, unikaj popularnych słów i schematów "
+        "oraz nie umieszczaj w nim nazwy użytkownika, adresu e-mail, daty urodzenia ani numeru "
+        "karty zdrowia."
+    ),
+    "activation_reenter_password": "Pozostałe dane zostały zachowane: wpisz ponownie hasło.",
+}
+TEXT_CATALOG["pt-BR"] = {
+    "booking_month_1": "janeiro",
+    "booking_month_2": "fevereiro",
+    "booking_month_3": "março",
+    "booking_month_4": "abril",
+    "booking_month_5": "maio",
+    "booking_month_6": "junho",
+    "booking_month_7": "julho",
+    "booking_month_8": "agosto",
+    "booking_month_9": "setembro",
+    "booking_month_10": "outubro",
+    "booking_month_11": "novembro",
+    "booking_month_12": "dezembro",
+    "booking_slot_date": "{weekday}, {day} de {month}",
+    "booking_weekday_0": "Segunda-feira",
+    "booking_weekday_1": "Terça-feira",
+    "booking_weekday_2": "Quarta-feira",
+    "booking_weekday_3": "Quinta-feira",
+    "booking_weekday_4": "Sexta-feira",
+    "booking_weekday_5": "Sábado",
+    "booking_weekday_6": "Domingo",
+    "date_of_birth_month_1": "Janeiro",
+    "date_of_birth_month_2": "Fevereiro",
+    "date_of_birth_month_3": "Março",
+    "date_of_birth_month_4": "Abril",
+    "date_of_birth_month_5": "Maio",
+    "date_of_birth_month_6": "Junho",
+    "date_of_birth_month_7": "Julho",
+    "date_of_birth_month_8": "Agosto",
+    "date_of_birth_month_9": "Setembro",
+    "date_of_birth_month_10": "Outubro",
+    "date_of_birth_month_11": "Novembro",
+    "date_of_birth_month_12": "Dezembro",
+    "activation_date_of_birth_invalid": (
+        "Verifique a data de nascimento: informe uma data real, por exemplo, 15 de junho de "
+        "1985."
+    ),
+    "date_of_birth": "Data de nascimento",
+    "date_of_birth_day": "Dia",
+    "date_of_birth_hint": "Por exemplo, 15 de junho de 1985.",
+    "date_of_birth_month": "Mês",
+    "date_of_birth_month_choose": "Escolha um mês",
+    "date_of_birth_year": "Ano",
+    "activation_password_rejected": (
+        "Escolha outra senha: use pelo menos 12 caracteres, evite palavras ou padrões comuns e "
+        "não inclua seu nome de usuário, e-mail, data de nascimento nem número do cartão de saúde."
+    ),
+    "activation_reenter_password": "Seus outros dados foram mantidos: digite sua senha novamente.",
+}
+
 # Every supported locale gets an entry so `portal_text` never falls back wholesale to English and
-# a translator can start filling one in without touching anything else. Empty today: the per-key
-# merge in `portal_text` supplies the English string for anything a locale has not defined, which
-# is what makes a half-finished translation render instead of raising KeyError.
+# a translator can start filling one in without touching anything else. Nearly empty today: the
+# per-key merge in `portal_text` supplies the English string for anything a locale has not defined,
+# which is what makes a half-finished translation render instead of raising KeyError.
 for _locale in SUPPORTED_LOCALES:
     TEXT_CATALOG.setdefault(_locale.code, {})
 

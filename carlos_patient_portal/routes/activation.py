@@ -26,6 +26,7 @@ from starlette.responses import Response
 from carlos_patient_portal.accounts import (
     ActivationDeliveryUnavailableError,
     ActivationError,
+    ActivationPasswordRejectedError,
     ActivationThrottledError,
     UsernameUnavailableError,
     activate_patient_account,
@@ -51,6 +52,8 @@ from carlos_patient_portal.web_support import (
     render_public_auth_template,
     request_locale,
 )
+
+ACTIVATION_PASSWORD_REJECTED_DETAIL = "password does not meet the password rules"
 
 
 def localized_activation_text(request: Request) -> dict[str, str]:
@@ -221,6 +224,22 @@ def register_activation_routes(
             return JSONResponse(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 content={"detail": MFA_DELIVERY_UNAVAILABLE_DETAIL},
+            )
+        except ActivationPasswordRejectedError:
+            if is_browser_form:
+                return render_public_auth_template(
+                    request,
+                    settings=settings,
+                    csrf_secret=csrf_secret,
+                    template_name=ACTIVATION_TEMPLATE,
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    error_message=localized_activation_text(request)["activation_password_rejected"],
+                    form_values=kept_activation_form_values(request),
+                    sms_mfa_available=runtime.sms_sender is not None,
+                )
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"detail": ACTIVATION_PASSWORD_REJECTED_DETAIL},
             )
         except UsernameUnavailableError:
             if is_browser_form:

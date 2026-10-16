@@ -1028,7 +1028,11 @@ async def get_activation_request_from_request(
     if password != first_form_value_or_empty(form_values, "password_confirmation"):
         raise BrowserFormValidationError(
             "password confirmation does not match",
-            safe_form_values=activation_form_values_to_keep(form_values),
+            # Only the invite code is read from this (to charge the rate limit); the entries the
+            # page shows again come from request.state.
+            safe_form_values={
+                "invite_code": first_form_value_or_empty(form_values, "invite_code")
+            },
         )
     try:
         return ActivationRequest.model_validate(
