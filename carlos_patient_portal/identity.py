@@ -133,6 +133,24 @@ def normalize_health_card_number(health_card_number: str) -> str:
     return normalized_hcn
 
 
+# An Ontario card prints a one- or two-letter version code after the number (1234-567-890-AB).
+# CARLOS sends the number without it, so a patient who types the whole card must still match.
+TRAILING_VERSION_CODE = re.compile(r"(?P<number>.*[0-9])[A-Z]{1,2}")
+
+
+def health_card_number_candidates(normalized_hcn: str) -> tuple[str, ...]:
+    """The normalized number as typed and, if it ends in a version code after a digit, without it.
+
+    A stored number that carries its own version code still matches the number as typed; one
+    without a code also matches the typed number with its trailing letters removed. Anything
+    else (a different number, extra digits, three letters) matches neither.
+    """
+    version_coded = TRAILING_VERSION_CODE.fullmatch(normalized_hcn)
+    if version_coded is None:
+        return (normalized_hcn,)
+    return (normalized_hcn, version_coded.group("number"))
+
+
 def hash_identity_value(secret: str, salt: str, purpose: str, value: str) -> str:
     return new_hmac(
         secret.encode("utf-8"),
@@ -211,7 +229,13 @@ def verify_identity_proof(
     date_of_birth_matches = compare_digest(
         expected_hashes["proof_date_of_birth_hash"], date_of_birth_hash or ""
     )
-    health_card_matches = compare_digest(
-        expected_hashes["proof_health_card_hash"], health_card_hash or ""
-    )
+    # Every candidate is compared (no early exit), so the timing does not show which matched.
+    health_card_matches = False
+    for candidate in health_card_number_candidates(
+        normalize_health_card_number(proof.health_card_number)
+    ):
+        candidate_hash = hash_identity_value(
+            secret, salt.strip(), "health_card_number", candidate
+        )
+        health_card_matches |= compare_digest(candidate_hash, health_card_hash or "")
     return email_matches and date_of_birth_matches and health_card_matches
