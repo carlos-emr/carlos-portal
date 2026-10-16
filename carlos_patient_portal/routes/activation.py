@@ -47,6 +47,7 @@ from carlos_patient_portal.web_support import (
     get_activation_request_from_request,
     get_request_client_reference,
     is_urlencoded_form_request,
+    kept_activation_form_values,
     render_public_auth_template,
     request_locale,
 )
@@ -54,6 +55,15 @@ from carlos_patient_portal.web_support import (
 
 def localized_activation_text(request: Request) -> dict[str, str]:
     return portal_text(request_locale(request))
+
+
+def is_date_of_birth_format_error(exc: RequestValidationError) -> bool:
+    """Whether the date of birth itself is unreadable or outside the accepted range.
+
+    That is a format problem the patient can fix, so the form says so. It reveals nothing about
+    the invite: a well-formed date that does not match is still only "could not be verified".
+    """
+    return any("date_of_birth" in tuple(error.get("loc") or ()) for error in exc.errors())
 
 
 def register_activation_routes(
@@ -105,6 +115,7 @@ def register_activation_routes(
                     error_message=localized_activation_text(request)[
                         "activation_rate_limited"
                     ],
+                    form_values=kept_activation_form_values(request),
                     sms_mfa_available=runtime.sms_sender is not None,
                 )
                 response.headers["Retry-After"] = str(exc.retry_after_seconds)
@@ -144,6 +155,7 @@ def register_activation_routes(
                 template_name=ACTIVATION_TEMPLATE,
                 status_code=status.HTTP_400_BAD_REQUEST,
                 error_message=localized_activation_text(request)["password_mismatch"],
+                form_values=kept_activation_form_values(request),
                 sms_mfa_available=runtime.sms_sender is not None,
             )
         except RequestValidationError as exc:
@@ -154,13 +166,19 @@ def register_activation_routes(
             ):
                 return response
             if is_browser_form:
+                activation_text = localized_activation_text(request)
                 return render_public_auth_template(
                     request,
                     settings=settings,
                     csrf_secret=csrf_secret,
                     template_name=ACTIVATION_TEMPLATE,
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    error_message=localized_activation_text(request)["activation_error"],
+                    error_message=(
+                        activation_text["activation_date_of_birth_invalid"]
+                        if is_date_of_birth_format_error(exc)
+                        else activation_text["activation_error"]
+                    ),
+                    form_values=kept_activation_form_values(request),
                     sms_mfa_available=runtime.sms_sender is not None,
                 )
             return JSONResponse(
@@ -197,6 +215,7 @@ def register_activation_routes(
                     template_name=ACTIVATION_TEMPLATE,
                     status_code=status.HTTP_400_BAD_REQUEST,
                     error_message=localized_activation_text(request)["mfa_delivery_unavailable"],
+                    form_values=kept_activation_form_values(request),
                     sms_mfa_available=False,
                 )
             return JSONResponse(
@@ -212,10 +231,7 @@ def register_activation_routes(
                     template_name=ACTIVATION_TEMPLATE,
                     status_code=status.HTTP_409_CONFLICT,
                     error_message=localized_activation_text(request)["username_unavailable"],
-                    form_values={
-                        "email": payload.email,
-                        "date_of_birth": payload.date_of_birth.isoformat(),
-                    },
+                    form_values=kept_activation_form_values(request),
                     sms_mfa_available=runtime.sms_sender is not None,
                 )
             return JSONResponse(status_code=409, content={"detail": "username unavailable"})
@@ -230,6 +246,7 @@ def register_activation_routes(
                     template_name=ACTIVATION_TEMPLATE,
                     status_code=status.HTTP_400_BAD_REQUEST,
                     error_message=localized_activation_text(request)["activation_error"],
+                    form_values=kept_activation_form_values(request),
                     sms_mfa_available=runtime.sms_sender is not None,
                 )
             return JSONResponse(

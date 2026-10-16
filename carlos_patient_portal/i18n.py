@@ -107,7 +107,11 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
         "activation_details": (
             "Enter the invitation details supplied by your clinic and create your portal sign-in."
         ),
+        "activation_date_of_birth_invalid": (
+            "Check the date of birth: enter a real date, for example 15 June 1985."
+        ),
         "activation_error": "The activation details could not be verified.",
+        "activation_reenter_password": "Your other entries are kept: enter your password again.",
         "activation_heading": "Activate your account",
         "activation_rate_limited": (
             "Too many activation attempts were made. Wait before trying again."
@@ -235,6 +239,11 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
         "filter_error": "Enter valid filters.",
         "date_range_error": "The from date must not be later than the to date.",
         "date_of_birth": "Date of birth",
+        "date_of_birth_day": "Day",
+        "date_of_birth_hint": "For example, 15 June 1985.",
+        "date_of_birth_month": "Month",
+        "date_of_birth_month_choose": "Choose a month",
+        "date_of_birth_year": "Year",
         "date_to": "To date",
         "development_mfa_code": (
             "Development MFA code (same code as sent by email, to make testing quicker, "
