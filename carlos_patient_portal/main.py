@@ -83,6 +83,7 @@ from carlos_patient_portal.routes.portal import (
     register_portal_routes,
 )
 from carlos_patient_portal.routes.public import register_public_routes
+from carlos_patient_portal.routes.signup import register_signup_routes
 from carlos_patient_portal.runtime import (
     FhirApiError,
     InMemoryRateLimiter,
@@ -976,5 +977,6 @@ def register_app_routes(app: FastAPI, runtime: PortalRuntime) -> None:
     register_logout_route(app, runtime, route_dependencies)
     register_portal_routes(app, runtime, route_dependencies)
     register_activation_routes(app, runtime, route_dependencies)
+    register_signup_routes(app, runtime, route_dependencies)
     register_dev_admin_routes(app, runtime, route_dependencies)
     register_carlos_internal_routes(app, runtime)
