@@ -65,6 +65,14 @@ class CarlosStaffPermissionError(Exception):
     """Raised when the authenticated CARLOS provider lacks a portal permission."""
 
 
+class AssertionExpiredError(CarlosServiceAuthenticationError):
+    """Raised when an assertion expired before its nonce could be recorded."""
+
+
+class AssertionReplayError(CarlosServiceAuthenticationError):
+    """Raised when an assertion's nonce was already used."""
+
+
 @dataclass(frozen=True)
 class StaffPrincipal:
     provider_id: str
@@ -303,10 +311,28 @@ def consume_staff_assertion(
         or principal.assertion_expires_at is None
     ):
         return
+    consume_assertion_id(
+        session_factory,
+        principal.assertion_id,
+        principal.assertion_expires_at,
+    )
+
+
+def consume_assertion_id(
+    session_factory: sessionmaker[Session],
+    assertion_id: str,
+    expires_at_epoch: int,
+) -> None:
+    """Record one assertion nonce, refusing it if any portal worker has recorded it already.
+
+    Staff and job assertions share this one table, so a nonce used by either caller type can
+    never be used again by the other. Both failures are authentication failures; the subclasses
+    let the job path say which one it was.
+    """
     now = utc_now()
-    expires_at = datetime.fromtimestamp(principal.assertion_expires_at, tz=UTC)
+    expires_at = datetime.fromtimestamp(expires_at_epoch, tz=UTC)
     if expires_at <= now:
-        raise CarlosServiceAuthenticationError()
+        raise AssertionExpiredError()
     try:
         with session_factory() as session:
             with session.begin():
@@ -317,11 +343,11 @@ def consume_staff_assertion(
                 )
                 session.add(
                     PatientPortalStaffAssertionUse(
-                        assertion_id=principal.assertion_id,
+                        assertion_id=assertion_id,
                         created_at=now,
                         expires_at=expires_at,
                     )
                 )
                 session.flush()
     except IntegrityError as exc:
-        raise CarlosServiceAuthenticationError() from exc
+        raise AssertionReplayError() from exc

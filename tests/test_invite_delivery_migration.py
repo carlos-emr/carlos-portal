@@ -8,11 +8,24 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from carlos_patient_portal import invites
 from carlos_patient_portal.identity import IdentityProof
 from carlos_patient_portal.invites import create_invite, prepare_create_invite, revoke_invite
 from carlos_patient_portal.models import PatientPortalInvite
 
 
+@pytest.fixture
+def invite_audit_writes_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skip the invite service's audit rows while it runs against an older revision.
+
+    These tests drive the invite service on a database stopped at 0012 or 0013, whose audit table
+    predates columns the model has gained since (0016). Their subject is the invite schema, not
+    the audit trail, so the audit write is left out rather than failing on a missing column.
+    """
+    monkeypatch.setattr(invites, "record_audit_event", lambda *_args, **_kwargs: None)
+
+
+@pytest.mark.usefixtures("invite_audit_writes_skipped")
 def test_invite_delivery_migration_follows_main_and_guards_prepared_tokens(tmp_path) -> None:
     config = Config()
     config.set_main_option("script_location", "carlos_patient_portal:migrations")
@@ -65,6 +78,7 @@ def test_invite_delivery_migration_follows_main_and_guards_prepared_tokens(tmp_p
         engine.dispose()
 
 
+@pytest.mark.usefixtures("invite_audit_writes_skipped")
 def test_dropping_the_redundant_pending_index_keeps_pending_invites_unique(tmp_path) -> None:
     config = Config()
     config.set_main_option("script_location", "carlos_patient_portal:migrations")

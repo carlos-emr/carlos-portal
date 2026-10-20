@@ -14,6 +14,7 @@
 
 """Offered times: CARLOS offers slots, the patient picks one, CARLOS reports the result."""
 
+import json
 import logging
 import re
 from datetime import UTC, datetime, time, timedelta
@@ -51,6 +52,7 @@ from carlos_patient_portal.models import (
     AUDIT_EVENT_BOOKING_PROMPT_DELIVERY,
     AUDIT_EVENT_BOOKING_PROMPT_OFFER,
     AUDIT_EVENT_BOOKING_PROMPT_RESULT,
+    AUDIT_EVENT_JOB_AUTH_REFUSED,
     AUDIT_EVENT_STAFF_ACTION,
     AUDIT_OUTCOME_FAILURE,
     AUDIT_OUTCOME_SUCCESS,
@@ -67,18 +69,21 @@ from carlos_patient_portal.models import (
     utc_now,
 )
 from carlos_patient_portal.outbound_messages import booking_prompt_update_email_message
+from carlos_patient_portal.system_jobs import JOB_BOOKING_SYNC
 from tests.support import (
     INTERNAL_API_TOKEN,
     OUTBOX_ENCRYPTION_SECRET,
+    TEST_JOB_ASSERTION_KEY_IDS,
+    TEST_JOB_ASSERTION_PUBLIC_KEYRING,
     RecordingPortalEmailSender,
     activate_seeded_patient_account,
     browser_sign_in_seeded_patient,
+    carlos_job_headers,
     carlos_staff_headers,
     csrf_token_from_response,
     development_settings,
     migrated_development_app,
 )
-from tests.test_internal_api import INTERNAL_ROUTE_PERMISSIONS
 
 PROMPTS_PATH = "/internal/carlos/patients/1234/booking-prompts"
 CHOICES_PATH = "/internal/carlos/booking-prompts/choices?state=pending"
@@ -102,6 +107,7 @@ def booking_app(**overrides: object):
             "clinic_timezone": "America/Toronto",
             "booking_locations": LOCATIONS,
             "internal_api_token": INTERNAL_API_TOKEN,
+            "internal_job_assertion_public_keyring": TEST_JOB_ASSERTION_PUBLIC_KEYRING,
             "outbox_encryption_secret": OUTBOX_ENCRYPTION_SECRET,
             **overrides,
         }
@@ -117,14 +123,36 @@ def staff_headers(*permissions: str, clinic_id: str = "clinic-a") -> dict[str, s
     )
 
 
-def sync_headers(clinic_id: str = "clinic-a") -> dict[str, str]:
-    # The polling job's own principal: a non-login system provider with only this permission.
-    return carlos_staff_headers(
+def sync_headers(
+    method: str,
+    path: str,
+    *,
+    body: bytes = b"",
+    clinic_id: str = "clinic-a",
+) -> dict[str, str]:
+    # The polling job's own signed call: the booking-sync job, bound to this exact request.
+    return carlos_job_headers(
+        JOB_BOOKING_SYNC,
         SYNC,
+        method=method,
+        path=path,
+        body=body,
         clinic_id=clinic_id,
         token=INTERNAL_API_TOKEN,
-        provider_id="carlos-booking-sync",
-        provider_name="CARLOS booking sync",
+    )
+
+
+def sync_get(app, path: str = CHOICES_PATH, *, clinic_id: str = "clinic-a"):
+    return TestClient(app).get(path, headers=sync_headers("GET", path, clinic_id=clinic_id))
+
+
+def sync_post(app, path: str, payload: dict[str, object]):
+    # Sent as the exact bytes the assertion hashed.
+    body = json.dumps(payload).encode()
+    return TestClient(app).post(
+        path,
+        headers={**sync_headers("POST", path, body=body), "Content-Type": "application/json"},
+        content=body,
     )
 
 
@@ -229,15 +257,15 @@ def decline(patient: TestClient, prompt_id: int):
     )
 
 
-def pending_choices(app, headers: dict[str, str] | None = None):
-    return TestClient(app).get(CHOICES_PATH, headers=headers or sync_headers())
+def pending_choices(app, *, clinic_id: str = "clinic-a"):
+    return sync_get(app, clinic_id=clinic_id)
 
 
 def report(app, prompt_id: int, choice_id: int, result: str, **extra: object):
-    return TestClient(app).post(
+    return sync_post(
+        app,
         f"/internal/carlos/booking-prompts/{prompt_id}/choice-result",
-        headers=sync_headers(),
-        json={"choice_id": choice_id, "result": result, **extra},
+        {"choice_id": choice_id, "result": result, **extra},
     )
 
 
@@ -962,8 +990,8 @@ def test_the_polling_list_has_only_pending_choices_for_its_clinic_oldest_first()
     assert report(app, resolved, resolved_choice_id, "booked").status_code == 200
 
     listed = pending_choices(app)
-    limited = TestClient(app).get(f"{CHOICES_PATH}&limit=1", headers=sync_headers())
-    other_clinic = pending_choices(app, sync_headers(clinic_id="clinic-b"))
+    limited = sync_get(app, f"{CHOICES_PATH}&limit=1")
+    other_clinic = pending_choices(app, clinic_id="clinic-b")
 
     assert listed.status_code == 200
     assert [item["prompt_id"] for item in listed.json()["items"]] == [older, newer]
@@ -972,6 +1000,9 @@ def test_the_polling_list_has_only_pending_choices_for_its_clinic_oldest_first()
     assert limited.json()["has_more"] is True
     # A portal serves one clinic: another clinic's assertion is refused before any lookup.
     assert other_clinic.status_code == 404
+    assert [event.reason for event in audit_events(app, AUDIT_EVENT_JOB_AUTH_REFUSED)] == [
+        "clinic_mismatch"
+    ]
 
 
 def test_turning_an_account_off_cancels_its_waiting_pick_for_good() -> None:
@@ -1017,12 +1048,8 @@ def test_the_polling_list_needs_the_pending_state_and_audits_only_what_it_disclo
     app, patient, prompt_id = patient_with_offer()
 
     empty = pending_choices(app)
-    no_state = TestClient(app).get(
-        "/internal/carlos/booking-prompts/choices", headers=sync_headers()
-    )
-    other_state = TestClient(app).get(
-        "/internal/carlos/booking-prompts/choices?state=booked", headers=sync_headers()
-    )
+    no_state = sync_get(app, "/internal/carlos/booking-prompts/choices")
+    other_state = sync_get(app, "/internal/carlos/booking-prompts/choices?state=booked")
     assert pick(app, patient, prompt_id).status_code == 303
     one = pending_choices(app)
 
@@ -1037,8 +1064,8 @@ def test_the_polling_list_needs_the_pending_state_and_audits_only_what_it_disclo
     ]
     assert listings == [
         (
-            "CARLOS booking sync",
-            "carlos-booking-sync",
+            "Clinic booking",
+            "job:booking-sync",
             "booking_choice",
             "count:1",
             "pending_choices_listed",
@@ -1082,7 +1109,7 @@ def test_a_booked_result_confirms_the_time_and_deletes_the_offer() -> None:
     assert only_choice(app).starts_at is not None
     results = audit_events(app, AUDIT_EVENT_BOOKING_PROMPT_RESULT)
     assert [(event.actor_id, event.resource_id, event.reason) for event in results] == [
-        ("carlos-booking-sync", str(choice_id), "booked")
+        ("job:booking-sync", str(choice_id), "booked")
     ]
     assert len(update_notices(app)) == 1
 
@@ -1313,35 +1340,30 @@ def test_a_booked_prompt_stays_booked_after_it_expires_until_a_day_after_the_vis
 # --------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("method", "path", "permission"),
-    [route for route in INTERNAL_ROUTE_PERMISSIONS if route[2] != SYNC],
-)
-def test_the_sync_principal_is_refused_by_every_other_internal_route(
-    method, path, permission
-) -> None:
-    app = booking_app()
-
-    response = TestClient(app).request(method, path, headers=sync_headers())
-
-    assert response.status_code == 403, f"{method} {path} accepted the sync permission"
-    assert response.json() == {"detail": "permission denied"}
-
-
-def test_the_sync_principal_cannot_create_read_accounts_or_manage_invites() -> None:
+def test_the_sync_job_cannot_create_read_accounts_or_manage_invites() -> None:
+    # Every staff route gives the job the same 404 as an unknown route (the route matrix in
+    # test_internal_api.py covers them all); here, nothing is created or disclosed either.
     app = booking_app()
     activate_seeded_patient_account(app, TestClient(app))
-    client = TestClient(app)
+    account_path = "/internal/carlos/patients/1234/portal-account"
+    invites_path = "/internal/carlos/patients/1234/invites"
 
-    created = client.post(PROMPTS_PATH, headers=sync_headers(), json=prompt_request())
-    account = client.get(
-        "/internal/carlos/patients/1234/portal-account", headers=sync_headers()
-    )
-    invites = client.get("/internal/carlos/patients/1234/invites", headers=sync_headers())
+    created = sync_post(app, PROMPTS_PATH, prompt_request())
+    account = sync_get(app, account_path)
+    invites = sync_get(app, invites_path)
 
-    assert [created.status_code, account.status_code, invites.status_code] == [403, 403, 403]
+    assert [created.status_code, account.status_code, invites.status_code] == [404, 404, 404]
+    assert account.json() == {"detail": "not found"}
     with app.state.session_factory() as session:
         assert session.scalar(select(func.count(PatientPortalBookingPrompt.id))) == 0
+    assert [
+        (event.reason, event.resource_id)
+        for event in audit_events(app, AUDIT_EVENT_JOB_AUTH_REFUSED)
+    ] == [
+        ("route_not_open", "/internal/carlos/patients/{demographic_no}/booking-prompts"),
+        ("route_not_open", "/internal/carlos/patients/{demographic_no}/portal-account"),
+        ("route_not_open", "/internal/carlos/patients/{demographic_no}/invites"),
+    ]
 
 
 def test_the_sync_endpoints_require_the_sync_permission_not_manage() -> None:
@@ -1957,10 +1979,11 @@ def test_a_result_for_a_withdrawn_pick_says_so() -> None:
     assert (unknown.status_code, unknown.json()["detail"]) == (409, "booking choice is not pending")
 
 
-def combined_sync_headers() -> dict[str, str]:
+def staff_sync_headers(*extra_permissions: str) -> dict[str, str]:
+    # The old provider-based caller: a staff assertion carrying the job's permission.
     return carlos_staff_headers(
         SYNC,
-        MANAGE,
+        *extra_permissions,
         clinic_id="clinic-a",
         token=INTERNAL_API_TOKEN,
         provider_id="carlos-booking-sync",
@@ -1968,20 +1991,25 @@ def combined_sync_headers() -> dict[str, str]:
     )
 
 
-def test_the_sync_permission_is_only_accepted_on_its_own() -> None:
+@pytest.mark.parametrize("extra_permissions", [(), (MANAGE,)])
+def test_a_staff_assertion_carrying_the_sync_permission_is_refused_everywhere(
+    extra_permissions,
+) -> None:
     app, patient, prompt_id = patient_with_offer()
     assert pick(app, patient, prompt_id).status_code == 303
     choice_id = only_choice(app).id
     client = TestClient(app)
 
-    assert client.get(CHOICES_PATH, headers=combined_sync_headers()).status_code == 403
-    assert client.post(
+    listed = client.get(CHOICES_PATH, headers=staff_sync_headers(*extra_permissions))
+    reported = client.post(
         f"/internal/carlos/booking-prompts/{prompt_id}/choice-result",
-        headers=combined_sync_headers(),
+        headers=staff_sync_headers(*extra_permissions),
         json={"choice_id": choice_id, "result": "booked"},
-    ).status_code == 403
-    assert client.get(PROMPTS_PATH, headers=combined_sync_headers()).status_code == 403
-    # Nothing changed, and the sync principal on its own still works.
+    )
+    prompts = client.get(PROMPTS_PATH, headers=staff_sync_headers(*extra_permissions))
+
+    assert [listed.status_code, reported.status_code, prompts.status_code] == [403, 403, 403]
+    # Nothing changed, and the job itself still works.
     assert prompt_state(app, prompt_id) == "choice_pending"
     assert len(pending_choices(app).json()["items"]) == 1
 
@@ -1998,7 +2026,16 @@ def test_the_polling_job_is_audited_as_the_system() -> None:
         if event.reason == "pending_choices_listed"
     ]
     results = audit_events(app, AUDIT_EVENT_BOOKING_PROMPT_RESULT)
-    assert [event.actor_type for event in listed + results] == ["system", "system"]
+    assert [
+        (event.actor_type, event.actor, event.actor_id, event.assertion_key_id)
+        for event in listed + results
+    ] == [
+        ("system", "Clinic booking", "job:booking-sync", TEST_JOB_ASSERTION_KEY_IDS["booking-sync"])
+    ] * 2
+    # Each row names its own call's one-time assertion id.
+    assertion_ids = [event.assertion_id for event in listed + results]
+    assert all(assertion_id and len(assertion_id) == 36 for assertion_id in assertion_ids)
+    assert len(set(assertion_ids)) == 2
 
 
 # --------------------------------------------------------------------------------------
@@ -2134,7 +2171,7 @@ def test_the_poll_never_lists_a_pick_whose_time_has_started_even_before_it_is_cl
     # The listing on its own, as when the closing pass skipped a prompt another writer held.
     with app.state.session_factory.begin() as session:
         page = list_pending_choices(
-            session, clinic_id="clinic-a", actor="CARLOS booking sync", actor_id="sync"
+            session, clinic_id="clinic-a", actor="Clinic booking", actor_id="job:booking-sync"
         )
 
     assert page.choices == ()
