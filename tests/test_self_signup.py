@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import create_engine, func, inspect, select, text, update
 
-from carlos_patient_portal import i18n
+from carlos_patient_portal import i18n, main
 from carlos_patient_portal.config import Settings
 from carlos_patient_portal.maintenance import cleanup_transient_auth_rows
 from carlos_patient_portal.models import (
@@ -62,6 +62,7 @@ from tests.support import (
     activate_seeded_patient_account,
     create_service_invite,
     csrf_token_from_response,
+    development_settings,
     get_csrf_token,
     migrated_development_app,
     seeded_identity_proof,
@@ -826,6 +827,7 @@ def test_readiness_shows_the_backlog_and_the_age_of_the_oldest_request() -> None
         "pending": 0,
         "max_pending": 1000,
         "oldest_pending_age_seconds": None,
+        "client_limit_counts": "peer_address",
     }
     backlog = waiting.json()["self_signup"]
     assert backlog["pending"] == 1
@@ -835,6 +837,44 @@ def test_readiness_shows_the_backlog_and_the_age_of_the_oldest_request() -> None
     assert "self_signup" not in TestClient(switched_off).get(
         "/internal/readiness", headers=headers
     ).json()
+
+
+def test_readiness_says_which_address_the_per_client_limit_counts() -> None:
+    headers = {"Authorization": f"Bearer {INTERNAL_HEALTH_TOKEN}"}
+    behind_proxy = signup_app(
+        internal_health_token=INTERNAL_HEALTH_TOKEN,
+        trusted_client_ip_header="x-forwarded-for",
+        trusted_proxy_cidrs="10.0.0.0/8",
+    )
+    direct = signup_app(internal_health_token=INTERNAL_HEALTH_TOKEN)
+
+    assert client_at(behind_proxy).get("/internal/readiness", headers=headers).json()[
+        "self_signup"
+    ]["client_limit_counts"] == "trusted_client_ip_header"
+    assert client_at(direct).get("/internal/readiness", headers=headers).json()["self_signup"][
+        "client_limit_counts"
+    ] == "peer_address"
+
+
+def test_start_up_warns_when_the_per_client_limit_can_only_see_the_peer(caplog) -> None:
+    def warnings_for(**overrides: object) -> list[str]:
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger=main.logger.name):
+            main.warn_if_self_signup_counts_peer_addresses(development_settings(**overrides))
+        return [record.getMessage() for record in caplog.records]
+
+    unset = warnings_for(self_signup_enabled=True)
+    assert len(unset) == 1
+    assert "PATIENT_PORTAL_TRUSTED_CLIENT_IP_HEADER" in unset[0]
+    assert (
+        warnings_for(
+            self_signup_enabled=True,
+            trusted_client_ip_header="x-forwarded-for",
+            trusted_proxy_cidrs="10.0.0.0/8",
+        )
+        == []
+    )
+    assert warnings_for(self_signup_enabled=False) == []
 
 
 def test_encryption_refuses_an_oversized_payload() -> None:

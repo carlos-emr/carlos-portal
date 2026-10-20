@@ -128,6 +128,13 @@ def register_public_routes(
                 "pending": backlog.pending,
                 "max_pending": settings.self_signup_queue_max_pending,
                 "oldest_pending_age_seconds": backlog.oldest_age_seconds(now),
+                # Which address the per-client limit counts. "peer_address" behind a reverse
+                # proxy means one shared count for every patient (see the startup warning).
+                "client_limit_counts": (
+                    "trusted_client_ip_header"
+                    if settings.trusted_client_ip_header is not None
+                    else "peer_address"
+                ),
             }
         }
 
