@@ -132,10 +132,10 @@ portal. These are **the first appointment data the portal stores**, and they sit
 that a patient has a follow-up coming. The decision is to accept that narrowly, on these terms.
 
 The direction of the contract does not change. The portal never reads the CARLOS schedule and
-CARLOS never accepts calls from the portal. CARLOS pushes the times with the prompt; a CARLOS job,
-signed as a dedicated non-login system provider holding only `portal.booking_prompt.sync`, polls
-for the patient's pick and reports whether it was booked. That permission can list pending picks
-and report results and nothing else.
+CARLOS never accepts calls from the portal. CARLOS pushes the times with the prompt; the CARLOS
+`booking-sync` job, signing its own job assertion with `portal.booking_prompt.sync` (see
+*Amendment: CARLOS jobs as internal callers*), polls for the patient's pick and reports whether it
+was booked. That permission can list pending picks and report results and nothing else.
 
 What is stored, per offered time (`patient_portal_booking_offered_slots`): the CARLOS `slot_id`
 (opaque, never interpreted), the start with its UTC offset normalised to UTC, a duration, a visit
@@ -191,3 +191,74 @@ These belong in this document but cannot be reconstructed from the code:
 - `README.md` — configuration, operations, and the current pilot-blocker list
 - [CARLOS layer naming policy](https://github.com/carlos-emr/carlos/blob/develop/docs/architecture/layer-names.md)
   — the naming policy the portal's `*ViewModel`, `*ViewModelAssembler`, and service modules follow
+
+## Amendment: CARLOS jobs as internal callers
+
+**Recorded:** 2026-10-20.
+
+The internal API has two caller types, kept apart:
+
+| | Staff | Job |
+| --- | --- | --- |
+| Who | a CARLOS provider acting in CARLOS | a CARLOS background job with no person behind it |
+| Header | `X-CARLOS-Staff-Assertion` | `X-CARLOS-Job-Assertion` |
+| Audience | `carlos-patient-portal-internal-api` | `carlos-patient-portal-job-api` |
+| Keys | `PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING` | `PATIENT_PORTAL_INTERNAL_JOB_ASSERTION_PUBLIC_KEYRING`, one key pair per job |
+| Identity claims | `provider_id`, `provider_name`, a `permissions` list | `job`, exactly one `permission` |
+
+Before this, the booking sync signed as a non-login CARLOS provider holding only the sync
+permission. That made a job pretend to be a person: the provider row sat in CARLOS's provider lists,
+someone could later give it a login or a role without the portal noticing, it signed with the staff
+key (so anything able to make CARLOS sign a staff assertion could sign as the job), and every new
+job meant another provider row per clinic. A job is now its own caller type with its own key.
+
+Both caller types send the shared Bearer service token, use the same compact Ed25519 format with
+strict base64url and duplicate-claim refusal, the same 4096-byte limit, the same 120-second
+lifetime with 30 seconds of skew, the same one-time `jti` store, and the same request hash. A job
+assertion is always bound to the request, in every environment, and its claim set is exactly
+`aud`, `clinic_id`, `exp`, `iat`, `iss`, `jti`, `job`, `kid`, `permission`, `request_hash`. The
+different audience and the separate header mean a job assertion can never pass as a staff one or
+the reverse, and the staff verifier is unchanged.
+
+**Jobs are code, keys are configuration.** `system_jobs.py` names each job, its display name and
+the permissions it may hold: `booking-sync` ("Clinic booking", `portal.booking_prompt.sync`) and
+`signup-poll` ("Patient self sign-up", `portal.signup.manage` and `portal.invite.manage`, with no
+routes yet; its routes, and the rule that its invite must name a sign-up request it has claimed,
+come with self sign-up). Configuration supplies only public keys. Startup refuses an unknown job,
+an empty job entry, a malformed key ID, a key ID used twice or shared with the staff keyring, a key
+that is not 32 bytes, and a public key used by two jobs or by staff. A job without keys is off. Key
+IDs are unique across jobs, so the verifier finds the key by its ID and then requires the signed
+`job` to be that key's owner.
+
+**Every route declares its callers.** The default is staff only (`staff_principal_requiring`); a
+route opened to a job names one job and one permission (`job_principal_requiring`, which refuses at
+startup a job that is not registered or a permission it does not hold). The two booking-sync
+routes take the `booking-sync` job only. A staff assertion carrying `portal.booking_prompt.sync`
+is refused everywhere, and a test lists every internal route with its callers, failing when a
+route is added without that decision. There is no provider-based path left: the portal was not yet
+in production, so the transition release was skipped and CARLOS and the portal move together.
+
+**Refusals.** Anything that does not prove who sent it (no or wrong service token, a malformed
+envelope, an unknown key ID, a bad signature) is the same `404` "not found" as any unauthenticated
+internal call. Once the signature has verified, the refusal has a reason: `unknown_job`,
+`wrong_key`, `invalid_claims`, `expired`, `request_mismatch`, `clinic_mismatch`, `replay`,
+`both_headers` (both headers on one request) and `route_not_open` (which includes every staff
+route) are also `404`, so a job cannot use the API to learn which routes exist; only
+`permission_not_held` and `wrong_permission`, on a route open to that job, are `403`.
+
+**Audit.** Unsigned or invalid job headers keep the per-request `staff.action`
+`authentication_failed` row that staff failures write, unattributed, with the hashed client
+reference. A flood of unsigned or invalid job headers therefore stays visible in the audit log, one
+row per request, exactly as for staff. A refusal after the signature verified writes one
+`job.auth_refused` row in its place: actor type `system`, the display name and `job:<name>` of the
+job whose key signed it, the portal's clinic, the route template (never the raw path or query), the
+reason, and the new `assertion_key_id` and `assertion_id` columns (migration 0016). A verified job
+whose request later fails gets the usual failure row with that attribution, and a job's successful
+actions keep their existing event types with the same actor, key ID and assertion ID. No job event
+carries patient details beyond what the same event already records.
+
+**Keys.** CARLOS keeps each job's private key beside the staff key and never falls back to the
+staff key; portal operators hold only public halves. Rotation needs no downtime: add the new `kid`
+to the portal, switch CARLOS to the new key, and remove the old `kid` after two minutes, the longest
+a signed call lives. For a leaked key, remove its `kid` at once; the job stops until CARLOS has the
+new key, which is the intended trade.
