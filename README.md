@@ -703,7 +703,9 @@ know, an empty job entry, a key ID that is not 1 to 64 of `A-Z a-z 0-9 . _ -`, a
 twice (across jobs, or equal to a staff key ID), a key that is not 32 bytes, or the same public key
 under two jobs or in the staff keyring. Rotate a job key as a staff key: add the new `kid`,
 restart the portal, move CARLOS to it, and remove the old `kid` after two minutes. For a leaked
-key, remove its `kid` at once; the job stops until CARLOS has the new key.
+key, remove its `kid` at once; the job stops until CARLOS has the new key. To make a job key by
+hand (with `openssl`, until a carlos-ctl command exists), see *Making a job key by hand* in
+`docs/architecture/patient-portal-runtime.md`.
 
 Every internal route declares its callers: staff only (the default), or one named job claiming
 one named permission. A request carrying both headers is refused. Refusals:

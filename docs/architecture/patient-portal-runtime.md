@@ -262,3 +262,68 @@ staff key; portal operators hold only public halves. Rotation needs no downtime:
 to the portal, switch CARLOS to the new key, and remove the old `kid` after two minutes, the longest
 a signed call lives. For a leaked key, remove its `kid` at once; the job stops until CARLOS has the
 new key, which is the intended trade.
+
+### Making a job key by hand
+
+A carlos-ctl command for this is planned. Until then, make each job's key by hand, on a trusted
+machine, once per job (`booking-sync` shown; use the job's own name throughout):
+
+1. Make the key pair, in a file only you can read:
+
+   ```bash
+   umask 077
+   openssl genpkey -algorithm ed25519 -out booking-sync.pem
+   ```
+
+2. Choose its key ID as `<job>-<yyyymmdd>-<6 hex>`:
+
+   ```bash
+   kid="booking-sync-$(date -u +%Y%m%d)-$(openssl rand -hex 3)"
+   ```
+
+   It must match `[A-Za-z0-9._-]{1,64}` and differ from the staff key ID and from every other
+   job's key ID; the portal refuses to start otherwise.
+
+3. CARLOS side: in `/etc/carlos-emr/carlos.properties` (installed `0640 root:carlos`), set the
+   private key as the unpadded base64url of its PKCS#8 DER form, and the key ID:
+
+   ```bash
+   openssl pkey -in booking-sync.pem -outform DER | basenc --base64url | tr -d '=\n'
+   ```
+
+   ```properties
+   patient_portal.job.booking-sync.private_key=<the output above>
+   patient_portal.job.booking-sync.key_id=<the kid>
+   ```
+
+4. Portal side: the public key is the raw 32-byte Ed25519 key as unpadded base64url:
+
+   ```bash
+   openssl pkey -in booking-sync.pem -pubout -outform DER | tail -c 32 | basenc --base64url | tr -d '=\n'
+   ```
+
+   Put it in `PATIENT_PORTAL_INTERNAL_JOB_ASSERTION_PUBLIC_KEYRING` under the job and the key ID:
+   `{"booking-sync": {"<kid>": "<public key>"}}`. With both jobs configured, and `booking-sync` in
+   the middle of a rotation (two key IDs at once), it looks like this:
+
+   ```json
+   {
+     "booking-sync": {
+       "booking-sync-20261020-4f2a9c": "<booking-sync public key, current>",
+       "booking-sync-20261101-0a1b2c": "<booking-sync public key, next>"
+     },
+     "signup-poll": {
+       "signup-poll-20261020-9f8e7d": "<signup-poll public key>"
+     }
+   }
+   ```
+
+   In the environment file it goes on one line, for example
+   `PATIENT_PORTAL_INTERNAL_JOB_ASSERTION_PUBLIC_KEYRING={"booking-sync":{"<kid>":"<public key>"}}`.
+
+5. Rotation, in short: add the new key ID to the portal keyring and restart the portal first, then
+   switch CARLOS to the new private key and key ID and restart every CARLOS node, then remove the
+   old key ID from the portal after 2 minutes.
+
+6. Once both values are set, shred or securely delete the `.pem` file (`shred -u booking-sync.pem`
+   on a local disk); the private key now lives only in the CARLOS properties file.
