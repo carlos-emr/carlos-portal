@@ -2,6 +2,7 @@ from pathlib import Path
 
 from carlos_patient_portal import models
 from carlos_patient_portal.config import DEFAULT_SOURCE_CODE_URL, OutboxSettings, Settings
+from carlos_patient_portal.preflight import TABLES_WITHOUT_SEQUENCES
 
 PACKAGE_ROOT = Path(__file__).parents[1] / "carlos_patient_portal"
 REPOSITORY_ROOT = PACKAGE_ROOT.parent
@@ -99,8 +100,12 @@ def test_database_policy_explicitly_grants_every_application_table_and_sequence(
     ).read_text()
 
     for table in models.Base.metadata.tables.values():
-        assert f"public.{table.name}" in policy
-        if table.name != "patient_portal_staff_assertion_uses":
+        assert f"public.{table.name}," in policy or f"public.{table.name}\n" in policy
+        # A table keyed by something other than a serial id has no sequence to grant, and a
+        # GRANT naming a missing sequence would fail the whole policy script on PostgreSQL.
+        if table.name in TABLES_WITHOUT_SEQUENCES:
+            assert f"public.{table.name}_id_seq" not in policy
+        else:
             assert f"public.{table.name}_id_seq" in policy
     assert "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES" not in policy
     assert "GRANT USAGE, SELECT ON ALL SEQUENCES" not in policy
