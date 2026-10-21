@@ -195,6 +195,10 @@ def verify_staff_assertion(
         json.JSONDecodeError,
         ValueError,
         TypeError,
+        # Deeply nested JSON within the size limit exhausts the decoder's recursion depth (on
+        # Python 3.11 at about 1,000 levels). It is a malformed assertion like any other, so it
+        # gets the generic refusal, never a 500.
+        RecursionError,
     ) as exc:
         raise CarlosServiceAuthenticationError() from exc
     if not isinstance(payload, dict):
