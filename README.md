@@ -978,6 +978,13 @@ The audit trail accepts five new event types, which nothing writes yet: `mycarlo
 `mycarlos.link` (a device link attempt; refusals have outcome `failure`), `mycarlos.device_list`,
 `mycarlos.device_remove` and `mycarlos.clinic_keys_publish`.
 
+Requests from a linked device carry `X-MyCarlos-Device-Assertion`: a compact Ed25519 object
+signed with that link's device key and bound to the exact request, the same framing as CARLOS's
+staff and job assertions. `carlos_patient_portal/device_identity.py` checks it in the spec's order
+(and the link request, signed with the new device's key), and its nonce goes into the store
+staff and job assertions use. `tests/test_device_identity.py` runs every shared vector through
+those checks. No route uses them yet.
+
 `PATIENT_PORTAL_MYCARLOS_DELIVERY_ENABLED` (default `false`) turns the feature on. Leave it off:
 it is still being built, and while it is off none of its pages or routes exist.
 
