@@ -407,6 +407,44 @@ def test_date_of_birth_bounds_follow_the_server_rule(
     assert identity.date_of_birth_bounds(today) == (earliest, latest)
 
 
+def test_activation_accepts_the_health_card_with_its_version_code() -> None:
+    # The clinic stores the number without its version code; the patient types the whole card.
+    client = TestClient(migrated_development_app())
+    invite_code = client.post(
+        "/dev/admin/invites",
+        headers=dev_admin_headers(),
+        json=seeded_invite_request(health_card_number="1234567890"),
+    ).json()["invite_token"]
+
+    response = client.post(
+        "/auth/activate",
+        json=activation_request(invite_code, health_card_number="1234-567-890-AB"),
+    )
+
+    assert response.status_code == 201
+
+
+def test_password_holding_the_card_number_is_refused_when_typed_with_its_version_code() -> None:
+    client = TestClient(migrated_development_app())
+    invite_code = client.post(
+        "/dev/admin/invites",
+        headers=dev_admin_headers(),
+        json=seeded_invite_request(health_card_number="1234567890"),
+    ).json()["invite_token"]
+
+    response = client.post(
+        "/auth/activate",
+        json=activation_request(
+            invite_code,
+            health_card_number="1234-567-890-AB",
+            password="Orbit1234567890Lantern!",  # ggignore
+        ),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "password does not meet the password rules"
+
+
 def test_patient_activation_creates_account_from_seeded_invite() -> None:
     app = migrated_development_app()
     client = TestClient(app)

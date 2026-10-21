@@ -48,6 +48,8 @@ The MVP foundation currently includes:
 Why this is a separate Python service with its own PostgreSQL database, what was traded away, and
 the conditions under which the decision should be revisited are recorded in
 [`docs/architecture/patient-portal-runtime.md`](docs/architecture/patient-portal-runtime.md).
+The product spec (what the MVP does and does not do, and its open decisions) is
+[`docs/product-spec.md`](docs/product-spec.md).
 
 The current MVP deliberately uses one isolated portal deployment, database, origin, and configured
 clinic identity per clinic. It is not a shared multi-clinic identity service. The portal-side API
