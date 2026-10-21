@@ -1043,7 +1043,8 @@ def test_an_unset_job_assertion_keyring_turns_every_job_off(value) -> None:
         ("{}", "must be a non-empty JSON object of jobs"),
         (
             {"nightly-export": {"export-1": BOOKING_SYNC_KEY}},
-            "names an unknown job nightly-export; known jobs: booking-sync, signup-poll",
+            "names an unknown job nightly-export; "
+            "known jobs: booking-sync, key-publish, signup-poll",
         ),
         # Text that is not shaped like a job name is not echoed back.
         ({"Booking Sync!": {"k-1": BOOKING_SYNC_KEY}}, r"names an unknown job; known jobs"),

@@ -145,7 +145,7 @@ def payload_of(assertion: str) -> dict[str, object]:
 
 
 def test_registered_jobs_have_well_formed_names_display_names_and_permissions() -> None:
-    assert set(SYSTEM_JOBS) == {"booking-sync", "signup-poll"}
+    assert set(SYSTEM_JOBS) == {"booking-sync", "key-publish", "signup-poll"}
     for name, job in SYSTEM_JOBS.items():
         assert job.name == name
         assert JOB_NAME_PATTERN.fullmatch(name)
@@ -155,7 +155,9 @@ def test_registered_jobs_have_well_formed_names_display_names_and_permissions() 
     assert SYSTEM_JOBS["booking-sync"].permissions == {SYNC}
     assert SYSTEM_JOBS["signup-poll"].display_name == "Patient self sign-up"
     assert SYSTEM_JOBS["signup-poll"].permissions == {SIGNUP, INVITE}
-    assert JOB_ONLY_PERMISSIONS == {SYNC}
+    assert SYSTEM_JOBS["key-publish"].display_name == "Clinic signing keys"
+    assert SYSTEM_JOBS["key-publish"].permissions == {"portal.mycarlos.clinic_keys.publish"}
+    assert JOB_ONLY_PERMISSIONS == {SYNC, "portal.mycarlos.clinic_keys.publish"}
 
 
 def test_no_route_is_open_to_the_signup_job_yet() -> None:
