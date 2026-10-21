@@ -181,7 +181,9 @@ def register_mycarlos_device_routes(app: FastAPI, runtime: PortalRuntime) -> Non
                 content = {
                     "recipient_id": result.recipient_id,
                     "device_key_id": request.device_key_id,
-                    "clinic_id": account.clinic_id,
+                    # One source for the clinic and its keys: the device pins these keys under
+                    # this clinic ID, and every manifest it later checks must name the same one.
+                    "clinic_id": settings.clinic_id,
                     "clinic_name": settings.clinic_name,
                     "clinic_keys": clinic_key_list(session, settings.clinic_id),
                 }
