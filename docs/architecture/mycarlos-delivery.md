@@ -363,7 +363,13 @@ The Ed25519 signature is 64 bytes, and the assertion is at most 4096 bytes.
       `invalid_assertion`.
    3. **Signature:** it verifies with the body's Ed25519 key. Else `invalid_assertion`.
    4. **Time, request hash and replay:** as for device requests.
-   5. **The code:**
+   5. **Clinic keys:** the clinic must have published at least one active signing key. Else
+      `clinic_keys_missing`. The device pins the key list it links with, and nothing refreshes
+      a pinned list, so a device linked before any key existed could never verify a document.
+      This check is for the whole clinic and comes before the code, so it says nothing about the
+      link the request names, the code stays usable once a key is published, and nothing is
+      counted.
+   6. **The code:**
       - it is checked only against the pending link that `link_id` names, so a code never works
         with another account's link;
       - the link must still be pending: unused, unexpired, its session still signed in, and
@@ -378,7 +384,7 @@ The Ed25519 signature is 64 bytes, and the assertion is at most 4096 bytes.
 
       Every failure here gives the same `link_code_invalid`, so the code can't be used to probe
       which links exist.
-   6. **Device key:** a key that is already linked, to any account, gets `device_exists`. Keys
+   7. **Device key:** a key that is already linked, to any account, gets `device_exists`. Keys
       are per link, so a second link always brings a fresh pair.
 4. **On success:** the portal records the device as linked to the code's account, never to an
    account named in the request. It marks the code used and returns:
@@ -498,6 +504,7 @@ The portal logs the code in its audit trail, never content. On the wire:
 | `receipt_mismatch` | 409 | The receipt doesn't match the route or the stored copy |
 | `link_code_invalid` | 403 | Wrong, expired, used or locked code, or one whose session has ended |
 | `device_exists` | 409 | That device key is already linked (keys are per link) |
+| `clinic_keys_missing` | 409 | Linking refused: the clinic hasn't published an active signing key yet. The link code stays usable. |
 | `device_removed` | 403 on device requests, 409 on uploads | The link was removed; its copies are gone |
 
 **Clock problems:** the portal sends a `Date` header, so myCarlos can tell the patient when its
