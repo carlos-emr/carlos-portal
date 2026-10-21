@@ -675,6 +675,11 @@ Permissions are deliberately narrow:
   the two sync endpoints take that job and nobody else. The job is refused by every other internal
   route, including prompt creation, account reads, and invite management, and a staff assertion
   carrying this permission is refused (`403`) on every route.
+- `portal.mycarlos.device.manage`: read a patient's linked myCarlos devices and remove one (only
+  while `PATIENT_PORTAL_MYCARLOS_DELIVERY_ENABLED` is on; see *Send to myCarlos* below).
+- `portal.mycarlos.clinic_keys.publish`: publish the clinic's signing public keys for Send to
+  myCarlos. Only the `key-publish` CARLOS job holds it; a staff assertion carrying it is refused
+  (`403`) on every route.
 
 ### CARLOS jobs
 
@@ -686,6 +691,7 @@ one another permission, is a reviewed code change:
 | --- | --- | --- | --- |
 | `booking-sync` | Clinic booking | `portal.booking_prompt.sync` | the two booking sync endpoints |
 | `signup-poll` | Patient self sign-up | `portal.signup.manage`, `portal.invite.manage` | none yet |
+| `key-publish` | Clinic signing keys | `portal.mycarlos.clinic_keys.publish` | `PUT /internal/carlos/mycarlos/clinic-keys`, only while Send to myCarlos is on |
 
 A job call carries the same Bearer service token and, instead of the staff header, an
 `X-CARLOS-Job-Assertion`: the same compact `<payload>.<signature>` Ed25519 format, signed with
@@ -973,7 +979,25 @@ The audit trail accepts five new event types, which nothing writes yet: `mycarlo
 `mycarlos.device_remove` and `mycarlos.clinic_keys_publish`.
 
 `PATIENT_PORTAL_MYCARLOS_DELIVERY_ENABLED` (default `false`) turns the feature on. Leave it off:
-only the tables exist so far, and while it is off none of its pages or routes exist.
+it is still being built, and while it is off none of its pages or routes exist.
+
+The internal routes CARLOS calls (registered only while the switch is on):
+
+- `PUT /internal/carlos/mycarlos/clinic-keys`, by the `key-publish` job only. The body is the
+  clinic's whole key list, `{"keys": [{"kid", "spki", "status", "replaces_kid",
+  "replacement_signature"}]}`, 1 to 16 keys. `spki` is a P-256 SubjectPublicKeyInfo (DER, unpadded
+  base64url), `kid` must be b64url(SHA-256(spki)), and `status` is `active` or `revoked`. The same
+  list again changes nothing. A published key can never disappear (`409 key_missing`: list it as
+  revoked), a revoked key can never return (`409 key_revoked`), and a stored key's replacement
+  details can never change (`409 key_changed`). The keys are what a device receives when it links.
+- `GET /internal/carlos/patients/{demographic_no}/mycarlos/devices`, staff with
+  `portal.mycarlos.device.manage`. It returns the patient's `recipient_id` (null before the first
+  link) and every device, removed ones too, with its key ID, name, status, times, and the X25519
+  and Ed25519 public keys CARLOS seals to and checks receipts with.
+- `POST /internal/carlos/patients/{demographic_no}/mycarlos/devices/{device_key_id}/remove`, the
+  same permission. It removes one device for good. Removing it again changes nothing, and a device
+  of another patient is `404`. Each call is audited (`mycarlos.device_list`,
+  `mycarlos.device_remove`, `mycarlos.clinic_keys_publish`).
 
 ## Development Invite API
 
