@@ -17,7 +17,8 @@
 Registered only while PATIENT_PORTAL_MYCARLOS_DELIVERY_ENABLED is on. The device has no browser
 session; it proves itself with `X-MyCarlos-Device-Assertion` (device_identity.py). Answers follow
 the spec's "Response codes": a failed assertion is the same generic 404 as the job routes, a
-refused code is 403 `link_code_invalid`, and a key that is already linked is 409 `device_exists`.
+refused code is 403 `link_code_invalid`, a key that is already linked is 409 `device_exists`, and
+linking before the clinic has published an active signing key is 409 `clinic_keys_missing`.
 Every attempt is audited as `mycarlos.link` with its code, never its content.
 """
 
@@ -45,9 +46,11 @@ from carlos_patient_portal.models import (
     PatientPortalAccount,
 )
 from carlos_patient_portal.mycarlos_links import (
+    LINK_RESULT_CLINIC_KEYS_MISSING,
     LINK_RESULT_CODE_INVALID,
     LINK_RESULT_DEVICE_EXISTS,
     LINK_RESULT_LINKED,
+    clinic_has_active_key,
     clinic_key_list,
     link_device,
 )
@@ -136,6 +139,21 @@ def register_mycarlos_device_routes(app: FastAPI, runtime: PortalRuntime) -> Non
             return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content=GENERIC_NOT_FOUND)
 
         with runtime.session_factory() as session, session.begin():
+            # Spec check 5: no device links before the clinic has a key to give it. Checked for
+            # the whole clinic before any link is looked up, so the code stays pending, nothing
+            # is counted, and the answer says nothing about the link the request names.
+            if not clinic_has_active_key(session, settings.clinic_id):
+                record_link_attempt(
+                    outcome=AUDIT_OUTCOME_FAILURE,
+                    reason=LINK_RESULT_CLINIC_KEYS_MISSING,
+                    client_reference_hash=client_reference_hash,
+                    device_key_id=request.device_key_id,
+                    session=session,
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_409_CONFLICT,
+                    content={"code": LINK_RESULT_CLINIC_KEYS_MISSING},
+                )
             result = link_device(
                 session,
                 request,
@@ -165,7 +183,7 @@ def register_mycarlos_device_routes(app: FastAPI, runtime: PortalRuntime) -> Non
                     "device_key_id": request.device_key_id,
                     "clinic_id": account.clinic_id,
                     "clinic_name": settings.clinic_name,
-                    "clinic_keys": clinic_key_list(session, account.clinic_id),
+                    "clinic_keys": clinic_key_list(session, settings.clinic_id),
                 }
         if not linked:
             return JSONResponse(status_code=LINK_STATUS[result.code], content={"code": result.code})

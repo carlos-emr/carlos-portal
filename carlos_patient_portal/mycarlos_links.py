@@ -45,6 +45,7 @@ from carlos_patient_portal.auth import is_past, lock_is_staff_initiated
 from carlos_patient_portal.device_identity import LinkRequest, b64url
 from carlos_patient_portal.models import (
     ACCOUNT_STATUS_ACTIVE,
+    CLINIC_KEY_STATUS_ACTIVE,
     MYCARLOS_DEVICE_STATUS_ACTIVE,
     MYCARLOS_LINK_CODE_LENGTH,
     MYCARLOS_LINK_ID_LENGTH,
@@ -75,6 +76,7 @@ MAX_RECIPIENT_ID_ATTEMPTS = 5
 LINK_RESULT_LINKED = "linked"
 LINK_RESULT_CODE_INVALID = "link_code_invalid"
 LINK_RESULT_DEVICE_EXISTS = "device_exists"
+LINK_RESULT_CLINIC_KEYS_MISSING = "clinic_keys_missing"
 
 
 class LinkingPausedError(Exception):
@@ -296,7 +298,9 @@ def link_device(
     idle_timeout: timedelta,
     now: datetime | None = None,
 ) -> LinkResult:
-    """Spec checks 5 (the code) and 6 (the device key), then the link itself.
+    """Spec checks 6 (the code) and 7 (the device key), then the link itself.
+
+    Check 5, an active clinic key, is the caller's: it is clinic-wide and comes first.
 
     A wrong code is counted here and is part of this transaction, so the caller must commit it
     even though the answer is a refusal; this function never raises for a refused link.
@@ -366,6 +370,25 @@ def link_device(
         account_id=account.id,
         device=device,
         recipient_id=recipient_id,
+    )
+
+
+def clinic_has_active_key(session: Session, clinic_id: str) -> bool:
+    """Whether CARLOS has published at least one active signing key for the clinic.
+
+    A device pins the key list it receives when it links, and nothing refreshes a pinned list,
+    so a device linked before any key exists could never verify a document.
+    """
+    return (
+        session.scalar(
+            select(PatientPortalClinicKey.kid)
+            .where(
+                PatientPortalClinicKey.clinic_id == clinic_id,
+                PatientPortalClinicKey.status == CLINIC_KEY_STATUS_ACTIVE,
+            )
+            .limit(1)
+        )
+        is not None
     )
 
 

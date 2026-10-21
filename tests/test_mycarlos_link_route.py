@@ -308,8 +308,28 @@ def link_request(
     }
 
 
-def fresh_account(app, demographic_no: int = 8001) -> tuple[int, int]:
+def publish_active_clinic_key(app) -> None:
+    """The fixture's clinic-a key, published as CARLOS's key-publish job would."""
+    key = CONTRACT["keys"]["clinic_a"]
+    with app.state.session_factory() as session, session.begin():
+        if session.get(PatientPortalClinicKey, key["kid"]) is None:
+            session.add(
+                PatientPortalClinicKey(
+                    kid=key["kid"],
+                    clinic_id=key["clinic_id"],
+                    spki=decode(key["spki"]),
+                    status="active",
+                    published_at=NOW_AT - timedelta(days=1),
+                )
+            )
+
+
+def fresh_account(
+    app, demographic_no: int = 8001, *, with_clinic_key: bool = True
+) -> tuple[int, int]:
     """An account with one signed-in session. Returns (account id, session id)."""
+    if with_clinic_key:
+        publish_active_clinic_key(app)
     with app.state.session_factory() as session, session.begin():
         account = PatientPortalAccount(
             clinic_id="clinic-a",
@@ -358,6 +378,50 @@ def test_a_fresh_code_links_and_makes_the_recipient_id() -> None:
     assert stored.recipient_id == recipient_id
     # Never the code itself.
     assert issued.code not in link.code_hash
+
+
+def test_no_device_links_before_the_clinic_publishes_an_active_key() -> None:
+    app = link_app()
+    account_id, session_id = fresh_account(app, with_clinic_key=False)
+    # Only a revoked key so far: nothing a device could pin and verify with.
+    revoked = CONTRACT["keys"]["clinic_a_revoked"]
+    with app.state.session_factory() as session, session.begin():
+        session.add(
+            PatientPortalClinicKey(
+                kid=revoked["kid"],
+                clinic_id=revoked["clinic_id"],
+                spki=decode(revoked["spki"]),
+                status="revoked",
+                published_at=NOW_AT - timedelta(days=30),
+                revoked_at=NOW_AT - timedelta(days=2),
+            )
+        )
+    issued = new_code(app, account_id, session_id)
+    client = TestClient(app)
+
+    refused = post(client, link_request(issued.link_id, issued.code, "no key yet"))
+    assert (refused.status_code, refused.json()) == (409, {"code": "clinic_keys_missing"})
+    # A wrong code gets the same answer and counts nothing: the check comes before the code.
+    wrong_first = post(client, link_request(issued.link_id, wrong(issued.code), "no key wrong"))
+    assert wrong_first.json() == {"code": "clinic_keys_missing"}
+    assert wrong_code_count(app, account_id) == 0
+    with app.state.session_factory() as session:
+        link = session.scalar(select(PatientPortalMyCarlosLinkCode))
+        assert (link.status, link.wrong_codes) == ("pending", 0)
+        reasons = list(
+            session.scalars(
+                select(PatientPortalAuditEvent.reason).where(
+                    PatientPortalAuditEvent.event_type == AUDIT_EVENT_MYCARLOS_LINK
+                )
+            )
+        )
+    assert reasons == ["clinic_keys_missing", "clinic_keys_missing"]
+
+    # Once CARLOS publishes an active key, the same code links.
+    publish_active_clinic_key(app)
+    linked = post(client, link_request(issued.link_id, issued.code, "key published"))
+    assert linked.status_code == 200, linked.text
+    assert [key["status"] for key in linked.json()["clinic_keys"]] == ["revoked", "active"]
 
 
 def test_five_wrong_codes_end_a_link_and_more_count_nothing() -> None:
