@@ -46,6 +46,11 @@ from tests.support import (
     NON_DEVELOPMENT_SESSION_SECRET,
     SEEDED_INVITE_EMAIL,
     STRONG_PASSWORD,
+    TEST_JOB_ASSERTION_KEY_IDS,
+    TEST_JOB_ASSERTION_NEXT_PUBLIC_KEY,
+    TEST_JOB_ASSERTION_PUBLIC_KEYRING,
+    TEST_JOB_ASSERTION_PUBLIC_KEYS,
+    TEST_STAFF_ASSERTION_KEY_ID,
     TEST_STAFF_ASSERTION_PUBLIC_KEY,
     TEST_STAFF_ASSERTION_PUBLIC_KEYRING,
     RecordingPortalSmsSender,
@@ -1004,6 +1009,133 @@ def test_staff_assertion_keyring_rejects_invalid_or_ambiguous_members() -> None:
             internal_api_token="c" * 32,
             internal_staff_assertion_public_keyring=json.dumps({"new": "A"}),
         )
+
+
+BOOKING_SYNC_KEY = TEST_JOB_ASSERTION_PUBLIC_KEYS["booking-sync"]
+SIGNUP_POLL_KEY = TEST_JOB_ASSERTION_PUBLIC_KEYS["signup-poll"]
+
+
+def job_keyring_settings(keyring: object, **overrides: object) -> Settings:
+    encoded = keyring if isinstance(keyring, str) else json.dumps(keyring)
+    return production_settings(internal_job_assertion_public_keyring=encoded, **overrides)
+
+
+def test_job_assertion_keyring_accepts_each_registered_job_with_its_own_keys() -> None:
+    settings = production_settings(
+        internal_job_assertion_public_keyring=TEST_JOB_ASSERTION_PUBLIC_KEYRING
+    )
+
+    assert settings.resolved_internal_job_assertion_public_keys == {
+        job: {TEST_JOB_ASSERTION_KEY_IDS[job]: public_key}
+        for job, public_key in TEST_JOB_ASSERTION_PUBLIC_KEYS.items()
+    }
+
+
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_an_unset_job_assertion_keyring_turns_every_job_off(value) -> None:
+    settings = production_settings(internal_job_assertion_public_keyring=value)
+
+    assert settings.internal_job_assertion_public_keyring is None
+    assert settings.resolved_internal_job_assertion_public_keys == {}
+
+
+@pytest.mark.parametrize(
+    ("keyring", "message"),
+    [
+        ("{", "must be a JSON object"),
+        ("[]", "must be a non-empty JSON object of jobs"),
+        ("{}", "must be a non-empty JSON object of jobs"),
+        (
+            {"nightly-export": {"export-1": BOOKING_SYNC_KEY}},
+            "names an unknown job nightly-export; known jobs: booking-sync, signup-poll",
+        ),
+        # Text that is not shaped like a job name is not echoed back.
+        ({"Booking Sync!": {"k-1": BOOKING_SYNC_KEY}}, r"names an unknown job; known jobs"),
+        ({"booking-sync": {}}, r"\[booking-sync\] must be a non-empty JSON object of key IDs"),
+        ({"booking-sync": [BOOKING_SYNC_KEY]}, "must be a non-empty JSON object of key IDs"),
+        ({"booking-sync": BOOKING_SYNC_KEY}, "must be a non-empty JSON object of key IDs"),
+        ({"booking-sync": {"bad key": BOOKING_SYNC_KEY}}, "job assertion key IDs must contain"),
+        ({"booking-sync": {"k" * 65: BOOKING_SYNC_KEY}}, "job assertion key IDs must contain"),
+        ({"booking-sync": {"k-1": 123}}, "key must be a string"),
+        ({"booking-sync": {"k-1": "A"}}, "must be base64url"),
+        ({"booking-sync": {"k-1": "invalid"}}, "must encode one 32-byte Ed25519 public key"),
+        (
+            {
+                "booking-sync": {"shared": BOOKING_SYNC_KEY},
+                "signup-poll": {"shared": SIGNUP_POLL_KEY},
+            },
+            "lists key ID shared under both booking-sync and signup-poll",
+        ),
+        (
+            {"booking-sync": {"k-1": BOOKING_SYNC_KEY}, "signup-poll": {"k-2": BOOKING_SYNC_KEY}},
+            "same public key under booking-sync and signup-poll",
+        ),
+        (
+            '{"booking-sync":{"k-1":"' + BOOKING_SYNC_KEY + '"},"booking-sync":{"k-2":"'
+            + BOOKING_SYNC_KEY + '"}}',
+            "duplicate JSON member",
+        ),
+        (
+            '{"booking-sync":{"k-1":"' + BOOKING_SYNC_KEY + '","k-1":"' + BOOKING_SYNC_KEY + '"}}',
+            "duplicate JSON member",
+        ),
+        (
+            {"booking-sync": {TEST_STAFF_ASSERTION_KEY_ID: BOOKING_SYNC_KEY}},
+            "is also a staff assertion key ID",
+        ),
+        (
+            {"booking-sync": {"k-1": TEST_STAFF_ASSERTION_PUBLIC_KEY}},
+            "is a staff assertion public key; every job needs its own key pair",
+        ),
+    ],
+)
+def test_job_assertion_keyring_refuses_to_start_with_an_unsafe_entry(keyring, message) -> None:
+    with pytest.raises(ValidationError, match=message):
+        job_keyring_settings(keyring)
+
+
+def test_job_assertion_keyring_is_checked_against_the_singular_development_staff_key() -> None:
+    # The singular development key is served under the id "legacy", so a job may not reuse either.
+    with pytest.raises(ValidationError, match="is also a staff assertion key ID"):
+        development_settings(
+            internal_api_token="c" * 32,
+            internal_staff_assertion_public_key=TEST_STAFF_ASSERTION_PUBLIC_KEY,
+            internal_job_assertion_public_keyring=json.dumps(
+                {"booking-sync": {"legacy": BOOKING_SYNC_KEY}}
+            ),
+        )
+    with pytest.raises(ValidationError, match="is a staff assertion public key"):
+        development_settings(
+            internal_api_token="c" * 32,
+            internal_staff_assertion_public_key=TEST_STAFF_ASSERTION_PUBLIC_KEY,
+            internal_job_assertion_public_keyring=json.dumps(
+                {"booking-sync": {"k-1": TEST_STAFF_ASSERTION_PUBLIC_KEY}}
+            ),
+        )
+
+
+def test_job_assertion_keyring_allows_overlapping_rotation_keys_for_one_job() -> None:
+    settings = production_settings(
+        internal_staff_assertion_public_keyring=TEST_STAFF_ASSERTION_PUBLIC_KEYRING,
+        internal_job_assertion_public_keyring=json.dumps(
+            {
+                "booking-sync": {
+                    "booking-sync-old": BOOKING_SYNC_KEY,
+                    "booking-sync-new": TEST_JOB_ASSERTION_NEXT_PUBLIC_KEY,
+                }
+            }
+        ),
+    )
+
+    assert set(settings.resolved_internal_job_assertion_public_keys["booking-sync"]) == {
+        "booking-sync-old",
+        "booking-sync-new",
+    }
+
+
+def test_job_assertion_keyring_has_a_bounded_length() -> None:
+    with pytest.raises(ValidationError, match="at most 8192 characters"):
+        production_settings(internal_job_assertion_public_keyring="x" * 8193)
 
 
 @pytest.mark.parametrize("settings_factory", [staging_settings, production_settings])

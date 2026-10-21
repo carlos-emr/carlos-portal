@@ -64,6 +64,8 @@ AUDIT_EVENT_INVITE_CREATE = "invite.create"
 AUDIT_EVENT_INVITE_LIST = "invite.list"
 AUDIT_EVENT_INVITE_RESEND = "invite.resend"
 AUDIT_EVENT_INVITE_REVOKE = "invite.revoke"
+# A CARLOS job's signed call that verified but was refused (system_jobs.py, job_identity.py).
+AUDIT_EVENT_JOB_AUTH_REFUSED = "job.auth_refused"
 AUDIT_EVENT_LOGIN = "login"
 AUDIT_EVENT_MFA_CHALLENGE = "mfa.challenge"
 AUDIT_EVENT_MFA_DELIVERY = "mfa.delivery"
@@ -173,6 +175,7 @@ MAX_AUDIT_RESOURCE_TYPE_LENGTH = 64
 MAX_AUDIT_RESOURCE_ID_LENGTH = 128
 MAX_AUDIT_REASON_LENGTH = 64
 STAFF_ASSERTION_ID_LENGTH = 36
+MAX_AUDIT_ASSERTION_KEY_ID_LENGTH = 64
 MAX_UNLOCK_SECRET_LABEL_LENGTH = 128
 MAX_UNLOCK_SECRET_SOURCE_REFERENCE_LENGTH = 128
 MAX_UNLOCK_SECRET_ACTOR_LENGTH = 128
@@ -1603,6 +1606,7 @@ class PatientPortalAuditEvent(Base):
                 "'account.enable', 'account.lock', "
                 "'account.mfa_update', 'account.password_change', 'account.unlock', "
                 "'invite.create', 'invite.list', 'invite.resend', 'invite.revoke', "
+                "'job.auth_refused', "
                 "'login', 'mfa.challenge', 'mfa.delivery', 'mfa.resend', 'mfa.verify', "
                 "'password_reset.complete', 'password_reset.delivery', "
                 "'password_reset.request', 'retention.policy_override', 'session.logout', "
@@ -1661,6 +1665,14 @@ class PatientPortalAuditEvent(Base):
             "resource_id is null or length(resource_id) between 1 and 128",
             name="ck_patient_portal_audit_events_resource_id_length",
         ),
+        CheckConstraint(
+            "assertion_key_id is null or length(assertion_key_id) between 1 and 64",
+            name="ck_patient_portal_audit_events_assertion_key_id_length",
+        ),
+        CheckConstraint(
+            f"assertion_id is null or length(assertion_id) = {STAFF_ASSERTION_ID_LENGTH}",
+            name="ck_patient_portal_audit_events_assertion_id_length",
+        ),
         Index(
             "ix_patient_portal_audit_events_activation_invite",
             "event_type",
@@ -1713,6 +1725,16 @@ class PatientPortalAuditEvent(Base):
         nullable=True,
     )
     reason: Mapped[str | None] = mapped_column(String(MAX_AUDIT_REASON_LENGTH), nullable=True)
+    # The signing key id and the one-time assertion id of a CARLOS job's call, so a job's rows can
+    # be tied to the key that signed them and to one exact request.
+    assertion_key_id: Mapped[str | None] = mapped_column(
+        String(MAX_AUDIT_ASSERTION_KEY_ID_LENGTH),
+        nullable=True,
+    )
+    assertion_id: Mapped[str | None] = mapped_column(
+        String(STAFF_ASSERTION_ID_LENGTH),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=utc_now,

@@ -16,7 +16,7 @@ import logging
 from collections.abc import Awaitable, Callable, Generator
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Annotated, Literal, Protocol
+from typing import Annotated, Literal, NoReturn, Protocol, TypeVar
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Request, status
 from pydantic import (
@@ -92,9 +92,21 @@ from carlos_patient_portal.invites import (
     resend_invite,
     revoke_invite,
 )
+from carlos_patient_portal.job_identity import (
+    JOB_ASSERTION_HEADER,
+    JOB_REFUSAL_PERMISSION_NOT_HELD,
+    JOB_REFUSAL_ROUTE_NOT_OPEN,
+    JOB_REFUSAL_WRONG_PERMISSION,
+    CarlosJobRefusal,
+    JobPrincipal,
+    authenticate_carlos_job,
+    consume_job_assertion,
+)
 from carlos_patient_portal.models import (
     AUDIT_ACTOR_TYPE_STAFF,
+    AUDIT_ACTOR_TYPE_SYSTEM,
     AUDIT_EVENT_INVITE_LIST,
+    AUDIT_EVENT_JOB_AUTH_REFUSED,
     AUDIT_EVENT_STAFF_ACTION,
     AUDIT_OUTCOME_FAILURE,
     AUDIT_OUTCOME_SUCCESS,
@@ -125,6 +137,12 @@ from carlos_patient_portal.staff_identity import (
     consume_staff_assertion,
     staff_request_hash,
 )
+from carlos_patient_portal.system_jobs import (
+    JOB_BOOKING_SYNC,
+    JOB_ONLY_PERMISSIONS,
+    PERMISSION_BOOKING_PROMPT_SYNC,
+    SYSTEM_JOBS,
+)
 from carlos_patient_portal.unlock_secrets import (
     UnlockSecretDecryptionError,
     UnlockSecretNotFoundError,
@@ -145,10 +163,11 @@ PERMISSION_ACCOUNT_MANAGE = "portal.account.manage"
 PERMISSION_SECRET_MANAGE = "portal.secret.manage"
 PERMISSION_CONTACT_REVIEW = "portal.contact.review"
 PERMISSION_BOOKING_PROMPT_MANAGE = "portal.booking_prompt.manage"
-# Held by the CARLOS polling job's dedicated, non-login system provider and nothing else. It lists
-# patients' pending picks and reports results; it cannot create prompts, read accounts, or manage
-# invites, and no other endpoint accepts it.
-PERMISSION_BOOKING_PROMPT_SYNC = "portal.booking_prompt.sync"
+# `PERMISSION_BOOKING_PROMPT_SYNC` (from system_jobs) belongs to the `booking-sync` job alone. It
+# lists patients' pending picks and reports results; it cannot create prompts, read accounts, or
+# manage invites, no other route accepts it, and a staff assertion carrying it is refused
+# everywhere.
+STAFF_ASSERTION_HEADER = "X-CARLOS-Staff-Assertion"
 # Part of the CARLOS/Java boundary: one deliberately generic 404 shared by every account lookup so
 # the contract cannot drift branch by branch.
 INTERNAL_ACCOUNT_NOT_FOUND_DETAIL = "portal account not found"
@@ -579,14 +598,66 @@ def require_permission(principal: StaffPrincipal, permission: str) -> None:
     except CarlosStaffPermissionError as exc:
         # Sonar cannot associate dependency-level errors with every route's OpenAPI responses.
         raise HTTPException(status_code=403, detail="permission denied") from exc  # NOSONAR
-    # The booking sync permission is only accepted on its own: it belongs to CARLOS's polling job,
-    # which holds nothing else, so an assertion carrying it with anything else is refused
-    # everywhere.
-    if (
-        PERMISSION_BOOKING_PROMPT_SYNC in principal.permissions
-        and principal.permissions != frozenset({PERMISSION_BOOKING_PROMPT_SYNC})
-    ):
+    # A job's own permission never rides on a person's login: a staff assertion carrying one is
+    # refused on every route, whatever else it holds. Jobs sign their own calls (job_identity.py).
+    if principal.permissions & JOB_ONLY_PERMISSIONS:
         raise HTTPException(status_code=403, detail="permission denied")  # NOSONAR
+
+
+@dataclass(frozen=True)
+class InternalCallerPolicy:
+    """Who a route takes: staff holding `permission`, or the one job `job` claiming it."""
+
+    caller: Literal["staff", "job"]
+    permission: str
+    job: str | None = None
+
+
+# Set on every route's authorization dependency, so a test can list each route's callers and a
+# new route without a decision fails the build.
+CALLER_POLICY_ATTRIBUTE = "carlos_caller_policy"
+DependencyT = TypeVar("DependencyT", bound=Callable[..., object])
+
+
+def tag_caller_policy(dependency: DependencyT, policy: InternalCallerPolicy) -> DependencyT:
+    setattr(dependency, CALLER_POLICY_ATTRIBUTE, policy)
+    return dependency
+
+
+def internal_route_template(request: Request) -> str:
+    """The matched route's template, such as `/internal/carlos/invites/{invite_id}/revoke`.
+
+    Audit rows name the template, never the raw path or query, which carry values the caller chose.
+    """
+    template = getattr(request.scope.get("route"), "path", None)
+    if isinstance(template, str) and template.startswith("/internal/carlos/"):
+        return template
+    return "/internal/carlos/"
+
+
+@dataclass(frozen=True)
+class RecordedJobRefusal:
+    """A refused job call, left on request.state for the failure middleware to record."""
+
+    code: str
+    key_owner: str
+    key_id: str
+    assertion_id: str | None
+    route_template: str
+
+
+def raise_job_refusal(request: Request, refusal: CarlosJobRefusal) -> NoReturn:
+    request.state.carlos_job_refusal = RecordedJobRefusal(
+        code=refusal.code,
+        key_owner=refusal.key_owner,
+        key_id=refusal.key_id,
+        assertion_id=refusal.assertion_id,
+        route_template=internal_route_template(request),
+    )
+    if refusal.status_code == status.HTTP_403_FORBIDDEN:
+        raise HTTPException(status_code=403, detail="permission denied") from refusal  # NOSONAR
+    # The same 404 as an unauthenticated call, so a job cannot tell a closed route from no route.
+    raise HTTPException(status_code=404, detail="not found") from refusal  # NOSONAR
 
 
 def require_pending_for_disclosure(unlock_secret: PatientPortalUnlockSecret) -> None:
@@ -646,47 +717,123 @@ class InternalRouteDependencies:
     """
 
     staff_principal_requiring: Callable[[str], Callable[..., StaffPrincipal]]
+    job_principal_requiring: Callable[[str, str], Callable[..., JobPrincipal]]
     session_dependency: object
     disclose_unlock_secret: Callable[[Session, PatientPortalUnlockSecret, StaffPrincipal], str]
 
 
+@dataclass(frozen=True)
+class InternalFailureRecord:
+    """Who a failed internal request's audit row names, and why it failed."""
+
+    event_type: str
+    actor_type: str
+    actor: str
+    reason: str
+    actor_id: str | None = None
+    clinic_id: str | None = None
+    resource_id: str | None = None
+    assertion_key_id: str | None = None
+    assertion_id: str | None = None
+
+
+FAILED_INTERNAL_ACTION_REASONS = {
+    403: "authorization_failed",
+    404: "not_found",
+    409: "conflict",
+    422: "validation_failed",
+    429: "throttled",
+}
+
+
+def describe_failed_internal_action(
+    state: object,
+    status_code: int,
+    *,
+    clinic_id: str,
+) -> InternalFailureRecord:
+    """Attribute one failed request from what its authentication left on request.state.
+
+    A job call that verified and was refused gets its own `job.auth_refused` row, in place of the
+    generic one, naming the job whose key signed it and the route template. A verified job that
+    later fails (a conflict, a validation error) is named as the system actor it is. Anything that
+    did not authenticate stays the unattributed `authentication_failed` row, one per request.
+    """
+    refusal: RecordedJobRefusal | None = getattr(state, "carlos_job_refusal", None)
+    if refusal is not None:
+        job = SYSTEM_JOBS[refusal.key_owner]
+        return InternalFailureRecord(
+            event_type=AUDIT_EVENT_JOB_AUTH_REFUSED,
+            actor_type=AUDIT_ACTOR_TYPE_SYSTEM,
+            actor=job.display_name,
+            actor_id=job.actor_id,
+            clinic_id=clinic_id,
+            resource_id=refusal.route_template,
+            reason=refusal.code,
+            assertion_key_id=refusal.key_id,
+            assertion_id=refusal.assertion_id,
+        )
+    reason = FAILED_INTERNAL_ACTION_REASONS.get(status_code, "internal_failure")
+    job_principal: JobPrincipal | None = getattr(state, "carlos_job_principal", None)
+    if job_principal is not None:
+        return InternalFailureRecord(
+            event_type=AUDIT_EVENT_STAFF_ACTION,
+            actor_type=AUDIT_ACTOR_TYPE_SYSTEM,
+            actor=job_principal.display_name,
+            actor_id=job_principal.actor_id,
+            clinic_id=job_principal.clinic_id,
+            reason=reason,
+            assertion_key_id=job_principal.key_id,
+            assertion_id=job_principal.assertion_id,
+        )
+    principal: StaffPrincipal | None = getattr(state, "carlos_staff_principal", None)
+    if principal is not None:
+        return InternalFailureRecord(
+            event_type=AUDIT_EVENT_STAFF_ACTION,
+            actor_type=AUDIT_ACTOR_TYPE_STAFF,
+            actor=principal.display_name,
+            actor_id=principal.provider_id,
+            clinic_id=principal.clinic_id,
+            reason=reason,
+        )
+    return InternalFailureRecord(
+        event_type=AUDIT_EVENT_STAFF_ACTION,
+        actor_type=AUDIT_ACTOR_TYPE_STAFF,
+        actor="carlos-service",
+        reason="authentication_failed",
+    )
+
+
 def register_internal_failure_audit(app: FastAPI, runtime: InternalRuntime) -> None:
-    """Record every failed /internal/carlos/** request as a staff-action audit event."""
+    """Record every failed /internal/carlos/** request as an audit event."""
 
     def record_failed_internal_action(request: Request, status_code: int) -> None:
         # Authentication consumes a request-bound nonce. Re-verifying here would either consume it
         # twice or require a replay bypass in the audit path, so the dependency records only a
-        # successfully authenticated principal on request.state. Authentication failures remain
-        # deliberately unattributed.
-        principal: StaffPrincipal | None = getattr(
+        # successfully authenticated principal (or a verified job's refusal) on request.state.
+        # Authentication failures remain deliberately unattributed.
+        failure = describe_failed_internal_action(
             request.state,
-            "carlos_staff_principal",
-            None,
+            status_code,
+            clinic_id=runtime.settings.clinic_id,
         )
-        reason = (
-            "authentication_failed"
-            if principal is None
-            else {
-                403: "authorization_failed",
-                404: "not_found",
-                409: "conflict",
-                422: "validation_failed",
-                429: "throttled",
-            }.get(status_code, "internal_failure")
-        )
+        reason = failure.reason
         try:
             with runtime.session_factory() as audit_session:
                 with audit_session.begin():
                     record_audit_event(
                         audit_session,
-                        event_type=AUDIT_EVENT_STAFF_ACTION,
+                        event_type=failure.event_type,
                         outcome=AUDIT_OUTCOME_FAILURE,
-                        actor_type=AUDIT_ACTOR_TYPE_STAFF,
-                        actor=principal.display_name if principal is not None else "carlos-service",
-                        actor_id=principal.provider_id if principal is not None else None,
-                        clinic_id=principal.clinic_id if principal is not None else None,
+                        actor_type=failure.actor_type,
+                        actor=failure.actor,
+                        actor_id=failure.actor_id,
+                        clinic_id=failure.clinic_id,
                         resource_type="internal_api",
+                        resource_id=failure.resource_id,
                         reason=reason,
+                        assertion_key_id=failure.assertion_key_id,
+                        assertion_id=failure.assertion_id,
                         # Without this every unauthenticated failure row is identical
                         # ("carlos-service" / "authentication_failed"), so a flood cannot be told
                         # apart from a single misconfigured caller. Patient-facing failure paths
@@ -734,23 +881,66 @@ def build_internal_dependencies(runtime: InternalRuntime) -> InternalRouteDepend
             with session.begin():
                 yield session
 
-    async def get_staff_principal(
+    async def authenticate_job_request(
+        request: Request,
+        *,
+        authorization: str | None,
+        job_assertion: str,
+        staff_assertion_present: bool,
+        expected_request_hash: str,
+    ) -> JobPrincipal:
+        try:
+            principal = authenticate_carlos_job(
+                runtime.settings,
+                authorization=authorization,
+                job_assertion=job_assertion,
+                expected_request_hash=expected_request_hash,
+                staff_assertion_present=staff_assertion_present,
+            )
+            await run_in_threadpool(
+                consume_job_assertion,
+                runtime.session_factory,
+                principal,
+            )
+        except CarlosJobRefusal as refusal:
+            raise_job_refusal(request, refusal)
+        except CarlosServiceAuthenticationError as exc:
+            raise HTTPException(status_code=404, detail="not found") from exc
+        request.state.carlos_job_principal = principal
+        return principal
+
+    async def get_internal_principal(
         request: Request,
         authorization: Annotated[str | None, Header()] = None,
-        staff_assertion: Annotated[str | None, Header(alias="X-CARLOS-Staff-Assertion")] = None,
-    ) -> StaffPrincipal:
+        staff_assertion: Annotated[str | None, Header(alias=STAFF_ASSERTION_HEADER)] = None,
+        job_assertion: Annotated[str | None, Header(alias=JOB_ASSERTION_HEADER)] = None,
+    ) -> StaffPrincipal | JobPrincipal:
+        """Authenticate the caller as staff or as a job, from whichever assertion it sent.
+
+        A job header always takes the job path, even beside a staff header, so a request carrying
+        both is refused and, when the job's signature verifies, recorded as `both_headers`.
+        """
         try:
             body = await request.body()
+            expected_request_hash = staff_request_hash(
+                request.method,
+                request.scope.get("raw_path", request.url.path.encode("utf-8")),
+                request.scope.get("query_string", b""),
+                body,
+            )
+            if job_assertion is not None:
+                return await authenticate_job_request(
+                    request,
+                    authorization=authorization,
+                    job_assertion=job_assertion,
+                    staff_assertion_present=staff_assertion is not None,
+                    expected_request_hash=expected_request_hash,
+                )
             principal = authenticate_carlos_staff(
                 runtime.settings,
                 authorization=authorization,
                 staff_assertion=staff_assertion,
-                expected_request_hash=staff_request_hash(
-                    request.method,
-                    request.scope.get("raw_path", request.url.path.encode("utf-8")),
-                    request.scope.get("query_string", b""),
-                    body,
-                ),
+                expected_request_hash=expected_request_hash,
             )
             await run_in_threadpool(
                 consume_staff_assertion,
@@ -769,15 +959,61 @@ def build_internal_dependencies(runtime: InternalRuntime) -> InternalRouteDepend
         permission here makes 403 precede 422 — matching CARLOS's auth-first rule, where
         `hasPrivilege` is the first statement in every 2Action, and keeping a caller who lacks
         permission from learning the endpoint's schema through validation errors.
+
+        This is the default for every internal route: staff only. A job is refused here with the
+        generic 404 (`route_not_open`), whatever permission it claims.
         """
 
         def dependency(
-            principal: Annotated[StaffPrincipal, Depends(get_staff_principal)],
+            request: Request,
+            principal: Annotated[StaffPrincipal | JobPrincipal, Depends(get_internal_principal)],
         ) -> StaffPrincipal:
+            if isinstance(principal, JobPrincipal):
+                raise_job_refusal(
+                    request,
+                    CarlosJobRefusal.for_principal(JOB_REFUSAL_ROUTE_NOT_OPEN, principal),
+                )
             require_permission(principal, permission)
             return principal
 
-        return dependency
+        return tag_caller_policy(
+            dependency,
+            InternalCallerPolicy(caller="staff", permission=permission),
+        )
+
+    def job_principal_requiring(job: str, permission: str) -> Callable[..., JobPrincipal]:
+        """Open a route to one registered job claiming one of its permissions, and to nobody else.
+
+        Raises at registration when the job is not registered or does not hold the permission, so
+        a route can never be opened to a right the allowlist in system_jobs.py does not grant.
+        """
+        registered = SYSTEM_JOBS.get(job)
+        if registered is None:
+            raise ValueError(f"{job} is not a registered CARLOS job")
+        if permission not in registered.permissions:
+            raise ValueError(f"the {job} job does not hold {permission}")
+
+        def dependency(
+            request: Request,
+            principal: Annotated[StaffPrincipal | JobPrincipal, Depends(get_internal_principal)],
+        ) -> JobPrincipal:
+            if isinstance(principal, StaffPrincipal):
+                # A person's login never reaches a job's route, whatever it holds.
+                raise HTTPException(status_code=403, detail="permission denied")  # NOSONAR
+            if principal.job != job:
+                code = JOB_REFUSAL_ROUTE_NOT_OPEN
+            elif principal.permission not in registered.permissions:
+                code = JOB_REFUSAL_PERMISSION_NOT_HELD
+            elif principal.permission != permission:
+                code = JOB_REFUSAL_WRONG_PERMISSION
+            else:
+                return principal
+            raise_job_refusal(request, CarlosJobRefusal.for_principal(code, principal))
+
+        return tag_caller_policy(
+            dependency,
+            InternalCallerPolicy(caller="job", permission=permission, job=job),
+        )
 
     # FastAPI supports function-scoped teardown; Sonar's FastAPI stub does not.
     session_dependency = Depends(get_database_session, scope="function")  # NOSONAR
@@ -821,6 +1057,7 @@ def build_internal_dependencies(runtime: InternalRuntime) -> InternalRouteDepend
 
     return InternalRouteDependencies(
         staff_principal_requiring=staff_principal_requiring,
+        job_principal_requiring=job_principal_requiring,
         session_dependency=session_dependency,
         disclose_unlock_secret=disclose_unlock_secret,
     )
@@ -1647,8 +1884,9 @@ def register_internal_booking_sync_routes(
 ) -> None:
     """Offered-time sync for the CARLOS polling job (carlos-portal#11).
 
-    Both routes require `portal.booking_prompt.sync` and accept nothing else, so the polling job's
-    system provider can hold that permission alone.
+    Both routes take the `booking-sync` job claiming `portal.booking_prompt.sync`, and nobody else:
+    staff are refused, whatever they hold. The job is audited as the system actor it is, with the
+    key id and nonce of the call.
     """
 
     @app.get(
@@ -1659,8 +1897,10 @@ def register_internal_booking_sync_routes(
     def internal_list_booking_choices(
         request: Request,
         principal: Annotated[
-            StaffPrincipal,
-            Depends(deps.staff_principal_requiring(PERMISSION_BOOKING_PROMPT_SYNC)),
+            JobPrincipal,
+            Depends(
+                deps.job_principal_requiring(JOB_BOOKING_SYNC, PERMISSION_BOOKING_PROMPT_SYNC)
+            ),
         ],
         session: Annotated[Session, deps.session_dependency],
         state: Annotated[Literal["pending"], Query()],
@@ -1689,8 +1929,10 @@ def register_internal_booking_sync_routes(
             session,
             clinic_id=principal.clinic_id,
             actor=principal.display_name,
-            actor_id=principal.provider_id,
+            actor_id=principal.actor_id,
             limit=limit,
+            assertion_key_id=principal.key_id,
+            assertion_id=principal.assertion_id,
         )
         return {
             "items": [
@@ -1716,8 +1958,10 @@ def register_internal_booking_sync_routes(
         prompt_id: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
         payload: InternalBookingChoiceResultRequest,
         principal: Annotated[
-            StaffPrincipal,
-            Depends(deps.staff_principal_requiring(PERMISSION_BOOKING_PROMPT_SYNC)),
+            JobPrincipal,
+            Depends(
+                deps.job_principal_requiring(JOB_BOOKING_SYNC, PERMISSION_BOOKING_PROMPT_SYNC)
+            ),
         ],
         session: Annotated[Session, deps.session_dependency],
     ) -> dict[str, object]:
@@ -1736,8 +1980,10 @@ def register_internal_booking_sync_routes(
                 replacement_slots=offered_slot_specs(payload.offered_slots),
                 booking_location_codes=runtime.settings.resolved_booking_locations.keys(),
                 actor=principal.display_name,
-                actor_id=principal.provider_id,
+                actor_id=principal.actor_id,
                 notice=notice,
+                assertion_key_id=principal.key_id,
+                assertion_id=principal.assertion_id,
             )
         except BookingPromptNotFoundError as exc:
             raise HTTPException(status_code=404, detail=BOOKING_PROMPT_NOT_FOUND_DETAIL) from exc

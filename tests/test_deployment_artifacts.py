@@ -429,6 +429,17 @@ def test_reference_proxy_omits_raw_request_target_and_limits_expensive_routes() 
         )
         == 1
     )
+    # A CARLOS job's assertion: stripped from patient-facing locations, forwarded only to the
+    # CARLOS location, exactly like the staff one.
+    assert configuration.count('proxy_set_header X-CARLOS-Job-Assertion ""') == 1
+    assert (
+        configuration.count("proxy_set_header X-CARLOS-Job-Assertion $http_x_carlos_job_assertion")
+        == 1
+    )
+    internal_block = configuration.split("location ^~ /internal/carlos/ {", 1)[1]
+    internal_block = internal_block.split("\n  }", 1)[0]
+    assert "$http_x_carlos_job_assertion" in internal_block
+    assert 'X-CARLOS-Job-Assertion ""' not in internal_block
     assert configuration.count("proxy_set_header Host $host") == 2
     assert "location ^~ /patient/" in configuration
     assert "proxy_pass http://carlos_patient_portal/;" in configuration

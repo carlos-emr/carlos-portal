@@ -38,6 +38,12 @@ from carlos_patient_portal.models import (
     utc_now,
 )
 from carlos_patient_portal.sms_delivery import PortalSmsDeliveryError, PortalSmsSender
+from carlos_patient_portal.staff_identity import staff_request_hash
+from carlos_patient_portal.system_jobs import (
+    JOB_BOOKING_SYNC,
+    JOB_SIGNUP_POLL,
+    PERMISSION_BOOKING_PROMPT_SYNC,
+)
 
 NON_DEVELOPMENT_SESSION_SECRET = "s" * MIN_PRODUCTION_SECRET_LENGTH
 
@@ -74,6 +80,46 @@ TEST_STAFF_ASSERTION_KEY_ID = "test-2026"
 TEST_STAFF_ASSERTION_PUBLIC_KEYRING = json.dumps(
     {TEST_STAFF_ASSERTION_KEY_ID: TEST_STAFF_ASSERTION_PUBLIC_KEY},
     separators=(",", ":"),
+)
+
+
+def _raw_public_key(private_key: Ed25519PrivateKey) -> str:
+    return (
+        urlsafe_b64encode(
+            private_key.public_key().public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            )
+        )
+        .rstrip(b"=")
+        .decode("ascii")
+    )
+
+
+# One fixed key per job, each different from the staff test key (bytes 1-32) and from the
+# rotation key test_internal_api.py derives from bytes 33-64.
+TEST_JOB_ASSERTION_PRIVATE_KEYS = {
+    JOB_BOOKING_SYNC: Ed25519PrivateKey.from_private_bytes(bytes(range(65, 97))),
+    JOB_SIGNUP_POLL: Ed25519PrivateKey.from_private_bytes(bytes(range(97, 129))),
+}
+TEST_JOB_ASSERTION_KEY_IDS = {
+    JOB_BOOKING_SYNC: "booking-sync-test-2026",
+    JOB_SIGNUP_POLL: "signup-poll-test-2026",
+}
+TEST_JOB_ASSERTION_PUBLIC_KEYS = {
+    job: _raw_public_key(private_key)
+    for job, private_key in TEST_JOB_ASSERTION_PRIVATE_KEYS.items()
+}
+# A second booking-sync key, for rotation tests.
+TEST_JOB_ASSERTION_NEXT_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(bytes(range(129, 161)))
+TEST_JOB_ASSERTION_NEXT_PUBLIC_KEY = _raw_public_key(TEST_JOB_ASSERTION_NEXT_PRIVATE_KEY)
+TEST_JOB_ASSERTION_PUBLIC_KEYRING = json.dumps(
+    {
+        job: {TEST_JOB_ASSERTION_KEY_IDS[job]: public_key}
+        for job, public_key in TEST_JOB_ASSERTION_PUBLIC_KEYS.items()
+    },
+    separators=(",", ":"),
+    sort_keys=True,
 )
 
 
@@ -190,6 +236,96 @@ def carlos_staff_headers(
             clinic_id=clinic_id,
             provider_id=provider_id,
             provider_name=provider_name,
+            **assertion_options,
+        ),
+    }
+
+
+def encode_assertion(payload: bytes, signing_key: Ed25519PrivateKey) -> str:
+    """Sign raw payload bytes, for tests that need a payload json.dumps cannot produce."""
+    return f"{_base64url(payload)}.{_base64url(signing_key.sign(payload))}"
+
+
+def sign_job_assertion(
+    job: str = JOB_BOOKING_SYNC,
+    permission: object = PERMISSION_BOOKING_PROMPT_SYNC,
+    *,
+    request_hash: str,
+    clinic_id: str = TEST_CLINIC_ID,
+    issued_at: int | None = None,
+    expires_at: int | None = None,
+    audience: str = "carlos-patient-portal-job-api",
+    issuer: str = "carlos",
+    key_id: str | None = None,
+    signing_key: Ed25519PrivateKey | None = None,
+    claim_overrides: dict[str, object] | None = None,
+    removed_claims: tuple[str, ...] = (),
+) -> str:
+    """Sign a job assertion the way CARLOS does: compact, sorted JSON, one fresh UUID per call.
+
+    The key defaults to the claimed job's own test key; pass `key_id`/`signing_key` to sign with
+    another one. `claim_overrides` replaces or adds claims, `removed_claims` drops them.
+    """
+    now = int(datetime.now(UTC).timestamp())
+    issued_at = now if issued_at is None else issued_at
+    expires_at = issued_at + 60 if expires_at is None else expires_at
+    key_owner = job if job in TEST_JOB_ASSERTION_PRIVATE_KEYS else JOB_BOOKING_SYNC
+    claims: dict[str, object] = {
+        "aud": audience,
+        "clinic_id": clinic_id,
+        "exp": expires_at,
+        "iat": issued_at,
+        "iss": issuer,
+        "jti": str(uuid4()),
+        "job": job,
+        "kid": TEST_JOB_ASSERTION_KEY_IDS[key_owner] if key_id is None else key_id,
+        "permission": permission,
+        "request_hash": request_hash,
+    }
+    claims.update(claim_overrides or {})
+    for name in removed_claims:
+        claims.pop(name)
+    payload = json.dumps(claims, separators=(",", ":"), sort_keys=True).encode()
+    return encode_assertion(
+        payload,
+        TEST_JOB_ASSERTION_PRIVATE_KEYS[key_owner] if signing_key is None else signing_key,
+    )
+
+
+def job_request_hash(method: str, path: str, *, query: bytes = b"", body: bytes = b"") -> str:
+    """The request hash of `path`, which may carry its own `?query` instead of `query`."""
+    raw_path, separator, path_query = path.partition("?")
+    if separator and query:
+        raise ValueError("give the query in the path or as query, not both")
+    return staff_request_hash(
+        method,
+        raw_path.encode(),
+        path_query.encode() if separator else query,
+        body,
+    )
+
+
+def carlos_job_headers(
+    job: str = JOB_BOOKING_SYNC,
+    permission: object = PERMISSION_BOOKING_PROMPT_SYNC,
+    *,
+    method: str,
+    path: str,
+    query: bytes = b"",
+    body: bytes = b"",
+    clinic_id: str = TEST_CLINIC_ID,
+    token: str = INTERNAL_API_TOKEN,
+    **assertion_options: object,
+) -> dict[str, str]:
+    """Headers for one job call. The assertion is bound to this exact method, path, query and body,
+    so send a POST body with `content=` (the same bytes), not `json=`."""
+    return {
+        "Authorization": f"Bearer {token}",
+        "X-CARLOS-Job-Assertion": sign_job_assertion(
+            job,
+            permission,
+            request_hash=job_request_hash(method, path, query=query, body=body),
+            clinic_id=clinic_id,
             **assertion_options,
         ),
     }
