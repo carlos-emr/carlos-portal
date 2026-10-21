@@ -111,6 +111,13 @@ The manifest has exactly these claims, no more and no fewer:
 The PDF keeps its own PAdES signature (carlos#4691), so it stays verifiable after it leaves the
 vault. The manifest signature also covers the PDF, through `document.sha256`.
 
+The PDF also carries CARLOS's embedded document manifest, `carlos-document-manifest.json`. It is
+added in the same update as that PAdES signature, so the signature covers it. It names the
+issuing clinic and the patient, and gives the document a stable ID and version, so the PDF still
+says what it is once it leaves the vault. A receiver reads it only after the PDF signature checks
+out. Its field names match this manifest's where the two overlap. Its format is set in CARLOS
+(`DocumentManifest`, carlos#4691), not here.
+
 ### 2. The sealed plaintext
 
 ```
