@@ -432,9 +432,22 @@ K_link          = HKDF-SHA256(ikm = this link's Ed25519 private seed (32 bytes),
 vault_head_link = lowercase hex of HMAC-SHA256(K_link, head)
 ```
 
-Here `head` is the vault history's current head hash, as 32 bytes. myCarlos can recompute the
-anchor for any past head, so a rewrite of its history still shows against the anchors on record.
-The vectors include both links' anchors for the same head.
+Here `head` is the vault history's current head hash, as 32 bytes. The vectors include both
+links' anchors for the same head.
+
+**Who checks an anchor:** only the device, or an auditor the patient gives that link's key, can
+recompute `vault_head_link`. The portal and CARLOS hold anchors but not `K_link`: they just store
+the values and hand them back.
+- **The device itself:** it fetches the anchors stored for a link and compares them with its own
+  history, recomputing each anchor from the head recorded at that time. A mismatch means the
+  history was rewritten after that anchor was recorded. The route that returns stored anchors
+  is M4 detail.
+- **An auditor, in a dispute:** myCarlos gives the auditor two things:
+  - that link's `K_link`. It is an HKDF output, so it reveals nothing about the link's signing
+    key and nothing about any other link;
+  - its history heads.
+
+  The auditor recomputes the anchors and compares them with the ones CARLOS has on record.
 
 **CARLOS** checks the receipt against its own record of the delivery:
 - the accepted device's key;
