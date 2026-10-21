@@ -25,6 +25,7 @@ from base64 import urlsafe_b64decode
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import NAMESPACE_URL, uuid5
 
 import pytest
@@ -32,9 +33,11 @@ from alembic import command
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from carlos_patient_portal import device_identity
 from carlos_patient_portal.device_identity import (
     DEVICE_REFUSAL_CODES,
     DeviceRefusal,
+    b64url,
     consume_device_assertion,
     device_key_id,
     find_device_record,
@@ -285,6 +288,26 @@ def test_a_nonce_used_by_a_device_is_refused_to_another_device_request(portal) -
 def test_a_malformed_assertion_is_invalid(portal, assertion) -> None:
     vector = {**signed_request(), "assertion": assertion}
     assert device_outcome(portal, vector)[0] == "invalid_assertion"
+
+
+def test_a_deeply_nested_assertion_or_link_body_is_invalid(portal) -> None:
+    nested = b64url(b"[" * 2900) + "." + b64url(bytes(64))
+    assert len(nested) <= 4096
+    assert device_outcome(portal, {**signed_request(), "assertion": nested})[0] == (
+        "invalid_assertion"
+    )
+    link = next(v for v in PORTAL["link_requests"] if v["name"] == "link a new device")
+    assert link_outcome(portal, {**link, "body": "[" * 3000})[0] == "invalid_assertion"
+
+
+def test_a_decoder_recursion_error_is_invalid_not_a_crash(portal, monkeypatch) -> None:
+    def too_deep(*_args: object, **_kwargs: object) -> object:
+        raise RecursionError("maximum recursion depth exceeded while decoding a JSON array")
+
+    link = next(v for v in PORTAL["link_requests"] if v["name"] == "link a new device")
+    monkeypatch.setattr(device_identity, "json", SimpleNamespace(loads=too_deep))
+    assert device_outcome(portal, signed_request())[0] == "invalid_assertion"
+    assert link_outcome(portal, link)[0] == "invalid_assertion"
 
 
 def test_a_non_integer_time_is_invalid(portal) -> None:

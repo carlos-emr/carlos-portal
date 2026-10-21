@@ -197,7 +197,9 @@ def _parse_compact(assertion: object) -> tuple[bytes, dict[str, object], bytes]:
     signature = _strict_b64url(encoded_signature, expected_length=64)
     try:
         claims = json.loads(payload, object_pairs_hook=_no_duplicate_members)
-    except (UnicodeDecodeError, ValueError, TypeError) as exc:
+    # Deeply nested JSON inside the size limit exhausts the decoder's recursion depth (on Python
+    # 3.11 at about 1,000 levels): malformed like any other, never a 500.
+    except (UnicodeDecodeError, ValueError, TypeError, RecursionError) as exc:
         raise DeviceRefusal(REFUSAL_INVALID_ASSERTION) from exc
     if not isinstance(claims, dict):
         raise DeviceRefusal(REFUSAL_INVALID_ASSERTION)
@@ -341,7 +343,7 @@ def verify_link_request(
     current_time = int(time()) if now is None else now
     try:
         fields = json.loads(body, object_pairs_hook=_no_duplicate_members)
-    except (UnicodeDecodeError, ValueError, TypeError) as exc:
+    except (UnicodeDecodeError, ValueError, TypeError, RecursionError) as exc:
         raise DeviceRefusal(REFUSAL_INVALID_ASSERTION) from exc
     if not isinstance(fields, dict) or set(fields) != LINK_BODY_FIELDS:
         raise DeviceRefusal(REFUSAL_INVALID_ASSERTION)
