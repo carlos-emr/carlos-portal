@@ -416,12 +416,16 @@ def list_pending_choices(
     actor: str,
     actor_id: str | None,
     limit: int = MAX_PENDING_CHOICE_LIST,
+    assertion_key_id: str | None = None,
+    assertion_id: str | None = None,
 ) -> PendingBookingChoicePage:
     """The clinic's picks waiting for CARLOS, oldest first, for the polling job.
 
     A pick stays listed until CARLOS reports its result, staff withdraw its prompt or turn the
     account off, or its time starts (then it is closed by `close_lapsed_choices`), including after
     the prompt's expiry: the patient chose while it was live and is still waiting.
+    `assertion_key_id` and `assertion_id` are the job call's signing key id and nonce, kept on the
+    audit row.
     """
     if not 1 <= limit <= MAX_PENDING_CHOICE_LIST:
         raise ValueError(f"limit must be between 1 and {MAX_PENDING_CHOICE_LIST}")
@@ -465,6 +469,8 @@ def list_pending_choices(
             resource_type="booking_choice",
             resource_id=f"count:{len(choices)}",
             reason="pending_choices_listed",
+            assertion_key_id=assertion_key_id,
+            assertion_id=assertion_id,
         )
     return PendingBookingChoicePage(choices=choices, has_more=len(rows) > limit)
 
@@ -481,6 +487,8 @@ def record_choice_result(
     actor: str,
     actor_id: str | None,
     notice: BookingPromptNotice,
+    assertion_key_id: str | None = None,
+    assertion_id: str | None = None,
 ) -> BookingChoiceResultOutcome:
     """Record CARLOS's answer to one pick, and tell the patient there is an update.
 
@@ -488,7 +496,8 @@ def record_choice_result(
     poll cycle cannot double-report. A different result for a resolved choice is a conflict. On
     `booked` the offered times are deleted. On `slot_unavailable` the taken time is removed, the
     patient can pick again from the rest, and any replacement times are added after them; on an
-    expired prompt the patient can no longer pick, so replacements are not stored.
+    expired prompt the patient can no longer pick, so replacements are not stored. The job call's
+    signing key id and nonce (`assertion_key_id`, `assertion_id`) are kept on the audit rows.
     """
     if result not in BOOKING_CHOICE_RESULTS:
         raise ValueError("result is not supported")
@@ -589,6 +598,8 @@ def record_choice_result(
         resource_type="booking_choice",
         resource_id=str(choice.id),
         reason=result,
+        assertion_key_id=assertion_key_id,
+        assertion_id=assertion_id,
     )
     if store_replacements:
         record_audit_event(
@@ -604,6 +615,8 @@ def record_choice_result(
             resource_type="booking_prompt",
             resource_id=str(prompt.id),
             reason=f"replacement:{len(replacements)}",
+            assertion_key_id=assertion_key_id,
+            assertion_id=assertion_id,
         )
     enqueue_booking_prompt_update_delivery(
         session,

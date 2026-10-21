@@ -327,8 +327,9 @@ def report_choice_result(result: str) -> None:
                         if result == "slot_unavailable"
                         else ()
                     ),
-                    actor="CARLOS booking sync",
-                    actor_id="carlos-booking-sync",
+                    # As the booking-sync job records it.
+                    actor="Clinic booking",
+                    actor_id="job:booking-sync",
                     # The browser run has no outbox worker; the queued notice is never sent.
                     notice=BookingPromptNotice(
                         sign_in_url=(settings.public_base_url or "http://127.0.0.1:8090") + "/",
