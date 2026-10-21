@@ -491,6 +491,10 @@ def is_portal_path(path: str) -> bool:
     return path == PORTAL_SESSION_COOKIE_PATH or path.startswith(f"{PORTAL_SESSION_COOKIE_PATH}/")
 
 
+MYCARLOS_API_PREFIX = "/api/mycarlos/"
+MYCARLOS_LINK_PATH = "/api/mycarlos/link"
+
+
 def is_patient_runtime_path(path: str) -> bool:
     return (
         path == "/"
@@ -511,7 +515,14 @@ def is_rate_limited_path(path: str) -> bool:
     # The probe endpoints (/internal/health/db, /internal/readiness, /internal/metrics) are
     # deliberately excluded: they are polled on a fixed interval by orchestrators and throttling
     # them would turn a healthy service into a failing liveness check.
-    return is_patient_runtime_path(path) or path.startswith("/internal/carlos/")
+    #
+    # /api/mycarlos/** is the myCarlos device API (carlos-portal#41). It answers callers with no
+    # browser session, and its link route takes a guessable one-time code.
+    return (
+        is_patient_runtime_path(path)
+        or path.startswith("/internal/carlos/")
+        or path.startswith(MYCARLOS_API_PREFIX)
+    )
 
 
 def is_maintenance_exempt_path(path: str) -> bool:
