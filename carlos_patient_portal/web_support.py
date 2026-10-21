@@ -997,9 +997,10 @@ async def get_activation_request(request: Request) -> ActivationRequest:
         raw_payload = json.loads(body)
         if isinstance(raw_payload, dict) and isinstance(raw_payload.get("invite_code"), str):
             invite_code = raw_payload["invite_code"]
-    # RecursionError: JSON nested deeply enough, inside the size cap, exhausts the decoder's
-    # recursion depth. It is malformed input like any other, refused below, never a 500.
-    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
+    # Malformed input like any other, refused below, never a 500. ValueError covers decode errors
+    # (JSONDecodeError, UnicodeDecodeError) and a number past Python's int-conversion digit limit;
+    # RecursionError is JSON nested deeply enough, inside the size cap, to exhaust the decoder.
+    except (ValueError, RecursionError):
         pass
     try:
         return ActivationRequest.model_validate_json(body)

@@ -979,6 +979,21 @@ def test_patient_activation_refuses_deeply_nested_json_without_a_500() -> None:
     assert response.status_code == 400
 
 
+def test_patient_activation_refuses_an_oversized_json_number_without_a_500() -> None:
+    """A number past Python's 4,300-digit int-conversion limit, inside the size cap."""
+    app = migrated_development_app()
+    body = b'{"invite_code": ' + b"9" * 5000 + b"}"
+    assert len(body) <= web_support.MAX_JSON_BODY_BYTES
+
+    response = TestClient(app, raise_server_exceptions=False).post(
+        "/auth/activate",
+        content=body,
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 400
+
+
 def test_patient_activation_requires_json_body() -> None:
     app = migrated_development_app()
     response = TestClient(app).post(
