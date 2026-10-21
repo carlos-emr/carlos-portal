@@ -181,9 +181,10 @@ names the code the vectors expect.
 
 1. The outer record's `v` and `suite` are the ones above. Else `unsupported_version`.
 2. The size and SHA-256 of the downloaded bytes match the outer record. Else `hash_mismatch`.
-3. The outer `recipient_id` is this link's, and the outer `device_key_id` is this device's. Else
-   `wrong_recipient` or `wrong_device`. Nothing is decrypted for someone else.
-4. Open the seal with the AAD built from the outer record. Else `decrypt_failed`.
+3. The outer `recipient_id` and `device_key_id` are this link's (the copy was fetched through
+   this link). Else `wrong_recipient` or `wrong_device`. Nothing is decrypted for someone else.
+4. Open the seal with this link's X25519 key and the AAD built from the outer record. Else
+   `decrypt_failed`.
 5. Split the plaintext. Else `bad_package` (or `unsupported_version`, as in "The sealed plaintext"
    above). Parse the manifest. If it isn't a compact object with exactly the claims listed, of
    the types listed, with `v` 1, the right `typ` and a PDF `media_type`: `bad_manifest`.
