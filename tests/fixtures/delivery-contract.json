@@ -92,6 +92,13 @@
       "x25519_seed_text": "FAKE delivery contract test key: device 1 x25519",
       "ed25519_seed_text": "FAKE delivery contract test key: device 1 ed25519"
     },
+    "device_link_b": {
+      "device_key_id": "l204uPWInHF_kzBQ7ovwyKq0PwcGtCMbIGdIDNsHthE",
+      "x25519_public_key": "jsmD68Amb-VkTzADmBGQOzr_HL03-JGcpGEQ3oxhjj4",
+      "ed25519_public_key": "CWmzG3xiIFwqpGzDcXo8fED03iyeEry3UohuYpNZv-k",
+      "x25519_seed_text": "FAKE delivery contract test key: device 1, link to clinic-b x25519",
+      "ed25519_seed_text": "FAKE delivery contract test key: device 1, link to clinic-b ed25519"
+    },
     "other_device": {
       "device_key_id": "UfKEw1hvufYaSTpPEAC3iFECGAQJg1ULkDzYhZGsAVQ",
       "x25519_public_key": "vORWzJhOsOrNMNziF0W9XuMwlVeYXdRr3uc7HcnsvUg",
@@ -153,6 +160,7 @@
     "links": [
       {
         "name": "link to clinic-a",
+        "device": "device",
         "clinic_id": "clinic-a",
         "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
         "clinic_keys": [
@@ -172,6 +180,7 @@
       },
       {
         "name": "link to clinic-b",
+        "device": "device_link_b",
         "clinic_id": "clinic-b",
         "recipient_id": "rcp-FAKE0003cccccccccccc",
         "clinic_keys": [
@@ -575,7 +584,7 @@
         "blob": "ST8_aoTZPjvmogPB_8diihVQUk1JRWLnSwLUuLpSsx6TqxL9kZ29kLrA0LKvS04RiAkmFkGN4KZkA9cA_3l6SiiQLcFTORT6pjdQAxk53Xlqsee7nCei9I_6K2j8gNS6Wnot_myVVKjeABPypZSYOQwOjwysIFDTSdrZQsUftundCCcsOUbRtXWGTK-ySB4piYq-UZL7dXfTiGE4MmrVmDd3YClT-Ey005O1rReXmbdKTC70TLFUYW-m8L4UrRnSvUKPdxPMkP3Z4k5qxsuyhJR-MMqWx-QFHY5bycFiHoZyj_V1LKjqr9wp7-WmdENjjzQK5NGIYbH6e89g2v15wyA2ESNrajlZ9a95tLrx62dkbQM8srwMoRJcYmkOKaITbdVWtF0mNqARQpylfFX71Ss__6UWKHff9FgK2gRtNhSmltM6MemE7aohj-OplJtOUHIHjWQZEzDJcHWCQ-pAJiz1Q2nyuwKq_S0WyBK9uYcnKMEDpEV1DXLS3HfsP7I2Vklk0BvPOyXxGBNQogo7USFtjURYrS1yVYNOc4faDzFJnG57VP_R-2mjTVOog6HEY-v3mjhH3vACIiS1xfydPhTjiLhvW7PWcOWRRNXEgzWunyViSqYm2zKxFiu4trDcRE4thf2j7LkWk8bNz5T8wfxmSi2HnkYeqmqHQkaCwdVzsfFn8bnDRXLhGT-Ko-atD_tFVUAKlsxy-D_TKC-gBSJSxCfgtqEuSlWxg6HZo2bpQviESPwkfbi0pak-CVnj2oIVdG7wQj7iWqe40daXxDJJO_JIs8bgUPN4w9w7zQVPrQh0i5aVMjQRrwqMhagSOLczEvJyj-4loIRg25BbEYxjlFR2pF3pLifiJmm6eqje5f3JGQ6o_Po6iqpefKmpScuzn6YO78sYGlylxgnrJ8cc52jjQZaFtOMoSj3tsCKuVM_F_cUiv3bYZLP0yIvUhkXjtoo_Y-LOhFrBKEn8JDhMvCbizbprrdcylv3tIC8qvg_N4jSMMOkgmxG17sMUfnU1ZH9VjC9jwTFN8lMQAVXbh5SgWhxFPIL7dEkvPyvOBpx8IG3REPp6phwJtlyymXRvjanWrBXDXz4CyK3I9dt33w1PTZBUkYCH6tODbA2h2u33vVE6ZZGFgTG_Bk8KlG6hqUfCKSIc6ijD1uRA2FJR8EFTMZBZXpNqALQ7-jGreQVzoxQQ5MXHuCB8WqTtwNLv9O9_QGb6ht4uggJ28WRlZlcIOYWRskUd2Cyuyor_P3rGiwX6PAVKXEtUQbIXqu0kf5OIQcrUxCckIgGJhU7epvHzfiOsu-KkKySekeLq4Y8QT9sINOXxsQeGsFRWCdFx0v8-oCeN2SWxKeUlkFUFkkVVy-v9Ys9dRKEToVWm3p60mmZmvXuYLFopogg73Ms2IjtRYw1fwqaYPuOqXzQrIgcMsTT0J4Ace6kDlXSJIW1xLx3QJmSAbdL2GvqgJYbEoe7VTqGbPgObTuGk7MiO8nzEUb7TPEVK5xmvAboTsbsXrnXlV4tkHrJYMoUGTX3xBki23_AE6gLxSe6wtYOunJlSMToUNILeTL9FQ7tasPtcdc9gfI8B8Jv5cFLZIbfuWQaRosk3YT3lpl7Wm5AihBOwITo1oUkEez_AuXWAupkHggTxIQqSUZZLKVHnaWROPRUbdvAg_-QUsiTOkXk-AImL-7IoXZRDitU-zPN-",
         "now": 1792454400,
         "expect": "wrong_clinic",
-        "note": "clinic-b's key is pinned, but on the device's other link",
+        "note": "clinic-b's genuine key, signing for this link's IDs; it is pinned only on the other link",
         "portal_upload": "accept"
       },
       {
@@ -1222,21 +1231,6 @@
         }
       },
       {
-        "name": "the same device linking a second account",
-        "expect": "accept",
-        "method": "POST",
-        "path": "/api/mycarlos/link",
-        "query": "",
-        "body": "{\"code\":\"FAKE9D3RHW\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"njUvKIbOgLS2FyrkL2a6iGkUbNIsd1iR0FaELGmiaGI\",\"link_id\":\"FAKE0002\",\"x25519_public_key\":\"41IHjK4kO6HTxTGlXde7IBQGjSo7XVz-vKbb8wXN9HY\"}",
-        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiI3OGI2NWQyMi01Y2RmLTVjM2UtYjM3Yy1hNDhiMWJhMjFmZjgiLCJraWQiOiJFYnoyc0gyalZvcWNkRmhsMUJtSU9CUm0xeHVULXpXNWJ2RkJjQ2VFUlBZIiwicmVxdWVzdF9oYXNoIjoiZThjMGY4MWJkMDZiZTkwYzdlODhjY2RiNDYyNTA0ZjYwOTdhNTY0MTMzZDZkMDJhMmMzMDMzMzUwYWExNGZlMyJ9.IcegFFao6_aHKMmIiBqEipcuDp2er_zlLuLD1CphmP7paI1yfJ8Ak8UidsCs8f6_pjypzCSErpfRGiU-CeSNDg",
-        "returns": {
-          "account": "account-2",
-          "recipient_id": "rcp-FAKE0002bbbbbbbbbbbb",
-          "device_key_id": "Ebz2sH2jVoqcdFhl1BmIOBRm1xuT-zW5bvFBcCeERPY"
-        },
-        "note": "device keys are per device; the device gets a second row, for account-2"
-      },
-      {
         "name": "a code from another account's link",
         "expect": "link_code_invalid",
         "method": "POST",
@@ -1244,7 +1238,35 @@
         "query": "",
         "body": "{\"code\":\"FAKE7Q2M4K\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKE0002\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
         "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiJjMGFmNzg1NC02NzJlLTUwYWEtOWI2Ny05YmQxNzZkYTZlZjUiLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiZDg3Zjg5YjlhMmI0MzY5YmMzMmE4MWUwNjRkMjNjMDc4NDcyZDc3MjgzMDE0OGM2NjMxYWI2NGFlMjRkNTRhZiJ9.eu1xuGkA9tihoBesMB5XQ5KbFjVvd3qfFxuY6X9pRfvtpykCe7a4gd5uVqyJXTf73wPcA3CJc0kjPTS3nlOXDw",
-        "note": "link_id names account-2's pending link; the code is account-1's"
+        "note": "link_id names account-2's pending link; the code is account-1's",
+        "account_wrong_codes_after": {
+          "account-2": 1
+        }
+      },
+      {
+        "name": "a wrong code for a used link",
+        "expect": "link_code_invalid",
+        "method": "POST",
+        "path": "/api/mycarlos/link",
+        "query": "",
+        "body": "{\"code\":\"FAKEWR0NG1\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKE0004\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
+        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiJhYzViMjBmZC0xMDYyLTU0ZmEtOTZjNy00ZTIzOTVhNDRmMzciLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiNjFmYWI5ODM3ZDgxNTFkMDE3ZWUxM2E2NDZjMmE3OTc3Njc1ZjUxMGJhZjc0NTFkYWQ5ZDlkOGZjMWE1YjY3NSJ9.5OYeFJZI0Mf7ctvGJ6IKX32ZIIzlZcb7DyRAYNiC0XIK_yoD7LG1UHF9ZA0EikNEaTvcQUVOscjcb7NZxKb4BQ",
+        "note": "an ended link answers the same, but nothing is counted",
+        "account_wrong_codes_after": {
+          "account-1": 0
+        }
+      },
+      {
+        "name": "a wrong code for an expired link",
+        "expect": "link_code_invalid",
+        "method": "POST",
+        "path": "/api/mycarlos/link",
+        "query": "",
+        "body": "{\"code\":\"FAKEWR0NG1\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKE0003\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
+        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiJhNTk0ZjEzYS1mYzM0LTU3YzYtYjM1NC1lZWFjODE3Mjg3Y2MiLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiNWM5OTQwNGI4OTMxMTg5ZmFjZGJmYzY1YTI1Mjg5NjcyNjkzYmUwODcwOWJkZjljMGYwODk4ZTFhNjMxNWMyYSJ9.r6ffhLQ99O_-bPaXoS28m0RQVDBlHpU265vBvyKhg3lI2kI5s3LIldnqfKGLi4RmCg1NVx32c3_3rqUaw0eHDQ",
+        "account_wrong_codes_after": {
+          "account-1": 0
+        }
       },
       {
         "name": "an expired code",
@@ -1355,13 +1377,23 @@
         "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiJiNjA5NjI2Ny03NzIzLTViNjAtOTE1YS0xY2FkMjMyZTM1ZjMiLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiMWY0YTAzM2QzYmIxYzk1MzMwOGU3OWRlOWUxN2I4YzFhMTI0YjM1MzdmNTEzMDZiODIxN2NhZDliMmQyZTAxYSJ9.4nazVXSFztvMFkVq2vvPDwplgZcotcb1KvV0M4zI8LGFTE1BVTbz6ixcmTLrp9WQxyXayxSF6TLOuHPVmiBfDw"
       },
       {
-        "name": "a device key already linked to this account",
+        "name": "a device key that is already linked",
         "expect": "device_exists",
         "method": "POST",
         "path": "/api/mycarlos/link",
         "query": "",
         "body": "{\"code\":\"FAKE7Q2M4K\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"njUvKIbOgLS2FyrkL2a6iGkUbNIsd1iR0FaELGmiaGI\",\"link_id\":\"FAKE0001\",\"x25519_public_key\":\"41IHjK4kO6HTxTGlXde7IBQGjSo7XVz-vKbb8wXN9HY\"}",
-        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiJmZTlmOWYxMy0xYjc2LTVmMjUtYWQyZC0wYTlkYzkyOGQ5ODciLCJraWQiOiJFYnoyc0gyalZvcWNkRmhsMUJtSU9CUm0xeHVULXpXNWJ2RkJjQ2VFUlBZIiwicmVxdWVzdF9oYXNoIjoiZDI3YmE3MzU5ZWE4OGY1MWZmYzUwMTcyMzM5Mzc0NThiMTJmZGE0N2I0MDc1OGNlZDVjMWQ2NGY5YTBlNmJkMiJ9.oKw5KzBpTNGZX5L1u5IBflgld605MxmaedJMl5I7owCN2Oje7w3nQrxfsggXDL8vQEF0bXIdN11ZyTLbt3k6Dg"
+        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiIzMWViMTM3MS0zOTU4LTUwMWMtODlhNy0xMzZhZjEwN2Q5ZWYiLCJraWQiOiJFYnoyc0gyalZvcWNkRmhsMUJtSU9CUm0xeHVULXpXNWJ2RkJjQ2VFUlBZIiwicmVxdWVzdF9oYXNoIjoiZDI3YmE3MzU5ZWE4OGY1MWZmYzUwMTcyMzM5Mzc0NThiMTJmZGE0N2I0MDc1OGNlZDVjMWQ2NGY5YTBlNmJkMiJ9.yXFKUPOs66Y0mwz7jMBjXkTNxYx6MXj8P-dqAGaZLn6JXVTPBXPm4ThLwiQD5dzHPsLAl63Ws2M3Mbw9dknDCg"
+      },
+      {
+        "name": "a link's keys offered for another account",
+        "expect": "device_exists",
+        "method": "POST",
+        "path": "/api/mycarlos/link",
+        "query": "",
+        "body": "{\"code\":\"FAKE9D3RHW\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"njUvKIbOgLS2FyrkL2a6iGkUbNIsd1iR0FaELGmiaGI\",\"link_id\":\"FAKE0002\",\"x25519_public_key\":\"41IHjK4kO6HTxTGlXde7IBQGjSo7XVz-vKbb8wXN9HY\"}",
+        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiI4MmU2MDE5NC04NzhmLTU4NGItOGJmMy1hZjA0N2ZlODAyMDEiLCJraWQiOiJFYnoyc0gyalZvcWNkRmhsMUJtSU9CUm0xeHVULXpXNWJ2RkJjQ2VFUlBZIiwicmVxdWVzdF9oYXNoIjoiZThjMGY4MWJkMDZiZTkwYzdlODhjY2RiNDYyNTA0ZjYwOTdhNTY0MTMzZDZkMDJhMmMzMDMzMzUwYWExNGZlMyJ9.MF919R2QjS1Dx70W7EDXC4pfCWWxwZhk-cGpumfCUnSzJXQGCugwZ5EP1P2C8SlyrSm8Fn5i8M83HvLySRQCDA",
+        "note": "keys are per link; a second link always brings a fresh pair"
       }
     ]
   }

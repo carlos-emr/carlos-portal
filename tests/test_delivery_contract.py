@@ -185,9 +185,11 @@ class ReferencePortal:
     def _account(self, name: str) -> dict[str, object]:
         return next(row for row in self.state["accounts"] if row["account"] == name)
 
-    def _device_rows(self, device_key_id: object) -> list[dict[str, object]]:
-        """Keys are per device, so one device linked to two accounts has a row for each."""
-        return [row for row in self.state["devices"] if row["device_key_id"] == device_key_id]
+    def _device(self, device_key_id: object) -> dict[str, object] | None:
+        """Keys are per link, so a device_key_id names exactly one row."""
+        return next(
+            (row for row in self.state["devices"] if row["device_key_id"] == device_key_id), None
+        )
 
     def _check_times(self, claims: dict[str, object]) -> None:
         issued_at, expires_at = claims["iat"], claims["exp"]
@@ -252,29 +254,21 @@ class ReferencePortal:
         _check_assertion_shape(
             claims, CONSTANTS["device_audience"], DEVICE_CLAIMS, DEVICE_OPTIONAL_CLAIMS
         )
-        rows = self._device_rows(claims["kid"])
-        if not rows:
+        device = self._device(claims["kid"])
+        if device is None:
             raise Refusal("unknown_device")
         _verify_ed25519(
-            _strict_b64url(rows[0]["ed25519_public_key"], "invalid_assertion", 32),
+            _strict_b64url(device["ed25519_public_key"], "invalid_assertion", 32),
             signature,
             payload,
             "invalid_assertion",
         )
-        device = next(
-            (
-                row
-                for row in rows
-                if self._account(row["account"])["recipient_id"] == claims["recipient_id"]
-            ),
-            None,
-        )
-        if device is None:
-            raise Refusal("recipient_mismatch")
         if device["status"] != "active":
             raise Refusal("device_removed")
         self._check_times(claims)
         self._check_request(claims, vector)
+        if claims["recipient_id"] != self._account(device["account"])["recipient_id"]:
+            raise Refusal("recipient_mismatch")
         self._consume_jti(claims["jti"])
 
         if vector["method"] == "GET" and vector["path"] == ref.DEVICE_DELIVERIES_PATH:
@@ -373,22 +367,23 @@ class ReferencePortal:
         if row is None:
             raise Refusal("link_code_invalid")
         account = self._account(row["account"])
-        code_matches = compare_digest(
-            sha256(body["code"].encode()).digest(), sha256(row["code"].encode()).digest()
+        pending = (
+            row["status"] == "unused"
+            and row["expires_at"] > self.now
+            and row["session_signed_in"]
+            and row["wrong_attempts"] < CONSTANTS["max_link_code_attempts"]
         )
-        if not code_matches:
+        # An ended link counts nothing: its link_id was on screen once, and counting would let
+        # whoever saw it keep the account locked out.
+        if not pending or account["recent_wrong_codes"] >= CONSTANTS["max_account_wrong_codes"]:
+            raise Refusal("link_code_invalid")
+        if not compare_digest(
+            sha256(body["code"].encode()).digest(), sha256(row["code"].encode()).digest()
+        ):
             row["wrong_attempts"] += 1
             account["recent_wrong_codes"] += 1
-        if (
-            not code_matches
-            or row["status"] != "unused"
-            or row["expires_at"] <= self.now
-            or not row["session_signed_in"]
-            or row["wrong_attempts"] >= CONSTANTS["max_link_code_attempts"]
-            or account["recent_wrong_codes"] >= CONSTANTS["max_account_wrong_codes"]
-        ):
             raise Refusal("link_code_invalid")
-        if any(row_["account"] == row["account"] for row_ in self._device_rows(fingerprint)):
+        if self._device(fingerprint) is not None:
             raise Refusal("device_exists")
         row["status"] = "used"
         self.state["devices"].append(
@@ -478,7 +473,7 @@ def test_every_key_follows_from_its_seed_text():
         )
         assert entry["spki"] == _b64url(spki), name
         assert entry["kid"] == _b64url(sha256(spki).digest()), name
-    for name in ("device", "other_device", "third_device", "new_device"):
+    for name in ("device", "device_link_b", "other_device", "third_device", "new_device"):
         entry = keys[name]
         x25519 = X25519PrivateKey.from_private_bytes(
             sha256(entry["x25519_seed_text"].encode()).digest()
@@ -536,6 +531,7 @@ def test_sender_example_is_the_first_accepted_package():
 def _open(vector: dict[str, object]) -> tuple[str, dict[str, object]]:
     receiver = CONTRACT["receiver"]
     links = receiver["links"]
+    assert _by_name(links, receiver["package_link"])["device"] == "device"
     return ref.open_package(
         vector,
         device=ref.DeviceKeys("device 1"),
@@ -642,6 +638,9 @@ def test_portal_link_requests(vector):
         added = portal.state["devices"][-1]
         assert added["account"] == vector["returns"]["account"]
         assert added["device_key_id"] == vector["returns"]["device_key_id"]
+    for name, count in vector.get("account_wrong_codes_after", {}).items():
+        account = next(row for row in portal.state["accounts"] if row["account"] == name)
+        assert account["recent_wrong_codes"] == count, name
 
 
 def test_a_wrong_code_counts_against_the_link_it_names():

@@ -606,18 +606,22 @@ def build_contract() -> dict[str, object]:
     other_device = DeviceKeys("device 2")
     third_device = DeviceKeys("device 3")
     new_device = DeviceKeys("device 4")
+    # Keys are per link: the same computer's link to clinic-b has its own pair.
+    link_b_device = DeviceKeys("device 1, link to clinic-b")
 
     def key_entry(key: ClinicKey, status: str) -> dict[str, str]:
         return {**key.public(), "status": status}
 
     link_a = {
         "name": "link to clinic-a",
+        "device": "device",
         "clinic_id": CLINIC_A,
         "recipient_id": RECIPIENT_ID,
         "clinic_keys": [key_entry(clinic_a, "active"), key_entry(clinic_a_revoked, "revoked")],
     }
     link_b = {
         "name": "link to clinic-b",
+        "device": "device_link_b",
         "clinic_id": CLINIC_B,
         "recipient_id": "rcp-FAKE0003cccccccccccc",
         "clinic_keys": [key_entry(clinic_b, "active")],
@@ -780,7 +784,8 @@ def build_contract() -> dict[str, object]:
                     manifest=manifest(clinic_b, kid=clinic_b.kid, clinic_id=CLINIC_B),
                 ),
             ),
-            "note": "clinic-b's key is pinned, but on the device's other link",
+            "note": "clinic-b's genuine key, signing for this link's IDs; it is pinned only on "
+            "the other link",
         },
         refusal(
             "wrong_clinic",
@@ -922,6 +927,7 @@ def build_contract() -> dict[str, object]:
             "clinic_b": clinic_b.described(),
             "unknown_clinic": unknown.described(),
             "device": device.described(),
+            "device_link_b": link_b_device.described(),
             "other_device": other_device.described(),
             "third_device": third_device.described(),
             "new_device": new_device.described(),
@@ -1391,25 +1397,29 @@ def portal_vectors(
             },
             {
                 **link_request(
-                    "the same device linking a second account",
-                    "accept",
-                    link_body("FAKE0002", codes["FAKE0002"], keys=device),
-                    signer=device,
-                ),
-                "returns": {
-                    "account": "account-2",
-                    "recipient_id": OTHER_RECIPIENT_ID,
-                    "device_key_id": device.device_key_id,
-                },
-                "note": "device keys are per device; the device gets a second row, for account-2",
-            },
-            {
-                **link_request(
                     "a code from another account's link",
                     "link_code_invalid",
                     link_body("FAKE0002", codes["FAKE0001"]),
                 ),
                 "note": "link_id names account-2's pending link; the code is account-1's",
+                "account_wrong_codes_after": {"account-2": 1},
+            },
+            {
+                **link_request(
+                    "a wrong code for a used link",
+                    "link_code_invalid",
+                    link_body("FAKE0004", "FAKEWR0NG1"),
+                ),
+                "note": "an ended link answers the same, but nothing is counted",
+                "account_wrong_codes_after": {"account-1": 0},
+            },
+            {
+                **link_request(
+                    "a wrong code for an expired link",
+                    "link_code_invalid",
+                    link_body("FAKE0003", "FAKEWR0NG1"),
+                ),
+                "account_wrong_codes_after": {"account-1": 0},
             },
             link_request(
                 "an expired code",
@@ -1475,11 +1485,20 @@ def portal_vectors(
                 signed_body=good_link,
             ),
             link_request(
-                "a device key already linked to this account",
+                "a device key that is already linked",
                 "device_exists",
                 link_body("FAKE0001", codes["FAKE0001"], keys=device),
                 signer=device,
             ),
+            {
+                **link_request(
+                    "a link's keys offered for another account",
+                    "device_exists",
+                    link_body("FAKE0002", codes["FAKE0002"], keys=device),
+                    signer=device,
+                ),
+                "note": "keys are per link; a second link always brings a fresh pair",
+            },
         ],
     }
 

@@ -44,13 +44,12 @@ Every switch stays off until the whole flow works end to end.
 | Device signing key, Ed25519 | myCarlos, inside the vault | Device requests to the portal, and pickup receipts |
 | Portal TLS and server keys | Portal | Transport only. Never a document key. |
 
-**Device keys are per device.** Each device has its own X25519 and Ed25519 pair, and so its own
-`device_key_id`, made the first time it links and used for all of its links. Two devices never
-share keys. The `recipient_id` is per patient account, shared by all of that patient's devices.
-
-One consequence: if a device links to two clinics that use different portals, both portals see the
-same `device_key_id`, so they could tell it's the same device. Keys per link would hide that, and
-could come in a later version.
+**Device keys are per link.** myCarlos makes a fresh X25519 and Ed25519 pair for each portal link
+and keeps it in the vault with that link.
+- **`device_key_id`:** the key ID of this device's link. Keys are never shared across the
+  patient's devices, or across links. So two portals never see the same ID, and a link can be
+  removed without touching any other.
+- **`recipient_id`:** per patient account, shared by all of that patient's devices.
 
 myCarlos pins the clinic's public keys when it links (below). Key changes follow
 [mycarlos#55](https://github.com/carlos-emr/mycarlos/issues/55): a replacement signed by the
@@ -83,7 +82,7 @@ current key is accepted, and a revoked key stops verifying.
 |---|---|---|
 | `delivery_id` | CARLOS, per document sent | UUID v4, canonical lowercase. One delivery ID covers every device's copy of that document. |
 | `recipient_id` | Portal, per patient account (clinic ID and demographic number) | Opaque, 128-bit random, as b64url (1–64 characters from `A-Z a-z 0-9 _ -`). The same for all of that patient's devices. Never derived from the health card number. CARLOS gets it from the patient's portal link; myCarlos gets it when it links. |
-| `device_key_id` | Anyone, from the device's public keys (one per device) | `b64url(SHA-256("mycarlos-device-key-v1" ‖ frame(X25519 public key, Ed25519 public key)))`, 43 characters |
+| `device_key_id` | Anyone, from the public keys of one device's link | `b64url(SHA-256("mycarlos-device-key-v1" ‖ frame(X25519 public key, Ed25519 public key)))`, 43 characters |
 | `kid` (clinic key) | Anyone, from the clinic public key | `b64url(SHA-256(SubjectPublicKeyInfo DER))` |
 
 ## The package
@@ -275,15 +274,14 @@ The Ed25519 signature is 64 bytes, and the assertion is at most 4096 bytes.
 **The portal's checks, in order:**
 1. **Parse:** the canonical encoding, exactly the claims above (`vault_head` optional), the right
    `aud` and `iss`, a UUID `jti`, integer times, and hex hashes. Else `invalid_assertion`.
-2. **Find the device** by `kid`. Else `unknown_device`. A device linked to two accounts on this
-   portal has a row for each, all with the same keys.
+2. **Find the device** by `kid`. Keys are per link, so `kid` names one row. Else
+   `unknown_device`.
 3. **Verify the signature** with that device's stored Ed25519 key. Else `invalid_assertion`.
-4. **Recipient:** pick the device's row for the account whose recipient ID is `recipient_id`.
-   Else `recipient_mismatch`.
-5. **Device status:** a removed row gets `device_removed`.
-6. **Time:** `exp > iat`, `exp − iat ≤ 120`, and `iat ≤ now + 30`. Else `invalid_assertion`.
+4. **Device status:** a removed device gets `device_removed`.
+5. **Time:** `exp > iat`, `exp − iat ≤ 120`, and `iat ≤ now + 30`. Else `invalid_assertion`.
    If `now ≥ exp + 30`, the code is `expired`.
-7. **Request hash:** it must match the request as received. Else `request_mismatch`.
+6. **Request hash:** it must match the request as received. Else `request_mismatch`.
+7. **Recipient:** `recipient_id` must be the device's account's ID. Else `recipient_mismatch`.
 8. **Replay:** a `jti` already used gets `replay`. This uses the jti table shared with staff and
    job assertions.
 9. **The route itself:** a copy that isn't this device's, has expired or is gone gets
@@ -300,8 +298,7 @@ The Ed25519 signature is 64 bytes, and the assertion is at most 4096 bytes.
 
    It shows them as one string and as a QR code. The QR code holds the portal address, the
    `link_id` and the `code`.
-2. **The request:** myCarlos makes its two device keys (the first time it links; later links
-   reuse them) and sends this body:
+2. **The request:** myCarlos makes a fresh pair of keys for this link and sends this body:
    ```json
    {"link_id": "…", "code": "…", "device_name": "…", "x25519_public_key": "<b64url>", "ed25519_public_key": "<b64url>"}
    ```
@@ -321,14 +318,20 @@ The Ed25519 signature is 64 bytes, and the assertion is at most 4096 bytes.
    5. **The code:**
       - it is checked only against the pending link that `link_id` names, so a code never works
         with another account's link;
-      - a wrong code counts against that link and against its account;
-      - the link must be unused and unexpired, and its session still signed in;
-      - the limits below must not have been reached.
+      - the link must still be pending: unused, unexpired, its session still signed in, and
+        under 5 wrong codes;
+      - the account must be under its limit (below);
+      - only then is the code compared. A wrong code counts against that link and against its
+        account.
+
+      A wrong code for a link that has ended counts nothing. Its `link_id` was on screen once,
+      and counting would let whoever saw it keep the patient from linking. The portal deletes
+      ended links, or keeps them only as markers that answer `link_code_invalid`.
 
       Every failure here gives the same `link_code_invalid`, so the code can't be used to probe
       which links exist.
-   6. **Device key:** a key already linked to the code's account gets `device_exists`. The same
-      device may link to another account, for example a second clinic on the same portal.
+   6. **Device key:** a key that is already linked, to any account, gets `device_exists`. Keys
+      are per link, so a second link always brings a fresh pair.
 4. **On success:** the portal records the device as linked to the code's account, never to an
    account named in the request. It marks the code used and returns:
    - the `recipient_id`;
@@ -356,7 +359,7 @@ The Ed25519 signature is 64 bytes, and the assertion is at most 4096 bytes.
 **The limits:**
 - **Per link:** 10 minutes, one use, and 5 wrong codes end it.
 - **Per account:** at most 3 pending links at a time; a fourth replaces the oldest. 10 wrong codes
-  within 24 hours, across all the account's links, stop every link for that account until 24
+  within 24 hours, counted only on pending links, stop every link for that account until 24
   hours after the last wrong code.
 - **Per caller:** the portal's usual per-IP rate limits also apply.
 
@@ -419,7 +422,7 @@ The portal logs the code in its audit trail, never content. On the wire:
 | `invalid_receipt` | 400 | The receipt is malformed, isn't the device's, or names another patient |
 | `receipt_mismatch` | 409 | The receipt doesn't match the route or the stored copy |
 | `link_code_invalid` | 403 | Wrong, expired, used or locked code, or one whose session has ended |
-| `device_exists` | 409 | That device key is already linked to this account |
+| `device_exists` | 409 | That device key is already linked (keys are per link) |
 
 **Clock problems:** the portal sends a `Date` header, so myCarlos can tell the patient when its
 clock is far off.
