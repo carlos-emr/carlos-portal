@@ -17,13 +17,14 @@
           <h1 id="activation-title">{{ text.activation_heading }}</h1>
           <p class="auth-intro">{{ text.activation_details }}</p>
           {% if error_message %}
-            <p class="form-error" role="alert">{{ error_message }}</p>
+            {# A failed attempt shows the entries again, except the two password boxes. #}
+            <p class="form-error" role="alert">{{ error_message }}{% if form_values %} {{ text.activation_reenter_password }}{% endif %}</p>
           {% endif %}
           <form class="form-stack" method="post" action="{{ url_for('activate_invite') }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <label>
               <span>{{ text.invite_code }}</span>
-              <input type="text" name="invite_code" value="" autocomplete="off" required>
+              <input type="text" name="invite_code" value="{{ form_values.invite_code or '' }}" autocomplete="off" required>
             </label>
             <label>
               <span>{{ text.email }}</span>
@@ -36,19 +37,55 @@
                 required
               >
             </label>
-            <label>
-              <span>{{ text.date_of_birth }}</span>
-              <input
-                type="date"
-                name="date_of_birth"
-                value="{{ form_values.date_of_birth or '' }}"
-                autocomplete="bday"
-                required
-              >
-            </label>
+            {# Three boxes rather than a date field: a date field reads typed digits in an order the
+               page cannot know or show (month first in many browsers), so "1985-06-15" became
+               another date. Named months leave no day/month doubt. #}
+            <fieldset class="date-of-birth" aria-describedby="date-of-birth-hint">
+              <legend>{{ text.date_of_birth }}</legend>
+              <small id="date-of-birth-hint">{{ text.date_of_birth_hint }}</small>
+              <div class="date-of-birth-parts">
+                <label>
+                  <span>{{ text.date_of_birth_day }}</span>
+                  <input
+                    type="text"
+                    name="date_of_birth_day"
+                    value="{{ form_values.date_of_birth_day or '' }}"
+                    inputmode="numeric"
+                    pattern="[0-9]{1,2}"
+                    maxlength="2"
+                    autocomplete="bday-day"
+                    required
+                  >
+                </label>
+                <label>
+                  <span>{{ text.date_of_birth_month }}</span>
+                  <select name="date_of_birth_month" autocomplete="bday-month" required>
+                    <option value="">{{ text.date_of_birth_month_choose }}</option>
+                    {# The list's own month names: some languages name a month differently inside a date. #}
+                    {% for month in range(1, 13) %}
+                      <option value="{{ month }}"{% if form_values.date_of_birth_month == month|string %} selected{% endif %}>{{ text["date_of_birth_month_" ~ month] }}</option>
+                    {% endfor %}
+                  </select>
+                </label>
+                <label>
+                  <span>{{ text.date_of_birth_year }}</span>
+                  <input
+                    type="text"
+                    name="date_of_birth_year"
+                    value="{{ form_values.date_of_birth_year or '' }}"
+                    inputmode="numeric"
+                    pattern="[0-9]{4}"
+                    minlength="4"
+                    maxlength="4"
+                    autocomplete="bday-year"
+                    required
+                  >
+                </label>
+              </div>
+            </fieldset>
             <label>
               <span>{{ text.health_card_number }}</span>
-              <input type="text" name="health_card_number" value="" maxlength="64" autocomplete="off" required>
+              <input type="text" name="health_card_number" value="{{ form_values.health_card_number or '' }}" maxlength="64" autocomplete="off" required>
             </label>
             <label>
               <span>{{ text.username }}</span>
@@ -72,9 +109,9 @@
               <span>{{ text.mfa_method }}</span>
               <select name="mfa_delivery_method" data-activation-mfa-method>
                 {% if email_mfa_available %}
-                  <option value="email">{{ text.mfa_email }}</option>
+                  <option value="email"{% if form_values.mfa_delivery_method == 'email' %} selected{% endif %}>{{ text.mfa_email }}</option>
                 {% endif %}
-                <option value="sms"{% if not sms_mfa_available %} disabled{% endif %}{% if not email_mfa_available %} selected{% endif %}>{{ text.mfa_sms }}</option>
+                <option value="sms"{% if not sms_mfa_available %} disabled{% endif %}{% if not email_mfa_available or (sms_mfa_available and form_values.mfa_delivery_method == 'sms') %} selected{% endif %}>{{ text.mfa_sms }}</option>
               </select>
             </label>
             <label>

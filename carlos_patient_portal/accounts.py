@@ -28,7 +28,13 @@ from carlos_patient_portal.audit import (
 )
 from carlos_patient_portal.auth import normalize_mfa_delivery_method, normalize_phone_number
 from carlos_patient_portal.credentials import hash_password, validate_password, validate_username
-from carlos_patient_portal.identity import IdentityProof, normalize_email, verify_identity_proof
+from carlos_patient_portal.identity import (
+    IdentityProof,
+    health_card_number_candidates,
+    normalize_email,
+    normalize_health_card_number,
+    verify_identity_proof,
+)
 from carlos_patient_portal.invites import hash_invite_token, normalize_clinic_id
 from carlos_patient_portal.models import (
     ACCOUNT_STATUS_ACTIVE,
@@ -57,6 +63,14 @@ class ActivationError(Exception):
 
 class ActivationDeliveryUnavailableError(ActivationError):
     """Raised after auditing when the requested activation MFA channel is unavailable."""
+
+
+class ActivationPasswordRejectedError(ActivationError):
+    """The chosen password breaks the password rules.
+
+    It is judged before the invite and the identity, against what was typed, so saying so tells
+    nobody whether the invite or the identity matched.
+    """
 
 
 class UsernameUnavailableError(Exception):
@@ -299,6 +313,37 @@ def activate_patient_account(
         )
         raise ActivationError() from exc
 
+    # Before the invite lookup and the identity check, and against the typed values, so its own
+    # message is no oracle for either. It still counts as a failed attempt for the rate limit,
+    # which was enforced above, so the strength analysis runs at most once per allowed attempt.
+    # The number with and without a trailing version code, as the identity check compares it, so
+    # a password holding the bare number is refused even when the card was typed with "-AB".
+    try:
+        health_card_context = health_card_number_candidates(
+            normalize_health_card_number(identity_proof.health_card_number)
+        )
+    except ValueError:
+        health_card_context = (identity_proof.health_card_number,)
+    try:
+        validate_password(
+            password,
+            context_values=(
+                normalized_username,
+                normalized_email,
+                identity_proof.date_of_birth.isoformat(),
+                *health_card_context,
+                expected_clinic_id,
+            ),
+        )
+    except ValueError as exc:
+        record_activation_failure(
+            session,
+            invite_token_hash=invite_token_hash,
+            client_reference_hash=client_reference_hash,
+            reason=ACTIVATION_REASON_INVALID_DETAILS,
+        )
+        raise ActivationPasswordRejectedError() from exc
+
     # An invite is only redeemable through the clinic runtime that issued it: a shared database
     # must never let a Clinic A origin consume a Clinic B invite under Clinic A branding.
     invite = session.scalar(
@@ -332,29 +377,6 @@ def activate_patient_account(
             invite_id=invite.id if invite else None,
         )
         raise ActivationError()
-
-    try:
-        validate_password(
-            password,
-            context_values=(
-                normalized_username,
-                normalized_email,
-                identity_proof.date_of_birth.isoformat(),
-                identity_proof.health_card_number,
-                expected_clinic_id,
-            ),
-        )
-    except ValueError as exc:
-        record_activation_failure(
-            session,
-            invite_token_hash=invite_token_hash,
-            client_reference_hash=client_reference_hash,
-            reason=ACTIVATION_REASON_INVALID_DETAILS,
-            clinic_id=invite.clinic_id,
-            demographic_no=invite.demographic_no,
-            invite_id=invite.id,
-        )
-        raise ActivationError() from exc
 
     existing_account = find_account_id_for_patient(
         session,

@@ -298,6 +298,44 @@ h2 {
   border: 0;
 }
 
+.date-of-birth {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.date-of-birth legend {
+  margin-bottom: 2px;
+  padding: 0;
+  color: #1f2937;
+  font-size: 13px;
+  font-weight: bold;
+}
+
+.date-of-birth small {
+  color: #4b5563;
+}
+
+.date-of-birth-parts {
+  display: grid;
+  grid-template-columns: 4.5em minmax(0, 1fr) 6em;
+  gap: 8px;
+}
+
+.date-of-birth-parts label {
+  font-weight: normal;
+}
+
+.date-of-birth-parts input,
+.date-of-birth-parts select {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
 .mfa-method-switch legend {
   margin-bottom: 6px;
   color: #1f2937;
