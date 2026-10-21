@@ -33,8 +33,8 @@ The MVP is not a full patient health record. CARLOS remains the clinical source 
 
 ## Out Of Scope For MVP
 
-- Full PHR/document library.
-- Portal-hosted document storage or document byte delivery.
+- Full PHR/document library. This stays out of scope after the MVP as well: the portal never becomes a place where patients keep or read documents.
+- Portal-hosted document storage or document byte delivery in the MVP. The first post-MVP feature, Send to myCarlos (see Post-MVP Direction), adds sealed copies that the portal can't open and deletes on pickup.
 - Labs, medications, appointments, patient messaging, proxy/dependent access, or clinical editing.
 - Patient uploads.
 - Staff raw unlock-password reveal, including as downtime fallback.
@@ -164,7 +164,9 @@ Screens covered with desktop and mobile screenshots:
 
 ## Post-MVP Direction
 
-Documents are the preferred first post-MVP expansion before patient messaging. Patient messaging is viable later and should integrate with the existing CARLOS/OSCAR messaging interface rather than creating a separate staff inbox.
+**The first post-MVP feature is Send to myCarlos** ([#41](https://github.com/carlos-emr/carlos-portal/issues/41)). CARLOS signs a document and seals one copy to each of the patient's linked and accepted myCarlos devices. The portal holds each sealed copy until that device picks it up, then deletes it, or deletes it unpicked after 7 days. The portal never stores a readable document, a title or a patient name. The format and the contract between CARLOS, the portal and myCarlos are in [`architecture/mycarlos-delivery.md`](architecture/mycarlos-delivery.md). Everything ships behind `PATIENT_PORTAL_MYCARLOS_DELIVERY_ENABLED`, off by default.
+
+So documents come first after the MVP, before patient messaging, as planned. Patient messaging is viable later and should integrate with the existing CARLOS/OSCAR messaging interface rather than creating a separate staff inbox.
 
 Future patient messaging should support attachments by reference, questionnaires, response enable/disable, hidden sender display, and unread/unacknowledged reminders, but only after release rules, retention, routing, scanning, storage, and staff review workflows are defined.
 
@@ -174,7 +176,7 @@ Future patient messaging should support attachments by reference, questionnaires
 - Confirm what revocation/regeneration can guarantee for already-sent encrypted PDFs.
 - Decide production cloud provider/region while preserving Canadian data residency.
 - Confirm whether any consent tracking, privacy masking, break-glass behavior, or patient directives are needed in MVP.
-- Define criteria for expanding beyond credential/unlock-password workflows into broader document/PHR features.
+- Define criteria for expanding beyond credential/unlock-password workflows into broader document/PHR features. Send to myCarlos (#41) is the first such feature; a hosted document library stays out of scope.
 
 ## Local Planning Source
 
