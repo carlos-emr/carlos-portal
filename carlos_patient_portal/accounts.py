@@ -28,7 +28,13 @@ from carlos_patient_portal.audit import (
 )
 from carlos_patient_portal.auth import normalize_mfa_delivery_method, normalize_phone_number
 from carlos_patient_portal.credentials import hash_password, validate_password, validate_username
-from carlos_patient_portal.identity import IdentityProof, normalize_email, verify_identity_proof
+from carlos_patient_portal.identity import (
+    IdentityProof,
+    health_card_number_candidates,
+    normalize_email,
+    normalize_health_card_number,
+    verify_identity_proof,
+)
 from carlos_patient_portal.invites import hash_invite_token, normalize_clinic_id
 from carlos_patient_portal.models import (
     ACCOUNT_STATUS_ACTIVE,
@@ -310,6 +316,14 @@ def activate_patient_account(
     # Before the invite lookup and the identity check, and against the typed values, so its own
     # message is no oracle for either. It still counts as a failed attempt for the rate limit,
     # which was enforced above, so the strength analysis runs at most once per allowed attempt.
+    # The number with and without a trailing version code, as the identity check compares it, so
+    # a password holding the bare number is refused even when the card was typed with "-AB".
+    try:
+        health_card_context = health_card_number_candidates(
+            normalize_health_card_number(identity_proof.health_card_number)
+        )
+    except ValueError:
+        health_card_context = (identity_proof.health_card_number,)
     try:
         validate_password(
             password,
@@ -317,7 +331,7 @@ def activate_patient_account(
                 normalized_username,
                 normalized_email,
                 identity_proof.date_of_birth.isoformat(),
-                identity_proof.health_card_number,
+                *health_card_context,
                 expected_clinic_id,
             ),
         )

@@ -608,6 +608,10 @@ function screenshotPath(name) {
     );
     await page.locator('input[name="password"]').fill(activationFixture.password);
     await page.locator('input[name="password_confirmation"]').fill(activationFixture.password);
+    // The whole card as printed, version code included: the clinic stored it without one (#23).
+    await page.locator('input[name="health_card_number"]').fill(
+      `${activationFixture.healthCardNumber}-AB`
+    );
     const activationResponsePromise = page.waitForResponse(
       (response) => new URL(response.url()).pathname === portalPathname('/auth/activate')
         && response.request().method() === 'POST'
