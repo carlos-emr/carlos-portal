@@ -636,7 +636,8 @@ The remaining secrets have deliberately different rotation behavior:
 ## CARLOS Internal API
 
 Set `PATIENT_PORTAL_INTERNAL_API_TOKEN` to enable the production staff/service contract. Requests
-must include its Bearer token and an `X-CARLOS-Staff-Assertion`. Configure
+must include its Bearer token and an `X-CARLOS-Staff-Assertion` (a provider's action), or, for the
+CARLOS jobs described under *CARLOS jobs* below, an `X-CARLOS-Job-Assertion` instead. Configure
 `PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING` as a JSON object mapping stable key IDs to
 raw Ed25519 public keys encoded as unpadded base64url. CARLOS signs a compact
 `<payload>.<signature>` assertion for the authenticated provider. The JSON payload must contain
@@ -658,7 +659,7 @@ effective across every portal worker through PostgreSQL.
 The service token still authenticates CARLOS as a workload, while the signed assertion binds the
 specific provider and permissions. Keep `/internal/carlos/` reachable only from CARLOS application
 instances, terminate TLS on that path, and strip patient-supplied `X-CARLOS-*` headers at the edge.
-The reference nginx policy forwards only the signed assertion to the internal route.
+The reference nginx policy forwards only the two signed assertion headers to the internal route.
 
 Permissions are deliberately narrow:
 
@@ -670,9 +671,70 @@ Permissions are deliberately narrow:
 - `portal.booking_prompt.manage`: check booking eligibility, create, list, and withdraw booking
   prompts.
 - `portal.booking_prompt.sync`: list patients' pending picks of offered times and report whether
-  CARLOS booked them. Held only by the CARLOS polling job's dedicated, non-login system provider;
-  only the two sync endpoints accept it, and they accept nothing else. That provider is refused by
-  every other internal route, including prompt creation, account reads, and invite management.
+  CARLOS booked them. Only the `booking-sync` CARLOS job holds it (see *CARLOS jobs* below), and
+  the two sync endpoints take that job and nobody else. The job is refused by every other internal
+  route, including prompt creation, account reads, and invite management, and a staff assertion
+  carrying this permission is refused (`403`) on every route.
+
+### CARLOS jobs
+
+A CARLOS background job with no person behind it calls as a **job**, never as a CARLOS provider.
+The portal knows its jobs in code (`carlos_patient_portal/system_jobs.py`); adding one, or giving
+one another permission, is a reviewed code change:
+
+| Job | Shown as | May hold | Routes |
+| --- | --- | --- | --- |
+| `booking-sync` | Clinic booking | `portal.booking_prompt.sync` | the two booking sync endpoints |
+| `signup-poll` | Patient self sign-up | `portal.signup.manage`, `portal.invite.manage` | none yet |
+
+A job call carries the same Bearer service token and, instead of the staff header, an
+`X-CARLOS-Job-Assertion`: the same compact `<payload>.<signature>` Ed25519 format, signed with
+that job's own key, never the staff key. The payload must contain exactly `iss` (`carlos`), `aud`
+(`carlos-patient-portal-job-api`, its own audience), `iat`, `exp` (at most 120 seconds apart,
+30 seconds of clock skew), `jti` (a canonical UUID, used once, in the same store as staff
+assertions), `clinic_id`, `job`, `kid`, `permission` (exactly one permission string, not a list),
+and `request_hash`, computed as for staff. Job assertions are always bound to the request, in
+every environment. There are no provider claims: the portal names the job from its own list.
+
+Configure the public halves in `PATIENT_PORTAL_INTERNAL_JOB_ASSERTION_PUBLIC_KEYRING` as JSON
+`{"<job>": {"<kid>": "<unpadded base64url Ed25519 public key>"}}`. A job left out (or the
+variable left empty) is off: its calls are refused. Startup fails on a job the portal does not
+know, an empty job entry, a key ID that is not 1 to 64 of `A-Z a-z 0-9 . _ -`, a key ID used
+twice (across jobs, or equal to a staff key ID), a key that is not 32 bytes, or the same public key
+under two jobs or in the staff keyring. Rotate a job key as a staff key: add the new `kid`,
+restart the portal, move CARLOS to it, and remove the old `kid` after two minutes. For a leaked
+key, remove its `kid` at once; the job stops until CARLOS has the new key. To make a job key by
+hand (with `openssl`, until a carlos-ctl command exists), see *Making a job key by hand* in
+`docs/architecture/patient-portal-runtime.md`.
+
+Every internal route declares its callers: staff only (the default), or one named job claiming
+one named permission. A request carrying both headers is refused. Refusals:
+
+| Reason | Status | When |
+| --- | --- | --- |
+| (none recorded) | `404` | no or wrong service token; a malformed job assertion; an unknown `kid` (a staff key ID included); a bad signature |
+| `unknown_job` | `404` | the signed `job` is not one the portal knows |
+| `wrong_key` | `404` | the `kid` belongs to another job |
+| `invalid_claims` | `404` | a missing, extra, or wrongly typed claim; another audience or issuer; a lifetime over 120 seconds; an `iat` in the future; a permission that is not one plain string |
+| `expired` | `404` | `exp` has passed |
+| `request_mismatch` | `404` | `request_hash` is not this request's |
+| `clinic_mismatch` | `404` | another clinic |
+| `replay` | `404` | the `jti` was already used |
+| `both_headers` | `404` | the request also carries `X-CARLOS-Staff-Assertion` |
+| `route_not_open` | `404` | the route is not open to this job, which includes every staff route |
+| `permission_not_held` | `403` | the job does not hold the permission it claims |
+| `wrong_permission` | `403` | the job holds it, but the route takes another |
+
+The `404` is the same "not found" an unauthenticated call gets, so a job cannot use the API to find
+out which routes exist. Unsigned or invalid job headers (the first row) keep the usual
+`staff.action` `authentication_failed` audit row, one per request, so a flood of them is as visible
+as a flood of bad staff headers. Every other refusal writes one `job.auth_refused` row instead:
+actor type `system`, the display name and `job:<name>` of the job whose key verified the signature,
+the portal's clinic, the route template (never the raw path or query), the reason, the key ID
+(`assertion_key_id`), and the assertion UUID (`assertion_id`). Job actions that succeed keep their
+usual event types with actor `Clinic booking`, actor ID `job:booking-sync`, the key ID and the
+assertion UUID; a job call that fails later (a `409` or `422`) gets the usual failure row with the
+same attribution.
 
 Staff-supplied text that the portal stores and shows back (an account-access reason, an unlock-secret
 revocation reason, and an unlock-secret label and source reference) is refused with `422` when it
@@ -828,8 +890,9 @@ collects the pick by polling.
   `409` `booking choice expired`, and the patient is told "That time passed before the clinic could
   confirm it." and can pick again from any times still on offer, with the update email. A poll that
   returns picks is audited as `staff.action` with reason `pending_choices_listed` and the count, with
-  actor type `system`; an empty poll writes nothing. The sync permission is only accepted on its
-  own: an assertion carrying it with any other permission is refused everywhere.
+  actor type `system`, actor `Clinic booking`, actor ID `job:booking-sync`, and the call's key ID
+  and assertion UUID; an empty poll writes nothing. Both sync endpoints take only the
+  `booking-sync` job (see *CARLOS jobs*); staff are refused with `403`, whatever they hold.
 - `POST /internal/carlos/booking-prompts/{id}/choice-result` with `{"choice_id": ...,
   "result": "booked" | "slot_unavailable", "offered_slots": [...]}` records the answer. Replacement
   `offered_slots` are accepted only with `slot_unavailable` and are validated as on create; they

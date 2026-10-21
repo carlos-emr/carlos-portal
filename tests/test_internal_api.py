@@ -5,6 +5,7 @@ from datetime import date, timedelta
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -25,6 +26,7 @@ from carlos_patient_portal.models import (
     AUDIT_EVENT_ACCOUNT_UNLOCK,
     AUDIT_EVENT_INVITE_CREATE,
     AUDIT_EVENT_INVITE_RESEND,
+    AUDIT_EVENT_JOB_AUTH_REFUSED,
     AUDIT_EVENT_STAFF_ACTION,
     AUDIT_EVENT_UNLOCK_SECRET_CREATE,
     AUDIT_EVENT_UNLOCK_SECRET_PUBLISH,
@@ -44,10 +46,13 @@ from carlos_patient_portal.models import (
 from carlos_patient_portal.schemas import InviteCreateRequest
 from carlos_patient_portal.staff_identity import staff_request_hash
 from tests.support import (
+    TEST_JOB_ASSERTION_KEY_IDS,
+    TEST_JOB_ASSERTION_PUBLIC_KEYRING,
     TEST_STAFF_ASSERTION_KEY_ID,
     TEST_STAFF_ASSERTION_PUBLIC_KEY,
     TEST_STAFF_ASSERTION_PUBLIC_KEYRING,
     activation_request,
+    carlos_job_headers,
     carlos_staff_headers,
     migrated_staging_app,
     sign_staff_assertion,
@@ -115,6 +120,7 @@ def internal_app(**overrides: object):
         "database_url": "sqlite+pysqlite:///:memory:",
         "internal_api_token": INTERNAL_API_TOKEN,
         "internal_staff_assertion_public_key": TEST_STAFF_ASSERTION_PUBLIC_KEY,
+        "internal_job_assertion_public_keyring": TEST_JOB_ASSERTION_PUBLIC_KEYRING,
         "identity_proof_secret": IDENTITY_PROOF_SECRET,
         "audit_hash_secret": AUDIT_HASH_SECRET,
         "unlock_secret_encryption_secret": UNLOCK_SECRET,
@@ -1811,35 +1817,70 @@ def test_internal_contact_review_feed_pages_beyond_one_hundred_requests() -> Non
     assert second_page.json()["next_offset"] is None
 
 
-# (method, path, body, required permission). Kept in lockstep with the registered internal routes
-# by test_internal_route_permission_manifest_covers_every_route below, so a new CARLOS endpoint
-# fails the build until its authorization expectation is declared here.
-# (method, path, required permission). No request bodies are needed: authorization now runs in
-# the dependency phase, so a caller lacking the permission is rejected before the request model is
-# ever validated. That ordering is itself asserted below.
+# (method, path, caller, required permission). Kept in lockstep with the registered internal routes
+# by the two manifest tests below, so a new CARLOS endpoint fails the build until its callers and
+# authorization expectation are declared here. `caller` is "staff" (the default: CARLOS providers
+# only) or "job:<name>" (that one registered CARLOS job, and nobody else). No request bodies are
+# needed: authorization runs in the dependency phase, so a caller lacking the permission is
+# rejected before the request model is ever validated. That ordering is itself asserted below.
+STAFF = "staff"
+BOOKING_SYNC_JOB = "job:booking-sync"
 INTERNAL_ROUTE_PERMISSIONS = (
-    ("POST", "/internal/carlos/patients/1234/invites", "portal.invite.manage"),
-    ("POST", "/internal/carlos/patients/1234/invites/prepare", "portal.invite.manage"),
-    ("GET", "/internal/carlos/patients/1234/invites", "portal.invite.manage"),
-    ("POST", "/internal/carlos/invites/1/resend", "portal.invite.manage"),
-    ("POST", "/internal/carlos/invites/1/resend/prepare", "portal.invite.manage"),
-    ("POST", "/internal/carlos/invites/1/commit-delivery", "portal.invite.manage"),
-    ("POST", "/internal/carlos/invites/1/revoke", "portal.invite.manage"),
-    ("POST", "/internal/carlos/patients/1234/unlock", "portal.account.unlock"),
-    ("GET", "/internal/carlos/patients/1234/portal-account", "portal.account.manage"),
-    ("POST", "/internal/carlos/patients/1234/portal-account/access", "portal.account.manage"),
-    ("POST", "/internal/carlos/patients/1234/unlock-secrets", "portal.secret.manage"),
-    ("POST", "/internal/carlos/unlock-secrets/1/publish", "portal.secret.manage"),
-    ("POST", "/internal/carlos/unlock-secrets/1/revoke", "portal.secret.manage"),
-    ("GET", "/internal/carlos/contact-reviews", "portal.contact.review"),
-    ("POST", "/internal/carlos/contact-reviews/1/decision", "portal.contact.review"),
-    ("GET", "/internal/carlos/patients/1234/booking-eligibility", "portal.booking_prompt.manage"),
-    ("POST", "/internal/carlos/patients/1234/booking-prompts", "portal.booking_prompt.manage"),
-    ("GET", "/internal/carlos/patients/1234/booking-prompts", "portal.booking_prompt.manage"),
-    ("POST", "/internal/carlos/booking-prompts/1/withdraw", "portal.booking_prompt.manage"),
-    ("GET", "/internal/carlos/booking-prompts/choices", "portal.booking_prompt.sync"),
-    ("POST", "/internal/carlos/booking-prompts/1/choice-result", "portal.booking_prompt.sync"),
+    ("POST", "/internal/carlos/patients/1234/invites", STAFF, "portal.invite.manage"),
+    ("POST", "/internal/carlos/patients/1234/invites/prepare", STAFF, "portal.invite.manage"),
+    ("GET", "/internal/carlos/patients/1234/invites", STAFF, "portal.invite.manage"),
+    ("POST", "/internal/carlos/invites/1/resend", STAFF, "portal.invite.manage"),
+    ("POST", "/internal/carlos/invites/1/resend/prepare", STAFF, "portal.invite.manage"),
+    ("POST", "/internal/carlos/invites/1/commit-delivery", STAFF, "portal.invite.manage"),
+    ("POST", "/internal/carlos/invites/1/revoke", STAFF, "portal.invite.manage"),
+    ("POST", "/internal/carlos/patients/1234/unlock", STAFF, "portal.account.unlock"),
+    ("GET", "/internal/carlos/patients/1234/portal-account", STAFF, "portal.account.manage"),
+    (
+        "POST",
+        "/internal/carlos/patients/1234/portal-account/access",
+        STAFF,
+        "portal.account.manage",
+    ),
+    ("POST", "/internal/carlos/patients/1234/unlock-secrets", STAFF, "portal.secret.manage"),
+    ("POST", "/internal/carlos/unlock-secrets/1/publish", STAFF, "portal.secret.manage"),
+    ("POST", "/internal/carlos/unlock-secrets/1/revoke", STAFF, "portal.secret.manage"),
+    ("GET", "/internal/carlos/contact-reviews", STAFF, "portal.contact.review"),
+    ("POST", "/internal/carlos/contact-reviews/1/decision", STAFF, "portal.contact.review"),
+    (
+        "GET",
+        "/internal/carlos/patients/1234/booking-eligibility",
+        STAFF,
+        "portal.booking_prompt.manage",
+    ),
+    (
+        "POST",
+        "/internal/carlos/patients/1234/booking-prompts",
+        STAFF,
+        "portal.booking_prompt.manage",
+    ),
+    (
+        "GET",
+        "/internal/carlos/patients/1234/booking-prompts",
+        STAFF,
+        "portal.booking_prompt.manage",
+    ),
+    ("POST", "/internal/carlos/booking-prompts/1/withdraw", STAFF, "portal.booking_prompt.manage"),
+    (
+        "GET",
+        "/internal/carlos/booking-prompts/choices",
+        BOOKING_SYNC_JOB,
+        "portal.booking_prompt.sync",
+    ),
+    (
+        "POST",
+        "/internal/carlos/booking-prompts/1/choice-result",
+        BOOKING_SYNC_JOB,
+        "portal.booking_prompt.sync",
+    ),
 )
+STAFF_ROUTES = tuple(route for route in INTERNAL_ROUTE_PERMISSIONS if route[2] == STAFF)
+JOB_ROUTES = tuple(route for route in INTERNAL_ROUTE_PERMISSIONS if route[2] != STAFF)
+STAFF_PERMISSIONS = tuple(sorted({route[3] for route in STAFF_ROUTES}))
 UNRELATED_PERMISSION = "portal.something.else"
 
 
@@ -1880,6 +1921,17 @@ def test_internal_openapi_contract_is_stable() -> None:
     }
 
 
+def route_template(path: str) -> str:
+    """The registered template of a manifest path, such as `/invites/{invite_id}/revoke`."""
+    return (
+        path.replace("1234", "{demographic_no}")
+        .replace("/invites/1/", "/invites/{invite_id}/")
+        .replace("/unlock-secrets/1/", "/unlock-secrets/{unlock_secret_id}/")
+        .replace("/contact-reviews/1/", "/contact-reviews/{review_request_id}/")
+        .replace("/booking-prompts/1/", "/booking-prompts/{prompt_id}/")
+    )
+
+
 def test_internal_route_permission_manifest_covers_every_route() -> None:
     """A newly added internal route must declare its authorization expectation."""
     app = internal_app()
@@ -1890,26 +1942,164 @@ def test_internal_route_permission_manifest_covers_every_route() -> None:
         for method in sorted(getattr(route, "methods", set()) - {"HEAD", "OPTIONS"})
     }
     declared = {
-        (method, path.replace("1234", "{demographic_no}"))
-        for method, path, _ in INTERNAL_ROUTE_PERMISSIONS
+        (method, route_template(path)) for method, path, _, _ in INTERNAL_ROUTE_PERMISSIONS
     }
-    normalized_declared = {
-        (
-            method,
-            path.replace("/invites/1/", "/invites/{invite_id}/")
-            .replace("/unlock-secrets/1/", "/unlock-secrets/{unlock_secret_id}/")
-            .replace("/contact-reviews/1/", "/contact-reviews/{review_request_id}/")
-            .replace("/booking-prompts/1/", "/booking-prompts/{prompt_id}/"),
+
+    assert declared == registered
+
+
+def caller_policies(dependant) -> list[internal_routes.InternalCallerPolicy]:
+    """Every tagged authorization dependency in a route's dependency tree."""
+    policies = []
+    for dependency in dependant.dependencies:
+        policy = getattr(dependency.call, internal_routes.CALLER_POLICY_ATTRIBUTE, None)
+        if policy is not None:
+            policies.append(policy)
+        policies.extend(caller_policies(dependency))
+    return policies
+
+
+def test_every_internal_route_declares_its_callers_in_code_and_in_the_manifest() -> None:
+    """Each route names exactly one caller policy, and it is the one declared above.
+
+    Read from the dependency each route actually uses, so a route that forgot its policy, or
+    opened itself to a job without a decision here, fails like the mutator-GET scan in CARLOS.
+    """
+    app = internal_app()
+    registered = {}
+    for route in app.routes:
+        if not isinstance(route, APIRoute) or not route.path.startswith("/internal/carlos"):
+            continue
+        policies = caller_policies(route.dependant)
+        assert len(policies) == 1, f"{route.path} has {len(policies)} caller policies"
+        (policy,) = policies
+        caller = STAFF if policy.caller == "staff" else f"job:{policy.job}"
+        for method in route.methods - {"HEAD", "OPTIONS"}:
+            registered[(method, route.path)] = (caller, policy.permission)
+    declared = {
+        (method, route_template(path)): (caller, permission)
+        for method, path, caller, permission in INTERNAL_ROUTE_PERMISSIONS
+    }
+
+    assert registered == declared
+
+
+def test_a_route_cannot_be_opened_to_an_unknown_job_or_a_right_it_does_not_hold() -> None:
+    deps = internal_routes.build_internal_dependencies(internal_app().state)
+
+    with pytest.raises(ValueError, match="not a registered CARLOS job"):
+        deps.job_principal_requiring("nightly-export", "portal.booking_prompt.sync")
+    with pytest.raises(ValueError, match="does not hold portal.invite.manage"):
+        deps.job_principal_requiring("booking-sync", "portal.invite.manage")
+
+
+def job_route_audit_rows(app) -> list[PatientPortalAuditEvent]:
+    with app.state.session_factory() as session:
+        return list(
+            session.scalars(select(PatientPortalAuditEvent).order_by(PatientPortalAuditEvent.id))
         )
-        for method, path in declared
-    }
-
-    assert normalized_declared == registered
 
 
-@pytest.mark.parametrize(("method", "path", "permission"), INTERNAL_ROUTE_PERMISSIONS)
+@pytest.mark.parametrize(("method", "path", "caller", "permission"), STAFF_ROUTES)
+def test_a_job_on_a_staff_route_is_not_found_and_recorded_with_the_route_template(
+    method: str, path: str, caller: str, permission: str
+) -> None:
+    """A verified job is refused by every staff route with the same 404 as an unknown route.
+
+    Whatever it claims: here the booking-sync job's own permission, which no staff route takes.
+    The one audit row replaces the generic one and names the template, never the raw path.
+    """
+    app = internal_app()
+
+    response = TestClient(app).request(
+        method,
+        path,
+        headers=carlos_job_headers(
+            "booking-sync",
+            "portal.booking_prompt.sync",
+            method=method,
+            path=path,
+            clinic_id="clinic-a",
+        ),
+    )
+
+    assert response.status_code == 404, f"{method} {path} accepted the booking-sync job"
+    assert response.json() == {"detail": "not found"}
+    rows = job_route_audit_rows(app)
+    assert [
+        (
+            row.event_type,
+            row.outcome,
+            row.actor_type,
+            row.actor,
+            row.actor_id,
+            row.clinic_id,
+            row.resource_type,
+            row.resource_id,
+            row.reason,
+            row.assertion_key_id,
+        )
+        for row in rows
+    ] == [
+        (
+            AUDIT_EVENT_JOB_AUTH_REFUSED,
+            "failure",
+            "system",
+            "Clinic booking",
+            "job:booking-sync",
+            "clinic-a",
+            "internal_api",
+            route_template(path),
+            "route_not_open",
+            TEST_JOB_ASSERTION_KEY_IDS["booking-sync"],
+        )
+    ]
+    assert rows[0].assertion_id is not None and len(rows[0].assertion_id) == 36
+    assert rows[0].demographic_no is None and rows[0].account_id is None
+
+
+@pytest.mark.parametrize(("method", "path", "caller", "permission"), INTERNAL_ROUTE_PERMISSIONS)
+def test_a_staff_assertion_carrying_the_sync_permission_is_refused_on_every_route(
+    method: str, path: str, caller: str, permission: str
+) -> None:
+    """The job's permission never rides on a login, even beside the route's own permission."""
+    app = internal_app()
+
+    response = TestClient(app).request(
+        method,
+        path,
+        headers=carlos_headers(*sorted({"portal.booking_prompt.sync", permission})),
+    )
+
+    assert response.status_code == 403, f"{method} {path} accepted the sync permission on staff"
+    assert response.json() == {"detail": "permission denied"}
+    assert [(row.event_type, row.reason) for row in job_route_audit_rows(app)] == [
+        (AUDIT_EVENT_STAFF_ACTION, "authorization_failed")
+    ]
+
+
+@pytest.mark.parametrize(("method", "path", "caller", "permission"), JOB_ROUTES)
+def test_staff_cannot_call_a_job_route_whatever_else_it_holds(
+    method: str, path: str, caller: str, permission: str
+) -> None:
+    app = internal_app()
+
+    response = TestClient(app).request(
+        method,
+        path,
+        headers=carlos_headers(*STAFF_PERMISSIONS),
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "permission denied"}
+    assert [(row.event_type, row.actor_type, row.reason) for row in job_route_audit_rows(app)] == [
+        (AUDIT_EVENT_STAFF_ACTION, "staff", "authorization_failed")
+    ]
+
+
+@pytest.mark.parametrize(("method", "path", "caller", "permission"), INTERNAL_ROUTE_PERMISSIONS)
 def test_internal_route_rejects_a_caller_without_its_permission(
-    method: str, path: str, permission: str
+    method: str, path: str, caller: str, permission: str
 ) -> None:
     """Holding some other permission must never satisfy a route's own requirement.
 
@@ -1940,7 +2130,9 @@ def test_internal_route_rejects_a_caller_without_its_permission(
 
 
 PATIENT_ROUTE_PERMISSIONS = tuple(
-    route for route in INTERNAL_ROUTE_PERMISSIONS if "/patients/1234/" in route[1]
+    (method, path, permission)
+    for method, path, caller, permission in INTERNAL_ROUTE_PERMISSIONS
+    if "/patients/1234/" in path and caller == STAFF
 )
 
 

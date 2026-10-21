@@ -66,6 +66,8 @@ def record_audit_event(
     resource_type: str | None = None,
     resource_id: str | None = None,
     reason: str | None = None,
+    assertion_key_id: str | None = None,
+    assertion_id: str | None = None,
 ) -> PatientPortalAuditEvent:
     audit_event = PatientPortalAuditEvent(
         clinic_id=clinic_id,
@@ -82,6 +84,8 @@ def record_audit_event(
         resource_type=resource_type,
         resource_id=resource_id,
         reason=reason,
+        assertion_key_id=assertion_key_id,
+        assertion_id=assertion_id,
         created_at=utc_now(),
     )
     session.add(audit_event)
