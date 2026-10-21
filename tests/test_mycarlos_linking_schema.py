@@ -175,6 +175,12 @@ def assert_refused(engine: Engine, build: Callable[[Session], object]) -> None:
 def test_the_migration_creates_the_tables_and_matches_the_models(migrated) -> None:
     engine, _config = migrated
     assert MYCARLOS_TABLES <= set(inspect(engine).get_table_names())
+    # Ending a session deletes its links, so that lookup must not scan the whole table.
+    link_code_indexes = {
+        tuple(index["column_names"])
+        for index in inspect(engine).get_indexes("patient_portal_mycarlos_link_codes")
+    }
+    assert ("session_id",) in link_code_indexes
 
 
 def test_a_device_key_can_be_linked_only_once_across_all_accounts(migrated) -> None:

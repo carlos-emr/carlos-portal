@@ -245,6 +245,7 @@ def upgrade() -> None:
         ["account_id", "status", "created_at"],
     )
     op.create_index("ix_pp_mycarlos_link_codes_expires", _LINK_CODE_TABLE, ["expires_at"])
+    op.create_index("ix_pp_mycarlos_link_codes_session", _LINK_CODE_TABLE, ["session_id"])
 
     op.create_table(
         _LINK_FAILURE_TABLE,
@@ -354,6 +355,7 @@ def downgrade() -> None:
     op.drop_index("ix_pp_mycarlos_link_failures_failed", table_name=_LINK_FAILURE_TABLE)
     op.drop_index("ix_pp_mycarlos_link_failures_account_failed", table_name=_LINK_FAILURE_TABLE)
     op.drop_table(_LINK_FAILURE_TABLE)
+    op.drop_index("ix_pp_mycarlos_link_codes_session", table_name=_LINK_CODE_TABLE)
     op.drop_index("ix_pp_mycarlos_link_codes_expires", table_name=_LINK_CODE_TABLE)
     op.drop_index("ix_pp_mycarlos_link_codes_account_status_created", table_name=_LINK_CODE_TABLE)
     op.drop_index("ux_pp_mycarlos_link_codes_link_id", table_name=_LINK_CODE_TABLE)

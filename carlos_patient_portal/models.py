@@ -1947,6 +1947,8 @@ class PatientPortalMyCarlosLinkCode(Base):
             "created_at",
         ),
         Index("ix_pp_mycarlos_link_codes_expires", "expires_at"),
+        # Deleting a session cascades here; PostgreSQL does not index a foreign key by itself.
+        Index("ix_pp_mycarlos_link_codes_session", "session_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
