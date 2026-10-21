@@ -125,6 +125,15 @@ def _parse_compact(token: object, code: str) -> tuple[bytes, dict[str, object], 
     return payload, claims, signature
 
 
+def _is_link_text(value: object, length: int) -> bool:
+    """A link ID or code as sent: exactly `length` characters of the link-code alphabet."""
+    return (
+        isinstance(value, str)
+        and len(value) == length
+        and set(value) <= set(CONSTANTS["link_code_alphabet"])
+    )
+
+
 def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
@@ -169,15 +178,16 @@ class ReferencePortal:
         self.state = copy.deepcopy(state)
         self.now: int = self.state["now"]
         self.seen_jtis: set[str] = set()
-        self.held_receipts: list[str] = []
+        # Receipts accepted, as (device_key_id, delivery_id, receipt), held for CARLOS. The portal
+        # keeps each one (or its hash) until the copy's expiry, so a retry is answered as done.
+        self.held_receipts: list[tuple[str, str, str]] = []
 
     def _account(self, name: str) -> dict[str, object]:
         return next(row for row in self.state["accounts"] if row["account"] == name)
 
-    def _device(self, device_key_id: object) -> dict[str, object] | None:
-        return next(
-            (row for row in self.state["devices"] if row["device_key_id"] == device_key_id), None
-        )
+    def _device_rows(self, device_key_id: object) -> list[dict[str, object]]:
+        """Keys are per device, so one device linked to two accounts has a row for each."""
+        return [row for row in self.state["devices"] if row["device_key_id"] == device_key_id]
 
     def _check_times(self, claims: dict[str, object]) -> None:
         issued_at, expires_at = claims["iat"], claims["exp"]
@@ -242,21 +252,29 @@ class ReferencePortal:
         _check_assertion_shape(
             claims, CONSTANTS["device_audience"], DEVICE_CLAIMS, DEVICE_OPTIONAL_CLAIMS
         )
-        device = self._device(claims["kid"])
-        if device is None:
+        rows = self._device_rows(claims["kid"])
+        if not rows:
             raise Refusal("unknown_device")
         _verify_ed25519(
-            _strict_b64url(device["ed25519_public_key"], "invalid_assertion", 32),
+            _strict_b64url(rows[0]["ed25519_public_key"], "invalid_assertion", 32),
             signature,
             payload,
             "invalid_assertion",
         )
+        device = next(
+            (
+                row
+                for row in rows
+                if self._account(row["account"])["recipient_id"] == claims["recipient_id"]
+            ),
+            None,
+        )
+        if device is None:
+            raise Refusal("recipient_mismatch")
         if device["status"] != "active":
             raise Refusal("device_removed")
         self._check_times(claims)
         self._check_request(claims, vector)
-        if claims["recipient_id"] != self._account(device["account"])["recipient_id"]:
-            raise Refusal("recipient_mismatch")
         self._consume_jti(claims["jti"])
 
         if vector["method"] == "GET" and vector["path"] == ref.DEVICE_DELIVERIES_PATH:
@@ -276,6 +294,8 @@ class ReferencePortal:
             (row for row in self._copies_for(device) if row["delivery_id"] == delivery_id), None
         )
         if stored is None:
+            if (device["device_key_id"], delivery_id, receipt) in self.held_receipts:
+                return delivery_id  # the same receipt again: already done
             raise Refusal("delivery_not_found")
         payload, claims, signature = _parse_compact(receipt, "invalid_receipt")
         if (
@@ -307,7 +327,7 @@ class ReferencePortal:
         ):
             raise Refusal("receipt_mismatch")
         self.state["deliveries"].remove(stored)
-        self.held_receipts.append(receipt)
+        self.held_receipts.append((device["device_key_id"], delivery_id, receipt))
         return delivery_id
 
     def link_request(self, vector: dict[str, object]) -> dict[str, object]:
@@ -324,7 +344,8 @@ class ReferencePortal:
             not isinstance(name, str)
             or not 1 <= len(name) <= 64
             or not name.isprintable()
-            or not all(isinstance(body[key], str) for key in ("link_id", "code"))
+            or not _is_link_text(body["link_id"], CONSTANTS["link_id_length"])
+            or not _is_link_text(body["code"], CONSTANTS["link_code_length"])
         ):
             raise Refusal("invalid_assertion")
         payload, claims, signature = _parse_compact(vector["assertion"], "invalid_assertion")
@@ -351,20 +372,23 @@ class ReferencePortal:
         )
         if row is None:
             raise Refusal("link_code_invalid")
+        account = self._account(row["account"])
         code_matches = compare_digest(
             sha256(body["code"].encode()).digest(), sha256(row["code"].encode()).digest()
         )
         if not code_matches:
             row["wrong_attempts"] += 1
+            account["recent_wrong_codes"] += 1
         if (
             not code_matches
             or row["status"] != "unused"
             or row["expires_at"] <= self.now
             or not row["session_signed_in"]
             or row["wrong_attempts"] >= CONSTANTS["max_link_code_attempts"]
+            or account["recent_wrong_codes"] >= CONSTANTS["max_account_wrong_codes"]
         ):
             raise Refusal("link_code_invalid")
-        if self._device(fingerprint) is not None:
+        if any(row_["account"] == row["account"] for row_ in self._device_rows(fingerprint)):
             raise Refusal("device_exists")
         row["status"] = "used"
         self.state["devices"].append(
@@ -376,8 +400,11 @@ class ReferencePortal:
                 "status": "active",
             }
         )
-        account = self._account(row["account"])
-        return {"account": account["account"], "recipient_id": account["recipient_id"]}
+        return {
+            "account": account["account"],
+            "recipient_id": account["recipient_id"],
+            "device_key_id": fingerprint,
+        }
 
 
 def _outcome(call: object, *args: object) -> tuple[str, object]:
@@ -580,20 +607,29 @@ def test_a_receipt_deletes_the_copy_and_is_held_for_carlos():
     send = _by_name(PORTAL["device_requests"], "send the receipt")
     assert portal.device_request(send) == ref.DELIVERY_ID
     assert ref.DELIVERY_ID not in [row["delivery_id"] for row in portal.state["deliveries"]]
-    assert portal.held_receipts == [json.loads(send["body"])["receipt"]]
+    assert [receipt for _, _, receipt in portal.held_receipts] == [
+        json.loads(send["body"])["receipt"]
+    ]
     download = _by_name(PORTAL["device_requests"], "download one copy")
     assert _outcome(portal.device_request, download)[0] == "delivery_not_found"
 
 
-@pytest.mark.parametrize("vector", _named(PORTAL["receipts"]))
-def test_portal_receipts(vector):
-    portal = ReferencePortal(PORTAL["state"])
+def _post_receipt(portal: ReferencePortal, vector: dict[str, object]) -> str:
     device = next(
         row
         for row in portal.state["devices"]
         if row["device_key_id"] == CONTRACT["keys"][vector["device"]]["device_key_id"]
     )
-    outcome, _ = _outcome(portal.receipt, device, vector["delivery_id"], vector["receipt"])
+    return portal.receipt(device, vector["delivery_id"], vector["receipt"])
+
+
+@pytest.mark.parametrize("vector", _named(PORTAL["receipts"]))
+def test_portal_receipts(vector):
+    portal = ReferencePortal(PORTAL["state"])
+    if "after" in vector:
+        earlier = _by_name(PORTAL["receipts"], vector["after"])
+        assert _outcome(_post_receipt, portal, earlier)[0] == "accept"
+    outcome, _ = _outcome(_post_receipt, portal, vector)
     assert outcome == vector["expect"]
 
 
@@ -605,16 +641,18 @@ def test_portal_link_requests(vector):
         assert result == vector["returns"]
         added = portal.state["devices"][-1]
         assert added["account"] == vector["returns"]["account"]
-        assert added["device_key_id"] == CONTRACT["keys"]["new_device"]["device_key_id"]
+        assert added["device_key_id"] == vector["returns"]["device_key_id"]
 
 
 def test_a_wrong_code_counts_against_the_link_it_names():
     portal = ReferencePortal(PORTAL["state"])
     vector = _by_name(PORTAL["link_requests"], "a code from another account's link")
     assert _outcome(portal.link_request, vector)[0] == "link_code_invalid"
-    row = next(code for code in portal.state["link_codes"] if code["link_id"] == "FAKELNK2")
+    row = next(code for code in portal.state["link_codes"] if code["link_id"] == "FAKE0002")
     assert row["wrong_attempts"] == 1
     assert row["status"] == "unused"
+    account = next(row for row in portal.state["accounts"] if row["account"] == "account-2")
+    assert account["recent_wrong_codes"] == 1
 
 
 def test_a_link_code_works_once():
@@ -625,6 +663,27 @@ def test_a_link_code_works_once():
     # Even past the replay check (a portal restarted with an empty jti store), the code is spent.
     restarted = ReferencePortal(portal.state)
     assert _outcome(restarted.link_request, vector)[0] == "link_code_invalid"
+
+
+@pytest.mark.parametrize(
+    "example", [pytest.param(e, id=e["typed"]) for e in PORTAL["link_code_display_examples"]]
+)
+def test_typed_link_codes_split_as_listed(example):
+    if example.get("expect") == "not_a_link_code":
+        with pytest.raises(ValueError):
+            ref.parse_typed_link_code(example["typed"])
+    else:
+        assert ref.parse_typed_link_code(example["typed"]) == (example["link_id"], example["code"])
+
+
+def test_link_codes_meet_the_format():
+    alphabet = CONSTANTS["link_code_alphabet"]
+    assert len(alphabet) == 32 and len(set(alphabet)) == 32 and not set("ILOU") & set(alphabet)
+    assert CONSTANTS["link_code_length"] * 5 >= 50  # at least 50 bits of secret
+    for row in PORTAL["state"]["link_codes"]:
+        assert _is_link_text(row["link_id"], CONSTANTS["link_id_length"])
+        assert _is_link_text(row["code"], CONSTANTS["link_code_length"])
+        assert ref.parse_typed_link_code(row["display"]) == (row["link_id"], row["code"])
 
 
 def test_every_refusal_code_is_in_the_spec():
@@ -638,6 +697,7 @@ def test_every_refusal_code_is_in_the_spec():
     )
     codes = {vector["expect"] for group in groups for vector in group}
     codes |= {vector["portal_upload"] for vector in CONTRACT["packages"]["refuse"]}
+    codes |= {e.get("expect", "accept") for e in PORTAL["link_code_display_examples"]}
     codes.discard("accept")
     missing = sorted(code for code in codes if f"`{code}`" not in spec)
     assert not missing, missing

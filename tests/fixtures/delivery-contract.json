@@ -25,7 +25,13 @@
     "device_expiry_skew_seconds": 86400,
     "max_ciphertext_bytes": 20971520,
     "link_code_lifetime_seconds": 600,
-    "max_link_code_attempts": 5
+    "max_link_code_attempts": 5,
+    "link_code_alphabet": "0123456789ABCDEFGHJKMNPQRSTVWXYZ",
+    "link_id_length": 8,
+    "link_code_length": 10,
+    "max_account_wrong_codes": 10,
+    "account_wrong_code_window_seconds": 86400,
+    "max_pending_links_per_account": 3
   },
   "hpke_rfc9180_a2_1": {
     "mode": 0,
@@ -483,6 +489,29 @@
         "portal_upload": "accept"
       },
       {
+        "name": "a manifest with a duplicate claim",
+        "outer": {
+          "v": 1,
+          "suite": {
+            "kem_id": 32,
+            "kdf_id": 1,
+            "aead_id": 3
+          },
+          "delivery_id": "6f1c2a7e-0b9d-4e53-8a41-2d7c9b0e5f13",
+          "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+          "device_key_id": "Ebz2sH2jVoqcdFhl1BmIOBRm1xuT-zW5bvFBcCeERPY",
+          "size": 1323,
+          "ciphertext_sha256": "309bdb0d2c2b05f6ba19dd50f761e6de52f52a8ed0007e02b335899ff1be2126",
+          "created_at": 1792450800,
+          "expires_at": 1793055600
+        },
+        "blob": "WDZU-GLBXmyUvu4XYDRskFAyPZgMKxaDshPmr7_e2FZkNMHuvRL5db8kx8IB8OXBj1p2jLfzCGzy7OC3mKEGCDPqVYAv6lBci7QsW4RzX9tCI6Lm1VyCGKgAgtYNabOqyiDXAYmnzcDhRNmq1sAQGiy6OPqBjLWtb8q0bJ7I3Vgh5YK0gkf5OoS1H83EezJlcLTQoFW62Y9neBEiX9nDMp7IRB98wQz-lShhCiAuCpTWx81p-Och9tJZ41zcKhNfdHnEM-riGOuhdXdu58_8ynjwuVhQOn3kE7PKPXqPKe_4hfxi5GAosPrKr72ZJMRF3SekZHAQudmZ2KPakH3IsRtgPOyJJnSws625kTXmcvHuaNf1hnLhwzhqDv859v3k4n-p1OZGBsYQNsMH7msQ4SqkUUIjevB4hCEN4NjsDvkxiwajLVwtwTCQrIx4bixJpe5O4--WTWVjLIRmFx3pAk5tz6fyMnbo8GQwk3-1Dh9EQfgEg13UUfAkNOR0yB7QbAKwU2ietqdXF1iQSGo3zZltuGrww535t6SaH3L-1IZ-P9cZSK5OSr6dbN63NWutQTGzyxEViG6Ja6np87PHBOv4p7oshBk8zX-CNqx2-f-29IgZmsUEExSSKMlMllrv5p2lqUdbRKKjfBwzpIoVZINQCfiebInVtbdJ9t9L0Cv_T7p_qtf14HQxz5dpKy7B5hTOcwJZ-kC8q6ry_k2id94VtXbhR6kT-mBDtObmPbJ1S2VeEinChdstc-s9JGFJHWjlWFvqPzAtSkegYzYw7ZzA5vRbFfDONGFvZi5wujM7_TE4YugtlaeCjn6LcjRq4dYu7bpJ36bf0cbR9osagvbAxIg5rqG7x2uCpkmmuMOoeaK_PR7sCUT43CcumbeSSRhC9kreHhrwD7e-4vOt3pkQYZH5WfkzlZge8oTm_4zfabo9GVoswWDqUh1mPfUAXVAWF8ML06xh3_RrxPDncvVBz-ZVe5Ess1ZDR2mU0tJXIbDr4Wgbz9f5EvfVz2DFbDR_xi3dq-O1TaAWKg5hun4sZ6VLfsrNQK26ISfiyL9u-3tx7Whv8okD2gyF53XF_DwIhYAzz66k0qA0uZln01U6xbfQwoTLbWrxRFPs31xbc2KQftXhvTBM0raVboKBtcLsBx3h_LhIybN8wPxTMLk-yGzEgadsWse85CfZ3Nvs2oe0NZdjL3oD96euw7FvbZQj9XgVzbcXxNAwB8TiCJB_vm4EqlqzBtj2YKCN_QVEmlEOZlGItF6arvbL0O2LLa6E9guWgGngnzbpXI7Y3H6ceLeeqU2nZtx2-IS4gQ_ndRHr2AombsxmntrupTvLzLeaCl6Hgxph4Al6Z2HgNcyjw1T4Wn9D_DcMhh3u7FUw_TfieU63GWtHAeFmTRrcOkvLHIXc3ike565Hkh6s-pgs7EeTqXh99Fh6-1d6M-9VpkL_XyoQR6ADYnzNHZRXbtoFiEWrSz_MrNy5eykTkrunFeWMoxDsRgCMve88DnfXGDnKS1mNUw_7YJyEDv3u7JQkV3CFidlU4JZKZl-n65ib94XJggRjDO3B8uN6B9DwjnMBE2-NQxknnGqo2gLRqKAUetdFCiYjT8Vuev_jbUQhhvTb0n-EBoIAmrRATasu-BYlKQikFZoHvj1QE_4U4ox8TQMNoKoIDRWjxCaSMcp_2C-38CU7gGWjiKoEM4nd0aVlsNjIEqw7LWVVotVC5x9EpPhWpF2CsbJ41siE87R-jB2wnB6z9j_-",
+        "now": 1792454400,
+        "expect": "bad_manifest",
+        "note": "validly signed; clinic_name appears twice, so it is refused, not read",
+        "portal_upload": "accept"
+      },
+      {
         "name": "signed by an unknown key",
         "outer": {
           "v": 1,
@@ -714,12 +743,20 @@
         {
           "account": "account-1",
           "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
-          "clinic_id": "clinic-a"
+          "clinic_id": "clinic-a",
+          "recent_wrong_codes": 0
         },
         {
           "account": "account-2",
           "recipient_id": "rcp-FAKE0002bbbbbbbbbbbb",
-          "clinic_id": "clinic-a"
+          "clinic_id": "clinic-a",
+          "recent_wrong_codes": 0
+        },
+        {
+          "account": "account-3",
+          "recipient_id": "rcp-FAKE0004dddddddddddd",
+          "clinic_id": "clinic-a",
+          "recent_wrong_codes": 10
         }
       ],
       "devices": [
@@ -779,8 +816,9 @@
       ],
       "link_codes": [
         {
-          "link_id": "FAKELNK1",
-          "code": "FAKE-7Q2M-4KXP",
+          "link_id": "FAKE0001",
+          "code": "FAKE7Q2M4K",
+          "display": "FAKE0001-FAKE7-Q2M4K",
           "account": "account-1",
           "session_signed_in": true,
           "status": "unused",
@@ -788,8 +826,9 @@
           "wrong_attempts": 0
         },
         {
-          "link_id": "FAKELNK2",
-          "code": "FAKE-9D3R-HW6T",
+          "link_id": "FAKE0002",
+          "code": "FAKE9D3RHW",
+          "display": "FAKE0002-FAKE9-D3RHW",
           "account": "account-2",
           "session_signed_in": true,
           "status": "unused",
@@ -797,8 +836,9 @@
           "wrong_attempts": 0
         },
         {
-          "link_id": "FAKELNK3",
-          "code": "FAKE-2B8N-QJ5V",
+          "link_id": "FAKE0003",
+          "code": "FAKE2B8NQJ",
+          "display": "FAKE0003-FAKE2-B8NQJ",
           "account": "account-1",
           "session_signed_in": true,
           "status": "unused",
@@ -806,8 +846,9 @@
           "wrong_attempts": 0
         },
         {
-          "link_id": "FAKELNK4",
-          "code": "FAKE-6C1Z-MR7Y",
+          "link_id": "FAKE0004",
+          "code": "FAKE6C1ZMR",
+          "display": "FAKE0004-FAKE6-C1ZMR",
           "account": "account-1",
           "session_signed_in": true,
           "status": "used",
@@ -815,8 +856,9 @@
           "wrong_attempts": 0
         },
         {
-          "link_id": "FAKELNK5",
-          "code": "FAKE-4H9W-TK2D",
+          "link_id": "FAKE0005",
+          "code": "FAKE4H9WTK",
+          "display": "FAKE0005-FAKE4-H9WTK",
           "account": "account-1",
           "session_signed_in": false,
           "status": "unused",
@@ -824,16 +866,57 @@
           "wrong_attempts": 0
         },
         {
-          "link_id": "FAKELNK6",
-          "code": "FAKE-8P3F-XN6S",
+          "link_id": "FAKE0006",
+          "code": "FAKE8P3FXN",
+          "display": "FAKE0006-FAKE8-P3FXN",
           "account": "account-1",
           "session_signed_in": true,
           "status": "unused",
           "expires_at": 1792454700,
           "wrong_attempts": 5
+        },
+        {
+          "link_id": "FAKE0007",
+          "code": "FAKE5G7YVA",
+          "display": "FAKE0007-FAKE5-G7YVA",
+          "account": "account-3",
+          "session_signed_in": true,
+          "status": "unused",
+          "expires_at": 1792454700,
+          "wrong_attempts": 0
         }
       ]
     },
+    "link_code_display_examples": [
+      {
+        "typed": "FAKE0001-FAKE7-Q2M4K",
+        "link_id": "FAKE0001",
+        "code": "FAKE7Q2M4K"
+      },
+      {
+        "typed": "fake0001 fake7 q2m4k",
+        "link_id": "FAKE0001",
+        "code": "FAKE7Q2M4K"
+      },
+      {
+        "typed": "FAKEOOOI-FAKE7-Q2M4K",
+        "link_id": "FAKE0001",
+        "code": "FAKE7Q2M4K"
+      },
+      {
+        "typed": "FAKE0001FAKE7Q2M4K",
+        "link_id": "FAKE0001",
+        "code": "FAKE7Q2M4K"
+      },
+      {
+        "typed": "FAKE0001-FAKE7-Q2M4",
+        "expect": "not_a_link_code"
+      },
+      {
+        "typed": "FAKE0001-FAKE7-Q2M4U",
+        "expect": "not_a_link_code"
+      }
+    ],
     "device_requests": [
       {
         "name": "list waiting copies",
@@ -1007,6 +1090,15 @@
         "expect": "recipient_mismatch"
       },
       {
+        "name": "a duplicate claim",
+        "method": "GET",
+        "path": "/api/mycarlos/deliveries",
+        "query": "",
+        "body": "",
+        "assertion": "eyJyZWNpcGllbnRfaWQiOiJyY3AtRkFLRTAwMDJiYmJiYmJiYmJiYmIiLCJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWFwaSIsImV4cCI6MTc5MjQ1NDQ2MCwiaWF0IjoxNzkyNDU0NDAwLCJpc3MiOiJteWNhcmxvcyIsImp0aSI6ImY0NzljMDkyLTFhZDctNTExNi05MmNiLTAwOTExM2FlNmY0NiIsImtpZCI6IkViejJzSDJqVm9xY2RGaGwxQm1JT0JSbTF4dVQtelc1YnZGQmNDZUVSUFkiLCJyZWNpcGllbnRfaWQiOiJyY3AtRkFLRTAwMDFhYWFhYWFhYWFhYWEiLCJyZXF1ZXN0X2hhc2giOiJhYWNlOWRlMDY0ZDQzZDVjNjIyMzdmZTE1ZThkMmFhNmRjZDhhYjYxZGZkYmRjZWFmNjk2YmNkMjk0MTJhZjZkIn0.bolTWkLWD4GUFIg05yuPCzzRW49GAM5NMzuOoWO3h4Zhvzp9PwcIiQwXntY84nUKvK_3Pbjt4YgPbnsEUjySAw",
+        "expect": "invalid_assertion"
+      },
+      {
         "name": "download another device's copy",
         "method": "GET",
         "path": "/api/mycarlos/deliveries/c7f3a9b1-4e2d-4a68-9d05-3b8e6f1c2a47",
@@ -1088,6 +1180,30 @@
         "device": "device",
         "delivery_id": "6f1c2a7e-0b9d-4e53-8a41-2d7c9b0e5f13",
         "receipt": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWFwaSIsImNpcGhlcnRleHRfc2hhMjU2IjoiOWEzZjU1ZGNjNGRlN2YzNTQ0N2ViZTc2MzNlMmNiMDA1MzQxMjlmOTM0M2MxZTI5NWI5YjZiZWZhODVkNjgzNCIsImRlbGl2ZXJ5X2lkIjoiNmYxYzJhN2UtMGI5ZC00ZTUzLThhNDEtMmQ3YzliMGU1ZjEzIiwiZGV2aWNlX2tleV9pZCI6IkViejJzSDJqVm9xY2RGaGwxQm1JT0JSbTF4dVQtelc1YnZGQmNDZUVSUFkiLCJkb2N1bWVudF9zaGEyNTYiOiJjZWYzYjAzMGE5Mzc2M2NiODM2MzY3ODIxZDZkMzk4YTI3NmI2ODQ0Yjc4M2Y5ZTFiOGY4YmZjYTRkMjJlNjM3IiwianRpIjoiMjk4ZjQyZGYtM2Q1Ni01OWIyLWEzNWItNGNiZThhMzI0NWQ0IiwicGlja2VkX3VwX2F0IjoxNzkyNDU0NDAwLCJyZWNpcGllbnRfaWQiOiJyY3AtRkFLRTAwMDFhYWFhYWFhYWFhYWEiLCJ0eXAiOiJteWNhcmxvcy1kZWxpdmVyeS1yZWNlaXB0IiwidmF1bHRfaGVhZCI6ImI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjUifQ.IUE_exaOmb_pLsBhQiWqIbmJX8cqzFhOsA6lwo4nQcHCHwkSVFFVoIdTB7HED7TUE6Sa7HMYK1i8D4edQZsPAw"
+      },
+      {
+        "name": "a duplicate claim",
+        "expect": "invalid_receipt",
+        "device": "device",
+        "delivery_id": "6f1c2a7e-0b9d-4e53-8a41-2d7c9b0e5f13",
+        "receipt": "eyJjaXBoZXJ0ZXh0X3NoYTI1NiI6IjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAiLCJhdWQiOiJjYXJsb3MtZGVsaXZlcnktcmVjZWlwdCIsImNpcGhlcnRleHRfc2hhMjU2IjoiOWEzZjU1ZGNjNGRlN2YzNTQ0N2ViZTc2MzNlMmNiMDA1MzQxMjlmOTM0M2MxZTI5NWI5YjZiZWZhODVkNjgzNCIsImRlbGl2ZXJ5X2lkIjoiNmYxYzJhN2UtMGI5ZC00ZTUzLThhNDEtMmQ3YzliMGU1ZjEzIiwiZGV2aWNlX2tleV9pZCI6IkViejJzSDJqVm9xY2RGaGwxQm1JT0JSbTF4dVQtelc1YnZGQmNDZUVSUFkiLCJkb2N1bWVudF9zaGEyNTYiOiJjZWYzYjAzMGE5Mzc2M2NiODM2MzY3ODIxZDZkMzk4YTI3NmI2ODQ0Yjc4M2Y5ZTFiOGY4YmZjYTRkMjJlNjM3IiwianRpIjoiMjk4ZjQyZGYtM2Q1Ni01OWIyLWEzNWItNGNiZThhMzI0NWQ0IiwicGlja2VkX3VwX2F0IjoxNzkyNDU0NDAwLCJyZWNpcGllbnRfaWQiOiJyY3AtRkFLRTAwMDFhYWFhYWFhYWFhYWEiLCJ0eXAiOiJteWNhcmxvcy1kZWxpdmVyeS1yZWNlaXB0IiwidmF1bHRfaGVhZCI6ImI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjUifQ.vbJur0eyWNmSywCsHKNhFpDaIC9YwlIXqsFnprKi6wUIVCgPZTllRHF8sVmrAuaHNkNVGyw1QBuTEich2p2cDQ"
+      },
+      {
+        "name": "the same receipt again",
+        "expect": "accept",
+        "device": "device",
+        "delivery_id": "6f1c2a7e-0b9d-4e53-8a41-2d7c9b0e5f13",
+        "receipt": "eyJhdWQiOiJjYXJsb3MtZGVsaXZlcnktcmVjZWlwdCIsImNpcGhlcnRleHRfc2hhMjU2IjoiOWEzZjU1ZGNjNGRlN2YzNTQ0N2ViZTc2MzNlMmNiMDA1MzQxMjlmOTM0M2MxZTI5NWI5YjZiZWZhODVkNjgzNCIsImRlbGl2ZXJ5X2lkIjoiNmYxYzJhN2UtMGI5ZC00ZTUzLThhNDEtMmQ3YzliMGU1ZjEzIiwiZGV2aWNlX2tleV9pZCI6IkViejJzSDJqVm9xY2RGaGwxQm1JT0JSbTF4dVQtelc1YnZGQmNDZUVSUFkiLCJkb2N1bWVudF9zaGEyNTYiOiJjZWYzYjAzMGE5Mzc2M2NiODM2MzY3ODIxZDZkMzk4YTI3NmI2ODQ0Yjc4M2Y5ZTFiOGY4YmZjYTRkMjJlNjM3IiwianRpIjoiMjk4ZjQyZGYtM2Q1Ni01OWIyLWEzNWItNGNiZThhMzI0NWQ0IiwicGlja2VkX3VwX2F0IjoxNzkyNDU0NDAwLCJyZWNpcGllbnRfaWQiOiJyY3AtRkFLRTAwMDFhYWFhYWFhYWFhYWEiLCJ0eXAiOiJteWNhcmxvcy1kZWxpdmVyeS1yZWNlaXB0IiwidmF1bHRfaGVhZCI6ImI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjUifQ.Y0IEcm8p3Y45ki90O23eToWJbsx8fhOJKx41AYwPta2Wquy6sZVgxkZufQIMHIMtXhN3ddmbRQkQiwvRjKkIBQ",
+        "after": "the receipt for a picked-up copy",
+        "note": "a retry after a lost response: byte-identical, same jti"
+      },
+      {
+        "name": "a different receipt for a copy already picked up",
+        "expect": "delivery_not_found",
+        "device": "device",
+        "delivery_id": "6f1c2a7e-0b9d-4e53-8a41-2d7c9b0e5f13",
+        "receipt": "eyJhdWQiOiJjYXJsb3MtZGVsaXZlcnktcmVjZWlwdCIsImNpcGhlcnRleHRfc2hhMjU2IjoiOWEzZjU1ZGNjNGRlN2YzNTQ0N2ViZTc2MzNlMmNiMDA1MzQxMjlmOTM0M2MxZTI5NWI5YjZiZWZhODVkNjgzNCIsImRlbGl2ZXJ5X2lkIjoiNmYxYzJhN2UtMGI5ZC00ZTUzLThhNDEtMmQ3YzliMGU1ZjEzIiwiZGV2aWNlX2tleV9pZCI6IkViejJzSDJqVm9xY2RGaGwxQm1JT0JSbTF4dVQtelc1YnZGQmNDZUVSUFkiLCJkb2N1bWVudF9zaGEyNTYiOiJjZWYzYjAzMGE5Mzc2M2NiODM2MzY3ODIxZDZkMzk4YTI3NmI2ODQ0Yjc4M2Y5ZTFiOGY4YmZjYTRkMjJlNjM3IiwianRpIjoiZTgyYTViOTAtODdjZC01MDc5LWIzNDgtNTc4ZjI2YTczYmM5IiwicGlja2VkX3VwX2F0IjoxNzkyNDU0NDAwLCJyZWNpcGllbnRfaWQiOiJyY3AtRkFLRTAwMDFhYWFhYWFhYWFhYWEiLCJ0eXAiOiJteWNhcmxvcy1kZWxpdmVyeS1yZWNlaXB0IiwidmF1bHRfaGVhZCI6ImI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjViNWI1YjUifQ.iPruYhpnX3cKX-M_6AtsuKBgcfas6c8gmR-ywPceF-GK2U0GFUFZP7xPdYN3F-c42wI_cPCAKlEcDWnwp6VDBQ",
+        "after": "the receipt for a picked-up copy"
       }
     ],
     "link_requests": [
@@ -1097,12 +1213,28 @@
         "method": "POST",
         "path": "/api/mycarlos/link",
         "query": "",
-        "body": "{\"code\":\"FAKE-7Q2M-4KXP\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKELNK1\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
-        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiIwMWQyOWUwMi1lZTU0LTVmMzUtOWU5Yi1mZDliNzRmMDYzNzIiLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiZTFlMWFiNDc3NzVhMThhOTdiYWI1MGRlMGQzZmJiZDEwZjA3ZWFhMWZjNzhkZjkzZDY2ZDRjN2ZkYTU1ZThjMSJ9.52jlcz9eb-fF0gzai5-KDhG0drNieMLM_WAC-OS-GyCUBCUckGQC0xGfa_kcwFkajSFl8zVdvxXP3JnFTkAQDQ",
+        "body": "{\"code\":\"FAKE7Q2M4K\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKE0001\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
+        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiIwMWQyOWUwMi1lZTU0LTVmMzUtOWU5Yi1mZDliNzRmMDYzNzIiLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiMWY0YTAzM2QzYmIxYzk1MzMwOGU3OWRlOWUxN2I4YzFhMTI0YjM1MzdmNTEzMDZiODIxN2NhZDliMmQyZTAxYSJ9.sxbLiJi2KEbwkwkFrin3Vl-43wRZVHkPeE4XIjbPhzUDuO8zxFelN8CtEUa254_XgcoV_CYrYeDL3BwbNrNaAw",
         "returns": {
           "account": "account-1",
-          "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa"
+          "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+          "device_key_id": "uEfVzhnkYSKK7qDRnG3fZFStvifu-kFuyxrjP08wisY"
         }
+      },
+      {
+        "name": "the same device linking a second account",
+        "expect": "accept",
+        "method": "POST",
+        "path": "/api/mycarlos/link",
+        "query": "",
+        "body": "{\"code\":\"FAKE9D3RHW\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"njUvKIbOgLS2FyrkL2a6iGkUbNIsd1iR0FaELGmiaGI\",\"link_id\":\"FAKE0002\",\"x25519_public_key\":\"41IHjK4kO6HTxTGlXde7IBQGjSo7XVz-vKbb8wXN9HY\"}",
+        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiI3OGI2NWQyMi01Y2RmLTVjM2UtYjM3Yy1hNDhiMWJhMjFmZjgiLCJraWQiOiJFYnoyc0gyalZvcWNkRmhsMUJtSU9CUm0xeHVULXpXNWJ2RkJjQ2VFUlBZIiwicmVxdWVzdF9oYXNoIjoiZThjMGY4MWJkMDZiZTkwYzdlODhjY2RiNDYyNTA0ZjYwOTdhNTY0MTMzZDZkMDJhMmMzMDMzMzUwYWExNGZlMyJ9.IcegFFao6_aHKMmIiBqEipcuDp2er_zlLuLD1CphmP7paI1yfJ8Ak8UidsCs8f6_pjypzCSErpfRGiU-CeSNDg",
+        "returns": {
+          "account": "account-2",
+          "recipient_id": "rcp-FAKE0002bbbbbbbbbbbb",
+          "device_key_id": "Ebz2sH2jVoqcdFhl1BmIOBRm1xuT-zW5bvFBcCeERPY"
+        },
+        "note": "device keys are per device; the device gets a second row, for account-2"
       },
       {
         "name": "a code from another account's link",
@@ -1110,8 +1242,8 @@
         "method": "POST",
         "path": "/api/mycarlos/link",
         "query": "",
-        "body": "{\"code\":\"FAKE-7Q2M-4KXP\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKELNK2\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
-        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiJjMGFmNzg1NC02NzJlLTUwYWEtOWI2Ny05YmQxNzZkYTZlZjUiLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiNmIzOWNkNjBiZTE3ZjYwYjEzNDMwNmM2ZDM0ODVlNDljMjg3YjU2ZTA5OGFiNDJmYzVjZDhjNDBhODU5MjdmNSJ9.ounf7_s0q5V9YYI5W3K0dHI6om2nGI0eyC5r0ONsXNU5KLJ7FZGL4dNVkCenUTZThaEBcPTdxO17CvXVPJ31Cg",
+        "body": "{\"code\":\"FAKE7Q2M4K\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKE0002\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
+        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiJjMGFmNzg1NC02NzJlLTUwYWEtOWI2Ny05YmQxNzZkYTZlZjUiLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiZDg3Zjg5YjlhMmI0MzY5YmMzMmE4MWUwNjRkMjNjMDc4NDcyZDc3MjgzMDE0OGM2NjMxYWI2NGFlMjRkNTRhZiJ9.eu1xuGkA9tihoBesMB5XQ5KbFjVvd3qfFxuY6X9pRfvtpykCe7a4gd5uVqyJXTf73wPcA3CJc0kjPTS3nlOXDw",
         "note": "link_id names account-2's pending link; the code is account-1's"
       },
       {
@@ -1120,8 +1252,8 @@
         "method": "POST",
         "path": "/api/mycarlos/link",
         "query": "",
-        "body": "{\"code\":\"FAKE-2B8N-QJ5V\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKELNK3\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
-        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiI0ODMxYzQ5Mi04MWEyLTUxNGQtYTU2Yy0zNmU2ODE2OTA5ZDciLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiYzc0MThjMTVhMDFhNTFjMjRlZDQ1ZjQyZTJkYzMyMzU2ZDQzMzE5NzNiYmRkYjVmZmIyYmI4MDFiYjE0MDZlMyJ9.Z-DvCjxsxye5m-4nmxYH2xmm7MEwNfqswFfdL2Aq7sI0_uzD6grfjmFi_v21RYbjdb9b5RLH2WY_DZ40KQ7ABw"
+        "body": "{\"code\":\"FAKE2B8NQJ\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKE0003\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
+        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiI0ODMxYzQ5Mi04MWEyLTUxNGQtYTU2Yy0zNmU2ODE2OTA5ZDciLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiNTBkOTFmMDRmZTM5OTkzZDY2YWQ2Njg2MWUwOGU1MzI3NGM4OGNkNTc1YjBjMzQzNmI0NDM2YWQ1ZDkxODU5NCJ9.9LfA3kE9eRJkXLBAhmwVUSSvqicxBnCSR6IWjHqYAp731ck3g5Ep_8T28-txc_fknGSfA5mBQNmI7KBbIMTsDA"
       },
       {
         "name": "a used code",
@@ -1129,8 +1261,8 @@
         "method": "POST",
         "path": "/api/mycarlos/link",
         "query": "",
-        "body": "{\"code\":\"FAKE-6C1Z-MR7Y\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKELNK4\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
-        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiI2NzNjYWUyMS1jNGE2LTViNzItOTdjYi00MzZhNGIzYTViNTQiLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiYTdhZTJkOWE4YzlmZWRiMjE5N2IzNWVmNDE3OTJiNGE0NmM5MWFlYTQ3OTJkOTJmMDZiOGJiM2EyZDA3NmQwYSJ9.-ZR7GZFh_79LdwEN2ButA60b_Bte-RibBV-ZlS8C2XgP6Jah6MSpDkZp6L2g7PiRpk0YoN-N9Gn9ABSTQ1qoCQ"
+        "body": "{\"code\":\"FAKE6C1ZMR\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKE0004\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
+        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiI2NzNjYWUyMS1jNGE2LTViNzItOTdjYi00MzZhNGIzYTViNTQiLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiNzcxZWEyN2NlNzU3NjhjM2VjZmVhMmVlNTVmNTJlNmMxYzYyY2U2YTJjZDFmMTY5ZDIxMDkwOTc2MDRjOTM5NiJ9.fDp2aBYJtg6k6uHduXMTUOvjVQpFEHEk0-Hf6EjsJbqjEwyg54PQmgJQRjvFSK8R1_-KwpC9DKhGJwhF6yq1Cw"
       },
       {
         "name": "the session that showed the code has signed out",
@@ -1138,8 +1270,8 @@
         "method": "POST",
         "path": "/api/mycarlos/link",
         "query": "",
-        "body": "{\"code\":\"FAKE-4H9W-TK2D\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKELNK5\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
-        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiJlZDIxNzk2My0xMTUzLTVhMTItYjcxNy1mOTY1YmU4ZjA1ZGMiLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiM2VmYWNjOWEyZDhhNWU5ZTU1NjVlZGUwNzhiMDFkNjhlOTBkMDc1MjlkY2I0MjFmMTYyZmEyZmVjZjRhY2Y0MyJ9.u596Dfj2_6WzSE-4zyMqhR_IOX8UYHEJcjEhNeVVwJ8KIWYhllaYgd3EdMbrG6ld344Ete-KQBglBH24ymDqAA"
+        "body": "{\"code\":\"FAKE4H9WTK\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKE0005\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
+        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiJlZDIxNzk2My0xMTUzLTVhMTItYjcxNy1mOTY1YmU4ZjA1ZGMiLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiN2QzNDgwNWI2NTk4MTExZmY2YTczOTE3ODA4YWU2Nzg1ODQ2NTBiZjc0NTRjZDFhNzM0OTA5MjVhNTIzZjViNyJ9.kZZvN0p1RK9jcQaiuT68ZN7MhUGTqqvJAUGhKYTglNh21gXAoBZaPoi7SL3QrollxldLKW3exUM7CU6SdDPWBA"
       },
       {
         "name": "too many wrong codes for this link",
@@ -1147,8 +1279,35 @@
         "method": "POST",
         "path": "/api/mycarlos/link",
         "query": "",
-        "body": "{\"code\":\"FAKE-8P3F-XN6S\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKELNK6\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
-        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiI1YTI0NTk4ZS1hMTc4LTVjZGYtYmE0MS01MzY0OWUyZTNkYTUiLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiNWFhMjg5N2YxMTFhMDY4OGZjNjhmYjAwOTUyYzhkNDNlMzIwODlkOGE3NGMwOTQ5ODcyYmY3MDAxZTY0NTM2ZSJ9.8i4jDPZoc15XjStc79ZOc3L4w0DUnDeHSuzNes0RdTxkKGJBRjBOj18SJ5ce7fK8v5-K_-FpzSCFGPBZuMKyAw"
+        "body": "{\"code\":\"FAKE8P3FXN\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKE0006\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
+        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiI1YTI0NTk4ZS1hMTc4LTVjZGYtYmE0MS01MzY0OWUyZTNkYTUiLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiMDZjNjYwNDAzYWNjNzU3MTE4NDJiZjkwZGUxMmZhZWNlYzM5Nzc4NDkyZTBhYjdiOGY1MDQ1YmQzMWUwOWI4MCJ9.ceA1bBbyJ-m1AzhajtFbjc3V9oWVYoOmjxmNYgzXly_y0jJc-a8OJotJwFoQ_uJY9vlLDVrH13tKaOPQaP6SCw"
+      },
+      {
+        "name": "too many wrong codes for this account",
+        "expect": "link_code_invalid",
+        "method": "POST",
+        "path": "/api/mycarlos/link",
+        "query": "",
+        "body": "{\"code\":\"FAKE5G7YVA\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKE0007\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
+        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiI3OWM4NzU5OS00MGY5LTUxODAtOGJjMC02MDIxMzI5YmRkOWEiLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiYzhiMzEyY2ZhYTg4M2M4ZTdmNWJiOTcyZjVhZThiYTM2NGU5MDI5Zjg3NjIyMTYzMTNkZTFlMTU0ODI3MTRmNiJ9.03vCVAfCaWmherIAUyTMYhHecqZjui5Vl-IpIPrdHASyecvaoCKjICM38yJG6PjAfht-T0hN8UEHtNoP2kFSAg"
+      },
+      {
+        "name": "a code sent in its display form",
+        "expect": "invalid_assertion",
+        "method": "POST",
+        "path": "/api/mycarlos/link",
+        "query": "",
+        "body": "{\"code\":\"FAKE7-Q2M4K\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKE0001\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
+        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiI0NzhhMjYyMi0zNTYyLTU5ZmYtYTVmNC1lOGI4ZWM5NTcwMTUiLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiYTExZTFlMmVjMzY4NWQyMWI0ZDY3MThkMjM3NTU0NWExOWQ3Mjg3ZmNlMWJjY2Q4YWJhZTQxZDMyNmY0OTdmMSJ9.33m9C9Nu6anQ-5sm6UpzTWBYjj5NY8HgZymTnl9nb77FZfZ2muOwJc-opK-AUX2Ho9wHKQhe-a8hOVBGQxAKDg"
+      },
+      {
+        "name": "a duplicate body member",
+        "expect": "invalid_assertion",
+        "method": "POST",
+        "path": "/api/mycarlos/link",
+        "query": "",
+        "body": "{\"link_id\":\"FAKE0002\",\"code\":\"FAKE7Q2M4K\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKE0001\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
+        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiJlNGJjYTJkNS05YmVhLTVlY2ItOWZlMC0xOTk2NmRlMjNiMDYiLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiOGY5MWZkMjIwNzYyMGJiZDQwNWY2NTZkZjNiMDM1MTg2NGUwZWJhOGVkZjdlNTM1YjY4Y2Q4MzVlMTUyMTVmYyJ9.9VymQw7yWUjgpePqyiEYHJVrBYT7KCbMRxwHSxOKr4lKqKGYNRitXgQK6y_lRrSOUulJ9_t946eLxwYcx_zZCA"
       },
       {
         "name": "an unknown link ID",
@@ -1156,8 +1315,8 @@
         "method": "POST",
         "path": "/api/mycarlos/link",
         "query": "",
-        "body": "{\"code\":\"FAKE-7Q2M-4KXP\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKELNK9\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
-        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiJkNjYzODBmNy00YzlhLTU4MmItYmRiNS1iMjEyMWVjODA4YWEiLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiNzVlMmYzZThhMGUxMTVhYjEyZDNkYzJlY2E3Y2FhODg1OWYwMDE5ZDVmNDc3Y2YzNDI2ZWE1MzkxMjM1OTUzOCJ9.EgsURX7FfBOEtPPqunb7nGs03fWPKq209powCOoCTC2eEIXIivBET-AjlpziqimFPCUazCK-CQEWteTpPfg4Dw"
+        "body": "{\"code\":\"FAKE7Q2M4K\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKE0009\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
+        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiJkNjYzODBmNy00YzlhLTU4MmItYmRiNS1iMjEyMWVjODA4YWEiLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiZmI3YmYwZjgwMTE5YWQ1OTVhMmI1ZjRmNzdhODhkMjRhOGI1NWQ2NDNiNzhiMjA4ZjkxYTE1ZWU2OWYyOTU4NCJ9.8qJ2cqaXuhSZGMOg5yR3FHISSlaON01EITVTJ3WDcnNUFsxWkRjQJtkOH78HCa2ONUEBvkAg-xewYfVbn5TODw"
       },
       {
         "name": "signed by a key other than the one in the body",
@@ -1165,8 +1324,8 @@
         "method": "POST",
         "path": "/api/mycarlos/link",
         "query": "",
-        "body": "{\"code\":\"FAKE-7Q2M-4KXP\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKELNK1\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
-        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiI5ZmQ2YzI0ZS01N2ZjLTU0MzUtOGU5MC1lYjJkNWFhMjRkZjIiLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiZTFlMWFiNDc3NzVhMThhOTdiYWI1MGRlMGQzZmJiZDEwZjA3ZWFhMWZjNzhkZjkzZDY2ZDRjN2ZkYTU1ZThjMSJ9.4GNceUdZr0qaEZrlFXZMfvOaIgsZVbPJpjzIkKoOK29WQx-1Jlsyoh9laxnuPEzmJSqliRLdnyhnKVCGDYtcDw"
+        "body": "{\"code\":\"FAKE7Q2M4K\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKE0001\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
+        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiI5ZmQ2YzI0ZS01N2ZjLTU0MzUtOGU5MC1lYjJkNWFhMjRkZjIiLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiMWY0YTAzM2QzYmIxYzk1MzMwOGU3OWRlOWUxN2I4YzFhMTI0YjM1MzdmNTEzMDZiODIxN2NhZDliMmQyZTAxYSJ9.memuZXEHZdFeUmAp0P9q4o3B9bIov2JYxaosGW8CcKeuoNeiX4j5NOvawq4TT7zX-ai41sNl866GuEGrDrMrAQ"
       },
       {
         "name": "kid is not the body keys' fingerprint",
@@ -1174,8 +1333,8 @@
         "method": "POST",
         "path": "/api/mycarlos/link",
         "query": "",
-        "body": "{\"code\":\"FAKE-7Q2M-4KXP\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKELNK1\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
-        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiJkY2EyZmI0My00YWQ3LTVmZjctYWQ1YS1mM2M1MjA4NTExNmYiLCJraWQiOiJVZktFdzFodnVmWWFTVHBQRUFDM2lGRUNHQVFKZzFVTGtEelloWkdzQVZRIiwicmVxdWVzdF9oYXNoIjoiZTFlMWFiNDc3NzVhMThhOTdiYWI1MGRlMGQzZmJiZDEwZjA3ZWFhMWZjNzhkZjkzZDY2ZDRjN2ZkYTU1ZThjMSJ9._PBKvWUQk6h6hHROTRtEBFlHOy6UGIEKCNYqp5rIgVEEfHq8eBPAlPa5uSNoT7c_fjL5pC0jDkIuIvVlpY-PAg"
+        "body": "{\"code\":\"FAKE7Q2M4K\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKE0001\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
+        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiJkY2EyZmI0My00YWQ3LTVmZjctYWQ1YS1mM2M1MjA4NTExNmYiLCJraWQiOiJVZktFdzFodnVmWWFTVHBQRUFDM2lGRUNHQVFKZzFVTGtEelloWkdzQVZRIiwicmVxdWVzdF9oYXNoIjoiMWY0YTAzM2QzYmIxYzk1MzMwOGU3OWRlOWUxN2I4YzFhMTI0YjM1MzdmNTEzMDZiODIxN2NhZDliMmQyZTAxYSJ9.xeBNajr54AfSqJ46wqwKsjqG0NtoRA5wlnozc3FRzkTQwf0lqVFBPlTgC0HM9enkAVArGQSpsrA77gf3SfTWCg"
       },
       {
         "name": "device audience on the link route",
@@ -1183,8 +1342,8 @@
         "method": "POST",
         "path": "/api/mycarlos/link",
         "query": "",
-        "body": "{\"code\":\"FAKE-7Q2M-4KXP\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKELNK1\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
-        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWFwaSIsImV4cCI6MTc5MjQ1NDQ2MCwiaWF0IjoxNzkyNDU0NDAwLCJpc3MiOiJteWNhcmxvcyIsImp0aSI6IjMwMmIwYjZlLWMyZDEtNWI2Zi1hNjJkLTNiZDNkYTkxMjM1NiIsImtpZCI6InVFZlZ6aG5rWVNLSzdxRFJuRzNmWkZTdHZpZnUta0Z1eXhyalAwOHdpc1kiLCJyZXF1ZXN0X2hhc2giOiJlMWUxYWI0Nzc3NWExOGE5N2JhYjUwZGUwZDNmYmJkMTBmMDdlYWExZmM3OGRmOTNkNjZkNGM3ZmRhNTVlOGMxIn0.gG0mK3dLVk09va2X4UkiqRB6qhea-j2T88toL8FzuZUuAI5zazF4gmrQbZziOaBo3mmaM7BUdoyyvH7jKmdCDA"
+        "body": "{\"code\":\"FAKE7Q2M4K\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKE0001\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
+        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWFwaSIsImV4cCI6MTc5MjQ1NDQ2MCwiaWF0IjoxNzkyNDU0NDAwLCJpc3MiOiJteWNhcmxvcyIsImp0aSI6IjMwMmIwYjZlLWMyZDEtNWI2Zi1hNjJkLTNiZDNkYTkxMjM1NiIsImtpZCI6InVFZlZ6aG5rWVNLSzdxRFJuRzNmWkZTdHZpZnUta0Z1eXhyalAwOHdpc1kiLCJyZXF1ZXN0X2hhc2giOiIxZjRhMDMzZDNiYjFjOTUzMzA4ZTc5ZGU5ZTE3YjhjMWExMjRiMzUzN2Y1MTMwNmI4MjE3Y2FkOWIyZDJlMDFhIn0.B2Lpbq0o-_1E49JtMazY9uqBjFDNnWK0CmC7kLmHuTj-nBQjDEEv0roPzYyJ-tBhb5Q77g6dFGuMUFRQhqs-DA"
       },
       {
         "name": "device name changed after signing",
@@ -1192,17 +1351,17 @@
         "method": "POST",
         "path": "/api/mycarlos/link",
         "query": "",
-        "body": "{\"code\":\"FAKE-7Q2M-4KXP\",\"device_name\":\"FAKE renamed device\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKELNK1\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
-        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiJiNjA5NjI2Ny03NzIzLTViNjAtOTE1YS0xY2FkMjMyZTM1ZjMiLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiZTFlMWFiNDc3NzVhMThhOTdiYWI1MGRlMGQzZmJiZDEwZjA3ZWFhMWZjNzhkZjkzZDY2ZDRjN2ZkYTU1ZThjMSJ9.AdWM3Uev-80OKcRgpy2MzSOSsOTWH6WVi8qXifncPFa0FUbMZZKdJL0Xpuxzimje59VX9HSLrOQC88OqxXdvCQ"
+        "body": "{\"code\":\"FAKE7Q2M4K\",\"device_name\":\"FAKE renamed device\",\"ed25519_public_key\":\"gqVlG9cDvlrdo_jzziT2jl4FZEGDS1V_WwNk9kDm_DU\",\"link_id\":\"FAKE0001\",\"x25519_public_key\":\"FaOvW6L8lpi23KcGw2oom5gK0zWyiWpIZGms-J7CaS8\"}",
+        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiJiNjA5NjI2Ny03NzIzLTViNjAtOTE1YS0xY2FkMjMyZTM1ZjMiLCJraWQiOiJ1RWZWemhua1lTS0s3cURSbkczZlpGU3R2aWZ1LWtGdXl4cmpQMDh3aXNZIiwicmVxdWVzdF9oYXNoIjoiMWY0YTAzM2QzYmIxYzk1MzMwOGU3OWRlOWUxN2I4YzFhMTI0YjM1MzdmNTEzMDZiODIxN2NhZDliMmQyZTAxYSJ9.4nazVXSFztvMFkVq2vvPDwplgZcotcb1KvV0M4zI8LGFTE1BVTbz6ixcmTLrp9WQxyXayxSF6TLOuHPVmiBfDw"
       },
       {
-        "name": "a device key that is already linked",
+        "name": "a device key already linked to this account",
         "expect": "device_exists",
         "method": "POST",
         "path": "/api/mycarlos/link",
         "query": "",
-        "body": "{\"code\":\"FAKE-7Q2M-4KXP\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"njUvKIbOgLS2FyrkL2a6iGkUbNIsd1iR0FaELGmiaGI\",\"link_id\":\"FAKELNK1\",\"x25519_public_key\":\"41IHjK4kO6HTxTGlXde7IBQGjSo7XVz-vKbb8wXN9HY\"}",
-        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiIzMWViMTM3MS0zOTU4LTUwMWMtODlhNy0xMzZhZjEwN2Q5ZWYiLCJraWQiOiJFYnoyc0gyalZvcWNkRmhsMUJtSU9CUm0xeHVULXpXNWJ2RkJjQ2VFUlBZIiwicmVxdWVzdF9oYXNoIjoiMDIxMDUyZDNjMDMzMmU3ZDNlYTNjYTM2MGM2ZGM3ZjljNzllNzJkMzZjYTExZDE1MjEzNjAzZGQwOWVkNjMwOSJ9.7nJDhQbdVhNLTgcEgPSVlWlT9pIwMwCc8J7AK8i6f0EU4Wj5SFgHzZDFIG3AD0UmzVo8Qp1PIGyHKivKmT0OCg"
+        "body": "{\"code\":\"FAKE7Q2M4K\",\"device_name\":\"FAKE Linux laptop\",\"ed25519_public_key\":\"njUvKIbOgLS2FyrkL2a6iGkUbNIsd1iR0FaELGmiaGI\",\"link_id\":\"FAKE0001\",\"x25519_public_key\":\"41IHjK4kO6HTxTGlXde7IBQGjSo7XVz-vKbb8wXN9HY\"}",
+        "assertion": "eyJhdWQiOiJjYXJsb3MtcGF0aWVudC1wb3J0YWwtZGV2aWNlLWxpbmsiLCJleHAiOjE3OTI0NTQ0NjAsImlhdCI6MTc5MjQ1NDQwMCwiaXNzIjoibXljYXJsb3MiLCJqdGkiOiJmZTlmOWYxMy0xYjc2LTVmMjUtYWQyZC0wYTlkYzkyOGQ5ODciLCJraWQiOiJFYnoyc0gyalZvcWNkRmhsMUJtSU9CUm0xeHVULXpXNWJ2RkJjQ2VFUlBZIiwicmVxdWVzdF9oYXNoIjoiZDI3YmE3MzU5ZWE4OGY1MWZmYzUwMTcyMzM5Mzc0NThiMTJmZGE0N2I0MDc1OGNlZDVjMWQ2NGY5YTBlNmJkMiJ9.oKw5KzBpTNGZX5L1u5IBflgld605MxmaedJMl5I7owCN2Oje7w3nQrxfsggXDL8vQEF0bXIdN11ZyTLbt3k6Dg"
       }
     ]
   }

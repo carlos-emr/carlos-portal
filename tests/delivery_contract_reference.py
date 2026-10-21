@@ -65,6 +65,12 @@ DEVICE_EXPIRY_SKEW_SECONDS = 24 * 60 * 60
 MAX_CIPHERTEXT_BYTES = 20 * 1024 * 1024
 LINK_CODE_LIFETIME_SECONDS = 10 * 60
 MAX_LINK_CODE_ATTEMPTS = 5
+LINK_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"  # Crockford base32: no I, L, O or U
+LINK_ID_LENGTH = 8  # 40 bits; names one pending link
+LINK_CODE_LENGTH = 10  # 50 bits; the secret
+MAX_ACCOUNT_WRONG_CODES = 10  # across one account's links, within the window below
+ACCOUNT_WRONG_CODE_WINDOW_SECONDS = 24 * 60 * 60
+MAX_PENDING_LINKS_PER_ACCOUNT = 3
 DEVICE_DELIVERIES_PATH = "/api/mycarlos/deliveries"
 LINK_PATH = "/api/mycarlos/link"
 
@@ -309,14 +315,54 @@ def device_key_id(x25519_public: bytes, ed25519_public: bytes) -> str:
     )
 
 
+def compact_ed25519_bytes(key: Ed25519PrivateKey, payload: bytes) -> str:
+    return b64url(payload) + "." + b64url(key.sign(payload))
+
+
 def compact_ed25519(key: Ed25519PrivateKey, claims: dict[str, object]) -> str:
-    payload = canonical_json(claims)
+    return compact_ed25519_bytes(key, canonical_json(claims))
+
+
+def compact_es256_bytes(key: ClinicKey, payload: bytes) -> str:
     return b64url(payload) + "." + b64url(key.sign(payload))
 
 
 def compact_es256(key: ClinicKey, claims: dict[str, object]) -> str:
-    payload = canonical_json(claims)
-    return b64url(payload) + "." + b64url(key.sign(payload))
+    return compact_es256_bytes(key, canonical_json(claims))
+
+
+def json_with_duplicate(value: dict[str, object], name: str, first_value: object) -> bytes:
+    """`value` as canonical JSON with `name` twice: `first_value` first, the real value last.
+
+    A parser that keeps either one would accept it; the contract requires refusing it.
+    """
+    return b"{" + canonical_json({name: first_value})[1:-1] + b"," + canonical_json(value)[1:]
+
+
+def reject_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for name, value in pairs:
+        if name in result:
+            raise ValueError(f"duplicate member {name!r}")
+        result[name] = value
+    return result
+
+
+def display_link_code(link_id: str, code: str) -> str:
+    return f"{link_id}-{code[:5]}-{code[5:]}"
+
+
+def parse_typed_link_code(typed: str) -> tuple[str, str]:
+    """What myCarlos does with a typed link code: (link_id, code), or ValueError.
+
+    Spaces and hyphens are dropped, letters upper-cased, and the Crockford look-alikes
+    O, I and L read as 0, 1 and 1. The first 8 characters are the link ID, the other 10 the code.
+    """
+    text = typed.replace(" ", "").replace("-", "").upper()
+    text = text.translate(str.maketrans({"O": "0", "I": "1", "L": "1"}))
+    if len(text) != LINK_ID_LENGTH + LINK_CODE_LENGTH or not set(text) <= set(LINK_CODE_ALPHABET):
+        raise ValueError("not a link code")
+    return text[:LINK_ID_LENGTH], text[LINK_ID_LENGTH:]
 
 
 # --- Packages ------------------------------------------------------------------------------
@@ -479,7 +525,7 @@ def open_package(
     encoded_payload, dot, encoded_signature = manifest_text.partition(".")
     try:
         payload = b64url_decode(encoded_payload)
-        claims = json.loads(payload)
+        claims = json.loads(payload, object_pairs_hook=reject_duplicates)
         signature = b64url_decode(encoded_signature)
     except Exception:
         raise Refused("bad_manifest") from None
@@ -702,6 +748,19 @@ def build_contract() -> dict[str, object]:
                 manifest=manifest(document={**good_claims["document"], "media_type": "text/html"}),
             ),
         ),
+        {
+            **refusal(
+                "bad_manifest",
+                package(
+                    "a manifest with a duplicate claim",
+                    manifest=compact_es256_bytes(
+                        clinic_a,
+                        json_with_duplicate(good_claims, "clinic_name", "FAKE Other Clinic"),
+                    ),
+                ),
+            ),
+            "note": "validly signed; clinic_name appears twice, so it is refused, not read",
+        },
         refusal(
             "unknown_clinic_key",
             package("signed by an unknown key", manifest=manifest(unknown, kid=unknown.kid)),
@@ -845,6 +904,12 @@ def build_contract() -> dict[str, object]:
             "max_ciphertext_bytes": MAX_CIPHERTEXT_BYTES,
             "link_code_lifetime_seconds": LINK_CODE_LIFETIME_SECONDS,
             "max_link_code_attempts": MAX_LINK_CODE_ATTEMPTS,
+            "link_code_alphabet": LINK_CODE_ALPHABET,
+            "link_id_length": LINK_ID_LENGTH,
+            "link_code_length": LINK_CODE_LENGTH,
+            "max_account_wrong_codes": MAX_ACCOUNT_WRONG_CODES,
+            "account_wrong_code_window_seconds": ACCOUNT_WRONG_CODE_WINDOW_SECONDS,
+            "max_pending_links_per_account": MAX_PENDING_LINKS_PER_ACCOUNT,
         },
         "hpke_rfc9180_a2_1": RFC9180_A21,
         "keys": {
@@ -927,6 +992,7 @@ def portal_vectors(
         body: bytes = b"",
         *,
         signer: DeviceKeys = device,
+        duplicate: tuple[str, object] | None = None,
         **changes: object,
     ) -> dict[str, object]:
         claims: dict[str, object] = {
@@ -940,13 +1006,16 @@ def portal_vectors(
             "request_hash": request_hash(method, path.encode(), b"", body),
         }
         claims.update(changes)
+        payload = (
+            canonical_json(claims) if duplicate is None else json_with_duplicate(claims, *duplicate)
+        )
         return {
             "name": name,
             "method": method,
             "path": path,
             "query": "",
             "body": body.decode(),
-            "assertion": compact_ed25519(signer.ed25519, claims),
+            "assertion": compact_ed25519_bytes(signer.ed25519, payload),
         }
 
     receipt_claims: dict[str, object] = {
@@ -965,28 +1034,42 @@ def portal_vectors(
     receipt_body = canonical_json({"receipt": receipt})
 
     def receipt_vector(
-        name: str, expect: str, *, route: str = DELIVERY_ID, signer: DeviceKeys = device, **changes
+        name: str,
+        expect: str,
+        *,
+        route: str = DELIVERY_ID,
+        signer: DeviceKeys = device,
+        duplicate: tuple[str, object] | None = None,
+        **changes: object,
     ) -> dict[str, object]:
         claims = {**receipt_claims, **changes}
         claims = {key: value for key, value in claims.items() if value is not None}
+        payload = (
+            canonical_json(claims) if duplicate is None else json_with_duplicate(claims, *duplicate)
+        )
         return {
             "name": name,
             "expect": expect,
             "device": "device",
             "delivery_id": route,
-            "receipt": compact_ed25519(signer.ed25519, claims),
+            "receipt": compact_ed25519_bytes(signer.ed25519, payload),
         }
 
-    def link_body(link_id: str, code: str, keys: DeviceKeys = new_device, name: str = "") -> bytes:
-        return canonical_json(
-            {
-                "link_id": link_id,
-                "code": code,
-                "device_name": name or "FAKE Linux laptop",
-                "ed25519_public_key": b64url(keys.ed25519_public),
-                "x25519_public_key": b64url(keys.x25519_public),
-            }
-        )
+    def link_body(
+        link_id: str,
+        code: str,
+        keys: DeviceKeys = new_device,
+        name: str = "",
+        duplicate: tuple[str, object] | None = None,
+    ) -> bytes:
+        body = {
+            "link_id": link_id,
+            "code": code,
+            "device_name": name or "FAKE Linux laptop",
+            "ed25519_public_key": b64url(keys.ed25519_public),
+            "x25519_public_key": b64url(keys.x25519_public),
+        }
+        return canonical_json(body) if duplicate is None else json_with_duplicate(body, *duplicate)
 
     def link_request(
         name: str,
@@ -1020,18 +1103,22 @@ def portal_vectors(
         }
 
     codes = {
-        "FAKELNK1": "FAKE-7Q2M-4KXP",
-        "FAKELNK2": "FAKE-9D3R-HW6T",
-        "FAKELNK3": "FAKE-2B8N-QJ5V",
-        "FAKELNK4": "FAKE-6C1Z-MR7Y",
-        "FAKELNK5": "FAKE-4H9W-TK2D",
-        "FAKELNK6": "FAKE-8P3F-XN6S",
+        "FAKE0001": "FAKE7Q2M4K",
+        "FAKE0002": "FAKE9D3RHW",
+        "FAKE0003": "FAKE2B8NQJ",
+        "FAKE0004": "FAKE6C1ZMR",
+        "FAKE0005": "FAKE4H9WTK",
+        "FAKE0006": "FAKE8P3FXN",
+        "FAKE0007": "FAKE5G7YVA",
     }
+    for link_id, code in codes.items():
+        assert parse_typed_link_code(display_link_code(link_id, code)) == (link_id, code)
 
     def code_row(link_id: str, account: str, **changes: object) -> dict[str, object]:
         row: dict[str, object] = {
             "link_id": link_id,
             "code": codes[link_id],
+            "display": display_link_code(link_id, codes[link_id]),
             "account": account,
             "session_signed_in": True,
             "status": "unused",
@@ -1042,13 +1129,29 @@ def portal_vectors(
         return row
 
     first = request("list waiting copies", "GET", DEVICE_DELIVERIES_PATH)
-    good_link = link_body("FAKELNK1", codes["FAKELNK1"])
+    good_link = link_body("FAKE0001", codes["FAKE0001"])
     return {
         "state": {
             "now": NOW,
             "accounts": [
-                {"account": "account-1", "recipient_id": RECIPIENT_ID, "clinic_id": CLINIC_A},
-                {"account": "account-2", "recipient_id": OTHER_RECIPIENT_ID, "clinic_id": CLINIC_A},
+                {
+                    "account": "account-1",
+                    "recipient_id": RECIPIENT_ID,
+                    "clinic_id": CLINIC_A,
+                    "recent_wrong_codes": 0,
+                },
+                {
+                    "account": "account-2",
+                    "recipient_id": OTHER_RECIPIENT_ID,
+                    "clinic_id": CLINIC_A,
+                    "recent_wrong_codes": 0,
+                },
+                {
+                    "account": "account-3",
+                    "recipient_id": "rcp-FAKE0004dddddddddddd",
+                    "clinic_id": CLINIC_A,
+                    "recent_wrong_codes": MAX_ACCOUNT_WRONG_CODES,
+                },
             ],
             "devices": [
                 {**device.public(), "account": "account-1", "status": "active"},
@@ -1057,14 +1160,23 @@ def portal_vectors(
             ],
             "deliveries": [dict(delivered["outer"]), third_copy],
             "link_codes": [
-                code_row("FAKELNK1", "account-1"),
-                code_row("FAKELNK2", "account-2"),
-                code_row("FAKELNK3", "account-1", expires_at=NOW - 1),
-                code_row("FAKELNK4", "account-1", status="used"),
-                code_row("FAKELNK5", "account-1", session_signed_in=False),
-                code_row("FAKELNK6", "account-1", wrong_attempts=MAX_LINK_CODE_ATTEMPTS),
+                code_row("FAKE0001", "account-1"),
+                code_row("FAKE0002", "account-2"),
+                code_row("FAKE0003", "account-1", expires_at=NOW - 1),
+                code_row("FAKE0004", "account-1", status="used"),
+                code_row("FAKE0005", "account-1", session_signed_in=False),
+                code_row("FAKE0006", "account-1", wrong_attempts=MAX_LINK_CODE_ATTEMPTS),
+                code_row("FAKE0007", "account-3"),
             ],
         },
+        "link_code_display_examples": [
+            {"typed": "FAKE0001-FAKE7-Q2M4K", "link_id": "FAKE0001", "code": "FAKE7Q2M4K"},
+            {"typed": "fake0001 fake7 q2m4k", "link_id": "FAKE0001", "code": "FAKE7Q2M4K"},
+            {"typed": "FAKEOOOI-FAKE7-Q2M4K", "link_id": "FAKE0001", "code": "FAKE7Q2M4K"},
+            {"typed": "FAKE0001FAKE7Q2M4K", "link_id": "FAKE0001", "code": "FAKE7Q2M4K"},
+            {"typed": "FAKE0001-FAKE7-Q2M4", "expect": "not_a_link_code"},
+            {"typed": "FAKE0001-FAKE7-Q2M4U", "expect": "not_a_link_code"},
+        ],
         "device_requests": [
             {**first, "expect": "accept", "returns": [DELIVERY_ID]},
             {
@@ -1200,6 +1312,15 @@ def portal_vectors(
             },
             {
                 **request(
+                    "a duplicate claim",
+                    "GET",
+                    DEVICE_DELIVERIES_PATH,
+                    duplicate=("recipient_id", OTHER_RECIPIENT_ID),
+                ),
+                "expect": "invalid_assertion",
+            },
+            {
+                **request(
                     "download another device's copy", "GET", delivery_path(THIRD_DELIVERY_ID)
                 ),
                 "expect": "delivery_not_found",
@@ -1240,42 +1361,93 @@ def portal_vectors(
             ),
             receipt_vector("missing the vault head", "invalid_receipt", vault_head=None),
             receipt_vector("device request audience", "invalid_receipt", aud=DEVICE_AUDIENCE),
+            receipt_vector(
+                "a duplicate claim",
+                "invalid_receipt",
+                duplicate=("ciphertext_sha256", "00" * 32),
+            ),
+            {
+                **receipt_vector("the same receipt again", "accept"),
+                "after": "the receipt for a picked-up copy",
+                "note": "a retry after a lost response: byte-identical, same jti",
+            },
+            {
+                **receipt_vector(
+                    "a different receipt for a copy already picked up",
+                    "delivery_not_found",
+                    jti=_jti("another receipt"),
+                ),
+                "after": "the receipt for a picked-up copy",
+            },
         ],
         "link_requests": [
             {
                 **link_request("link a new device", "accept", good_link),
-                "returns": {"account": "account-1", "recipient_id": RECIPIENT_ID},
+                "returns": {
+                    "account": "account-1",
+                    "recipient_id": RECIPIENT_ID,
+                    "device_key_id": new_device.device_key_id,
+                },
+            },
+            {
+                **link_request(
+                    "the same device linking a second account",
+                    "accept",
+                    link_body("FAKE0002", codes["FAKE0002"], keys=device),
+                    signer=device,
+                ),
+                "returns": {
+                    "account": "account-2",
+                    "recipient_id": OTHER_RECIPIENT_ID,
+                    "device_key_id": device.device_key_id,
+                },
+                "note": "device keys are per device; the device gets a second row, for account-2",
             },
             {
                 **link_request(
                     "a code from another account's link",
                     "link_code_invalid",
-                    link_body("FAKELNK2", codes["FAKELNK1"]),
+                    link_body("FAKE0002", codes["FAKE0001"]),
                 ),
                 "note": "link_id names account-2's pending link; the code is account-1's",
             },
             link_request(
                 "an expired code",
                 "link_code_invalid",
-                link_body("FAKELNK3", codes["FAKELNK3"]),
+                link_body("FAKE0003", codes["FAKE0003"]),
             ),
             link_request(
-                "a used code", "link_code_invalid", link_body("FAKELNK4", codes["FAKELNK4"])
+                "a used code", "link_code_invalid", link_body("FAKE0004", codes["FAKE0004"])
             ),
             link_request(
                 "the session that showed the code has signed out",
                 "link_code_invalid",
-                link_body("FAKELNK5", codes["FAKELNK5"]),
+                link_body("FAKE0005", codes["FAKE0005"]),
             ),
             link_request(
                 "too many wrong codes for this link",
                 "link_code_invalid",
-                link_body("FAKELNK6", codes["FAKELNK6"]),
+                link_body("FAKE0006", codes["FAKE0006"]),
+            ),
+            link_request(
+                "too many wrong codes for this account",
+                "link_code_invalid",
+                link_body("FAKE0007", codes["FAKE0007"]),
+            ),
+            link_request(
+                "a code sent in its display form",
+                "invalid_assertion",
+                link_body("FAKE0001", "FAKE7-Q2M4K"),
+            ),
+            link_request(
+                "a duplicate body member",
+                "invalid_assertion",
+                link_body("FAKE0001", codes["FAKE0001"], duplicate=("link_id", "FAKE0002")),
             ),
             link_request(
                 "an unknown link ID",
                 "link_code_invalid",
-                link_body("FAKELNK9", codes["FAKELNK1"]),
+                link_body("FAKE0009", codes["FAKE0001"]),
             ),
             link_request(
                 "signed by a key other than the one in the body",
@@ -1299,13 +1471,13 @@ def portal_vectors(
             link_request(
                 "device name changed after signing",
                 "request_mismatch",
-                link_body("FAKELNK1", codes["FAKELNK1"], name="FAKE renamed device"),
+                link_body("FAKE0001", codes["FAKE0001"], name="FAKE renamed device"),
                 signed_body=good_link,
             ),
             link_request(
-                "a device key that is already linked",
+                "a device key already linked to this account",
                 "device_exists",
-                link_body("FAKELNK1", codes["FAKELNK1"], keys=device),
+                link_body("FAKE0001", codes["FAKE0001"], keys=device),
                 signer=device,
             ),
         ],

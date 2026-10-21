@@ -23,6 +23,10 @@ it in the vault as "From <clinic> · Verified", and only then sends a receipt si
 The portal hard-deletes the copy and passes the receipt on to CARLOS. Copies nobody picks up are
 deleted after 7 days, and CARLOS shows staff "not picked up".
 
+Anything email can send today can be sent this way. CARLOS already renders every attachment
+(eDocs, eForms, forms, labs and HRM reports) to PDF for email. A send with several documents
+makes one delivery per document, each with its own delivery ID.
+
 **Off switches:**
 - **portal:** `PATIENT_PORTAL_MYCARLOS_DELIVERY_ENABLED=false`. While it's off, none of the routes
   below are registered, so they answer 404.
@@ -40,6 +44,14 @@ Every switch stays off until the whole flow works end to end.
 | Device signing key, Ed25519 | myCarlos, inside the vault | Device requests to the portal, and pickup receipts |
 | Portal TLS and server keys | Portal | Transport only. Never a document key. |
 
+**Device keys are per device.** Each device has its own X25519 and Ed25519 pair, and so its own
+`device_key_id`, made the first time it links and used for all of its links. Two devices never
+share keys. The `recipient_id` is per patient account, shared by all of that patient's devices.
+
+One consequence: if a device links to two clinics that use different portals, both portals see the
+same `device_key_id`, so they could tell it's the same device. Keys per link would hide that, and
+could come in a later version.
+
 myCarlos pins the clinic's public keys when it links (below). Key changes follow
 [mycarlos#55](https://github.com/carlos-emr/mycarlos/issues/55): a replacement signed by the
 current key is accepted, and a revoked key stops verifying.
@@ -51,7 +63,12 @@ current key is accepted, and a revoked key stops verifying.
 - **frame(a, b, …):** each part is preceded by its length as 8 bytes, big-endian. No two
   different part lists can give the same bytes. This is the same framing the portal already
   uses for its staff and job request hash (`staff_request_hash`).
-- **JSON:** UTF-8, and duplicate member names are refused. Signers produce
+- **Duplicate members:** every JSON object in the contract refuses a member name that appears
+  twice. That covers the manifest, device and link assertions, link request bodies and receipts.
+  A parser that silently keeps the first or the last value doesn't meet the contract. The
+  refusal codes are `bad_manifest`, `invalid_assertion` and `invalid_receipt`, and the vectors
+  cover each one.
+- **JSON:** UTF-8. Signers produce
   [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) (JCS) form; the claims use only strings,
   integers and objects. Verifiers check the bytes as received and never re-serialize them.
 - **Compact signed object:** `b64url(payload) "." b64url(signature)`. The payload is the JSON
@@ -66,7 +83,7 @@ current key is accepted, and a revoked key stops verifying.
 |---|---|---|
 | `delivery_id` | CARLOS, per document sent | UUID v4, canonical lowercase. One delivery ID covers every device's copy of that document. |
 | `recipient_id` | Portal, per patient account (clinic ID and demographic number) | Opaque, 128-bit random, as b64url (1–64 characters from `A-Z a-z 0-9 _ -`). The same for all of that patient's devices. Never derived from the health card number. CARLOS gets it from the patient's portal link; myCarlos gets it when it links. |
-| `device_key_id` | Anyone, from the device's public keys | `b64url(SHA-256("mycarlos-device-key-v1" ‖ frame(X25519 public key, Ed25519 public key)))`, 43 characters |
+| `device_key_id` | Anyone, from the device's public keys (one per device) | `b64url(SHA-256("mycarlos-device-key-v1" ‖ frame(X25519 public key, Ed25519 public key)))`, 43 characters |
 | `kid` (clinic key) | Anyone, from the clinic public key | `b64url(SHA-256(SubjectPublicKeyInfo DER))` |
 
 ## The package
@@ -186,7 +203,8 @@ names the code the vectors expect.
     portal still serves; replays are stopped by step 11, not by expiry.
 11. **Already seen:** if this `delivery_id` was filed before:
     - **same copy** (`ciphertext_sha256` equals the one recorded when it was filed): the outcome
-      is `already_filed`. The receipt was lost after filing, so send it again and file nothing.
+      is `already_filed`. The receipt was lost after filing, so send the kept receipt again
+      (below) and file nothing.
     - **different copy:** `replayed`.
 
     Otherwise the outcome is `file`.
@@ -194,9 +212,18 @@ names the code the vectors expect.
 **After `file`:**
 1. Write the document to the vault and wait until the write is durable.
 2. Record the delivery in the vault history, with the delivery ID and ciphertext hash.
-3. Only then send the receipt.
+3. Sign the receipt and keep it in the vault with the filed delivery. It is kept outside the
+   history chain, because the receipt carries the chain's head.
+4. Only then send the receipt.
 
-A crash at any point before the receipt means the copy is simply downloaded again next time.
+A crash before step 3 means the copy is simply downloaded and filed again next time. A crash after
+it ends in `already_filed`.
+
+**Re-sending a receipt:** a re-sent receipt is always the kept one, byte for byte, with the same
+`jti`; it is never re-signed.
+- **When:** myCarlos re-sends it after a lost response, after a crash, or on `already_filed`.
+- **Until:** the portal answers 200, or `delivery_not_found`. Either answer means done: the portal
+  has the receipt, or no longer has the copy.
 
 **A refused copy:** it is not filed, and no receipt is sent. The patient sees a plain message.
 The copy expires on the portal, and CARLOS shows "not picked up".
@@ -248,13 +275,15 @@ The Ed25519 signature is 64 bytes, and the assertion is at most 4096 bytes.
 **The portal's checks, in order:**
 1. **Parse:** the canonical encoding, exactly the claims above (`vault_head` optional), the right
    `aud` and `iss`, a UUID `jti`, integer times, and hex hashes. Else `invalid_assertion`.
-2. **Find the device** by `kid`. Else `unknown_device`.
+2. **Find the device** by `kid`. Else `unknown_device`. A device linked to two accounts on this
+   portal has a row for each, all with the same keys.
 3. **Verify the signature** with that device's stored Ed25519 key. Else `invalid_assertion`.
-4. **Device status:** a removed device gets `device_removed`.
-5. **Time:** `exp > iat`, `exp − iat ≤ 120`, and `iat ≤ now + 30`. Else `invalid_assertion`.
+4. **Recipient:** pick the device's row for the account whose recipient ID is `recipient_id`.
+   Else `recipient_mismatch`.
+5. **Device status:** a removed row gets `device_removed`.
+6. **Time:** `exp > iat`, `exp − iat ≤ 120`, and `iat ≤ now + 30`. Else `invalid_assertion`.
    If `now ≥ exp + 30`, the code is `expired`.
-6. **Request hash:** it must match the request as received. Else `request_mismatch`.
-7. **Recipient:** `recipient_id` must be the device's account's ID. Else `recipient_mismatch`.
+7. **Request hash:** it must match the request as received. Else `request_mismatch`.
 8. **Replay:** a `jti` already used gets `replay`. This uses the jti table shared with staff and
    job assertions.
 9. **The route itself:** a copy that isn't this device's, has expired or is gone gets
@@ -269,9 +298,10 @@ The Ed25519 signature is 64 bytes, and the assertion is at most 4096 bytes.
    - bound to that patient account and to the signed-in session that made it;
    - valid for 10 minutes, and usable once.
 
-   It shows them as one string, `<link_id>-<code>`, and as a QR code that holds the portal
-   address, the `link_id` and the `code`.
-2. **The request:** myCarlos makes its two device keys and sends this body:
+   It shows them as one string and as a QR code. The QR code holds the portal address, the
+   `link_id` and the `code`.
+2. **The request:** myCarlos makes its two device keys (the first time it links; later links
+   reuse them) and sends this body:
    ```json
    {"link_id": "…", "code": "…", "device_name": "…", "x25519_public_key": "<b64url>", "ed25519_public_key": "<b64url>"}
    ```
@@ -281,8 +311,9 @@ The Ed25519 signature is 64 bytes, and the assertion is at most 4096 bytes.
    the body. Its `request_hash` covers the whole body. So the signature covers both public keys,
    the device name and the code, and proves the device holds the key.
 3. **The portal's checks, in order:**
-   1. **Body:** exactly these fields, 32-byte keys, and a device name of 1–64 printable
-      characters. Else `invalid_assertion`.
+   1. **Body:** exactly these fields, with no duplicates. The keys are 32 bytes, the device name
+      is 1–64 printable characters, and `link_id` and `code` are in the form below. Else
+      `invalid_assertion`.
    2. **Assertion:** it parses, and `kid` equals the body keys' `device_key_id`. Else
       `invalid_assertion`.
    3. **Signature:** it verifies with the body's Ed25519 key. Else `invalid_assertion`.
@@ -290,12 +321,14 @@ The Ed25519 signature is 64 bytes, and the assertion is at most 4096 bytes.
    5. **The code:**
       - it is checked only against the pending link that `link_id` names, so a code never works
         with another account's link;
-      - a wrong code counts against that link, and 5 wrong codes end it;
-      - the link must be unused and unexpired, and its session still signed in.
+      - a wrong code counts against that link and against its account;
+      - the link must be unused and unexpired, and its session still signed in;
+      - the limits below must not have been reached.
 
       Every failure here gives the same `link_code_invalid`, so the code can't be used to probe
       which links exist.
-   6. **Device key:** a key that is already linked gets `device_exists`.
+   6. **Device key:** a key already linked to the code's account gets `device_exists`. The same
+      device may link to another account, for example a second clinic on the same portal.
 4. **On success:** the portal records the device as linked to the code's account, never to an
    account named in the request. It marks the code used and returns:
    - the `recipient_id`;
@@ -308,6 +341,26 @@ The Ed25519 signature is 64 bytes, and the assertion is at most 4096 bytes.
    outside the portal (decision B: staff approval, a code CARLOS texts, or approval from an
    already linked device). CARLOS sends nothing to a pending device. A takeover of the portal
    or of the patient's portal account can link a device, but can't make CARLOS send it anything.
+
+**The link code:**
+
+| Part | Rule |
+|---|---|
+| Alphabet | Crockford base32: `0123456789ABCDEFGHJKMNPQRSTVWXYZ` (no I, L, O or U) |
+| `link_id` | 8 characters (40 bits), random, unique among pending links. Names one pending link; not secret. |
+| `code` | 10 characters (50 bits), random from a cryptographic generator. The secret. |
+| On the wire | Exactly these characters, upper case, with no separators |
+| Shown to the patient | `<link_id>-<first 5 of code>-<last 5 of code>`, e.g. `FAKE0001-FAKE7-Q2M4K` |
+| Typed into myCarlos | myCarlos drops spaces and hyphens, upper-cases, and reads O as 0 and I or L as 1. The first 8 characters are the `link_id`, the other 10 the `code`. Anything else is `not_a_link_code`, shown locally; nothing is sent. |
+
+**The limits:**
+- **Per link:** 10 minutes, one use, and 5 wrong codes end it.
+- **Per account:** at most 3 pending links at a time; a fourth replaces the oldest. 10 wrong codes
+  within 24 hours, across all the account's links, stop every link for that account until 24
+  hours after the last wrong code.
+- **Per caller:** the portal's usual per-IP rate limits also apply.
+
+With 50 bits and 5 tries, a guess succeeds about once in 2^47 links.
 
 ### Pickup receipts
 
@@ -323,10 +376,14 @@ the portal. It has exactly these claims:
 | `document_sha256` | The PDF as filed |
 | `picked_up_at` | When it was filed |
 | `vault_head` | The vault history's head hash after filing (decision L) |
-| `jti` | A canonical UUID |
+| `jti` | A canonical UUID. It identifies this receipt: re-sends carry the same `jti`, so the portal and CARLOS can de-duplicate. |
 
 **The portal:**
-1. Finds the device's copy named in the route. Else `delivery_not_found`.
+1. Finds the device's copy named in the route.
+   - **None there**, but this device sent this exact receipt for this delivery before: answer
+     200, already done. The portal keeps each accepted receipt, or its hash, until the copy's
+     expiry.
+   - **Otherwise:** `delivery_not_found`.
 2. Checks the receipt:
    - the claims, `typ` and `aud` are as listed;
    - the signature verifies with the device's key;
@@ -342,6 +399,9 @@ the portal. It has exactly these claims:
 - the delivery ID;
 - the ciphertext hash of the copy it uploaded;
 - the SHA-256 of the PDF it signed.
+
+CARLOS records the first valid receipt for each delivery ID and device. A repeat with the same
+`jti` and bytes changes nothing.
 
 ### Response codes
 
@@ -359,7 +419,7 @@ The portal logs the code in its audit trail, never content. On the wire:
 | `invalid_receipt` | 400 | The receipt is malformed, isn't the device's, or names another patient |
 | `receipt_mismatch` | 409 | The receipt doesn't match the route or the stored copy |
 | `link_code_invalid` | 403 | Wrong, expired, used or locked code, or one whose session has ended |
-| `device_exists` | 409 | That device key is already linked |
+| `device_exists` | 409 | That device key is already linked to this account |
 
 **Clock problems:** the portal sends a `Date` header, so myCarlos can tell the patient when its
 clock is far off.
@@ -370,7 +430,8 @@ clock is far off.
   fixture carries it as `hpke_rfc9180_a2_1`.
 - **Receivers (myCarlos)** must get exactly the listed outcome for every vector in
   `packages.accept` (`file` or `already_filed`) and `packages.refuse`. They use the device key in
-  `keys.device` and the links and filed copies in `receiver`.
+  `keys.device` and the links and filed copies in `receiver`. myCarlos also splits every
+  `portal.link_code_display_examples` entry as listed.
 - **Senders (CARLOS)** can't reproduce a seal, since the ephemeral key is random, so they are
   checked by round trip:
   1. Build the manifest for `sender.manifest_claims` and compare it byte for byte with
