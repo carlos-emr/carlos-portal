@@ -55,6 +55,7 @@ RECEIPT_TYPE = "mycarlos-delivery-receipt"
 DEVICE_AUDIENCE = "carlos-patient-portal-device-api"
 LINK_AUDIENCE = "carlos-patient-portal-device-link"
 RECEIPT_AUDIENCE = "carlos-delivery-receipt"
+VAULT_HEAD_LINK_INFO = b"mycarlos/vault-head/v1"
 ASSERTION_HEADER = "X-MyCarlos-Device-Assertion"
 ASSERTION_ISSUER = "mycarlos"
 ASSERTION_LIFETIME_SECONDS = 60
@@ -93,7 +94,7 @@ FAKE_PDF = (
     b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]>>endobj\n"
     b"trailer<</Root 1 0 R>>\n%%EOF\n"
 )
-VAULT_HEAD = "b5" * 32  # a stand-in vault history head hash (decision L)
+VAULT_HEAD = "b5" * 32  # a stand-in vault history head hash (decision L); never sent as is
 
 
 def b64url(data: bytes) -> str:
@@ -209,7 +210,9 @@ def hpke_open(sk_r: X25519PrivateKey, info: bytes, aad: bytes, blob: bytes) -> b
     return ChaCha20Poly1305(key).decrypt(nonce, ciphertext, aad)
 
 
-# RFC 9180 Appendix A.2.1 (base mode, this suite), sequence number 0, verbatim.
+# RFC 9180 Appendix A.2.1 (base mode, this suite), sequence number 0: the inputs and outputs.
+# The RFC's private keys (skEm, skRm) and intermediate secrets (shared_secret, key) are left out,
+# so no scanner mistakes them for real ones; both key pairs follow from ikmE and ikmR.
 RFC9180_A21 = {
     "mode": 0,
     "kem_id": KEM_ID,
@@ -218,13 +221,9 @@ RFC9180_A21 = {
     "info": "4f6465206f6e2061204772656369616e2055726e",
     "ikmE": "909a9b35d3dc4713a5e72a4da274b55d3d3821a37e5d099e74a647db583a904b",
     "pkEm": "1afa08d3dec047a643885163f1180476fa7ddb54c6a8029ea33f95796bf2ac4a",
-    "skEm": "f4ec9b33b792c372c1d2c2063507b684ef925b8c75a42dbcbf57d63ccd381600",
     "ikmR": "1ac01f181fdf9f352797655161c58b75c656a6cc2716dcb66372da835542e1df",
     "pkRm": "4310ee97d88cc1f088a5576c77ab0cf5c3ac797f3d95139c6c84b5429c59662a",
-    "skRm": "8057991eef8f1f1af18f4a9491d16a1ce333f695d4db8e38da75975c4478e0fb",
     "enc": "1afa08d3dec047a643885163f1180476fa7ddb54c6a8029ea33f95796bf2ac4a",
-    "shared_secret": "0bbe78490412b4bbea4812666f7916932b828bba79942424abb65244930d69a7",
-    "key": "ad2744de8e17f4ebba575b3f5f5a8fa1f69c2a07f6e7500bc60ca6e3e3ec1c91",
     "base_nonce": "5c4d98150661b848853b547f",
     "encryptions": [
         {
@@ -288,7 +287,8 @@ class DeviceKeys:
         self.label = label
         self.x25519 = X25519PrivateKey.from_private_bytes(_seed(label + " x25519"))
         self.x25519_public = _raw(self.x25519.public_key())
-        self.ed25519 = Ed25519PrivateKey.from_private_bytes(_seed(label + " ed25519"))
+        self.ed25519_seed = _seed(label + " ed25519")
+        self.ed25519 = Ed25519PrivateKey.from_private_bytes(self.ed25519_seed)
         self.ed25519_public = self.ed25519.public_key().public_bytes(
             serialization.Encoding.Raw, serialization.PublicFormat.Raw
         )
@@ -307,6 +307,16 @@ class DeviceKeys:
             "x25519_seed_text": seed_text(self.label + " x25519"),
             "ed25519_seed_text": seed_text(self.label + " ed25519"),
         }
+
+
+def vault_head_link(keys: DeviceKeys, head_hex: str) -> str:
+    """This link's anchor of the vault history head (decision L), as hex.
+
+    HMAC-SHA256 under a key derived from the link's Ed25519 seed, so the same head gives a
+    different value on every link and two portals can't match their links by it.
+    """
+    link_key = _expand(_extract(b"", keys.ed25519_seed), VAULT_HEAD_LINK_INFO, 32)
+    return hmac.new(link_key, bytes.fromhex(head_hex), hashlib.sha256).hexdigest()
 
 
 def device_key_id(x25519_public: bytes, ed25519_public: bytes) -> str:
@@ -900,6 +910,7 @@ def build_contract() -> dict[str, object]:
             "link_audience": LINK_AUDIENCE,
             "receipt_audience": RECEIPT_AUDIENCE,
             "assertion_header": ASSERTION_HEADER,
+            "vault_head_link_info": VAULT_HEAD_LINK_INFO.decode(),
             "assertion_issuer": ASSERTION_ISSUER,
             "assertion_lifetime_seconds": ASSERTION_LIFETIME_SECONDS,
             "max_assertion_lifetime_seconds": MAX_ASSERTION_LIFETIME_SECONDS,
@@ -917,6 +928,21 @@ def build_contract() -> dict[str, object]:
             "max_pending_links_per_account": MAX_PENDING_LINKS_PER_ACCOUNT,
         },
         "hpke_rfc9180_a2_1": RFC9180_A21,
+        "vault_head_link_examples": [
+            {
+                "link": "link to clinic-a",
+                "keys": "device",
+                "head": VAULT_HEAD,
+                "vault_head_link": vault_head_link(device, VAULT_HEAD),
+            },
+            {
+                "link": "link to clinic-b",
+                "keys": "device_link_b",
+                "head": VAULT_HEAD,
+                "vault_head_link": vault_head_link(link_b_device, VAULT_HEAD),
+                "note": "the same head on the device's other link: a different value",
+            },
+        ],
         "keys": {
             "derivation": (
                 "key bytes = SHA-256(UTF-8 seed_text). Ed25519: the 32-byte seed. X25519: the "
@@ -1033,7 +1059,7 @@ def portal_vectors(
         "ciphertext_sha256": delivered["outer"]["ciphertext_sha256"],
         "document_sha256": sha256_hex(FAKE_PDF),
         "picked_up_at": NOW,
-        "vault_head": VAULT_HEAD,
+        "vault_head_link": vault_head_link(device, VAULT_HEAD),
         "jti": _jti("receipt"),
     }
     receipt = compact_ed25519(device.ed25519, receipt_claims)
@@ -1071,7 +1097,7 @@ def portal_vectors(
         body = {
             "link_id": link_id,
             "code": code,
-            "device_name": name or "FAKE Linux laptop",
+            "device_name": name or "myCarlos on Linux",
             "ed25519_public_key": b64url(keys.ed25519_public),
             "x25519_public_key": b64url(keys.x25519_public),
         }
@@ -1183,14 +1209,50 @@ def portal_vectors(
             {"typed": "FAKE0001-FAKE7-Q2M4", "expect": "not_a_link_code"},
             {"typed": "FAKE0001-FAKE7-Q2M4U", "expect": "not_a_link_code"},
         ],
+        "upload_targets": [
+            {
+                "name": "an active device of the patient",
+                "recipient_id": RECIPIENT_ID,
+                "device_key_id": device.device_key_id,
+                "expect": "accept",
+            },
+            {
+                "name": "a removed device",
+                "recipient_id": RECIPIENT_ID,
+                "device_key_id": other_device.device_key_id,
+                "expect": "device_removed",
+            },
+            {
+                "name": "an unknown device",
+                "recipient_id": RECIPIENT_ID,
+                "device_key_id": new_device.device_key_id,
+                "expect": "invalid_delivery",
+            },
+            {
+                "name": "another patient's recipient ID with this device",
+                "recipient_id": OTHER_RECIPIENT_ID,
+                "device_key_id": device.device_key_id,
+                "expect": "invalid_delivery",
+            },
+        ],
+        "removal": {
+            "device": "device",
+            "deletes": [DELIVERY_ID],
+            "keeps": [THIRD_DELIVERY_ID],
+            "then": [
+                {"request": "list waiting copies", "expect": "device_removed"},
+                {"request": "send the receipt", "expect": "device_removed"},
+                {"upload_target": "an active device of the patient", "expect": "device_removed"},
+            ],
+        },
         "device_requests": [
             {**first, "expect": "accept", "returns": [DELIVERY_ID]},
             {
                 **request(
-                    "check in with the vault head",
+                    "check in with the vault head anchor",
                     "GET",
                     DEVICE_DELIVERIES_PATH,
-                    vault_head=VAULT_HEAD,
+                    vault_head_link=vault_head_link(device, VAULT_HEAD),
                 ),
                 "expect": "accept",
                 "returns": [DELIVERY_ID],
@@ -1252,10 +1314,10 @@ def portal_vectors(
             },
             {
                 **request(
-                    "a vault head that is not a SHA-256",
+                    "a vault head anchor that is not 64 hex digits",
                     "GET",
                     DEVICE_DELIVERIES_PATH,
-                    vault_head="not-a-hash",
+                    vault_head_link="not-a-hash",
                 ),
                 "expect": "invalid_assertion",
             },
@@ -1365,7 +1427,15 @@ def portal_vectors(
                 "invalid_receipt",
                 recipient_id=OTHER_RECIPIENT_ID,
             ),
-            receipt_vector("missing the vault head", "invalid_receipt", vault_head=None),
+            receipt_vector(
+                "missing the vault head anchor", "invalid_receipt", vault_head_link=None
+            ),
+            receipt_vector(
+                "a raw vault head instead of the link's anchor",
+                "invalid_receipt",
+                vault_head_link=None,
+                vault_head=VAULT_HEAD,
+            ),
             receipt_vector("device request audience", "invalid_receipt", aud=DEVICE_AUDIENCE),
             receipt_vector(
                 "a duplicate claim",
@@ -1481,7 +1551,7 @@ def portal_vectors(
             link_request(
                 "device name changed after signing",
                 "request_mismatch",
-                link_body("FAKE0001", codes["FAKE0001"], name="FAKE renamed device"),
+                link_body("FAKE0001", codes["FAKE0001"], name="myCarlos on my laptop"),
                 signed_body=good_link,
             ),
             link_request(

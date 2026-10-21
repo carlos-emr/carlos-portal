@@ -30,10 +30,11 @@ from uuid import UUID
 
 import pytest
 from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes, hmac, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from carlos_patient_portal.staff_identity import staff_request_hash
 from tests import delivery_contract_reference as ref
@@ -57,7 +58,7 @@ OUTER_FIELDS = {
     "expires_at",
 }
 DEVICE_CLAIMS = {"aud", "iss", "kid", "recipient_id", "jti", "iat", "exp", "request_hash"}
-DEVICE_OPTIONAL_CLAIMS = {"vault_head"}
+DEVICE_OPTIONAL_CLAIMS = {"vault_head_link"}
 LINK_CLAIMS = {"aud", "iss", "kid", "jti", "iat", "exp", "request_hash"}
 LINK_BODY_FIELDS = {"link_id", "code", "device_name", "x25519_public_key", "ed25519_public_key"}
 RECEIPT_CLAIMS = {
@@ -69,7 +70,7 @@ RECEIPT_CLAIMS = {
     "ciphertext_sha256",
     "document_sha256",
     "picked_up_at",
-    "vault_head",
+    "vault_head_link",
     "jti",
 }
 MAX_ASSERTION_BYTES = 4096
@@ -158,8 +159,8 @@ def _check_assertion_shape(
         raise Refusal("invalid_assertion")
     if not HEX64.fullmatch(claims["request_hash"]):
         raise Refusal("invalid_assertion")
-    if "vault_head" in claims and not (
-        isinstance(claims["vault_head"], str) and HEX64.fullmatch(claims["vault_head"])
+    if "vault_head_link" in claims and not (
+        isinstance(claims["vault_head_link"], str) and HEX64.fullmatch(claims["vault_head_link"])
     ):
         raise Refusal("invalid_assertion")
 
@@ -223,6 +224,22 @@ class ReferencePortal:
             row
             for row in self.state["deliveries"]
             if row["device_key_id"] == device["device_key_id"] and row["expires_at"] > self.now
+        ]
+
+    def upload_target(self, recipient_id: str, device_key_id: str) -> str:
+        """Whether CARLOS may upload a copy for this patient and device."""
+        device = self._device(device_key_id)
+        if device is None or self._account(device["account"])["recipient_id"] != recipient_id:
+            return "invalid_delivery"
+        return "device_removed" if device["status"] != "active" else "accept"
+
+    def remove_device(self, device_key_id: str) -> None:
+        """The patient (Linked devices) or staff removed this link; its copies go at once."""
+        device = self._device(device_key_id)
+        assert device is not None
+        device["status"] = "removed"
+        self.state["deliveries"] = [
+            row for row in self.state["deliveries"] if row["device_key_id"] != device_key_id
         ]
 
     def check_upload(self, outer: dict[str, object], blob: bytes, max_bytes: int) -> str:
@@ -301,7 +318,7 @@ class ReferencePortal:
             or not _is_int(claims["picked_up_at"])
             or not all(
                 isinstance(claims[name], str) and HEX64.fullmatch(claims[name])
-                for name in ("ciphertext_sha256", "document_sha256", "vault_head")
+                for name in ("ciphertext_sha256", "document_sha256", "vault_head_link")
             )
         ):
             raise Refusal("invalid_receipt")
@@ -489,6 +506,25 @@ def test_every_key_follows_from_its_seed_text():
         ), name
 
 
+def test_vault_head_anchors_are_per_link():
+    # Recomputed with the cryptography package's own HKDF and HMAC, not the reference's.
+    values = []
+    for example in CONTRACT["vault_head_link_examples"]:
+        seed = sha256(CONTRACT["keys"][example["keys"]]["ed25519_seed_text"].encode()).digest()
+        link_key = HKDF(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=None,
+            info=CONSTANTS["vault_head_link_info"].encode(),
+        ).derive(seed)
+        mac = hmac.HMAC(link_key, hashes.SHA256())
+        mac.update(bytes.fromhex(example["head"]))
+        assert mac.finalize().hex() == example["vault_head_link"], example["link"]
+        values.append(example["vault_head_link"])
+    assert len(set(values)) == len(values)
+    assert ref.VAULT_HEAD not in json.dumps(PORTAL)  # the raw head never leaves the device
+
+
 def test_sender_example_is_the_first_accepted_package():
     sender = CONTRACT["sender"]
     device = ref.DeviceKeys("device 1")
@@ -566,6 +602,30 @@ def test_portal_upload_checks_only_the_outer_record(vector):
         portal.check_upload(vector["outer"], blob, CONSTANTS["max_ciphertext_bytes"])
         == vector["portal_upload"]
     )
+
+
+@pytest.mark.parametrize("vector", _named(PORTAL["upload_targets"]))
+def test_portal_upload_targets(vector):
+    portal = ReferencePortal(PORTAL["state"])
+    assert portal.upload_target(vector["recipient_id"], vector["device_key_id"]) == vector["expect"]
+
+
+def test_removing_a_device_deletes_its_waiting_copies():
+    removal = PORTAL["removal"]
+    portal = ReferencePortal(PORTAL["state"])
+    portal.remove_device(CONTRACT["keys"][removal["device"]]["device_key_id"])
+    stored = {row["delivery_id"] for row in portal.state["deliveries"]}
+    assert not stored & set(removal["deletes"])
+    assert set(removal["keeps"]) <= stored
+    for step in removal["then"]:
+        if "request" in step:
+            outcome, _ = _outcome(
+                portal.device_request, _by_name(PORTAL["device_requests"], step["request"])
+            )
+        else:
+            target = _by_name(PORTAL["upload_targets"], step["upload_target"])
+            outcome = portal.upload_target(target["recipient_id"], target["device_key_id"])
+        assert outcome == step["expect"], step
 
 
 def test_portal_upload_refuses_oversized_and_overlong_copies():
@@ -693,6 +753,8 @@ def test_every_refusal_code_is_in_the_spec():
         PORTAL["device_requests"],
         PORTAL["receipts"],
         PORTAL["link_requests"],
+        PORTAL["upload_targets"],
+        PORTAL["removal"]["then"],
     )
     codes = {vector["expect"] for group in groups for vector in group}
     codes |= {vector["portal_upload"] for vector in CONTRACT["packages"]["refuse"]}

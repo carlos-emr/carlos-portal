@@ -213,7 +213,7 @@ names the code the vectors expect.
 1. Write the document to the vault and wait until the write is durable.
 2. Record the delivery in the vault history, with the delivery ID and ciphertext hash.
 3. Sign the receipt and keep it in the vault with the filed delivery. It is kept outside the
-   history chain, because the receipt carries the chain's head.
+   history chain, because the receipt carries an anchor of the chain's head.
 4. Only then send the receipt.
 
 A crash before step 3 means the copy is simply downloaded and filed again next time. A crash after
@@ -253,8 +253,26 @@ An upload is refused as `invalid_delivery` unless all of these hold:
 - `ciphertext_sha256` matches the bytes received;
 - `created_at < expires_at ≤ created_at + 7 days`.
 
-The device must also belong to the patient in the route; that is checked against the portal's
-own tables.
+The device must also be an active device of the patient in the route, checked against the
+portal's own tables:
+- **A removed device:** `device_removed`.
+- **An unknown device, or one linked to another patient:** `invalid_delivery`.
+
+### Removing a device
+
+**Who:** the patient, under Linked devices, or staff, through CARLOS.
+
+**What happens:** removing a device removes that one link (keys are per link). The portal then:
+- marks the device removed;
+- hard-deletes all of that link's waiting copies at once;
+- records an event for CARLOS's delivery-sync job. CARLOS then shows those copies as "removed"
+  and stops sending to that device.
+
+**Afterwards:**
+- Every request signed with that link's key, including a late pickup or receipt, gets
+  `device_removed` (403).
+- A CARLOS upload for it gets `device_removed` as well.
+- A removed link never comes back. Linking again makes a new link, with fresh keys.
 
 ### Device requests
 
@@ -270,10 +288,10 @@ The Ed25519 signature is 64 bytes, and the assertion is at most 4096 bytes.
 | `jti` | A canonical UUID, used once |
 | `iat`, `exp` | myCarlos uses 60 seconds; the portal accepts at most 120 |
 | `request_hash` | `SHA-256(frame(METHOD, raw path, raw query, body))` as hex, the staff request framing |
-| `vault_head` | Optional, on any request: the vault history's head hash (decision L). The portal keeps it as an anchor for that device. |
+| `vault_head_link` | Optional, on any request: this link's anchor of the vault history head (decision L, below). The portal keeps it for that device. |
 
 **The portal's checks, in order:**
-1. **Parse:** the canonical encoding, exactly the claims above (`vault_head` optional), the right
+1. **Parse:** the canonical encoding, exactly the claims above (`vault_head_link` optional), the right
    `aud` and `iss`, a UUID `jti`, integer times, and hex hashes. Else `invalid_assertion`.
 2. **Find the device** by `kid`. Keys are per link, so `kid` names one row. Else
    `unknown_device`.
@@ -299,13 +317,19 @@ The Ed25519 signature is 64 bytes, and the assertion is at most 4096 bytes.
 
    It shows them as one string and as a QR code. The QR code holds the portal address, the
    `link_id` and the `code`.
-2. **The request:** myCarlos makes a fresh pair of keys for this link and sends this body:
+2. **The request:** myCarlos makes a fresh pair of keys for this link and sends this body.
+   **`device_name` (client MUST):** myCarlos suggests a plain name, which the patient can edit.
+   - **Allowed:** the OS family, as in "myCarlos on Windows" (or macOS, Linux, Android, iOS).
+   - **Never sent:** the computer's host name, the phone's own name, the user account's name or
+     the OS version.
+
+   The portal can't check this.
    ```json
    {"link_id": "…", "code": "…", "device_name": "…", "x25519_public_key": "<b64url>", "ed25519_public_key": "<b64url>"}
    ```
    It goes with a compact Ed25519 assertion signed by the new device key. The assertion has the
    claims of a device request, except that `aud` is `"carlos-patient-portal-device-link"`,
-   there's no `recipient_id` and no `vault_head`, and `kid` is the `device_key_id` of the keys in
+   there's no `recipient_id` and no `vault_head_link`, and `kid` is the `device_key_id` of the keys in
    the body. Its `request_hash` covers the whole body. So the signature covers both public keys,
    the device name and the code, and proves the device holds the key.
 3. **The portal's checks, in order:**
@@ -379,7 +403,7 @@ the portal. It has exactly these claims:
 | `ciphertext_sha256` | The sealed copy as downloaded |
 | `document_sha256` | The PDF as filed |
 | `picked_up_at` | When it was filed |
-| `vault_head` | The vault history's head hash after filing (decision L) |
+| `vault_head_link` | This link's anchor of the vault history head after filing (decision L, below) |
 | `jti` | A canonical UUID. It identifies this receipt: re-sends carry the same `jti`, so the portal and CARLOS can de-duplicate. |
 
 **The portal:**
@@ -397,6 +421,20 @@ the portal. It has exactly these claims:
 3. Checks that `delivery_id` matches the route and `ciphertext_sha256` matches the stored copy.
    Else `receipt_mismatch`.
 4. Hard-deletes the copy, and holds the receipt until CARLOS's delivery-sync job collects it.
+
+**The vault head anchor (`vault_head_link`, decision L):** the raw head hash of the vault history
+is the same on every link at a given moment, so sending it would let two portals tie their links
+to one device. Each link sends its own anchor instead:
+
+```
+K_link          = HKDF-SHA256(ikm = this link's Ed25519 private seed (32 bytes),
+                              salt = none, info = "mycarlos/vault-head/v1", length = 32)
+vault_head_link = lowercase hex of HMAC-SHA256(K_link, head)
+```
+
+Here `head` is the vault history's current head hash, as 32 bytes. myCarlos can recompute the
+anchor for any past head, so a rewrite of its history still shows against the anchors on record.
+The vectors include both links' anchors for the same head.
 
 **CARLOS** checks the receipt against its own record of the delivery:
 - the accepted device's key;
@@ -424,6 +462,7 @@ The portal logs the code in its audit trail, never content. On the wire:
 | `receipt_mismatch` | 409 | The receipt doesn't match the route or the stored copy |
 | `link_code_invalid` | 403 | Wrong, expired, used or locked code, or one whose session has ended |
 | `device_exists` | 409 | That device key is already linked (keys are per link) |
+| `device_removed` | 403 on device requests, 409 on uploads | The link was removed; its copies are gone |
 
 **Clock problems:** the portal sends a `Date` header, so myCarlos can tell the patient when its
 clock is far off.
