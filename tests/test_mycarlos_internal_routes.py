@@ -38,7 +38,14 @@ from carlos_patient_portal.models import (
     PatientPortalMyCarlosRecipient,
     utc_now,
 )
-from carlos_patient_portal.mycarlos_devices import b64url, clinic_key_id
+from carlos_patient_portal.mycarlos_devices import (
+    ClinicKeyPublishError,
+    ClinicKeySpec,
+    b64url,
+    clinic_key_id,
+    insert_clinic_key,
+    publish_clinic_keys,
+)
 from carlos_patient_portal.system_jobs import JOB_ONLY_PERMISSIONS, SYSTEM_JOBS
 from tests.support import (
     TEST_JOB_ASSERTION_KEY_IDS,
@@ -532,3 +539,52 @@ def test_the_internal_api_token_is_still_required() -> None:
         "/internal/carlos/patients/1234/mycarlos/devices", headers=headers
     )
     assert response.status_code == 404
+
+
+# --------------------------------------------------------------------------------------
+# Two first publishes racing on the same kid
+# --------------------------------------------------------------------------------------
+
+
+def test_a_key_a_concurrent_publish_just_stored_is_checked_like_a_published_key() -> None:
+    app = mycarlos_app()
+    entry = key_entry("raced")
+    spec = ClinicKeySpec(
+        kid=entry["kid"], spki=clinic_spki("raced"), status="revoked", replaces_kid=None
+    )
+    # The winner stored the key as active, after the loser had read "no keys yet".
+    with app.state.session_factory() as session, session.begin():
+        session.add(
+            PatientPortalClinicKey(
+                kid=entry["kid"],
+                clinic_id=CLINIC,
+                spki=clinic_spki("raced"),
+                status="active",
+                published_at=utc_now(),
+            )
+        )
+    with app.state.session_factory() as session, session.begin():
+        existing = insert_clinic_key(session, clinic_id=CLINIC, spec=spec, now=utc_now())
+        assert existing is not None and existing.status == "active"
+    with app.state.session_factory() as session, session.begin():
+        result = publish_clinic_keys(session, clinic_id=CLINIC, specs=[spec])
+    assert [(key.kid, key.status) for key in result.keys] == [(entry["kid"], "revoked")]
+
+
+def test_a_raced_key_stored_for_another_clinic_is_refused() -> None:
+    app = mycarlos_app()
+    entry = key_entry("elsewhere")
+    with app.state.session_factory() as session, session.begin():
+        session.add(
+            PatientPortalClinicKey(
+                kid=entry["kid"],
+                clinic_id="clinic-b",
+                spki=clinic_spki("elsewhere"),
+                status="active",
+                published_at=utc_now(),
+            )
+        )
+    spec = ClinicKeySpec(kid=entry["kid"], spki=clinic_spki("elsewhere"), status="active")
+    with app.state.session_factory() as session, session.begin():
+        with pytest.raises(ClinicKeyPublishError, match="invalid_key"):
+            insert_clinic_key(session, clinic_id=CLINIC, spec=spec, now=utc_now())

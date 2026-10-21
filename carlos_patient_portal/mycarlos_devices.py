@@ -32,6 +32,7 @@ from hashlib import sha256
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from carlos_patient_portal.models import (
@@ -179,20 +180,10 @@ def publish_clinic_keys(
     for spec in specs:
         key = stored.get(spec.kid)
         if key is None:
-            session.add(
-                PatientPortalClinicKey(
-                    kid=spec.kid,
-                    clinic_id=clinic_id,
-                    spki=spec.spki,
-                    status=spec.status,
-                    published_at=current_time,
-                    revoked_at=current_time if spec.status == CLINIC_KEY_STATUS_REVOKED else None,
-                    replaces_kid=spec.replaces_kid,
-                    replacement_signature=spec.replacement_signature,
-                )
-            )
-            changed = True
-            continue
+            key = insert_clinic_key(session, clinic_id=clinic_id, spec=spec, now=current_time)
+            if key is None:
+                changed = True
+                continue
         if (key.replaces_kid, key.replacement_signature) != (
             spec.replaces_kid,
             spec.replacement_signature,
@@ -213,6 +204,45 @@ def publish_clinic_keys(
         )
     )
     return ClinicKeyPublishResult(keys=keys, changed=changed)
+
+
+def insert_clinic_key(
+    session: Session,
+    *,
+    clinic_id: str,
+    spec: ClinicKeySpec,
+    now: datetime,
+) -> PatientPortalClinicKey | None:
+    """Store a new key. None when stored; the existing row when a concurrent publish won.
+
+    Two first publishes can both find no row and both insert the same `kid`. The loser's insert
+    fails on the primary key inside its own savepoint, and the key just stored is then checked
+    like any already published key, instead of the publish failing with a 500.
+    """
+    try:
+        with session.begin_nested():
+            session.add(
+                PatientPortalClinicKey(
+                    kid=spec.kid,
+                    clinic_id=clinic_id,
+                    spki=spec.spki,
+                    status=spec.status,
+                    published_at=now,
+                    revoked_at=now if spec.status == CLINIC_KEY_STATUS_REVOKED else None,
+                    replaces_kid=spec.replaces_kid,
+                    replacement_signature=spec.replacement_signature,
+                )
+            )
+    except IntegrityError:
+        existing = session.scalar(
+            select(PatientPortalClinicKey)
+            .where(PatientPortalClinicKey.kid == spec.kid)
+            .with_for_update()
+        )
+        if existing is None or existing.clinic_id != clinic_id:
+            raise ClinicKeyPublishError("invalid_key") from None
+        return existing
+    return None
 
 
 def recipient_id_for_account(session: Session, account_id: int) -> str | None:
