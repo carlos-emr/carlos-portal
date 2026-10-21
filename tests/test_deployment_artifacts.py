@@ -387,9 +387,10 @@ def test_reference_proxy_omits_raw_request_target_and_limits_expensive_routes() 
         "/auth/password-reset/request",
         "/auth/activate",
         "/auth/mfa/",
+        "/api/mycarlos/link",
     ):
         assert route in configuration
-    assert configuration.count("limit_req zone=") == 8
+    assert configuration.count("limit_req zone=") == 10
     assert "location ^~ /internal/carlos/" in configuration
     assert "allow 10.0.0.0/8" not in configuration
     assert "allow 127.0.0.1/32" in configuration
