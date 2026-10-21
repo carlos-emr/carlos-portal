@@ -118,6 +118,20 @@ says what it is once it leaves the vault. A receiver reads it only after the PDF
 out. Its field names match this manifest's where the two overlap. Its format is set in CARLOS
 (`DocumentManifest`, carlos#4691), not here.
 
+The PAdES signature also binds the embedded manifest directly, so the binding holds even in a
+password-protected email copy, where the embedded file is encrypted and can't be found as is in the
+signed bytes:
+- **The attribute:** one CMS signed attribute, `id-aa-carlos-documentManifestSha256`, OID
+  `2.25.132515939282652475535231260060469025505` (under the UUID arc of ITU-T X.667, which needs
+  no registration).
+- **Its value:** exactly one OCTET STRING of exactly 32 bytes, the SHA-256 of the embedded file's
+  exact bytes, after its stream filters and the PDF's own encryption are removed. These are the
+  bytes CARLOS wrote.
+- **The receiver:** compares the SHA-256 of the manifest it read with that value. More than one
+  such attribute or value, or a value that isn't 32 bytes long, is refused.
+- **Uncompressed:** in a copy without a password, CARLOS also stores the embedded file
+  uncompressed, so it appears verbatim, exactly once, inside the signed byte ranges.
+
 ### 2. The sealed plaintext
 
 ```
