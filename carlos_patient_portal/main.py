@@ -83,6 +83,7 @@ from carlos_patient_portal.routes.portal import (
     register_portal_routes,
 )
 from carlos_patient_portal.routes.public import register_public_routes
+from carlos_patient_portal.routes.signup import register_signup_routes
 from carlos_patient_portal.runtime import (
     FhirApiError,
     InMemoryRateLimiter,
@@ -265,6 +266,22 @@ def record_audit_retention_override(runtime: PortalRuntime) -> None:
         )
 
 
+def warn_if_self_signup_counts_peer_addresses(settings: Settings) -> None:
+    """Warn once at start-up when self sign-up's per-client limit can only see the direct peer.
+
+    Without PATIENT_PORTAL_TRUSTED_CLIENT_IP_HEADER the limit counts the connection's own address.
+    Behind a reverse proxy that is the proxy, so every patient shares one count, and the uniform
+    sign-up page hides the refusals from them. Direct exposure without a proxy is fine, so this is a
+    warning, not a start-up failure.
+    """
+    if settings.self_signup_enabled and settings.trusted_client_ip_header is None:
+        logger.warning(
+            "Self sign-up is on without PATIENT_PORTAL_TRUSTED_CLIENT_IP_HEADER: its per-client "
+            "limit counts the direct peer address, which behind a reverse proxy is shared by "
+            "every patient"
+        )
+
+
 def build_lifespan(
     database_engine: Engine,
     runtime: PortalRuntime | None = None,
@@ -273,6 +290,7 @@ def build_lifespan(
     async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
         if runtime is not None:
             record_audit_retention_override(runtime)
+            warn_if_self_signup_counts_peer_addresses(runtime.settings)
         try:
             yield
         finally:
@@ -976,5 +994,6 @@ def register_app_routes(app: FastAPI, runtime: PortalRuntime) -> None:
     register_logout_route(app, runtime, route_dependencies)
     register_portal_routes(app, runtime, route_dependencies)
     register_activation_routes(app, runtime, route_dependencies)
+    register_signup_routes(app, runtime, route_dependencies)
     register_dev_admin_routes(app, runtime, route_dependencies)
     register_carlos_internal_routes(app, runtime)

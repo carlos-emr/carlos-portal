@@ -1,4 +1,5 @@
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
@@ -77,10 +78,19 @@ from carlos_patient_portal.models import (
     PatientPortalInvite,
     PatientPortalOutboundDelivery,
     PatientPortalSession,
+    PatientPortalSignupRequest,
     PatientPortalStaffAssertionUse,
     utc_now,
 )
 from carlos_patient_portal.preflight import query_runtime_role_policy
+from carlos_patient_portal.self_signup import (
+    SelfSignupPolicy,
+    SignupQueueFullError,
+    SignupRequestDetails,
+    hash_signup_client,
+    hash_signup_health_card,
+    submit_signup_request,
+)
 from carlos_patient_portal.staff_identity import (
     CarlosServiceAuthenticationError,
     StaffPrincipal,
@@ -1917,3 +1927,137 @@ def test_postgresql_cleanup_skips_prompt_while_result_holds_parent_lock(state) -
         allow_result.set()
         event.remove(engine, "after_cursor_execute", pause_result_after_parent_lock)
         engine.dispose()
+
+
+def _postgres_signup_policy(**overrides: object) -> SelfSignupPolicy:
+    values: dict[str, object] = {
+        "request_ttl": timedelta(hours=24),
+        "client_window": timedelta(hours=1),
+        "max_requests_per_client": 5,
+        "health_card_window": timedelta(hours=24),
+        "max_requests_per_health_card": 3,
+        "max_pending": 1_000,
+        **overrides,
+    }
+    return SelfSignupPolicy(**values)
+
+
+def test_postgresql_self_signup_limits_hold_across_workers() -> None:
+    """Simultaneous requests from separate connections never pass a limit together."""
+    assert POSTGRES_URL is not None
+    clean_postgresql_database()
+    engine = create_portal_engine(POSTGRES_URL)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    audit_secret = "a" * 32
+
+    def run_together(count: int, submit) -> list[str]:
+        barrier = Barrier(count)
+
+        def worker(index: int) -> str:
+            barrier.wait(timeout=10)
+            try:
+                with session_factory.begin() as session:
+                    return submit(session, index)
+            except SignupQueueFullError:
+                return "queue_full"
+
+        with ThreadPoolExecutor(max_workers=count) as executor:
+            return sorted(executor.map(worker, range(count)))
+
+    def submit(session, *, card: str, client: str, policy: SelfSignupPolicy) -> str:
+        return submit_signup_request(
+            session,
+            details=SignupRequestDetails(
+                health_card_number=card,
+                date_of_birth=date(1975, 3, 14),
+                email="fake.patient@example.test",
+            ),
+            clinic_id="postgres-clinic",
+            client_reference_hash=hash_signup_client(audit_secret, client),
+            health_card_hash=hash_signup_health_card(audit_secret, card),
+            encryption_secret="o" * 32,
+            encryption_key_id="primary",
+            policy=policy,
+        )
+
+    try:
+        one_card = run_together(
+            6,
+            lambda session, index: submit(
+                session,
+                card="9876543210",
+                client=f"203.0.113.{index}",
+                policy=_postgres_signup_policy(),
+            ),
+        )
+        one_client = run_together(
+            8,
+            lambda session, index: submit(
+                session,
+                card=f"710000000{index}",
+                client="198.51.100.9",
+                policy=_postgres_signup_policy(),
+            ),
+        )
+        with Session(engine) as session:
+            stored = session.scalar(select(func.count(PatientPortalSignupRequest.id)))
+        backlog = run_together(
+            12,
+            lambda session, index: submit(
+                session,
+                card=f"72000000{index:02d}",
+                client=f"192.0.2.{index}",
+                policy=_postgres_signup_policy(max_pending=stored + 10),
+            ),
+        )
+
+        assert one_card == ["rate_limited"] * 3 + ["stored"] * 3
+        assert one_client == ["rate_limited"] * 3 + ["stored"] * 5
+        assert stored == 8
+        assert backlog == ["queue_full"] * 2 + ["stored"] * 10
+        with Session(engine) as session:
+            assert session.scalar(select(func.count(PatientPortalSignupRequest.id))) == 18
+    finally:
+        engine.dispose()
+
+
+def test_postgresql_self_signup_page_answers_alike_when_workers_race_one_card() -> None:
+    assert POSTGRES_URL is not None
+    clean_postgresql_database()
+    app = create_app(
+        postgres_settings(
+            self_signup_enabled=True,
+            self_signup_response_floor_ms=0,
+            outbox_encryption_secret="o" * 32,
+        )
+    )
+    barrier = Barrier(6)
+
+    def request_from(index: int):
+        client = TestClient(app, client=(f"203.0.113.{index + 50}", 50000))
+        try:
+            page = client.get("/auth/sign-up")
+            token = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+            barrier.wait(timeout=10)
+            return client.post(
+                "/auth/sign-up",
+                data={
+                    "csrf_token": token,
+                    "health_card_number": "5550 001 234 AB",
+                    "date_of_birth_day": "14",
+                    "date_of_birth_month": "3",
+                    "date_of_birth_year": "1975",
+                    "email": "fake.patient@example.test",
+                },
+            )
+        finally:
+            client.close()
+
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        responses = list(executor.map(request_from, range(6)))
+
+    assert [response.status_code for response in responses] == [202] * 6
+    assert len({response.content for response in responses}) == 1
+    with Session(app.state.database_engine) as session:
+        assert session.scalar(select(func.count(PatientPortalSignupRequest.id))) == 3
+    app.state.database_engine.dispose()
