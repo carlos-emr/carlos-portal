@@ -29,6 +29,7 @@ from carlos_patient_portal.database import (
     check_database_schema_current,
     create_portal_engine,
 )
+from carlos_patient_portal.footer_audit import FooterAuditStore, FooterAuditUnavailableError
 
 PreflightStatus = Literal["pass", "fail"]
 
@@ -1067,6 +1068,23 @@ def collect_production_preflight(settings: Settings) -> list[PreflightCheck]:
             failed_detail="real-data deployments must use PATIENT_PORTAL_ENVIRONMENT=production",
         )
     ]
+    if settings.smtp_host is not None:
+        ready = True
+        try:
+            settings.validate_email_footer_policy()
+            FooterAuditStore(
+                settings.email_footer_audit_directory, settings.clinic_id
+            ).check_ready()
+        except (FooterAuditUnavailableError, OSError, ValueError):
+            ready = False
+        checks.append(
+            preflight_check(
+                "email_footer_audit",
+                ready,
+                passed_detail="private clinic footer audit supports durable publication",
+                failed_detail="clinic footer trust or durable private audit storage is unavailable",
+            )
+        )
     try:
         database_engine = create_portal_engine(
             settings.database_url,

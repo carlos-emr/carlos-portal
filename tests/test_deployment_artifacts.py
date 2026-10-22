@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from carlos_patient_portal import models
+import yaml
+
+from carlos_patient_portal import cli, models
 from carlos_patient_portal.config import DEFAULT_SOURCE_CODE_URL, OutboxSettings, Settings
 
 PACKAGE_ROOT = Path(__file__).parents[1] / "carlos_patient_portal"
@@ -120,6 +122,24 @@ def test_database_policy_explicitly_grants_every_application_table_and_sequence(
     assert "aclexplode(default_acl.defaclacl)" in policy
     assert "ACLs must not grant access to undeclared roles" in policy
     assert "User-schema objects must be owned by the declared schema owner" in policy
+
+
+def test_resolved_compose_mounts_same_private_audit_volume_for_senders_and_preflight() -> None:
+    # Resolve YAML anchors/merge keys, including the inherited read-only container policy.
+    # A command-only Docker mock cannot catch a missing preflight bind mount.
+    compose = yaml.safe_load((REPOSITORY_ROOT / "compose.production.yaml").read_text())
+    mounts = []
+    for name in ("web", "outbox", "preflight"):
+        service = compose["services"][name]
+        assert service["read_only"] is True
+        selected = [volume for volume in service["volumes"]
+                    if volume["target"] == "/var/lib/carlos-portal/email-footer-audit"]
+        assert len(selected) == 1, name
+        assert selected[0]["type"] == "bind"
+        assert selected[0]["read_only"] is False
+        assert "PORTAL_EMAIL_FOOTER_AUDIT_DIR:?" in selected[0]["source"]
+        mounts.append(selected[0])
+    assert mounts[0] == mounts[1] == mounts[2]
 
 
 def test_database_identity_query_attests_live_tls() -> None:
@@ -281,6 +301,12 @@ def test_production_stack_smoke_covers_success_replay_and_fail_closed_role() -> 
     assert "outbox is empty" in smoke
 
     settings = Settings(_env_file=environment_path)
+    worker_settings = OutboxSettings(
+        _env_file=REPOSITORY_ROOT / "tests" / "production-smoke-outbox.env"
+    )
+    assert cli._outbox_configuration_digest(settings) == cli._outbox_configuration_digest(
+        worker_settings
+    )
     assert settings.environment == "production"
     assert settings.clinic_id == "smoke-clinic"
 
@@ -306,6 +332,7 @@ def test_production_environment_example_can_satisfy_runtime_policy(tmp_path: Pat
     )
     for index, name in enumerate(secret_names):
         values[name] = f"production-example-{index}-" + ("x" * 32)
+    values["PATIENT_PORTAL_EMAIL_FOOTER_READ_TOKEN"] = "d" * 64
     values["PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING"] = (
         '{"initial":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"}'
     )
@@ -350,6 +377,10 @@ def test_outbox_environment_example_excludes_web_only_secrets(tmp_path: Path) ->
         for key, value in [line.split("=", 1)]
     }
     values["PATIENT_PORTAL_SESSION_SECRET"] = "s" * 32
+    values["PATIENT_PORTAL_EMAIL_FOOTER_READ_TOKEN"] = "d" * 64
+    values["PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING"] = (
+        '{"initial":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"}'
+    )
     values["PATIENT_PORTAL_OUTBOX_ENCRYPTION_KEYRING"] = '{"initial":"' + ("o" * 32) + '"}'
     configured_path = tmp_path / "outbox.env"
     configured_path.write_text("".join(f"{key}={value}\n" for key, value in values.items()))
