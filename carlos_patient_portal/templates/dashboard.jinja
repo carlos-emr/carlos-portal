@@ -1,3 +1,4 @@
+{% from "_password_toggle.jinja" import password_toggle -%}
 <!doctype html>
 <html lang="{{ locale }}">
 <head>
@@ -116,16 +117,17 @@
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <label>
                     {{ text.current_password }}
-                    <input type="password" name="current_password" autocomplete="current-password" required>
+                    <input type="password" name="current_password" id="change-current-password" autocomplete="current-password" required>
                   </label>
                   <label>
                     {{ text.new_password }}
-                    <input type="password" name="new_password" autocomplete="new-password" required>
+                    <input type="password" name="new_password" id="change-new-password" autocomplete="new-password" required>
                   </label>
                   <label>
                     {{ text.new_password_confirmation }}
-                    <input type="password" name="new_password_confirmation" autocomplete="new-password" required>
+                    <input type="password" name="new_password_confirmation" id="change-new-password-confirmation" autocomplete="new-password" required>
                   </label>
+                  {{ password_toggle("change-current-password change-new-password change-new-password-confirmation", text) }}
                   <button class="primary-action" type="submit">{{ text.update_password }}</button>
                 </form>
               </section>
@@ -150,8 +152,9 @@
                   </label>
                   <label>
                     {{ text.current_password }}
-                    <input type="password" name="current_password" autocomplete="current-password" required>
+                    <input type="password" name="current_password" id="contact-current-password" autocomplete="current-password" required>
                   </label>
+                  {{ password_toggle("contact-current-password", text) }}
                   <button class="primary-action" type="submit">{{ text.update_contact }}</button>
                 </form>
                 <form class="form-stack settings-form" method="post" action="{{ url_for('portal_account_confirm_phone') }}">
@@ -196,8 +199,9 @@
                   </label>
                   <label>
                     {{ text.current_password }}
-                    <input type="password" name="current_password" autocomplete="current-password" required>
+                    <input type="password" name="current_password" id="mfa-current-password" autocomplete="current-password" required>
                   </label>
+                  {{ password_toggle("mfa-current-password", text) }}
                   <button class="primary-action" type="submit">{{ text.update_mfa }}</button>
                 </form>
               </section>
@@ -259,6 +263,7 @@
               >
               <small>{{ text.reveal_password_hint }}</small>
             </label>
+            {{ password_toggle("email-password-step-up", text) }}
             <div class="table-shell" role="region" aria-label="{{ text.email_passwords_region }}">
               <table class="email-password-table">
                 <thead>

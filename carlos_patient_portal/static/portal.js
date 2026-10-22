@@ -78,6 +78,27 @@ document.addEventListener("click", (event) => {
     });
 });
 
+// "Show password" controls (#29). Each button names the boxes it controls in aria-controls. The
+// buttons are hidden in the HTML and revealed here, so without JavaScript the boxes just stay hidden.
+const passwordToggles = Array.from(document.querySelectorAll("[data-password-toggle]")).filter(
+  (toggle) => toggle instanceof HTMLButtonElement
+);
+const passwordToggleInputs = (toggle) => (toggle.getAttribute("aria-controls") || "")
+  .split(/\s+/)
+  .map((id) => document.getElementById(id))
+  .filter((input) => input instanceof HTMLInputElement);
+const setPasswordsShown = (toggle, shown) => {
+  for (const input of passwordToggleInputs(toggle)) {
+    input.type = shown ? "text" : "password";
+  }
+  toggle.textContent = shown
+    ? toggle.dataset.hideLabel || "Hide password"
+    : toggle.dataset.showLabel || "Show password";
+  toggle.setAttribute("aria-pressed", shown ? "true" : "false");
+};
+for (const toggle of passwordToggles) {
+  toggle.hidden = false;
+}
 document.addEventListener("click", (event) => {
   if (!(event.target instanceof Element)) {
     return;
@@ -86,17 +107,28 @@ document.addEventListener("click", (event) => {
   if (!(toggle instanceof HTMLButtonElement)) {
     return;
   }
-  const input = document.querySelector("[data-password-input]");
-  if (!(input instanceof HTMLInputElement)) {
-    return;
+  setPasswordsShown(toggle, toggle.getAttribute("aria-pressed") !== "true");
+});
+// Hide the boxes again when their form is sent and when the page comes back from the
+// back/forward cache, so a password is not left showing on a shared screen.
+document.addEventListener(
+  "submit",
+  (event) => {
+    if (!(event.target instanceof HTMLFormElement)) {
+      return;
+    }
+    for (const toggle of passwordToggles) {
+      if (passwordToggleInputs(toggle).some((input) => event.target.contains(input))) {
+        setPasswordsShown(toggle, false);
+      }
+    }
+  },
+  true
+);
+window.addEventListener("pageshow", () => {
+  for (const toggle of passwordToggles) {
+    setPasswordsShown(toggle, false);
   }
-  const shouldShow = input.type === "password";
-  input.type = shouldShow ? "text" : "password";
-  toggle.textContent = shouldShow
-    ? toggle.dataset.hideLabel || "Hide password"
-    : toggle.dataset.showLabel || "Show password";
-  toggle.setAttribute("aria-pressed", shouldShow ? "true" : "false");
-  input.focus();
 });
 
 document.addEventListener("click", (event) => {
