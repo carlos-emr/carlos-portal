@@ -16,6 +16,7 @@ on:
       - feat/mycarlos-linking-schema
       - feat/mycarlos-internal-routes
       - feat/mycarlos-device-identity
+      - feat/mycarlos-link-route
   push:
     branches:
       - main
