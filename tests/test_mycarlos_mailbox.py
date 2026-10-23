@@ -126,7 +126,13 @@ def test_valid_receipt_atomically_deletes_blob_preserves_proofs_even_at_ordinary
         assert clinic.waiting_count == clinic.waiting_bytes == clinic.reserved_terminal_bytes == 0
         assert clinic.terminal_event_bytes <= 16384
         assert acknowledge_events(session, clinic, through=1) == {"acked_through": "1"}
+        assert clinic.terminal_event_bytes == 0
+        assert acknowledge_events(session, clinic, through=0) == {"acked_through": "1"}
+        assert clinic.terminal_event_bytes == 0
+        assert acknowledge_events(session, clinic, through=1) == {"acked_through": "1"}
+        assert clinic.terminal_event_bytes == 0
         assert prune_collected_events(session, clinic) == 1
+        assert clinic.terminal_event_bytes == 0
     with mailbox_factory() as session, session.begin():
         assert count(session, MailboxAnchor) == 1
         assert count(session, MailboxProof) == 2
@@ -152,6 +158,29 @@ def test_receipt_rollback_leaves_primary_blob_and_no_false_pickup(mailbox_factor
         assert count(session, MailboxBlob) == 1
         assert session.scalar(select(MailboxCopy.status)) == "waiting"
         assert count(session, MailboxEvent) == count(session, MailboxAnchor) == count(session, MailboxProof) == 0
+
+
+def test_ack_rollback_releases_no_budget_or_checkpoint(mailbox_factory):
+    store(mailbox_factory)
+    with mailbox_factory() as session, session.begin():
+        accept_receipt(session, target(session), delivery_id=VALUE.outer["delivery_id"], compact=RECEIPT,
+            request_assertion=ASSERTION, request_anchor=None, clock=lambda: NOW, limits=LIMITS)
+    with mailbox_factory() as session:
+        clinic = session.scalar(select(MailboxClinic))
+        before = (clinic.acked_through, clinic.ordinary_event_bytes, clinic.terminal_event_bytes,
+                  clinic.reserved_terminal_bytes)
+        assert before[0] == 0 and before[2] > 0
+    with pytest.raises(RuntimeError, match="FAKE ack crash before commit"):
+        with mailbox_factory() as session, session.begin():
+            clinic = clinic_lock(session, "clinic-a")
+            acknowledge_events(session, clinic, through=1)
+            assert clinic.acked_through == 1 and clinic.terminal_event_bytes == 0
+            raise RuntimeError("FAKE ack crash before commit")
+    with mailbox_factory() as session:
+        clinic = session.scalar(select(MailboxClinic))
+        assert (clinic.acked_through, clinic.ordinary_event_bytes, clinic.terminal_event_bytes,
+                clinic.reserved_terminal_bytes) == before
+        assert count(session, MailboxEvent) == 1
 
 
 def test_removed_device_has_one_control_then_copy_event_and_no_late_receipt(mailbox_factory):
@@ -248,6 +277,11 @@ def test_repeated_pickups_fill_finite_event_budget_and_collection_reopens_admiss
     with mailbox_factory() as session, session.begin():
         clinic = clinic_lock(session, "clinic-a")
         acknowledge_events(session, clinic, through=clinic.event_sequence)
-        assert prune_collected_events(session, clinic, limit=100) > 0
+        assert clinic.ordinary_event_bytes == clinic.terminal_event_bytes == 0
     with mailbox_factory() as session, session.begin():
+        # ACK ALONE reopens admission before any physical event pruning sweep.
         assert admit_upload(session, target(session), blocked, now=NOW, limits=limits)[1] == 201
+    with mailbox_factory() as session, session.begin():
+        clinic = clinic_lock(session, "clinic-a")
+        assert prune_collected_events(session, clinic, limit=100) > 0
+        assert clinic.ordinary_event_bytes == clinic.terminal_event_bytes == 0

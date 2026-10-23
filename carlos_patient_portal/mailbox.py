@@ -25,7 +25,7 @@ from hashlib import sha256
 from secrets import compare_digest
 from time import time
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
 from carlos_patient_portal.mailbox_codec import (
@@ -343,6 +343,16 @@ def acknowledge_events(session: Session, clinic: MailboxClinic, *, through: int)
     if through > clinic.event_sequence:
         raise MailboxRefusal("invalid_cursor")
     if through > clinic.acked_through:
+        # Budget measures UNACKNOWLEDGED evidence, not physically retained audit
+        # proof storage. Release exactly the newly collected prefix in this commit.
+        # Clinic mutex excludes append/prune writers until all counters+ack commit.
+        released = session.execute(select(MailboxEvent.budget, func.sum(MailboxEvent.charged_bytes))
+            .where(MailboxEvent.clinic_id == clinic.clinic_id,
+                   MailboxEvent.sequence > clinic.acked_through, MailboxEvent.sequence <= through)
+            .group_by(MailboxEvent.budget))
+        for budget, byte_count in released:
+            if budget == "ordinary": clinic.ordinary_event_bytes -= int(byte_count)
+            elif budget == "terminal": clinic.terminal_event_bytes -= int(byte_count)
         clinic.acked_through = through
     # Collection does not delete proof/receipt/tombstone evidence. Pruning is separate.
     return {"acked_through": str(clinic.acked_through)}
@@ -353,8 +363,7 @@ def prune_collected_events(session: Session, clinic: MailboxClinic, *, limit: in
     rows = list(session.scalars(select(MailboxEvent).where(MailboxEvent.clinic_id == clinic.clinic_id,
         MailboxEvent.sequence <= clinic.acked_through).order_by(MailboxEvent.sequence).limit(limit)))
     for row in rows:
-        if row.budget == "ordinary": clinic.ordinary_event_bytes -= row.charged_bytes
-        elif row.budget == "terminal": clinic.terminal_event_bytes -= row.charged_bytes
+        # Acknowledgment already released this prefix. Never subtract it twice.
         clinic.retained_floor = row.sequence
         session.delete(row)
     return len(rows)
