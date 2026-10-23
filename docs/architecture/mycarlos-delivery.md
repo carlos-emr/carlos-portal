@@ -130,7 +130,7 @@ signed bytes:
 - **The receiver:** compares the SHA-256 of the manifest it read with that value. More than one
   such attribute or value, or a value that isn't 32 bytes long, is refused. So is a PDF that has
   an embedded manifest but no such attribute: every CARLOS signature over a manifest carries one,
-  so its absence means the manifest isn't bound, and the document isn't Verified (`bad_manifest`).
+  so its absence means the manifest isn't bound, and the document isn't Verified.
 - **Uncompressed:** in a copy without a password, CARLOS also stores the embedded file
   uncompressed, so it appears verbatim, exactly once, inside the signed byte ranges.
 
