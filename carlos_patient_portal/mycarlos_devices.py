@@ -31,9 +31,15 @@ from hashlib import sha256
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+
+from carlos_patient_portal.clinic_key_proofs import (
+    ClinicKeyInventoryError,
+    ClinicKeyMaterial,
+    validate_clinic_key_inventory,
+)
 
 from carlos_patient_portal.models import (
     CLINIC_KEY_STATUS_ACTIVE,
@@ -152,6 +158,12 @@ def publish_clinic_keys(
     key whose replacement details differ (`key_changed`). A `kid` is a hash of its key, so the
     key itself can never change under the same `kid`.
     """
+    # A stable clinic mutex also exists before the first row. Row locks alone cannot protect
+    # complete graph/count validation when concurrent first publishers insert different keys.
+    if session.get_bind().dialect.name == "postgresql":
+        digest = sha256(b"mycarlos-clinic-key-publish-v1\x00" + clinic_id.encode("utf-8")).digest()
+        lock_key = int.from_bytes(digest[:8], "big", signed=True)
+        session.execute(select(func.pg_advisory_xact_lock(lock_key))).scalar_one()
     _check_key_list(specs)
     current_time = utc_now() if now is None else now
     # Lock this clinic's rows so two concurrent publishes cannot both pass the checks below.
@@ -161,9 +173,20 @@ def publish_clinic_keys(
             select(PatientPortalClinicKey)
             .where(PatientPortalClinicKey.clinic_id == clinic_id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
     }
     listed = {spec.kid for spec in specs}
+    try:
+        validate_clinic_key_inventory(
+            clinic_id,
+            [ClinicKeyMaterial(spec.kid, spec.spki, spec.status, spec.replaces_kid,
+                               spec.replacement_signature) for spec in specs],
+            [ClinicKeyMaterial(key.kid, key.spki, key.status, key.replaces_kid,
+                               key.replacement_signature) for key in stored.values()],
+        )
+    except ClinicKeyInventoryError as exc:
+        raise ClinicKeyPublishError(exc.code) from exc
     if set(stored) - listed:
         raise ClinicKeyPublishError("key_missing")
     elsewhere = session.scalars(

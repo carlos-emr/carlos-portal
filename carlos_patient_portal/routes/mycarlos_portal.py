@@ -40,6 +40,7 @@ from carlos_patient_portal.mycarlos_links import (
     clinic_has_active_key,
     create_link_code,
 )
+from carlos_patient_portal.mycarlos_qr import link_qr_data_uri
 from carlos_patient_portal.notifications import record_mfa_delivery_and_commit, send_mfa_challenge
 from carlos_patient_portal.presenters import assemble_mycarlos_devices
 from carlos_patient_portal.routes.auth import build_auth_dependencies
@@ -50,6 +51,7 @@ from carlos_patient_portal.runtime import (
 )
 from carlos_patient_portal.sms_delivery import PortalSmsDeliveryError
 from carlos_patient_portal.web_support import (
+    CONTENT_SECURITY_POLICY,
     CSRF_FORM_FIELD,
     PORTAL_MFA_PROOF_COOKIE_NAME,
     PORTAL_SESSION_COOKIE_NAME,
@@ -104,6 +106,7 @@ def register_mycarlos_portal_routes(
         status_code: int = 200,
         error_key: str | None = None,
         code_display: str | None = None,
+        qr_png_data_uri: str | None = None,
         confirmation_key: str | None = None,
     ) -> Response:
         view = assemble_mycarlos_devices(
@@ -122,6 +125,7 @@ def register_mycarlos_portal_routes(
         view = replace(
             view,
             code_display=code_display,
+            qr_png_data_uri=qr_png_data_uri,
             confirmation=confirmation,
             mfa_required=not has_mfa_proof(request),
             error=portal_text(request_locale(request))[error_key] if error_key else None,
@@ -136,6 +140,10 @@ def register_mycarlos_portal_routes(
         )
         response.headers["Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
+        if qr_png_data_uri is not None:
+            response.headers["Content-Security-Policy"] = (
+                f"{CONTENT_SECURITY_POLICY}; img-src 'self' data:"
+            )
         return response
 
     def audit(
@@ -234,8 +242,12 @@ def register_mycarlos_portal_routes(
             outcome=AUDIT_OUTCOME_SUCCESS,
             reason="created",
         )
+        qr_png_data_uri = link_qr_data_uri(issued, settings.public_base_url)
         session.commit()
-        return render(request, session, authenticated, code_display=issued.display)
+        return render(
+            request, session, authenticated, code_display=issued.display,
+            qr_png_data_uri=qr_png_data_uri,
+        )
 
     @app.post("/portal/mycarlos/code", name="portal_mycarlos_code")
     async def linking_code(

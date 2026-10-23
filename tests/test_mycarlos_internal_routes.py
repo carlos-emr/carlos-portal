@@ -15,6 +15,7 @@
 """CARLOS's internal myCarlos routes (carlos-portal#41, M2-d): clinic keys and patient devices."""
 
 import json
+from pathlib import Path
 from hashlib import sha256
 
 import pytest
@@ -53,6 +54,7 @@ from tests.support import (
     carlos_job_headers,
     carlos_staff_headers,
 )
+from tests import delivery_contract_reference as ref
 from tests.test_internal_api import INTERNAL_API_TOKEN, internal_app
 
 CLINIC = "clinic-a"
@@ -337,10 +339,12 @@ def test_publishing_stores_the_keys_once_and_audits_each_call() -> None:
 def test_a_new_key_with_its_replacement_signature_and_a_revocation() -> None:
     app = mycarlos_app()
     client = TestClient(app)
-    old = key_entry("old")
+    fixture = json.loads((Path(__file__).parent / "fixtures/link-lifecycle-v1.json").read_text())
+    scenario = next(v for v in fixture["inventory_vectors"] if v["name"] == "signed-replacement")
+    old = scenario["previous"][0]
     assert publish(client, [old]).status_code == 200
-    signature = b64url(sha256(b"FAKE replacement signature").digest() * 2)
-    new = key_entry("new", replaces_kid=old["kid"], replacement_signature=signature)
+    new = scenario["incoming"][1]
+    signature = new["replacement_signature"]
 
     rotated = publish(client, [{**old, "status": "revoked"}, new])
     assert rotated.status_code == 200, rotated.text
@@ -350,7 +354,7 @@ def test_a_new_key_with_its_replacement_signature_and_a_revocation() -> None:
     assert by_kid[new["kid"]]["replaces_kid"] == old["kid"]
     with app.state.session_factory() as session:
         stored = session.get(PatientPortalClinicKey, new["kid"])
-        assert stored.replacement_signature == sha256(b"FAKE replacement signature").digest() * 2
+        assert stored.replacement_signature == ref.b64url_decode(signature)
 
 
 @pytest.mark.parametrize(

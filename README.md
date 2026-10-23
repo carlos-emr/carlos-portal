@@ -1028,9 +1028,20 @@ The patient browser controls use the same off switch:
   and a CSRF-protected POST, is account-scoped and idempotent, and preserves the device audit row.
   Waiting-copy deletion belongs to the mailbox step; this browser checkpoint does not add it.
 
-This is the typed-code browser checkpoint. QR rendering/scanning and content-free device notices
-remain separate completion gates before the full M2 linking flow is complete. There is no new
-runtime dependency, database migration, document verification result or mailbox in this checkpoint.
+The QR/lifecycle follow-up renders the frozen link-v1 payload locally as a regular PNG QR code
+with explicit UTF-8 ECI. Only the no-store code-creation response permits its local image data
+URI; the typed code remains available. Generating a PNG is not proof that the native scanner
+can decode it: exact ASCII, accented, CJK and decomposed-Unicode round trips remain required.
+The reviewed Segno dependency is pinned and hash-locked; it requires no external QR service.
+Key refresh and pending-only response recovery follow the additive
+[link lifecycle v1 contract](docs/architecture/mycarlos-link-lifecycle-v1.md).
+Other EMRs can implement a configured producer adapter under the
+[interoperability requirements](docs/architecture/producer-interoperability.md); a generic
+EMR adapter is not already implemented by this change.
+
+This remains a partial M2 checkpoint. Actual native QR decoding/scanning and content-free device
+notices remain completion gates. The QR producer adds Segno; this follow-up adds no database
+migration, document verification result or mailbox.
 
 The internal routes CARLOS calls (registered only while the switch is on):
 

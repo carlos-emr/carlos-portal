@@ -27,6 +27,7 @@ from datetime import timedelta
 from hashlib import sha256
 from itertools import count
 from threading import Barrier, Event
+from time import monotonic, sleep
 from uuid import uuid4
 
 import pytest
@@ -44,6 +45,7 @@ from carlos_patient_portal.models import (
     PatientPortalAccount,
     PatientPortalAuditEvent,
     PatientPortalMfaChallenge,
+    PatientPortalClinicKey,
     PatientPortalMyCarlosDevice,
     PatientPortalMyCarlosLinkCode,
     PatientPortalMyCarlosLinkFailure,
@@ -52,6 +54,7 @@ from carlos_patient_portal.models import (
     utc_now,
 )
 from carlos_patient_portal.mycarlos_links import create_link_code, link_device
+from carlos_patient_portal.mycarlos_devices import ClinicKeyPublishError, ClinicKeySpec, publish_clinic_keys
 from carlos_patient_portal.runtime import auth_policy_from_settings
 from carlos_patient_portal.token_keys import PortalTokenKeys
 from tests import delivery_contract_reference as ref
@@ -62,11 +65,116 @@ from tests.support import (
     upgrade_to_head,
 )
 from tests.test_postgresql_integration import POSTGRES_URL
+from tests.test_link_lifecycle_routes import native_portal, signed_assertion, RECOVERY, NOW_AT
+from carlos_patient_portal.routes import mycarlos as mycarlos_routes
 
 pytestmark = pytest.mark.skipif(
     POSTGRES_URL is None,
     reason="PORTAL_TEST_POSTGRES_URL is required for PostgreSQL integration tests",
 )
+
+
+def test_first_clinic_publish_has_a_stable_mutex_before_complete_inventory_validation(
+    migrated_postgresql_engine,
+):
+    """Different first key rows cannot evade one clinic's complete-inventory transaction."""
+    engine = migrated_postgresql_engine
+    factory = sessionmaker(bind=engine)
+    first_key = ref.ClinicKey("FAKE PostgreSQL first publisher A", "clinic-a")
+    second_key = ref.ClinicKey("FAKE PostgreSQL first publisher B", "clinic-a")
+    first_published = Event()
+    release_first = Event()
+    second_connected = Event()
+    second_pid = []
+
+    def first_publish():
+        with factory.begin() as session:
+            publish_clinic_keys(
+                session, clinic_id="clinic-a",
+                specs=[ClinicKeySpec(first_key.kid, first_key.spki, "active")],
+            )
+            first_published.set()
+            assert release_first.wait(5)
+
+    def second_publish():
+        try:
+            with factory.begin() as session:
+                second_pid.append(session.scalar(text("select pg_backend_pid()")))
+                second_connected.set()
+                publish_clinic_keys(
+                    session, clinic_id="clinic-a",
+                    specs=[ClinicKeySpec(second_key.kid, second_key.spki, "active")],
+                )
+        except ClinicKeyPublishError as exc:
+            return exc.code
+        return "published"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(first_publish)
+        try:
+            assert first_published.wait(5)
+            second = pool.submit(second_publish)
+            assert second_connected.wait(5)
+            waiting = False
+            deadline = monotonic() + 5
+            while monotonic() < deadline:
+                with engine.connect() as observer:
+                    waiting = observer.scalar(text(
+                        "select exists(select 1 from pg_locks where pid=:pid "
+                        "and locktype='advisory' and not granted)"
+                    ), {"pid": second_pid[0]})
+                if waiting or second.done():
+                    break
+                sleep(0.02)
+            assert waiting, "second publisher must wait even when the first key row is uncommitted"
+        finally:
+            release_first.set()
+        first.result(timeout=5)
+        assert second.result(timeout=5) == "key_missing"
+    with factory() as session:
+        assert list(session.scalars(select(PatientPortalClinicKey.kid))) == [first_key.kid]
+
+
+def test_recovery_rechecks_removal_after_waiting_on_the_account_lock(
+    migrated_postgresql_engine, monkeypatch,
+):
+    engine = migrated_postgresql_engine
+    with engine.connect() as connection:
+        assert connection.scalar(text("select current_schema()")).startswith("mycarlos_test_")
+    monkeypatch.setattr(main, "create_portal_engine", lambda *_args, **_kwargs: engine)
+    app, client, _proxy, account_id = native_portal(database_url=POSTGRES_URL)
+    snapshot = Event()
+    original_find = mycarlos_routes.find_device_record
+
+    def snapshot_device(session, kid):
+        result = original_find(session, kid)
+        if result is not None:
+            snapshot.set()
+        return result
+
+    monkeypatch.setattr(mycarlos_routes, "find_device_record", snapshot_device)
+    assertion = signed_assertion(RECOVERY)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with app.state.session_factory() as holder, holder.begin():
+            holder.scalar(select(PatientPortalAccount).where(
+                PatientPortalAccount.id == account_id
+            ).with_for_update())
+            request = pool.submit(
+                client.get, RECOVERY, headers={"X-MyCarlos-Device-Assertion": assertion}
+            )
+            assert snapshot.wait(5)
+            device = holder.scalar(select(PatientPortalMyCarlosDevice).where(
+                PatientPortalMyCarlosDevice.account_id == account_id
+            ).with_for_update())
+            device.status = "removed"
+            device.removed_at = NOW_AT
+            device.removed_by = "patient"
+        response = request.result(timeout=5)
+    assert response.status_code == 403
+    assert response.json() == {"code": "device_removed"}
+    with app.state.session_factory() as session:
+        assert session.scalar(select(PatientPortalMyCarlosDevice.status)) == "removed"
+        assert session.scalar(select(func.count()).select_from(PatientPortalMyCarlosLinkCode)) == 0
 
 LINK_KEY = PortalTokenKeys.derive("p" * 32).mycarlos_link
 IDLE = timedelta(minutes=10)

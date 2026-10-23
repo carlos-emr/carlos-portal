@@ -65,6 +65,7 @@ from carlos_patient_portal.staff_identity import (
 DEVICE_ASSERTION_HEADER = "X-MyCarlos-Device-Assertion"
 DEVICE_AUDIENCE = "carlos-patient-portal-device-api"
 LINK_AUDIENCE = "carlos-patient-portal-device-link"
+LINK_RECOVERY_AUDIENCE = "carlos-patient-portal-device-link-recovery"
 DEVICE_ISSUER = "mycarlos"
 MAX_DEVICE_ASSERTION_BYTES = 4096
 MAX_DEVICE_ASSERTION_LIFETIME_SECONDS = 120
@@ -313,6 +314,40 @@ def verify_device_assertion(
         assertion_id=str(claims["jti"]),
         assertion_expires_at=int(claims["exp"]),
         vault_head_link=str(vault_head_link) if vault_head_link is not None else None,
+    )
+
+
+def verify_link_recovery_assertion(
+    assertion: object,
+    *,
+    find_device: Callable[[str], DeviceRecord | None],
+    expected_request_hash: str,
+    now: int | None = None,
+) -> DevicePrincipal:
+    """Verify pending-link recovery possession, freshness and binding without status disclosure.
+
+    The caller consumes the shared nonce before locking account then device and rechecking
+    removal. A normal device audience or extra recipient/anchor claim never authorizes recovery.
+    The signature covers the original signed payload, including valid noncanonical JSON.
+    """
+    current_time = int(time()) if now is None else now
+    payload, claims, signature = _parse_compact(assertion)
+    _check_claims(
+        claims, audience=LINK_RECOVERY_AUDIENCE, required=LINK_CLAIMS, optional=frozenset()
+    )
+    device = find_device(str(claims["kid"]))
+    if device is None:
+        raise DeviceRefusal(REFUSAL_UNKNOWN_DEVICE)
+    _verify_signature(device.ed25519_public_key, signature, payload)
+    _check_times(claims, current_time)
+    _check_request_hash(claims, expected_request_hash)
+    return DevicePrincipal(
+        device_id=device.device_id,
+        account_id=device.account_id,
+        device_key_id=device.device_key_id,
+        assertion_id=str(claims["jti"]),
+        assertion_expires_at=int(claims["exp"]),
+        vault_head_link=None,
     )
 
 
