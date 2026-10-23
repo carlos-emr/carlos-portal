@@ -22,7 +22,7 @@ the rendered page — the failure mode an untyped ``dict[str, object]`` context 
 Assembling these belongs to `presenters.py`; nothing here touches a database session or a request.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,3 +138,22 @@ class MessagesViewModel:
     not_found: bool = False
     no_online_booking: str = ""
     error: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MyCarlosDeviceRowViewModel:
+    device_key_id: str
+    name: str
+    linked_at: str
+    last_seen_at: str
+    remove_href: str
+
+
+@dataclass(frozen=True, slots=True)
+class MyCarlosViewModel:
+    devices: tuple[MyCarlosDeviceRowViewModel, ...] = ()
+    portal_address: str | None = None
+    code_display: str | None = field(default=None, repr=False)
+    error: str | None = None
+    confirmation: MyCarlosDeviceRowViewModel | None = None
+    mfa_required: bool = False

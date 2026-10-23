@@ -33,7 +33,7 @@ never wait on each other in opposite orders.
 
 import hmac
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from hashlib import sha256
 
@@ -88,7 +88,7 @@ class IssuedLinkCode:
     """A new code, shown once. Only `link_id` and an HMAC of `code` are stored."""
 
     link_id: str
-    code: str
+    code: str = field(repr=False)
     expires_at: datetime
 
     @property
