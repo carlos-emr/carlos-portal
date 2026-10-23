@@ -62,6 +62,7 @@ from carlos_patient_portal.mycarlos_links import (
     clinic_key_list,
     link_device,
 )
+from carlos_patient_portal.public_device_path import public_device_prefix
 from carlos_patient_portal.runtime import PortalRuntime
 from carlos_patient_portal.staff_identity import staff_request_hash
 from carlos_patient_portal.web_support import MYCARLOS_LINK_PATH, get_request_client_reference
@@ -84,14 +85,18 @@ def signed_path(runtime: PortalRuntime, request: Request) -> bytes:
     """The path the device signed: the public base URL's path, then the route.
 
     A deployment under a prefix (PATIENT_PORTAL_PUBLIC_BASE_URL=https://host/patient) has the
-    prefix stripped by the proxy, so the device's signed path is the root path plus what arrives.
+    prefix stripped by the proxy. Sign its canonical URI octets followed by the received raw
+    path, preserving percent escapes independently of the browser/framework root_path.
     """
     raw_path = request.scope.get("raw_path") or request.url.path.encode("utf-8")
-    return runtime.settings.root_path.encode("utf-8") + raw_path
+    return public_device_prefix(runtime.settings) + raw_path
 
 
 def register_mycarlos_device_routes(app: FastAPI, runtime: PortalRuntime) -> None:
     settings = runtime.settings
+    # Validate only the enabled public-device boundary; framework/browser/internal paths retain
+    # their existing settings. Canonical URL results are bounded and cached by the complete URL.
+    public_device_prefix(settings)
     idle_timeout = timedelta(seconds=settings.session_idle_timeout_seconds)
 
     def record_link_attempt(

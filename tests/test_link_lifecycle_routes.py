@@ -48,14 +48,22 @@ class StrippingProxy:
 
 
 def native_portal(
-    *, removed=False, recipient=True, all_revoked=False, database_url="sqlite+pysqlite:///:memory:"
+    *,
+    removed=False,
+    recipient=True,
+    all_revoked=False,
+    database_url="sqlite+pysqlite:///:memory:",
+    public_base_url="https://portal.example.test/patients",
+    proxy_factory=StrippingProxy,
+    **settings_overrides,
 ):
     app = migrated_development_app(
         mycarlos_delivery_enabled=True,
         clinic_id="clinic-a",
         clinic_name="FAKE independent clinic",
-        public_base_url="https://portal.example.test/patients",
+        public_base_url=public_base_url,
         database_url=database_url,
+        **settings_overrides,
     )
     app.dependency_overrides[mycarlos_clock] = lambda: NOW
     device = FIXTURE["device"]
@@ -108,7 +116,7 @@ def native_portal(
                     else None,
                 )
             )
-    proxy = StrippingProxy(app)
+    proxy = proxy_factory(app)
     return app, TestClient(proxy, base_url="https://portal.example.test"), proxy, account_id
 
 
