@@ -33,7 +33,7 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, create_engine, delete, func, inspect, select, text, update
+from sqlalchemy import Engine, create_engine, delete, event, func, inspect, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.schema import CreateSchema, DropSchema
@@ -154,22 +154,50 @@ def test_recovery_rechecks_removal_after_waiting_on_the_account_lock(
 
     monkeypatch.setattr(mycarlos_routes, "find_device_record", snapshot_device)
     assertion = signed_assertion(RECOVERY)
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        with app.state.session_factory() as holder, holder.begin():
-            holder.scalar(select(PatientPortalAccount).where(
-                PatientPortalAccount.id == account_id
-            ).with_for_update())
-            request = pool.submit(
-                client.get, RECOVERY, headers={"X-MyCarlos-Device-Assertion": assertion}
-            )
-            assert snapshot.wait(5)
-            device = holder.scalar(select(PatientPortalMyCarlosDevice).where(
-                PatientPortalMyCarlosDevice.account_id == account_id
-            ).with_for_update())
-            device.status = "removed"
-            device.removed_at = NOW_AT
-            device.removed_by = "patient"
-        response = request.result(timeout=5)
+    account_lock_started = Event()
+    request_pid = []
+
+    def capture_account_lock(connection, _cursor, statement, _parameters, _context, _many):
+        normalized = " ".join(statement.upper().split())
+        if "FROM PATIENT_PORTAL_ACCOUNTS" in normalized and "FOR UPDATE" in normalized:
+            # Capture the connection executing the lock, not an earlier lookup session.
+            request_pid.append(connection.exec_driver_sql("select pg_backend_pid()").scalar_one())
+            account_lock_started.set()
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with app.state.session_factory() as holder, holder.begin():
+                holder.scalar(select(PatientPortalAccount).where(
+                    PatientPortalAccount.id == account_id
+                ).with_for_update())
+                holder_pid = holder.scalar(text("select pg_backend_pid()"))
+                event.listen(engine, "before_cursor_execute", capture_account_lock)
+                request = pool.submit(
+                    client.get, RECOVERY, headers={"X-MyCarlos-Device-Assertion": assertion}
+                )
+                assert snapshot.wait(5)
+                assert account_lock_started.wait(5)
+                blocked = False
+                deadline = monotonic() + 5
+                while monotonic() < deadline:
+                    with engine.connect() as observer:
+                        blocked = observer.scalar(text(
+                            "select :holder_pid = any(pg_blocking_pids(:request_pid))"
+                        ), {"holder_pid": holder_pid, "request_pid": request_pid[0]})
+                    if blocked or request.done():
+                        break
+                    sleep(0.02)
+                assert blocked, "recovery must actually wait on the held account lock before removal"
+                device = holder.scalar(select(PatientPortalMyCarlosDevice).where(
+                    PatientPortalMyCarlosDevice.account_id == account_id
+                ).with_for_update())
+                device.status = "removed"
+                device.removed_at = NOW_AT
+                device.removed_by = "patient"
+            response = request.result(timeout=5)
+    finally:
+        if event.contains(engine, "before_cursor_execute", capture_account_lock):
+            event.remove(engine, "before_cursor_execute", capture_account_lock)
     assert response.status_code == 403
     assert response.json() == {"code": "device_removed"}
     with app.state.session_factory() as session:
