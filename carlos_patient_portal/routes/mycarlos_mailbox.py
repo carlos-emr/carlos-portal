@@ -20,7 +20,6 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy import select
-from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from carlos_patient_portal.device_identity import (
