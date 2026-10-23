@@ -31,7 +31,7 @@ from fastapi import Depends
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, inspect, select, text
 
-from carlos_patient_portal import internal_routes
+from carlos_patient_portal import internal_routes, job_identity
 from carlos_patient_portal.job_identity import (
     JOB_ASSERTION_FIELDS,
     JOB_REFUSAL_CODES,
@@ -408,6 +408,44 @@ def test_a_staff_key_id_or_a_signature_by_the_wrong_key_does_not_verify() -> Non
 def test_a_malformed_or_oversized_envelope_is_refused_unattributed(assertion: str) -> None:
     with pytest.raises(CarlosServiceAuthenticationError):
         verify(assertion)
+
+
+def test_a_deeply_nested_payload_is_refused_unattributed() -> None:
+    # Inside the size limit; on Python 3.11 it exhausts the JSON decoder's recursion depth.
+    assertion = f"{encoded(b'[' * 2900)}.{encoded(bytes(64))}"
+    assert len(assertion) <= 4096
+    with pytest.raises(CarlosServiceAuthenticationError):
+        verify(assertion)
+
+
+def test_a_decoder_recursion_error_is_the_generic_404_not_a_500(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def too_deep(*_args: object, **_kwargs: object) -> object:
+        raise RecursionError("maximum recursion depth exceeded while decoding a JSON array")
+
+    with pytest.raises(CarlosServiceAuthenticationError):
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                job_identity,
+                "json",
+                SimpleNamespace(loads=too_deep, JSONDecodeError=json.JSONDecodeError),
+            )
+            verify(f"{encoded(b'{}')}.{encoded(bytes(64))}")
+
+    app = internal_app()
+    headers = {
+        "Authorization": f"Bearer {INTERNAL_API_TOKEN}",
+        "X-CARLOS-Job-Assertion": f"{encoded(b'[' * 2900)}.{encoded(bytes(64))}",
+    }
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            job_identity,
+            "json",
+            SimpleNamespace(loads=too_deep, JSONDecodeError=json.JSONDecodeError),
+        )
+        response = TestClient(app, raise_server_exceptions=False).get(CHOICES_URI, headers=headers)
+    assert (response.status_code, response.json()) == (404, {"detail": "not found"})
 
 
 def test_expiry_and_issue_time_are_bounded() -> None:

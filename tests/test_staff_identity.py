@@ -12,11 +12,14 @@
 # You should have received a copy of the GNU Affero General Public License along with this program.
 # If not, see <https://www.gnu.org/licenses/>.
 
+import json
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
+from carlos_patient_portal import staff_identity
 from carlos_patient_portal.staff_identity import (
     CarlosServiceAuthenticationError,
     StaffPrincipal,
@@ -53,6 +56,39 @@ def test_staff_assertion_rejects_malformed_envelopes(assertion: str) -> None:
         verify_staff_assertion(
             {TEST_STAFF_ASSERTION_KEY_ID: TEST_STAFF_ASSERTION_PUBLIC_KEY},
             assertion,
+        )
+
+
+# Deeply nested, yet inside the 4096-byte limit. On Python 3.11 this exhausts the JSON decoder's
+# recursion depth; on 3.12 it is a plain decode error. Either way: the generic refusal.
+NESTED_PAYLOAD = b"[" * 2900
+
+
+def test_staff_assertion_rejects_a_deeply_nested_payload() -> None:
+    assertion = f"{encoded(NESTED_PAYLOAD)}.{encoded(bytes(64))}"
+    assert len(assertion) <= 4096
+    with pytest.raises(CarlosServiceAuthenticationError):
+        verify_staff_assertion(
+            {TEST_STAFF_ASSERTION_KEY_ID: TEST_STAFF_ASSERTION_PUBLIC_KEY},
+            assertion,
+        )
+
+
+def test_staff_assertion_turns_a_decoder_recursion_error_into_the_generic_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def too_deep(*_args: object, **_kwargs: object) -> object:
+        raise RecursionError("maximum recursion depth exceeded while decoding a JSON array")
+
+    monkeypatch.setattr(
+        staff_identity,
+        "json",
+        SimpleNamespace(loads=too_deep, JSONDecodeError=json.JSONDecodeError),
+    )
+    with pytest.raises(CarlosServiceAuthenticationError):
+        verify_staff_assertion(
+            {TEST_STAFF_ASSERTION_KEY_ID: TEST_STAFF_ASSERTION_PUBLIC_KEY},
+            f"{encoded(b'{}')}.{encoded(bytes(64))}",
         )
 
 
