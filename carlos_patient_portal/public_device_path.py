@@ -15,11 +15,7 @@ MAX_PUBLIC_URL_BYTES = 1024
 @lru_cache(maxsize=32)
 def canonical_public_device_url(value: str) -> str:
     """Apply the frozen native HTTPS URL policy using the existing Rust URL parser family."""
-    if (
-        len(value.encode("utf-8")) > MAX_PUBLIC_URL_BYTES
-        or value.strip() != value
-        or "\\" in value
-    ):
+    if len(value.encode("utf-8")) > MAX_PUBLIC_URL_BYTES or value.strip() != value or "\\" in value:
         raise ValueError("invalid public device address")
     parsed = Url(value)
     if (
