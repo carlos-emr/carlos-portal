@@ -73,12 +73,17 @@ from carlos_patient_portal.models import (
     AUDIT_OUTCOME_SUCCESS,
     PatientPortalBookingPrompt,
 )
-from carlos_patient_portal.presenters import assemble_email_password_dashboard, assemble_messages
+from carlos_patient_portal.presenters import (
+    assemble_email_password_dashboard,
+    assemble_messages,
+    assemble_mycarlos_devices,
+)
 from carlos_patient_portal.routes.activation import register_activation_routes
 from carlos_patient_portal.routes.auth import register_auth_routes, register_logout_route
 from carlos_patient_portal.routes.dev_admin import register_dev_admin_routes
 from carlos_patient_portal.routes.fhir import register_fhir_routes
 from carlos_patient_portal.routes.mycarlos import register_mycarlos_device_routes
+from carlos_patient_portal.routes.mycarlos_portal import register_mycarlos_portal_routes
 from carlos_patient_portal.routes.portal import (
     register_patient_email_password_routes,
     register_portal_routes,
@@ -95,7 +100,11 @@ from carlos_patient_portal.runtime import (
 from carlos_patient_portal.sms_delivery import PortalSmsSender, build_portal_sms_sender
 from carlos_patient_portal.token_keys import PortalTokenKeys
 from carlos_patient_portal.unlock_secrets import load_unlock_secret_words
-from carlos_patient_portal.view_models import EmailPasswordDashboardViewModel, MessagesViewModel
+from carlos_patient_portal.view_models import (
+    EmailPasswordDashboardViewModel,
+    MessagesViewModel,
+    MyCarlosViewModel,
+)
 from carlos_patient_portal.web_support import (
     AUTHENTICATION_REQUIRED_DETAIL,
     CONTENT_SECURITY_POLICY,
@@ -372,11 +381,7 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
         # accepts a JSON body. A caller that declared JSON gets JSON back; a browser form post
         # or a navigation gets the page.
         declared_json = "application/json" in (request.headers.get("content-type") or "").lower()
-        if (
-            wants_html_response(request.url.path)
-            and not declared_json
-            and request.method != "HEAD"
-        ):
+        if wants_html_response(request.url.path) and not declared_json and request.method != "HEAD":
             return service_notice_response(
                 request,
                 settings=runtime.settings,
@@ -789,6 +794,7 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
         message_not_found: bool = False,
         message_error: str | None = None,
         authenticated_session: AuthenticatedPortalSession | None = None,
+        mycarlos: MyCarlosViewModel | None = None,
     ) -> Response:
         if authenticated_session is None:
             try:
@@ -801,6 +807,19 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
                 clear_portal_session_cookie(response, settings=settings)
                 return response
 
+        if (
+            settings.mycarlos_delivery_enabled
+            and active_module in {"account", "mycarlos"}
+            and mycarlos is None
+        ):
+            mycarlos = assemble_mycarlos_devices(
+                session,
+                authenticated_session.account,
+                account_path=request.url_for("portal_account").path,
+                locale=request_locale(request),
+                timezone_name=settings.clinic_timezone,
+                portal_address=settings.public_base_url,
+            )
         email_passwords: EmailPasswordDashboardViewModel | None = None
         if active_module == "email-passwords":
             email_passwords = assemble_email_password_dashboard(
@@ -853,6 +872,7 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
                 email_passwords=email_passwords,
                 messages=messages,
                 new_message_count=new_message_count,
+                mycarlos=mycarlos,
             ),
             status_code=status_code,
         )
@@ -993,3 +1013,4 @@ def register_app_routes(app: FastAPI, runtime: PortalRuntime) -> None:
     register_carlos_internal_routes(app, runtime)
     if runtime.settings.mycarlos_delivery_enabled:
         register_mycarlos_device_routes(app, runtime)
+        register_mycarlos_portal_routes(app, runtime, route_dependencies)
