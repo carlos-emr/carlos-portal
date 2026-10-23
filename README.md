@@ -957,6 +957,24 @@ collects the pick by polling.
 `a-z 0-9 _ -`; labels are 1 to 64 characters of plain text, shown to patients, without commas,
 control characters, or hidden formatting characters. A code removed later is simply not shown.
 
+## Send to myCarlos (being built)
+
+Send to myCarlos lets a clinic send a document straight to the patient's myCarlos app. CARLOS seals
+it to one of the patient's devices, and the portal holds only the sealed copy until the app picks it
+up (plan: carlos-portal#41; format: `docs/architecture/mycarlos-delivery.md`). The portal keeps:
+
+- each patient's opaque recipient ID (random, never derived from the health card number);
+- linked devices and their public keys, one row per link;
+- pending "Link myCarlos" codes, as keyed hashes only, and the wrong codes for the limits;
+- the CARLOS clinic public keys handed to myCarlos when it links.
+
+The audit trail accepts five new event types, which nothing writes yet: `mycarlos.link_code_create`,
+`mycarlos.link` (a device link attempt; refusals have outcome `failure`), `mycarlos.device_list`,
+`mycarlos.device_remove` and `mycarlos.clinic_keys_publish`.
+
+`PATIENT_PORTAL_MYCARLOS_DELIVERY_ENABLED` (default `false`) turns the feature on. Leave it off:
+only the tables exist so far, and while it is off none of its pages or routes exist.
+
 ## Development Invite API
 
 The staff invite skeleton is available only when `PATIENT_PORTAL_ENVIRONMENT=development` and

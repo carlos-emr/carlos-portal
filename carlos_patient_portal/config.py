@@ -342,6 +342,9 @@ class Settings(BaseSettings):
         ge=1,
         le=24 * 60,
     )
+    # Send to myCarlos (carlos-portal#41). Off by default; while off, none of its pages or routes
+    # exist. The schema is there either way, so turning it on needs no migration.
+    mycarlos_delivery_enabled: bool = False
     public_base_url: str | None = Field(default=None, max_length=2048)
     # Linked from every page footer as the "Source code" offer AGPL-3.0 section 13 requires. Never
     # optional: the offer must be present on every page, so a blank value fails startup.
