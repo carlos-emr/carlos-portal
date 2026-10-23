@@ -13,6 +13,10 @@ on:
   pull_request:
     branches:
       - main
+      - feat/mycarlos-linking-schema
+      - feat/mycarlos-internal-routes
+      - feat/mycarlos-device-identity
+      - feat/mycarlos-link-route
   push:
     branches:
       - main
@@ -164,7 +168,10 @@ jobs:
         if: matrix.python-version == '3.12'
         env:
           PORTAL_TEST_POSTGRES_URL: "postgresql+psycopg://carlos_portal:carlos_portal@127.0.0.1:5432/carlos_portal"
-        run: python -m pytest -q tests/test_postgresql_integration.py
+        run: >-
+          python -m pytest -q
+          tests/test_postgresql_integration.py
+          tests/test_mycarlos_postgresql.py
 
       - name: Run patient portal Playwright browser checks
         if: matrix.python-version == '3.12'
