@@ -89,7 +89,8 @@ def native_portal(*, removed=False, recipient=True, all_revoked=False,
     return app, TestClient(proxy, base_url="https://portal.example.test"), proxy, account_id
 
 
-def signed_assertion(path, *, recovery=True, signed_method="GET", signed_path=None):
+def signed_assertion(path, *, recovery=True, signed_method="GET", signed_path=None,
+                     recipient_id=ref.RECIPIENT_ID):
     device = ref.DeviceKeys("lifecycle-v1 registered device")
     assert device.device_key_id == FIXTURE["device"]["device_key_id"]
     claims = {
@@ -99,7 +100,7 @@ def signed_assertion(path, *, recovery=True, signed_method="GET", signed_path=No
         "request_hash": ref.request_hash(signed_method, (signed_path or path).encode(), b"", b""),
     }
     if not recovery:
-        claims["recipient_id"] = ref.RECIPIENT_ID
+        claims["recipient_id"] = recipient_id
     return ref.compact_ed25519(device.ed25519, claims)
 
 
@@ -167,3 +168,15 @@ def test_recovery_audience_never_authorizes_refresh_or_the_reverse():
     for path, recovery in [(RECOVERY, False), (REFRESH, True)]:
         result = client.get(path, headers={"X-MyCarlos-Device-Assertion": signed_assertion(path, recovery=recovery)})
         assert result.status_code == 404 and result.json() == {"detail": "not found"}
+
+
+@pytest.mark.parametrize("recipient_id,status,code", [
+    ("rcp-FAKE-wrong-recipient", 403, "recipient_mismatch"),
+    ("recipient-é", 404, None),
+])
+def test_refresh_preserves_recipient_refusal_without_unicode_comparison_error(recipient_id, status, code):
+    _app, client, _proxy, _account = native_portal()
+    assertion = signed_assertion(REFRESH, recovery=False, recipient_id=recipient_id)
+    response = client.get(REFRESH, headers={"X-MyCarlos-Device-Assertion": assertion})
+    assert response.status_code == status
+    assert response.json() == ({"code": code} if code else {"detail": "not found"})

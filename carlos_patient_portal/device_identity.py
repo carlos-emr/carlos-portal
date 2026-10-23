@@ -242,7 +242,13 @@ def _check_claims(
         or not _is_int(claims["exp"])
         or not isinstance(claims["kid"], str)
         or not _is_hex_64(claims["request_hash"])
-        or ("recipient_id" in required and not isinstance(claims["recipient_id"], str))
+        or (
+            "recipient_id" in required
+            and (
+                not isinstance(claims["recipient_id"], str)
+                or not claims["recipient_id"].isascii()
+            )
+        )
         or ("vault_head_link" in claims and not _is_hex_64(claims["vault_head_link"]))
     ):
         raise DeviceRefusal(REFUSAL_INVALID_ASSERTION)

@@ -37,6 +37,7 @@ from carlos_patient_portal.device_identity import (
     DeviceRefusal,
     LinkRequest,
     REFUSAL_DEVICE_REMOVED,
+    REFUSAL_RECIPIENT_MISMATCH,
     consume_device_assertion,
     find_device_record,
     verify_device_assertion,
@@ -263,8 +264,8 @@ def register_mycarlos_device_routes(app: FastAPI, runtime: PortalRuntime) -> Non
                 outcome=AUDIT_OUTCOME_FAILURE, reason=refusal.code,
                 client_reference_hash=client_reference_hash,
             )
-            if not recovery and refusal.code == REFUSAL_DEVICE_REMOVED:
-                return inventory_response({"code": REFUSAL_DEVICE_REMOVED}, 403)
+            if not recovery and refusal.code in {REFUSAL_DEVICE_REMOVED, REFUSAL_RECIPIENT_MISMATCH}:
+                return inventory_response({"code": refusal.code}, 403)
             return inventory_response(GENERIC_NOT_FOUND, 404)
         with runtime.session_factory() as session, session.begin():
             account = session.scalar(
