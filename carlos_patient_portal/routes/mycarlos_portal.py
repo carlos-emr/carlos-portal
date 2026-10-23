@@ -340,6 +340,7 @@ def register_mycarlos_portal_routes(
             account_id=authenticated.account.id,
             device_key_id=device_key_id,
             removed_by=AUDIT_ACTOR_TYPE_PATIENT,
+            mailbox_enabled=settings.mycarlos_mailbox_enabled,
         )
         if removed is None:
             raise HTTPException(status_code=404, detail="device not found")

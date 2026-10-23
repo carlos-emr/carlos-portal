@@ -345,6 +345,22 @@ class Settings(BaseSettings):
     # Send to myCarlos (carlos-portal#41). Off by default; while off, none of its pages or routes
     # exist. The schema is there either way, so turning it on needs no migration.
     mycarlos_delivery_enabled: bool = False
+    # Private M4 source is separately gated while its migration/security holds remain.
+    # Enabling M2 linking alone never assumes these new tables already exist.
+    mycarlos_mailbox_enabled: bool = False
+    mycarlos_mailbox_device_bytes: int = Field(default=268435456, ge=20971520)
+    mycarlos_mailbox_account_bytes: int = Field(default=1073741824, ge=20971520)
+    mycarlos_mailbox_clinic_bytes: int = Field(default=21474836480, ge=20971520)
+    mycarlos_mailbox_device_copies: int = Field(default=100, ge=1)
+    mycarlos_mailbox_account_copies: int = Field(default=500, ge=1)
+    mycarlos_mailbox_clinic_copies: int = Field(default=20000, ge=1)
+    mycarlos_mailbox_ordinary_event_bytes: int = Field(default=536870912, ge=16384)
+    mycarlos_mailbox_clinic_uploads_per_minute: int = Field(default=60, ge=1)
+    mycarlos_mailbox_clinic_upload_bytes_per_minute: int = Field(default=268435456, ge=20971520)
+    mycarlos_mailbox_device_lists_per_minute: int = Field(default=60, ge=1)
+    mycarlos_mailbox_device_downloads_per_minute: int = Field(default=60, ge=1)
+    mycarlos_mailbox_device_receipts_per_minute: int = Field(default=120, ge=1)
+    mycarlos_mailbox_clinic_sync_pages_per_minute: int = Field(default=120, ge=1)
     public_base_url: str | None = Field(default=None, max_length=2048)
     # Linked from every page footer as the "Source code" offer AGPL-3.0 section 13 requires. Never
     # optional: the offer must be present on every page, so a blank value fails startup.

@@ -963,7 +963,9 @@ def register_internal_failure_audit(app: FastAPI, runtime: InternalRuntime) -> N
             )
         return response
 
-def build_internal_dependencies(runtime: InternalRuntime) -> InternalRouteDependencies:
+def build_internal_dependencies(
+    runtime: InternalRuntime, *, external_root_path: bytes = b""
+) -> InternalRouteDependencies:
     """Construct the authentication, transaction, and disclosure dependencies once."""
     def get_database_session() -> Generator[Session, None, None]:
         with runtime.session_factory() as session:
@@ -1013,7 +1015,7 @@ def build_internal_dependencies(runtime: InternalRuntime) -> InternalRouteDepend
             body = await request.body()
             expected_request_hash = staff_request_hash(
                 request.method,
-                request.scope.get("raw_path", request.url.path.encode("utf-8")),
+                external_root_path + request.scope.get("raw_path", request.url.path.encode("utf-8")),
                 request.scope.get("query_string", b""),
                 body,
             )
@@ -2163,6 +2165,7 @@ CLINIC_KEY_CONFLICTS = frozenset({"key_missing", "key_revoked", "key_changed"})
 def register_internal_mycarlos_routes(
     app: FastAPI,
     deps: InternalRouteDependencies,
+    *, mailbox_enabled: bool = False,
 ) -> None:
     """Send to myCarlos (carlos-portal#41): clinic keys from CARLOS, and a patient's devices.
 
@@ -2278,6 +2281,7 @@ def register_internal_mycarlos_routes(
             account_id=account_id,
             device_key_id=device_key_id,
             removed_by=MYCARLOS_REMOVED_BY_STAFF,
+            mailbox_enabled=mailbox_enabled,
         )
         if removal is None:
             raise HTTPException(status_code=404, detail="device not found")
@@ -2312,4 +2316,10 @@ def register_carlos_internal_routes(app: FastAPI, runtime: InternalRuntime) -> N
     register_internal_booking_prompt_routes(app, runtime, deps)
     register_internal_booking_sync_routes(app, runtime, deps)
     if runtime.settings.mycarlos_delivery_enabled:
-        register_internal_mycarlos_routes(app, deps)
+        register_internal_mycarlos_routes(app, deps, mailbox_enabled=runtime.settings.mycarlos_mailbox_enabled)
+        if runtime.settings.mycarlos_mailbox_enabled:
+            from carlos_patient_portal.routes.mycarlos_mailbox import register_internal_mailbox_routes
+            # New M4 callers bind the configured external proxy prefix, just like device
+            # routes. Existing internal route request-binding behavior is unchanged.
+            mailbox_deps = build_internal_dependencies(runtime, external_root_path=runtime.settings.root_path.encode("utf-8"))
+            register_internal_mailbox_routes(app, runtime, mailbox_deps)

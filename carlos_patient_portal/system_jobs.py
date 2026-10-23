@@ -33,12 +33,16 @@ JOB_NAME_PATTERN = re.compile(r"[a-z0-9-]{1,32}")
 JOB_BOOKING_SYNC = "booking-sync"
 JOB_SIGNUP_POLL = "signup-poll"
 JOB_KEY_PUBLISH = "key-publish"
+JOB_DELIVERY_SYNC = "delivery-sync"
 
 # Spelled out rather than imported from internal_routes, which imports this module.
 PERMISSION_BOOKING_PROMPT_SYNC = "portal.booking_prompt.sync"
 PERMISSION_SIGNUP_MANAGE = "portal.signup.manage"
 PERMISSION_INVITE_MANAGE = "portal.invite.manage"
 PERMISSION_CLINIC_KEYS_PUBLISH = "portal.mycarlos.clinic_keys.publish"
+PERMISSION_DELIVERY_UPLOAD = "portal.mycarlos.delivery.upload"
+PERMISSION_DELIVERY_EVENTS_READ = "portal.mycarlos.delivery.events.read"
+PERMISSION_DELIVERY_EVENTS_ACK = "portal.mycarlos.delivery.events.ack"
 
 
 @dataclass(frozen=True)
@@ -75,9 +79,16 @@ SYSTEM_JOBS: Mapping[str, SystemJob] = MappingProxyType(
             display_name="Clinic signing keys",
             permissions=frozenset({PERMISSION_CLINIC_KEYS_PUBLISH}),
         ),
+        JOB_DELIVERY_SYNC: SystemJob(
+            name=JOB_DELIVERY_SYNC,
+            display_name="Clinic document delivery",
+            permissions=frozenset({PERMISSION_DELIVERY_UPLOAD, PERMISSION_DELIVERY_EVENTS_READ,
+                                   PERMISSION_DELIVERY_EVENTS_ACK}),
+        ),
     }
 )
 
 # Permissions only a job may hold. A staff assertion carrying one is refused on every route, so a
 # job's right can never ride on a person's login.
-JOB_ONLY_PERMISSIONS = frozenset({PERMISSION_BOOKING_PROMPT_SYNC, PERMISSION_CLINIC_KEYS_PUBLISH})
+JOB_ONLY_PERMISSIONS = frozenset({PERMISSION_BOOKING_PROMPT_SYNC, PERMISSION_CLINIC_KEYS_PUBLISH,
+    PERMISSION_DELIVERY_UPLOAD, PERMISSION_DELIVERY_EVENTS_READ, PERMISSION_DELIVERY_EVENTS_ACK})
