@@ -25,6 +25,12 @@
 {% else %}
   <p>{{ text.mycarlos_instruction }}</p>
   {% if mycarlos.code_display %}
+    {% if mycarlos.qr_png_data_uri %}
+      <h2>{{ text.mycarlos_qr_label }}</h2>
+      <img class="mycarlos-link-qr" src="{{ mycarlos.qr_png_data_uri }}" alt="{{ text.mycarlos_qr_alt }}">
+    {% else %}
+      <p class="form-notice">{{ text.mycarlos_qr_unavailable }}</p>
+    {% endif %}
     <h2 id="mycarlos-code-label">{{ text.mycarlos_code_label }}</h2>
     <p class="mycarlos-code"><code aria-labelledby="mycarlos-code-label" dir="ltr">{{ mycarlos.code_display }}</code></p>
     <p>{{ text.mycarlos_lifetime }}</p>

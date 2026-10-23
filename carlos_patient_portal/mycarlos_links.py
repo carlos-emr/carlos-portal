@@ -399,4 +399,13 @@ def clinic_key_list(session: Session, clinic_id: str) -> list[dict[str, str]]:
         .where(PatientPortalClinicKey.clinic_id == clinic_id)
         .order_by(PatientPortalClinicKey.published_at, PatientPortalClinicKey.kid)
     )
-    return [{"kid": key.kid, "spki": b64url(key.spki), "status": key.status} for key in keys]
+    result: list[dict[str, str]] = []
+    for key in keys:
+        value = {"kid": key.kid, "spki": b64url(key.spki), "status": key.status}
+        if key.replaces_kid is not None and key.replacement_signature is not None:
+            value.update(
+                replaces_kid=key.replaces_kid,
+                replacement_signature=b64url(key.replacement_signature),
+            )
+        result.append(value)
+    return result
