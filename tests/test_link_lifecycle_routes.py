@@ -17,8 +17,8 @@ from carlos_patient_portal.models import (
     PatientPortalMyCarlosLinkCode,
     PatientPortalMyCarlosRecipient,
 )
-from carlos_patient_portal.routes.mycarlos import mycarlos_clock
 from carlos_patient_portal.routes import mycarlos as mycarlos_routes
+from carlos_patient_portal.routes.mycarlos import mycarlos_clock
 from tests import delivery_contract_reference as ref
 from tests.support import migrated_development_app
 
@@ -140,7 +140,9 @@ def signed_assertion(
     ],
     ids=lambda value: value["name"],
 )
-def test_recovery_http_decides_shared_vectors_without_creating_devices_or_codes(vector, monkeypatch):
+def test_recovery_http_decides_shared_vectors_without_creating_devices_or_codes(
+    vector, monkeypatch
+):
     replay = vector["nonce_already_consumed"]
     app, client, proxy, account_id = native_portal(
         removed=vector["device_status"] == "removed" and not replay,
@@ -164,15 +166,24 @@ def test_recovery_http_decides_shared_vectors_without_creating_devices_or_codes(
             # AFTER that authenticated snapshot, before the current account lock.
             original_consume(*args, **kwargs)
             with app.state.session_factory() as session, session.begin():
-                session.execute(delete(PatientPortalMyCarlosDevice).where(
-                    PatientPortalMyCarlosDevice.account_id == account_id))
-                session.execute(delete(PatientPortalMyCarlosRecipient).where(
-                    PatientPortalMyCarlosRecipient.account_id == account_id))
-                session.execute(delete(PatientPortalAccount).where(
-                    PatientPortalAccount.id == account_id))
+                session.execute(
+                    delete(PatientPortalMyCarlosDevice).where(
+                        PatientPortalMyCarlosDevice.account_id == account_id
+                    )
+                )
+                session.execute(
+                    delete(PatientPortalMyCarlosRecipient).where(
+                        PatientPortalMyCarlosRecipient.account_id == account_id
+                    )
+                )
+                session.execute(
+                    delete(PatientPortalAccount).where(PatientPortalAccount.id == account_id)
+                )
             deleted_after_authentication.append(account_id)
 
-        monkeypatch.setattr(mycarlos_routes, "consume_device_assertion", consume_then_delete_owned_account)
+        monkeypatch.setattr(
+            mycarlos_routes, "consume_device_assertion", consume_then_delete_owned_account
+        )
     query = bytes.fromhex(vector["raw_query_hex"]).decode()
     response = client.request(
         "GET",
