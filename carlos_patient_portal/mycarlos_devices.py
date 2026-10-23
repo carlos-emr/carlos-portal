@@ -40,14 +40,13 @@ from carlos_patient_portal.clinic_key_proofs import (
     ClinicKeyMaterial,
     validate_clinic_key_inventory,
 )
-
 from carlos_patient_portal.models import (
     CLINIC_KEY_STATUS_ACTIVE,
     CLINIC_KEY_STATUS_REVOKED,
     MYCARLOS_DEVICE_STATUS_ACTIVE,
     MYCARLOS_DEVICE_STATUS_REMOVED,
-    PatientPortalClinicKey,
     PatientPortalAccount,
+    PatientPortalClinicKey,
     PatientPortalMyCarlosDevice,
     PatientPortalMyCarlosRecipient,
     utc_now,
@@ -181,10 +180,18 @@ def publish_clinic_keys(
     try:
         validate_clinic_key_inventory(
             clinic_id,
-            [ClinicKeyMaterial(spec.kid, spec.spki, spec.status, spec.replaces_kid,
-                               spec.replacement_signature) for spec in specs],
-            [ClinicKeyMaterial(key.kid, key.spki, key.status, key.replaces_kid,
-                               key.replacement_signature) for key in stored.values()],
+            [
+                ClinicKeyMaterial(
+                    spec.kid, spec.spki, spec.status, spec.replaces_kid, spec.replacement_signature
+                )
+                for spec in specs
+            ],
+            [
+                ClinicKeyMaterial(
+                    key.kid, key.spki, key.status, key.replaces_kid, key.replacement_signature
+                )
+                for key in stored.values()
+            ],
         )
     except ClinicKeyInventoryError as exc:
         raise ClinicKeyPublishError(exc.code) from exc
@@ -304,8 +311,12 @@ def remove_device(
     caller cannot tell whether a key ID exists elsewhere. Removing a removed device changes
     nothing. Deleting the device's waiting copies arrives with the mailbox (milestone M4).
     """
-    account = session.scalar(select(PatientPortalAccount).where(
-        PatientPortalAccount.id == account_id).with_for_update().execution_options(populate_existing=True))
+    account = session.scalar(
+        select(PatientPortalAccount)
+        .where(PatientPortalAccount.id == account_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if account is None:
         return None
     device = session.scalar(
@@ -323,8 +334,10 @@ def remove_device(
         return device, False
     if mailbox_enabled:
         from carlos_patient_portal.mailbox import mailbox_lock, remove_waiting
-        m = mailbox_lock(session, account_id=account_id, device_key_id=device_key_id,
-                         clinic_id=account.clinic_id)
+
+        m = mailbox_lock(
+            session, account_id=account_id, device_key_id=device_key_id, clinic_id=account.clinic_id
+        )
         instant = utc_now() if now is None else now
         remove_waiting(session, m, now=int(instant.timestamp()))
     device.status = MYCARLOS_DEVICE_STATUS_REMOVED

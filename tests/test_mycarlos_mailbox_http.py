@@ -26,12 +26,15 @@ from sqlalchemy import func, select
 from carlos_patient_portal.database import Base
 from carlos_patient_portal.mailbox_codec import parse_upload
 from carlos_patient_portal.mailbox_models import MailboxAnchor, MailboxBlob, MailboxCopy
-from carlos_patient_portal.models import PatientPortalAccount, PatientPortalMyCarlosDevice, PatientPortalMyCarlosRecipient
+from carlos_patient_portal.models import (
+    PatientPortalAccount,
+    PatientPortalMyCarlosDevice,
+    PatientPortalMyCarlosRecipient,
+)
 from carlos_patient_portal.routes import mycarlos_mailbox
 from tests import delivery_contract_reference as ref
 from tests.support import carlos_job_headers
 from tests.test_internal_api import internal_app
-from tests.test_link_lifecycle_routes import StrippingProxy
 
 M4 = json.loads((Path(__file__).parent / "fixtures/mailbox-contract-v1.json").read_bytes())
 M0 = json.loads((Path(__file__).parent / "fixtures/delivery-contract.json").read_bytes())
@@ -42,48 +45,110 @@ DEVICE = ref.DeviceKeys("device 1")
 JOB = ref.DeviceKeys("FAKE independent M4 delivery job")
 JOB_KID = "FAKE-delivery-sync-key"
 PREFIX = "/patients"
-UPLOAD_PATH = PREFIX + "/internal/carlos/patients/6001/mycarlos/deliveries"
+UPLOAD_PATH = "/internal/carlos/patients/6001/mycarlos/deliveries"
 LIST_PATH = PREFIX + "/api/mycarlos/deliveries"
 COPY_PATH = LIST_PATH + "/" + OUTER["delivery_id"]
+
+
+class SplitIngressProxy:
+    """Current CARLOS internal origin is root; patient device ingress strips public prefix."""
+
+    def __init__(self, app):
+        self.app = app
+        self.observed_paths = []
+
+    async def __call__(self, scope, receive, send):
+        forwarded = dict(scope)
+        if scope["type"] == "http":
+            self.observed_paths.append(scope["raw_path"])
+            if scope["raw_path"].startswith(b"/internal/carlos/"):
+                assert scope["path"].startswith("/internal/carlos/")
+            else:
+                assert scope["raw_path"].startswith(PREFIX.encode() + b"/api/")
+                forwarded["path"] = scope["path"][len(PREFIX) :]
+                forwarded["raw_path"] = scope["raw_path"][len(PREFIX) :]
+        await self.app(forwarded, receive, send)
 
 
 @pytest.fixture
 def http_mailbox(monkeypatch):
     monkeypatch.setattr(mycarlos_mailbox, "time", lambda: NOW)
-    app = internal_app(mycarlos_delivery_enabled=True, mycarlos_mailbox_enabled=True,
+    app = internal_app(
+        mycarlos_delivery_enabled=True,
+        mycarlos_mailbox_enabled=True,
         public_base_url="https://portal.example.test/patients",
-        internal_job_assertion_public_keyring=json.dumps({"delivery-sync": {JOB_KID: ref.b64url(JOB.ed25519_public)}}))
+        internal_job_assertion_public_keyring=json.dumps(
+            {"delivery-sync": {JOB_KID: ref.b64url(JOB.ed25519_public)}}
+        ),
+    )
     tables = [table for name, table in Base.metadata.tables.items() if "mycarlos_mailbox_" in name]
     Base.metadata.create_all(app.state.database_engine, tables=tables)
     with app.state.session_factory() as session, session.begin():
-        account = PatientPortalAccount(clinic_id="clinic-a", demographic_no=6001,
-            username="fake.mailbox", email="fake.mailbox@example.test", password_hash="FAKE-unused", status="active")
-        session.add(account); session.flush()
-        session.add(PatientPortalMyCarlosRecipient(account_id=account.id, recipient_id=OUTER["recipient_id"]))
-        session.add(PatientPortalMyCarlosDevice(account_id=account.id, device_key_id=DEVICE.device_key_id,
-            ed25519_public_key=DEVICE.ed25519_public, x25519_public_key=DEVICE.x25519_public,
-            device_name="FAKE M4 actual HTTP device", status="active", linked_at=datetime.fromtimestamp(NOW, tz=UTC)))
-    proxy = StrippingProxy(app)
+        account = PatientPortalAccount(
+            clinic_id="clinic-a",
+            demographic_no=6001,
+            username="fake.mailbox",
+            email="fake.mailbox@example.test",
+            password_hash="FAKE-unused",
+            status="active",
+        )
+        session.add(account)
+        session.flush()
+        session.add(
+            PatientPortalMyCarlosRecipient(
+                account_id=account.id, recipient_id=OUTER["recipient_id"]
+            )
+        )
+        session.add(
+            PatientPortalMyCarlosDevice(
+                account_id=account.id,
+                device_key_id=DEVICE.device_key_id,
+                ed25519_public_key=DEVICE.ed25519_public,
+                x25519_public_key=DEVICE.x25519_public,
+                device_name="FAKE M4 actual HTTP device",
+                status="active",
+                linked_at=datetime.fromtimestamp(NOW, tz=UTC),
+            )
+        )
+    proxy = SplitIngressProxy(app)
     return app, TestClient(proxy, base_url="https://portal.example.test"), proxy
 
 
-def job_headers(path=UPLOAD_PATH, *, body=BODY, permission="portal.mycarlos.delivery.upload", method="POST"):
-    return carlos_job_headers("delivery-sync", permission, method=method, path=path, body=body,
-        clinic_id="clinic-a", key_id=JOB_KID, signing_key=JOB.ed25519) | {"Content-Type": "application/octet-stream"}
+def job_headers(
+    path=UPLOAD_PATH, *, body=BODY, permission="portal.mycarlos.delivery.upload", method="POST"
+):
+    return carlos_job_headers(
+        "delivery-sync",
+        permission,
+        method=method,
+        path=path,
+        body=body,
+        clinic_id="clinic-a",
+        key_id=JOB_KID,
+        signing_key=JOB.ed25519,
+    ) | {"Content-Type": "application/octet-stream"}
 
 
 def device_headers(path, *, method="GET", body=b"", anchor=None):
     raw, _, query = path.partition("?")
-    claims = {"aud": ref.DEVICE_AUDIENCE, "iss": "mycarlos", "kid": DEVICE.device_key_id,
-        "recipient_id": OUTER["recipient_id"], "jti": str(uuid4()), "iat": NOW, "exp": NOW + 60,
-        "request_hash": ref.request_hash(method, raw.encode(), query.encode(), body)}
-    if anchor is not None: claims["vault_head_link"] = anchor
+    claims = {
+        "aud": ref.DEVICE_AUDIENCE,
+        "iss": "mycarlos",
+        "kid": DEVICE.device_key_id,
+        "recipient_id": OUTER["recipient_id"],
+        "jti": str(uuid4()),
+        "iat": NOW,
+        "exp": NOW + 60,
+        "request_hash": ref.request_hash(method, raw.encode(), query.encode(), body),
+    }
+    if anchor is not None:
+        claims["vault_head_link"] = anchor
     return {"X-MyCarlos-Device-Assertion": ref.compact_ed25519(DEVICE.ed25519, claims)}
 
 
-def test_binary_job_upload_requires_actual_external_prefix_and_entire_body(http_mailbox):
+def test_binary_job_upload_binds_internal_origin_root_independently_of_public_prefix(http_mailbox):
     app, client, proxy = http_mailbox
-    bad = client.post(UPLOAD_PATH, content=BODY, headers=job_headers(UPLOAD_PATH[len(PREFIX):]))
+    bad = client.post(UPLOAD_PATH, content=BODY, headers=job_headers(PREFIX + UPLOAD_PATH))
     assert bad.status_code == 404
     changed = BODY[:-1] + bytes([BODY[-1] ^ 1])
     assert client.post(UPLOAD_PATH, content=changed, headers=job_headers()).status_code == 404
@@ -104,14 +169,23 @@ def test_signed_list_download_receipt_and_anchor_survive_actual_http(http_mailbo
     downloaded = client.get(COPY_PATH, headers=device_headers(COPY_PATH))
     assert downloaded.status_code == 200 and downloaded.content == parse_upload(BODY).sealed
     assert downloaded.headers["cache-control"] == "no-store"
-    receipt = next(value["receipt"] for value in M0["portal"]["receipts"] if value["expect"] == "accept")
+    receipt = next(
+        value["receipt"] for value in M0["portal"]["receipts"] if value["expect"] == "accept"
+    )
     body = json.dumps({"receipt": receipt}, separators=(",", ":")).encode()
     path = COPY_PATH + "/receipt"
     # This server test has no actual native custody. Its fixture receipt is public FAKE evidence.
     from carlos_patient_portal import mailbox
+
     original = mailbox.accept_receipt
-    monkeypatch.setattr(mycarlos_mailbox, "accept_receipt", lambda *args, **kwargs: original(*args, **kwargs, clock=lambda: NOW))
-    accepted = client.post(path, content=body, headers=device_headers(path, method="POST", body=body))
+    monkeypatch.setattr(
+        mycarlos_mailbox,
+        "accept_receipt",
+        lambda *args, **kwargs: original(*args, **kwargs, clock=lambda: NOW),
+    )
+    accepted = client.post(
+        path, content=body, headers=device_headers(path, method="POST", body=body)
+    )
     assert accepted.status_code == 200 and accepted.json() == {"status": "picked_up"}
     assert client.get(COPY_PATH, headers=device_headers(COPY_PATH)).status_code == 404
     with app.state.session_factory() as session:

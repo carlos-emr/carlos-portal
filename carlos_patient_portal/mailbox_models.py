@@ -19,7 +19,16 @@ signed proofs. Restrictive foreign keys keep account deletion from bypassing the
 single quota/event transition. Human migration/audit-union holds still apply.
 """
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, ForeignKey, Integer, LargeBinary, String, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    ForeignKey,
+    Integer,
+    LargeBinary,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from carlos_patient_portal.database import Base
@@ -27,7 +36,17 @@ from carlos_patient_portal.database import Base
 
 class MailboxClinic(Base):
     __tablename__ = "patient_portal_mycarlos_mailbox_clinics"
-    __table_args__ = (CheckConstraint("waiting_bytes>=0 and waiting_count>=0 and ordinary_event_bytes>=0 and terminal_event_bytes>=0 and reserved_terminal_bytes>=0 and event_sequence>=acked_through and acked_through>=retained_floor and retained_floor>=0", name="ck_pp_mailbox_clinic_counters"),)
+    __table_args__ = (
+        CheckConstraint(
+            (
+                "waiting_bytes>=0 and waiting_count>=0 and ordinary_event_bytes>=0 and "
+                "terminal_event_bytes>=0 and reserved_terminal_bytes>=0 and "
+                "event_sequence>=acked_through and acked_through>=retained_floor and "
+                "retained_floor>=0"
+            ),
+            name="ck_pp_mailbox_clinic_counters",
+        ),
+    )
     clinic_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     waiting_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     waiting_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -41,16 +60,29 @@ class MailboxClinic(Base):
 
 class MailboxAccount(Base):
     __tablename__ = "patient_portal_mycarlos_mailbox_accounts"
-    __table_args__ = (CheckConstraint("waiting_bytes>=0 and waiting_count>=0", name="ck_pp_mailbox_account_counters"),)
-    account_id: Mapped[int] = mapped_column(ForeignKey("patient_portal_accounts.id", ondelete="RESTRICT"), primary_key=True)
+    __table_args__ = (
+        CheckConstraint(
+            "waiting_bytes>=0 and waiting_count>=0", name="ck_pp_mailbox_account_counters"
+        ),
+    )
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("patient_portal_accounts.id", ondelete="RESTRICT"), primary_key=True
+    )
     waiting_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     waiting_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class MailboxDevice(Base):
     __tablename__ = "patient_portal_mycarlos_mailbox_devices"
-    __table_args__ = (CheckConstraint("waiting_bytes>=0 and waiting_count>=0 and delivery_sequence>=0 and anchor_sequence>=0", name="ck_pp_mailbox_device_counters"),)
-    device_id: Mapped[int] = mapped_column(ForeignKey("patient_portal_mycarlos_devices.id", ondelete="RESTRICT"), primary_key=True)
+    __table_args__ = (
+        CheckConstraint(
+            "waiting_bytes>=0 and waiting_count>=0 and delivery_sequence>=0 and anchor_sequence>=0",
+            name="ck_pp_mailbox_device_counters",
+        ),
+    )
+    device_id: Mapped[int] = mapped_column(
+        ForeignKey("patient_portal_mycarlos_devices.id", ondelete="RESTRICT"), primary_key=True
+    )
     waiting_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     waiting_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     delivery_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
@@ -61,15 +93,45 @@ class MailboxDevice(Base):
 class MailboxCopy(Base):
     __tablename__ = "patient_portal_mycarlos_mailbox_copies"
     __table_args__ = (
-        UniqueConstraint("clinic_id", "device_key_id", "delivery_id", name="uq_pp_mailbox_copy_identity"),
+        UniqueConstraint(
+            "clinic_id", "device_key_id", "delivery_id", name="uq_pp_mailbox_copy_identity"
+        ),
         UniqueConstraint("device_id", "sequence", name="uq_pp_mailbox_copy_sequence"),
-        CheckConstraint("status in ('waiting','picked_up','expired','removed') and sequence>0 and size between 49 and 20971520 and expires_at>created_at and expires_at-created_at<=604800", name="ck_pp_mailbox_copy_state"),
-        CheckConstraint("created_at>=0 and length(recipient_id) between 1 and 64 and length(device_key_id)=43 and length(body_sha256)=64 and length(ciphertext_sha256)=64", name="ck_pp_mailbox_copy_bindings"),
-        CheckConstraint("(status='waiting' and terminal_at is null and receipt_sha256 is null) or (status='picked_up' and terminal_at is not null and receipt_sha256 is not null) or (status in ('removed','expired') and terminal_at is not null and receipt_sha256 is null)", name="ck_pp_mailbox_copy_terminal"),
+        CheckConstraint(
+            (
+                "status in ('waiting','picked_up','expired','removed') and sequence>0 and "
+                "size between 49 and 20971520 and expires_at>created_at and "
+                "expires_at-created_at<=604800"
+            ),
+            name="ck_pp_mailbox_copy_state",
+        ),
+        CheckConstraint(
+            (
+                "created_at>=0 and length(recipient_id) between 1 and 64 and "
+                "length(device_key_id)=43 and length(body_sha256)=64 and "
+                "length(ciphertext_sha256)=64"
+            ),
+            name="ck_pp_mailbox_copy_bindings",
+        ),
+        CheckConstraint(
+            (
+                "(status='waiting' and terminal_at is null and receipt_sha256 is null) or "
+                "(status='picked_up' and terminal_at is not null and receipt_sha256 is "
+                "not null) or (status in ('removed','expired') and terminal_at is not "
+                "null and receipt_sha256 is null)"
+            ),
+            name="ck_pp_mailbox_copy_terminal",
+        ),
     )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    account_id: Mapped[int] = mapped_column(ForeignKey("patient_portal_accounts.id", ondelete="RESTRICT"), nullable=False, index=True)
-    device_id: Mapped[int] = mapped_column(ForeignKey("patient_portal_mycarlos_devices.id", ondelete="RESTRICT"), nullable=False, index=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey("patient_portal_accounts.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    device_id: Mapped[int] = mapped_column(
+        ForeignKey("patient_portal_mycarlos_devices.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
     clinic_id: Mapped[str] = mapped_column(String(64), nullable=False)
     recipient_id: Mapped[str] = mapped_column(String(64), nullable=False)
     device_key_id: Mapped[str] = mapped_column(String(43), nullable=False)
@@ -88,15 +150,30 @@ class MailboxCopy(Base):
 
 class MailboxBlob(Base):
     __tablename__ = "patient_portal_mycarlos_mailbox_blobs"
-    __table_args__ = (CheckConstraint("length(sealed) between 49 and 20971520", name="ck_pp_mailbox_blob_size"),)
-    copy_id: Mapped[int] = mapped_column(ForeignKey("patient_portal_mycarlos_mailbox_copies.id", ondelete="RESTRICT"), primary_key=True)
+    __table_args__ = (
+        CheckConstraint("length(sealed) between 49 and 20971520", name="ck_pp_mailbox_blob_size"),
+    )
+    copy_id: Mapped[int] = mapped_column(
+        ForeignKey("patient_portal_mycarlos_mailbox_copies.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
     sealed: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
 
 
 class MailboxProof(Base):
     """One retained original compact; anchor and event rows refer to it without copying."""
+
     __tablename__ = "patient_portal_mycarlos_mailbox_proofs"
-    __table_args__ = (UniqueConstraint("device_key_id", "sha256", name="uq_pp_mailbox_proof_bytes"), CheckConstraint("length(compact) between 1 and 4096 and length(sha256)=64 and length(device_key_id)=43 and recorded_at>=0", name="ck_pp_mailbox_proof_size"))
+    __table_args__ = (
+        UniqueConstraint("device_key_id", "sha256", name="uq_pp_mailbox_proof_bytes"),
+        CheckConstraint(
+            (
+                "length(compact) between 1 and 4096 and length(sha256)=64 and "
+                "length(device_key_id)=43 and recorded_at>=0"
+            ),
+            name="ck_pp_mailbox_proof_size",
+        ),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     device_key_id: Mapped[str] = mapped_column(String(43), nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -106,7 +183,17 @@ class MailboxProof(Base):
 
 class MailboxAnchor(Base):
     __tablename__ = "patient_portal_mycarlos_mailbox_anchors"
-    __table_args__ = (UniqueConstraint("device_key_id", "sequence", name="uq_pp_mailbox_anchor_sequence"), UniqueConstraint("device_key_id", "proof_id", name="uq_pp_mailbox_anchor_proof"), CheckConstraint("proof_kind in ('request','receipt') and sequence>0 and length(vault_head_link)=64 and recorded_at>=0", name="ck_pp_mailbox_anchor_kind"))
+    __table_args__ = (
+        UniqueConstraint("device_key_id", "sequence", name="uq_pp_mailbox_anchor_sequence"),
+        UniqueConstraint("device_key_id", "proof_id", name="uq_pp_mailbox_anchor_proof"),
+        CheckConstraint(
+            (
+                "proof_kind in ('request','receipt') and sequence>0 and "
+                "length(vault_head_link)=64 and recorded_at>=0"
+            ),
+            name="ck_pp_mailbox_anchor_kind",
+        ),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     clinic_id: Mapped[str] = mapped_column(String(64), nullable=False)
     recipient_id: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -115,15 +202,36 @@ class MailboxAnchor(Base):
     vault_head_link: Mapped[str] = mapped_column(String(64), nullable=False)
     recorded_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
     proof_kind: Mapped[str] = mapped_column(String(16), nullable=False)
-    proof_id: Mapped[int] = mapped_column(ForeignKey("patient_portal_mycarlos_mailbox_proofs.id", ondelete="RESTRICT"), nullable=False)
+    proof_id: Mapped[int] = mapped_column(
+        ForeignKey("patient_portal_mycarlos_mailbox_proofs.id", ondelete="RESTRICT"), nullable=False
+    )
 
 
 class MailboxEvent(Base):
     __tablename__ = "patient_portal_mycarlos_mailbox_events"
     __table_args__ = (
         UniqueConstraint("clinic_id", "sequence", name="uq_pp_mailbox_event_sequence"),
-        CheckConstraint("kind in ('picked_up','expired','removed','device_removed','anchor') and sequence>0 and charged_bytes between 1 and 16384 and length(payload)<=16384 and occurred_at>=0", name="ck_pp_mailbox_event_kind"),
-        CheckConstraint("(kind='picked_up' and delivery_id is not null and budget='terminal' and request_proof_id is not null and receipt_proof_id is not null) or (kind in ('expired','removed') and delivery_id is not null and budget='terminal' and request_proof_id is null and receipt_proof_id is null) or (kind='device_removed' and delivery_id is null and budget='control' and request_proof_id is null and receipt_proof_id is null) or (kind='anchor' and delivery_id is null and budget='ordinary' and request_proof_id is not null and receipt_proof_id is null)", name="ck_pp_mailbox_event_evidence"),
+        CheckConstraint(
+            (
+                "kind in ('picked_up','expired','removed','device_removed','anchor') and "
+                "sequence>0 and charged_bytes between 1 and 16384 and "
+                "length(payload)<=16384 and occurred_at>=0"
+            ),
+            name="ck_pp_mailbox_event_kind",
+        ),
+        CheckConstraint(
+            (
+                "(kind='picked_up' and delivery_id is not null and budget='terminal' and "
+                "request_proof_id is not null and receipt_proof_id is not null) or (kind "
+                "in ('expired','removed') and delivery_id is not null and "
+                "budget='terminal' and request_proof_id is null and receipt_proof_id is "
+                "null) or (kind='device_removed' and delivery_id is null and "
+                "budget='control' and request_proof_id is null and receipt_proof_id is "
+                "null) or (kind='anchor' and delivery_id is null and budget='ordinary' "
+                "and request_proof_id is not null and receipt_proof_id is null)"
+            ),
+            name="ck_pp_mailbox_event_evidence",
+        ),
     )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     clinic_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -135,8 +243,12 @@ class MailboxEvent(Base):
     delivery_id: Mapped[str | None] = mapped_column(String(36))
     # Exact public payload fields except proof strings, resolved from retained proof rows.
     payload: Mapped[bytes] = mapped_column(LargeBinary(16384), nullable=False)
-    request_proof_id: Mapped[int | None] = mapped_column(ForeignKey("patient_portal_mycarlos_mailbox_proofs.id", ondelete="RESTRICT"))
-    receipt_proof_id: Mapped[int | None] = mapped_column(ForeignKey("patient_portal_mycarlos_mailbox_proofs.id", ondelete="RESTRICT"))
+    request_proof_id: Mapped[int | None] = mapped_column(
+        ForeignKey("patient_portal_mycarlos_mailbox_proofs.id", ondelete="RESTRICT")
+    )
+    receipt_proof_id: Mapped[int | None] = mapped_column(
+        ForeignKey("patient_portal_mycarlos_mailbox_proofs.id", ondelete="RESTRICT")
+    )
     budget: Mapped[str] = mapped_column(String(16), nullable=False)
     charged_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
 

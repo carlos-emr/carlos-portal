@@ -20,15 +20,31 @@ from pathlib import Path
 
 import pytest
 
-from carlos_patient_portal.mailbox_codec import MAX_SEALED, MAX_UPLOAD, MailboxRefusal, cursor, json_bytes, parse_ack, parse_upload
+from carlos_patient_portal.mailbox_codec import (
+    MAX_SEALED,
+    MAX_UPLOAD,
+    MailboxRefusal,
+    cursor,
+    json_bytes,
+    parse_ack,
+    parse_upload,
+)
 from carlos_patient_portal.staff_identity import staff_request_hash
 
 FIXTURE = json.loads((Path(__file__).parent / "fixtures/mailbox-contract-v1.json").read_bytes())
 
 
 def test_frozen_source_contract_and_unchanged_m0_fixture():
-    assert FIXTURE["frozen_contract_sha256"] == "d01777267371530ea49654eb183a5c845c503ea5bf2259c42f7de43c4e9c1148"
-    assert hashlib.sha256((Path(__file__).parent / "fixtures/delivery-contract.json").read_bytes()).hexdigest() == FIXTURE["m0_sha256"]
+    assert (
+        FIXTURE["frozen_contract_sha256"]
+        == "d01777267371530ea49654eb183a5c845c503ea5bf2259c42f7de43c4e9c1148"
+    )
+    assert (
+        hashlib.sha256(
+            (Path(__file__).parent / "fixtures/delivery-contract.json").read_bytes()
+        ).hexdigest()
+        == FIXTURE["m0_sha256"]
+    )
 
 
 @pytest.mark.parametrize("vector", FIXTURE["uploads"], ids=lambda value: value["name"])
@@ -47,8 +63,15 @@ def test_exact_shared_upload_bytes(vector):
 
 @pytest.mark.parametrize("vector", FIXTURE["request_hashes"], ids=lambda value: value["name"])
 def test_full_binary_body_and_external_raw_path_query_are_bound(vector):
-    assert staff_request_hash(vector["method"], bytes.fromhex(vector["raw_path_hex"]),
-        bytes.fromhex(vector["raw_query_hex"]), bytes.fromhex(vector["body"]["hex"])) == vector["request_hash"]
+    assert (
+        staff_request_hash(
+            vector["method"],
+            bytes.fromhex(vector["raw_path_hex"]),
+            bytes.fromhex(vector["raw_query_hex"]),
+            bytes.fromhex(vector["body"]["hex"]),
+        )
+        == vector["request_hash"]
+    )
 
 
 @pytest.mark.parametrize("vector", FIXTURE["cursors"])

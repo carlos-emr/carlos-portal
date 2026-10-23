@@ -22,7 +22,6 @@ and outbound delivery in `notifications.py`.
 
 import json
 import logging
-import anyio
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
@@ -30,6 +29,7 @@ from secrets import token_urlsafe
 from time import monotonic
 from typing import Annotated
 
+import anyio
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -287,8 +287,13 @@ def build_lifespan(
         if runtime is not None:
             record_audit_retention_override(runtime)
         try:
-            if runtime is not None and runtime.settings.mycarlos_delivery_enabled and runtime.settings.mycarlos_mailbox_enabled:
+            if (
+                runtime is not None
+                and runtime.settings.mycarlos_delivery_enabled
+                and runtime.settings.mycarlos_mailbox_enabled
+            ):
                 from carlos_patient_portal.mailbox_worker import run_worker
+
                 async with anyio.create_task_group() as workers:
                     workers.start_soon(run_worker, runtime)
                     try:
@@ -1026,4 +1031,5 @@ def register_app_routes(app: FastAPI, runtime: PortalRuntime) -> None:
         register_mycarlos_portal_routes(app, runtime, route_dependencies)
         if runtime.settings.mycarlos_mailbox_enabled:
             from carlos_patient_portal.routes.mycarlos_mailbox import register_device_mailbox_routes
+
             register_device_mailbox_routes(app, runtime)

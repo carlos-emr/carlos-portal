@@ -35,7 +35,9 @@ MAX_COPY = 20 * 1024 * 1024
 
 
 def canonical(value):
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+        "utf-8"
+    )
 
 
 def digest(value):
@@ -70,7 +72,9 @@ def build():
 
     upload_case("unchanged M0 package in exactly two frames", upload, "accept", outer)
     reordered = json.dumps(outer, indent=1, sort_keys=False).encode("utf-8")
-    upload_case("signed upload outer need not be raw JCS", frame(reordered, sealed), "accept", outer)
+    upload_case(
+        "signed upload outer need not be raw JCS", frame(reordered, sealed), "accept", outer
+    )
     for name, body in [
         ("missing both lengths", b""),
         ("truncated first uint64", b"\x00" * 7),
@@ -79,7 +83,10 @@ def build():
         ("outer declared length uint64 max", b"\xff" * 8),
         ("missing second frame", frame(outer_bytes)),
         ("truncated second length", frame(outer_bytes) + b"\x00" * 7),
-        ("second declared length20MiBplus1", frame(outer_bytes) + (MAX_COPY + 1).to_bytes(8, "big")),
+        (
+            "second declared length20MiBplus1",
+            frame(outer_bytes) + (MAX_COPY + 1).to_bytes(8, "big"),
+        ),
         ("second declared length uint64 max", frame(outer_bytes) + b"\xff" * 8),
         ("truncated sealed copy", upload[:-1]),
         ("trailing byte", upload + b"x"),
@@ -87,12 +94,17 @@ def build():
         ("invalid UTF8 outer", frame(b"\xff", sealed)),
         ("outer array", frame(b"[]", sealed)),
         ("duplicate outer v", frame(b'{"v":1,' + outer_bytes[1:], sealed)),
-        ("nested suite duplicate", frame(outer_bytes.replace(b'"aead_id":3', b'"aead_id":3,"aead_id":3'), sealed)),
+        (
+            "nested suite duplicate",
+            frame(outer_bytes.replace(b'"aead_id":3', b'"aead_id":3,"aead_id":3'), sealed),
+        ),
     ]:
         upload_case(name, body, "invalid_delivery")
     changes = [
-        ("boolean version", "v", True), ("float version", "v", 1.0),
-        ("unknown version", "v", 2), ("boolean size", "size", True),
+        ("boolean version", "v", True),
+        ("float version", "v", 1.0),
+        ("unknown version", "v", 2),
+        ("boolean size", "size", True),
         ("float time", "created_at", float(outer["created_at"])),
         ("negative time", "created_at", -1),
         ("wrong hash", "ciphertext_sha256", "00" * 32),
@@ -109,101 +121,239 @@ def build():
         ("zero lifetime", "expires_at", outer["created_at"]),
     ]
     for name, key, value in changes:
-        bad = copy.deepcopy(outer); bad[key] = value
+        bad = copy.deepcopy(outer)
+        bad[key] = value
         upload_case(name, frame(canonical(bad), sealed), "invalid_delivery")
     for name, change in [
         ("missing outer field", lambda value: value.pop("recipient_id")),
         ("unknown outer field", lambda value: value.update(title="FAKE forbidden metadata")),
         ("unknown suite field", lambda value: value["suite"].update(alg="unknown")),
     ]:
-        bad = copy.deepcopy(outer); change(bad)
+        bad = copy.deepcopy(outer)
+        change(bad)
         upload_case(name, frame(canonical(bad), sealed), "invalid_delivery")
     for length, expect in [(48, "invalid_delivery"), (49, "accept")]:
         blob = b"\xa5" * length
         value = dict(outer, size=length, ciphertext_sha256=digest(blob))
-        upload_case(f"opaque sealed copy length{length}", frame(canonical(value), blob), expect,
-                    value if expect == "accept" else None)
+        upload_case(
+            f"opaque sealed copy length{length}",
+            frame(canonical(value), blob),
+            expect,
+            value if expect == "accept" else None,
+        )
 
     requests = []
     for name, method, path, query, body in [
-        ("binary upload prefixed", "POST", b"/patients/internal/carlos/patients/6001/mycarlos/deliveries", b"", upload),
-        ("binary upload missing external prefix", "POST", b"/internal/carlos/patients/6001/mycarlos/deliveries", b"", upload),
-        ("binary upload changed final byte", "POST", b"/patients/internal/carlos/patients/6001/mycarlos/deliveries", b"", upload[:-1] + bytes([upload[-1] ^ 1])),
-        ("event feed raw query", "GET", b"/patients/internal/carlos/mycarlos/delivery-events", b"after=7&limit=25", b""),
-        ("event feed reordered raw query", "GET", b"/patients/internal/carlos/mycarlos/delivery-events", b"limit=25&after=7", b""),
-        ("event ack", "POST", b"/patients/internal/carlos/mycarlos/delivery-events/ack", b"", b'{"through":"7"}'),
+        (
+            "binary upload prefixed",
+            "POST",
+            b"/patients/internal/carlos/patients/6001/mycarlos/deliveries",
+            b"",
+            upload,
+        ),
+        (
+            "binary upload missing external prefix",
+            "POST",
+            b"/internal/carlos/patients/6001/mycarlos/deliveries",
+            b"",
+            upload,
+        ),
+        (
+            "binary upload changed final byte",
+            "POST",
+            b"/patients/internal/carlos/patients/6001/mycarlos/deliveries",
+            b"",
+            upload[:-1] + bytes([upload[-1] ^ 1]),
+        ),
+        (
+            "event feed raw query",
+            "GET",
+            b"/patients/internal/carlos/mycarlos/delivery-events",
+            b"after=7&limit=25",
+            b"",
+        ),
+        (
+            "event feed reordered raw query",
+            "GET",
+            b"/patients/internal/carlos/mycarlos/delivery-events",
+            b"limit=25&after=7",
+            b"",
+        ),
+        (
+            "event ack",
+            "POST",
+            b"/patients/internal/carlos/mycarlos/delivery-events/ack",
+            b"",
+            b'{"through":"7"}',
+        ),
     ]:
-        requests.append({"name": name, "method": method, "raw_path_hex": path.hex(),
-                         "raw_query_hex": query.hex(), "body": encoded(body),
-                         "request_hash": digest(frame(method.encode("ascii"), path, query, body))})
+        requests.append(
+            {
+                "name": name,
+                "method": method,
+                "raw_path_hex": path.hex(),
+                "raw_query_hex": query.hex(),
+                "body": encoded(body),
+                "request_hash": digest(frame(method.encode("ascii"), path, query, body)),
+            }
+        )
 
     cursor = []
-    for value, expect in [("0", "accept"), ("7", "accept"), ("9223372036854775807", "accept"),
-                          ("01", "invalid_cursor"), ("-1", "invalid_cursor"), ("+1", "invalid_cursor"),
-                          ("1.0", "invalid_cursor"), ("1e0", "invalid_cursor"), (" 1", "invalid_cursor"),
-                          ("١", "invalid_cursor"), ("9223372036854775808", "invalid_cursor")]:
+    for value, expect in [
+        ("0", "accept"),
+        ("7", "accept"),
+        ("9223372036854775807", "accept"),
+        ("01", "invalid_cursor"),
+        ("-1", "invalid_cursor"),
+        ("+1", "invalid_cursor"),
+        ("1.0", "invalid_cursor"),
+        ("1e0", "invalid_cursor"),
+        (" 1", "invalid_cursor"),
+        ("١", "invalid_cursor"),
+        ("9223372036854775808", "invalid_cursor"),
+    ]:
         cursor.append({"text": value, "expect": expect})
     acks = []
-    for body, expect in [(b'{"through":"7"}', "accept"), (b'{ "through" : "7" }', "accept"),
-                         (b'{"through":7}', "invalid_cursor"), (b'{"through":true}', "invalid_cursor"),
-                         (b'{"through":"07"}', "invalid_cursor"), (b'{}', "invalid_cursor"),
-                         (b'{"through":"7","through":"7"}', "invalid_cursor"),
-                         (b'{"through":"7","other":0}', "invalid_cursor")]:
+    for body, expect in [
+        (b'{"through":"7"}', "accept"),
+        (b'{ "through" : "7" }', "accept"),
+        (b'{"through":7}', "invalid_cursor"),
+        (b'{"through":true}', "invalid_cursor"),
+        (b'{"through":"07"}', "invalid_cursor"),
+        (b"{}", "invalid_cursor"),
+        (b'{"through":"7","through":"7"}', "invalid_cursor"),
+        (b'{"through":"7","other":0}', "invalid_cursor"),
+    ]:
         acks.append({"body": encoded(body), "expect": expect})
 
     receipt = next(v["receipt"] for v in m0["portal"]["receipts"] if v["expect"] == "accept")
-    assertion = next(v["assertion"] for v in m0["portal"]["device_requests"] if v["name"] == "send the receipt")
-    anchor_assertion = next(v["assertion"] for v in m0["portal"]["device_requests"] if v["name"] == "check in with the vault head anchor")
+    assertion = next(
+        v["assertion"] for v in m0["portal"]["device_requests"] if v["name"] == "send the receipt"
+    )
+    anchor_assertion = next(
+        v["assertion"]
+        for v in m0["portal"]["device_requests"]
+        if v["name"] == "check in with the vault head anchor"
+    )
     receipt_payload = receipt.split(".")[0]
-    receipt_claims = json.loads(base64.urlsafe_b64decode(receipt_payload + "=" * (-len(receipt_payload) % 4)))
+    receipt_claims = json.loads(
+        base64.urlsafe_b64decode(receipt_payload + "=" * (-len(receipt_payload) % 4))
+    )
     events = []
-    copy_payload = {key: outer[key] for key in ("ciphertext_sha256", "size", "created_at", "expires_at")}
-    for sequence, kind in enumerate(("picked_up", "expired", "removed", "device_removed", "anchor"), 1):
+    copy_payload = {
+        key: outer[key] for key in ("ciphertext_sha256", "size", "created_at", "expires_at")
+    }
+    for sequence, kind in enumerate(
+        ("picked_up", "expired", "removed", "device_removed", "anchor"), 1
+    ):
         payload = dict(copy_payload) if kind in {"picked_up", "expired", "removed"} else {}
-        if kind == "picked_up": payload.update(receipt=receipt, request_assertion=assertion)
-        if kind == "anchor": payload.update(vault_head_link=receipt_claims["vault_head_link"], request_assertion=anchor_assertion)
-        event = {"sequence": str(sequence), "kind": kind, "occurred_at": m0["portal"]["state"]["now"],
-                 "recipient_id": outer["recipient_id"], "device_key_id": outer["device_key_id"],
-                 "delivery_id": outer["delivery_id"] if kind in {"picked_up", "expired", "removed"} else None,
-                 "payload": payload}
-        events.append({"name": kind, "json": encoded(canonical(event)), "expect": "accept",
-                       "proof_note": "Original M0 signed bytes; delayed collector checks signatures/bindings, not present-day request freshness."})
+        if kind == "picked_up":
+            payload.update(receipt=receipt, request_assertion=assertion)
+        if kind == "anchor":
+            payload.update(
+                vault_head_link=receipt_claims["vault_head_link"],
+                request_assertion=anchor_assertion,
+            )
+        event = {
+            "sequence": str(sequence),
+            "kind": kind,
+            "occurred_at": m0["portal"]["state"]["now"],
+            "recipient_id": outer["recipient_id"],
+            "device_key_id": outer["device_key_id"],
+            "delivery_id": outer["delivery_id"]
+            if kind in {"picked_up", "expired", "removed"}
+            else None,
+            "payload": payload,
+        }
+        events.append(
+            {
+                "name": kind,
+                "json": encoded(canonical(event)),
+                "expect": "accept",
+                "proof_note": (
+                    "Original M0 signed bytes; delayed collector checks signatures/bindings, "
+                    "not present-day request freshness."
+                ),
+            }
+        )
     base_event = json.loads(bytes.fromhex(events[0]["json"]["hex"]))
     for name, key, value in [
-        ("unknown kind", "kind", "unknown"), ("numeric sequence", "sequence", 1),
-        ("zero event sequence", "sequence", "0"), ("boolean occurrence", "occurred_at", True),
+        ("unknown kind", "kind", "unknown"),
+        ("numeric sequence", "sequence", 1),
+        ("zero event sequence", "sequence", "0"),
+        ("boolean occurrence", "occurred_at", True),
         ("UUIDv1 event", "delivery_id", "6f1c2a7e-0b9d-1e53-8a41-2d7c9b0e5f13"),
         ("null delivery for pickup", "delivery_id", None),
         ("recipient65 event", "recipient_id", "a" * 65),
         ("unknown top field", "other", 0),
     ]:
-        value_event = copy.deepcopy(base_event); value_event[key] = value
+        value_event = copy.deepcopy(base_event)
+        value_event[key] = value
         events.append({"name": name, "json": encoded(canonical(value_event)), "expect": "reject"})
     for name, edit in [
         ("missing receipt proof", lambda value: value["payload"].pop("receipt")),
         ("unknown payload field", lambda value: value["payload"].update(title="forbidden")),
         ("missing envelope field", lambda value: value.pop("recipient_id")),
     ]:
-        value_event = copy.deepcopy(base_event); edit(value_event)
+        value_event = copy.deepcopy(base_event)
+        edit(value_event)
         events.append({"name": name, "json": encoded(canonical(value_event)), "expect": "reject"})
-    events.append({"name": "duplicate event sequence", "json": encoded(b'{"sequence":"1",' + canonical(base_event)[1:]), "expect": "reject"})
-    return {"description": "FAKE shared M4 transport bytes; no database/custody/end-to-end success implied",
-            "format_version": 1, "frozen_contract_sha256": CONTRACT_SHA, "m0_sha256": M0_SHA,
-            "binary_encoding": "hex is exact; sha256 covers full decoded bytes; no JSON/body reserialization before hashing",
-            "limits": {"outer_max": 4096, "sealed_min": 49, "sealed_max": MAX_COPY,
-                       "body_max": MAX_COPY + 4096 + 16, "event_max": 16384, "event_page_max": 1048576},
-            "uploads": cases, "request_hashes": requests, "cursors": cursor, "ack_bodies": acks,
-            "events": events,
-            "event_scenario_note": "The five accepted event examples are ALTERNATIVE independent shape/proof vectors, not one state feed. One copy cannot terminate as picked_up, expired and removed together. Bound constants are not large-body consumer execution proof.",
-            "semantic_expectations_only": ["known exact body after expiry200 without resurrection", "removed upload409 before known idempotency", "same receipt200 and different receipt404 throughout tombstone retention", "retained exact anchor proof survives event pruning", "committed-prefix and quota/race/crash proofs require real PostgreSQL"]}
+    events.append(
+        {
+            "name": "duplicate event sequence",
+            "json": encoded(b'{"sequence":"1",' + canonical(base_event)[1:]),
+            "expect": "reject",
+        }
+    )
+    return {
+        "description": (
+            "FAKE shared M4 transport bytes; no database/custody/end-to-end success implied"
+        ),
+        "format_version": 1,
+        "frozen_contract_sha256": CONTRACT_SHA,
+        "m0_sha256": M0_SHA,
+        "binary_encoding": (
+            "hex is exact; sha256 covers full decoded bytes; no JSON/body "
+            "reserialization before hashing"
+        ),
+        "limits": {
+            "outer_max": 4096,
+            "sealed_min": 49,
+            "sealed_max": MAX_COPY,
+            "body_max": MAX_COPY + 4096 + 16,
+            "event_max": 16384,
+            "event_page_max": 1048576,
+        },
+        "uploads": cases,
+        "request_hashes": requests,
+        "cursors": cursor,
+        "ack_bodies": acks,
+        "events": events,
+        "event_scenario_note": (
+            "The five accepted event examples are ALTERNATIVE independent shape/proof "
+            "vectors, not one state feed. One copy cannot terminate as picked_up, "
+            "expired and removed together. Bound constants are not large-body "
+            "consumer execution proof."
+        ),
+        "semantic_expectations_only": [
+            "known exact body after expiry200 without resurrection",
+            "removed upload409 before known idempotency",
+            "same receipt200 and different receipt404 throughout tombstone retention",
+            "retained exact anchor proof survives event pruning",
+            "committed-prefix and quota/race/crash proofs require real PostgreSQL",
+        ],
+    }
 
 
 def main():
-    parser = argparse.ArgumentParser(); parser.add_argument("--check", action="store_true")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     output = json.dumps(build(), indent=2, ensure_ascii=False).encode("utf-8") + b"\n"
     if args.check:
-        assert OUTPUT.read_bytes() == output, "shared fixture differs; never silently overwrite approved bytes"
+        assert OUTPUT.read_bytes() == output, (
+            "shared fixture differs; never silently overwrite approved bytes"
+        )
     else:
         with OUTPUT.open("xb") as destination:
             destination.write(output)

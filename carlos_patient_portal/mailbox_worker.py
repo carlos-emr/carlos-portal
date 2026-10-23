@@ -20,11 +20,12 @@ from time import monotonic
 import anyio
 
 from carlos_patient_portal.mailbox import clinic_lock, expire_batch, prune_collected_events
+from carlos_patient_portal.runtime import PortalRuntime
 
 logger = logging.getLogger(__name__)
 
 
-def sweep(runtime):
+def sweep(runtime: PortalRuntime) -> tuple[int, int]:
     expired = expire_batch(runtime.session_factory, limit=100)
     with runtime.session_factory() as session, session.begin():
         clinic = clinic_lock(session, runtime.settings.clinic_id)
@@ -32,7 +33,7 @@ def sweep(runtime):
     return expired, pruned
 
 
-async def run_worker(runtime):
+async def run_worker(runtime: PortalRuntime) -> None:
     while True:
         deadline = monotonic() + 60
         try:

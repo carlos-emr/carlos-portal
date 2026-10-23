@@ -82,13 +82,25 @@ SYSTEM_JOBS: Mapping[str, SystemJob] = MappingProxyType(
         JOB_DELIVERY_SYNC: SystemJob(
             name=JOB_DELIVERY_SYNC,
             display_name="Clinic document delivery",
-            permissions=frozenset({PERMISSION_DELIVERY_UPLOAD, PERMISSION_DELIVERY_EVENTS_READ,
-                                   PERMISSION_DELIVERY_EVENTS_ACK}),
+            permissions=frozenset(
+                {
+                    PERMISSION_DELIVERY_UPLOAD,
+                    PERMISSION_DELIVERY_EVENTS_READ,
+                    PERMISSION_DELIVERY_EVENTS_ACK,
+                }
+            ),
         ),
     }
 )
 
 # Permissions only a job may hold. A staff assertion carrying one is refused on every route, so a
 # job's right can never ride on a person's login.
-JOB_ONLY_PERMISSIONS = frozenset({PERMISSION_BOOKING_PROMPT_SYNC, PERMISSION_CLINIC_KEYS_PUBLISH,
-    PERMISSION_DELIVERY_UPLOAD, PERMISSION_DELIVERY_EVENTS_READ, PERMISSION_DELIVERY_EVENTS_ACK})
+JOB_ONLY_PERMISSIONS = frozenset(
+    {
+        PERMISSION_BOOKING_PROMPT_SYNC,
+        PERMISSION_CLINIC_KEYS_PUBLISH,
+        PERMISSION_DELIVERY_UPLOAD,
+        PERMISSION_DELIVERY_EVENTS_READ,
+        PERMISSION_DELIVERY_EVENTS_ACK,
+    }
+)

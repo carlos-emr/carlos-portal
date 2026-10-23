@@ -29,10 +29,33 @@ MAX_SEALED = 20 * 1024 * 1024
 MAX_OUTER = 4096
 MAX_UPLOAD = MAX_SEALED + MAX_OUTER + 16
 SUITE = {"kem_id": 32, "kdf_id": 1, "aead_id": 3}
-OUTER_FIELDS = frozenset({"v", "suite", "delivery_id", "recipient_id", "device_key_id", "size",
-                          "ciphertext_sha256", "created_at", "expires_at"})
-RECEIPT_FIELDS = frozenset({"typ", "aud", "delivery_id", "recipient_id", "device_key_id",
-                            "ciphertext_sha256", "document_sha256", "picked_up_at", "vault_head_link", "jti"})
+OUTER_FIELDS = frozenset(
+    {
+        "v",
+        "suite",
+        "delivery_id",
+        "recipient_id",
+        "device_key_id",
+        "size",
+        "ciphertext_sha256",
+        "created_at",
+        "expires_at",
+    }
+)
+RECEIPT_FIELDS = frozenset(
+    {
+        "typ",
+        "aud",
+        "delivery_id",
+        "recipient_id",
+        "device_key_id",
+        "ciphertext_sha256",
+        "document_sha256",
+        "picked_up_at",
+        "vault_head_link",
+        "jti",
+    }
+)
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 RECIPIENT = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 CURSOR = re.compile(r"(?:0|[1-9][0-9]{0,18})\Z")
@@ -47,11 +70,12 @@ class MailboxRefusal(ValueError):
 
 
 def json_bytes(value: object) -> bytes:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-                      allow_nan=False).encode("utf-8")
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    ).encode("utf-8")
 
 
-def no_duplicates(pairs):
+def no_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
     value = {}
     for key, item in pairs:
         if key in value:
@@ -64,8 +88,11 @@ def strict_object(raw: bytes, *, limit: int, code: str) -> dict:
     if len(raw) > limit:
         raise MailboxRefusal(code)
     try:
-        value = json.loads(raw.decode("utf-8"), object_pairs_hook=no_duplicates,
-                           parse_constant=lambda _value: (_ for _ in ()).throw(ValueError("nonfinite")))
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=no_duplicates,
+            parse_constant=lambda _value: (_ for _ in ()).throw(ValueError("nonfinite")),
+        )
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise MailboxRefusal(code) from exc
     if not isinstance(value, dict):
@@ -103,16 +130,26 @@ def valid_hash(value: object) -> bool:
 
 def validate_outer(value: dict) -> None:
     suite = value.get("suite")
-    if (set(value) != OUTER_FIELDS or type(value.get("v")) is not int or value["v"] != 1
-        or not isinstance(suite, dict) or set(suite) != set(SUITE)
-        or any(type(suite[key]) is not int or suite[key] != expected for key, expected in SUITE.items())
+    if (
+        set(value) != OUTER_FIELDS
+        or type(value.get("v")) is not int
+        or value["v"] != 1
+        or not isinstance(suite, dict)
+        or set(suite) != set(SUITE)
+        or any(
+            type(suite[key]) is not int or suite[key] != expected for key, expected in SUITE.items()
+        )
         or not uuid_text(value.get("delivery_id"), version4=True)
-        or not isinstance(value.get("recipient_id"), str) or not RECIPIENT.fullmatch(value["recipient_id"])
+        or not isinstance(value.get("recipient_id"), str)
+        or not RECIPIENT.fullmatch(value["recipient_id"])
         or not canonical_key(value.get("device_key_id"))
-        or not integer(value.get("size")) or not 49 <= value["size"] <= MAX_SEALED
+        or not integer(value.get("size"))
+        or not 49 <= value["size"] <= MAX_SEALED
         or not valid_hash(value.get("ciphertext_sha256"))
-        or not integer(value.get("created_at")) or not integer(value.get("expires_at"))
-        or not 0 < value["expires_at"] - value["created_at"] <= 604800):
+        or not integer(value.get("created_at"))
+        or not integer(value.get("expires_at"))
+        or not 0 < value["expires_at"] - value["created_at"] <= 604800
+    ):
         raise MailboxRefusal("invalid_delivery")
 
 
@@ -131,18 +168,20 @@ def parse_upload(body: bytes) -> Upload:
     for bound in (MAX_OUTER, MAX_SEALED):
         if len(body) - offset < 8:
             raise MailboxRefusal("invalid_delivery")
-        length = int.from_bytes(body[offset:offset + 8], "big")
+        length = int.from_bytes(body[offset : offset + 8], "big")
         offset += 8
         # Check bounds before slicing/allocating, including uint64 overflow-looking inputs.
         if length > bound or length > len(body) - offset:
             raise MailboxRefusal("invalid_delivery")
-        parts.append(body[offset:offset + length])
+        parts.append(body[offset : offset + length])
         offset += length
     if offset != len(body):
         raise MailboxRefusal("invalid_delivery")
     outer = strict_object(parts[0], limit=MAX_OUTER, code="invalid_delivery")
     validate_outer(outer)
-    if outer["size"] != len(parts[1]) or not compare_digest(outer["ciphertext_sha256"], sha256(parts[1]).hexdigest()):
+    if outer["size"] != len(parts[1]) or not compare_digest(
+        outer["ciphertext_sha256"], sha256(parts[1]).hexdigest()
+    ):
         raise MailboxRefusal("invalid_delivery")
     return Upload(outer, parts[1], sha256(body).hexdigest())
 
@@ -163,7 +202,12 @@ def parse_ack(body: bytes) -> int:
 def parse_receipt_body(body: bytes) -> str:
     value = strict_object(body, limit=8192, code="invalid_receipt")
     compact = value.get("receipt")
-    if set(value) != {"receipt"} or not isinstance(compact, str) or not compact.isascii() or not 1 <= len(compact) <= 4096:
+    if (
+        set(value) != {"receipt"}
+        or not isinstance(compact, str)
+        or not compact.isascii()
+        or not 1 <= len(compact) <= 4096
+    ):
         raise MailboxRefusal("invalid_receipt")
     return compact
 
@@ -174,21 +218,31 @@ def receipt_claims(compact: str, *, key: bytes, kid: str, recipient: str) -> dic
         if not compact.isascii() or not 1 <= len(compact) <= 4096:
             raise ValueError("size")
         encoded, signature = compact.split(".")
-        def decode(value):
+
+        def decode(value: str) -> bytes:
             raw = urlsafe_b64decode(value + "=" * (-len(value) % 4))
             if urlsafe_b64encode(raw).rstrip(b"=").decode("ascii") != value:
                 raise ValueError("encoding")
             return raw
+
         payload, sig = decode(encoded), decode(signature)
         if len(sig) != 64:
             raise ValueError("signature")
         claims = strict_object(payload, limit=4096, code="invalid_receipt")
-        if (set(claims) != RECEIPT_FIELDS or claims["typ"] != "mycarlos-delivery-receipt"
+        if (
+            set(claims) != RECEIPT_FIELDS
+            or claims["typ"] != "mycarlos-delivery-receipt"
             or claims["aud"] != "carlos-delivery-receipt"
-            or claims["device_key_id"] != kid or claims["recipient_id"] != recipient
-            or not uuid_text(claims["delivery_id"], version4=True) or not uuid_text(claims["jti"])
+            or claims["device_key_id"] != kid
+            or claims["recipient_id"] != recipient
+            or not uuid_text(claims["delivery_id"], version4=True)
+            or not uuid_text(claims["jti"])
             or not integer(claims["picked_up_at"])
-            or not all(valid_hash(claims[name]) for name in ("ciphertext_sha256", "document_sha256", "vault_head_link"))):
+            or not all(
+                valid_hash(claims[name])
+                for name in ("ciphertext_sha256", "document_sha256", "vault_head_link")
+            )
+        ):
             raise ValueError("claims")
         Ed25519PublicKey.from_public_bytes(key).verify(sig, payload)
     except (ValueError, TypeError, InvalidSignature) as exc:
