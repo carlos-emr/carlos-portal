@@ -34,10 +34,10 @@ from starlette.concurrency import run_in_threadpool
 from carlos_patient_portal.audit import hash_sensitive_reference, record_audit_event
 from carlos_patient_portal.device_identity import (
     DEVICE_ASSERTION_HEADER,
-    DeviceRefusal,
-    LinkRequest,
     REFUSAL_DEVICE_REMOVED,
     REFUSAL_RECIPIENT_MISMATCH,
+    DeviceRefusal,
+    LinkRequest,
     consume_device_assertion,
     find_device_record,
     verify_device_assertion,
@@ -49,10 +49,11 @@ from carlos_patient_portal.models import (
     AUDIT_EVENT_MYCARLOS_LINK,
     AUDIT_OUTCOME_FAILURE,
     AUDIT_OUTCOME_SUCCESS,
+    MYCARLOS_DEVICE_STATUS_ACTIVE,
     PatientPortalAccount,
     PatientPortalMyCarlosDevice,
-    MYCARLOS_DEVICE_STATUS_ACTIVE,
 )
+from carlos_patient_portal.mycarlos_devices import recipient_id_for_account
 from carlos_patient_portal.mycarlos_links import (
     LINK_RESULT_CLINIC_KEYS_MISSING,
     LINK_RESULT_CODE_INVALID,
@@ -61,7 +62,6 @@ from carlos_patient_portal.mycarlos_links import (
     clinic_key_list,
     link_device,
 )
-from carlos_patient_portal.mycarlos_devices import recipient_id_for_account
 from carlos_patient_portal.runtime import PortalRuntime
 from carlos_patient_portal.staff_identity import staff_request_hash
 from carlos_patient_portal.web_support import MYCARLOS_LINK_PATH, get_request_client_reference
@@ -240,13 +240,17 @@ def register_mycarlos_device_routes(app: FastAPI, runtime: PortalRuntime) -> Non
 
     def inventory_response(content: dict[str, object], status_code: int = 200) -> JSONResponse:
         return JSONResponse(
-            content=content, status_code=status_code,
+            content=content,
+            status_code=status_code,
             headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
         )
 
     def read_inventory(
-        assertion: str | None, expected_request_hash: str, client_reference_hash: str,
-        now: int, recovery: bool,
+        assertion: str | None,
+        expected_request_hash: str,
+        client_reference_hash: str,
+        now: int,
+        recovery: bool,
     ) -> JSONResponse:
         verifier = verify_link_recovery_assertion if recovery else verify_device_assertion
         try:
@@ -254,71 +258,103 @@ def register_mycarlos_device_routes(app: FastAPI, runtime: PortalRuntime) -> Non
                 principal = verifier(
                     assertion,
                     find_device=lambda kid: find_device_record(lookup_session, kid),
-                    expected_request_hash=expected_request_hash, now=now,
+                    expected_request_hash=expected_request_hash,
+                    now=now,
                 )
             # Recovery must validate freshness, exact request binding AND shared replay policy
             # before any removed-device distinction. This commit precedes account/device locks.
             consume_device_assertion(runtime.session_factory, principal, now=now)
         except DeviceRefusal as refusal:
             record_link_attempt(
-                outcome=AUDIT_OUTCOME_FAILURE, reason=refusal.code,
+                outcome=AUDIT_OUTCOME_FAILURE,
+                reason=refusal.code,
                 client_reference_hash=client_reference_hash,
             )
-            if not recovery and refusal.code in {REFUSAL_DEVICE_REMOVED, REFUSAL_RECIPIENT_MISMATCH}:
+            if not recovery and refusal.code in {
+                REFUSAL_DEVICE_REMOVED,
+                REFUSAL_RECIPIENT_MISMATCH,
+            }:
                 return inventory_response({"code": refusal.code}, 403)
             return inventory_response(GENERIC_NOT_FOUND, 404)
         with runtime.session_factory() as session, session.begin():
             account = session.scalar(
-                select(PatientPortalAccount).where(
+                select(PatientPortalAccount)
+                .where(
                     PatientPortalAccount.id == principal.account_id,
                     PatientPortalAccount.clinic_id == settings.clinic_id,
-                ).with_for_update().execution_options(populate_existing=True)
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
             )
-            device = session.scalar(
-                select(PatientPortalMyCarlosDevice).where(
-                    PatientPortalMyCarlosDevice.id == principal.device_id,
-                    PatientPortalMyCarlosDevice.account_id == principal.account_id,
-                    PatientPortalMyCarlosDevice.device_key_id == principal.device_key_id,
-                ).with_for_update().execution_options(populate_existing=True)
-            ) if account is not None else None
+            device = (
+                session.scalar(
+                    select(PatientPortalMyCarlosDevice)
+                    .where(
+                        PatientPortalMyCarlosDevice.id == principal.device_id,
+                        PatientPortalMyCarlosDevice.account_id == principal.account_id,
+                        PatientPortalMyCarlosDevice.device_key_id == principal.device_key_id,
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+                if account is not None
+                else None
+            )
             recipient = recipient_id_for_account(session, principal.account_id) if account else None
             if account is None or device is None or recipient is None:
                 record_link_attempt(
-                    outcome=AUDIT_OUTCOME_FAILURE, reason="unknown_device",
+                    outcome=AUDIT_OUTCOME_FAILURE,
+                    reason="unknown_device",
                     client_reference_hash=client_reference_hash,
-                    device_key_id=principal.device_key_id, session=session,
+                    device_key_id=principal.device_key_id,
+                    session=session,
                 )
                 return inventory_response(GENERIC_NOT_FOUND, 404)
             if device.status != MYCARLOS_DEVICE_STATUS_ACTIVE:
                 record_link_attempt(
-                    outcome=AUDIT_OUTCOME_FAILURE, reason=REFUSAL_DEVICE_REMOVED,
+                    outcome=AUDIT_OUTCOME_FAILURE,
+                    reason=REFUSAL_DEVICE_REMOVED,
                     client_reference_hash=client_reference_hash,
-                    device_key_id=principal.device_key_id, account=account,
-                    device_id=device.id, session=session,
+                    device_key_id=principal.device_key_id,
+                    account=account,
+                    device_id=device.id,
+                    session=session,
                 )
                 return inventory_response({"code": REFUSAL_DEVICE_REMOVED}, 403)
             # One statement sees the publisher's complete committed inventory. Bootstrap still
             # needs an active key; a completed link may refresh to an all-revoked inventory.
             published_keys = clinic_key_list(session, settings.clinic_id)
-            if not published_keys or (recovery and not any(key["status"] == "active" for key in published_keys)):
+            if not published_keys or (
+                recovery and not any(key["status"] == "active" for key in published_keys)
+            ):
                 record_link_attempt(
-                    outcome=AUDIT_OUTCOME_FAILURE, reason=LINK_RESULT_CLINIC_KEYS_MISSING,
+                    outcome=AUDIT_OUTCOME_FAILURE,
+                    reason=LINK_RESULT_CLINIC_KEYS_MISSING,
                     client_reference_hash=client_reference_hash,
-                    device_key_id=principal.device_key_id, account=account,
-                    device_id=device.id, session=session,
+                    device_key_id=principal.device_key_id,
+                    account=account,
+                    device_id=device.id,
+                    session=session,
                 )
                 return inventory_response({"code": LINK_RESULT_CLINIC_KEYS_MISSING}, 409)
             record_link_attempt(
-                outcome=AUDIT_OUTCOME_SUCCESS, reason="recovered" if recovery else "keys_refreshed",
+                outcome=AUDIT_OUTCOME_SUCCESS,
+                reason="recovered" if recovery else "keys_refreshed",
                 client_reference_hash=client_reference_hash,
-                device_key_id=principal.device_key_id, account=account,
-                device_id=device.id, session=session,
+                device_key_id=principal.device_key_id,
+                account=account,
+                device_id=device.id,
+                session=session,
             )
-            return inventory_response({
-                "recipient_id": recipient, "device_key_id": device.device_key_id,
-                "clinic_id": settings.clinic_id, "clinic_name": settings.clinic_name,
-                "clinic_keys": published_keys,
-            })
+            return inventory_response(
+                {
+                    "recipient_id": recipient,
+                    "device_key_id": device.device_key_id,
+                    "clinic_id": settings.clinic_id,
+                    "clinic_name": settings.clinic_name,
+                    "clinic_keys": published_keys,
+                }
+            )
 
     async def inventory_request(request: Request, now: int, *, recovery: bool) -> JSONResponse:
         # Both signed GETs have an empty body. Stop at the first nonempty chunk rather than
@@ -327,25 +363,35 @@ def register_mycarlos_device_routes(app: FastAPI, runtime: PortalRuntime) -> Non
             if chunk:
                 return inventory_response(GENERIC_NOT_FOUND, 404)
         expected_request_hash = staff_request_hash(
-            request.method, signed_path(runtime, request),
-            request.scope.get("query_string", b""), b"",
+            request.method,
+            signed_path(runtime, request),
+            request.scope.get("query_string", b""),
+            b"",
         )
         client_reference_hash = hash_sensitive_reference(
-            runtime.audit_hash_secret, "portal_client", get_request_client_reference(request, settings)
+            runtime.audit_hash_secret,
+            "portal_client",
+            get_request_client_reference(request, settings),
         )
         return await run_in_threadpool(
-            read_inventory, request.headers.get(DEVICE_ASSERTION_HEADER),
-            expected_request_hash, client_reference_hash, now, recovery,
+            read_inventory,
+            request.headers.get(DEVICE_ASSERTION_HEADER),
+            expected_request_hash,
+            client_reference_hash,
+            now,
+            recovery,
         )
 
     @app.get(MYCARLOS_LINK_PATH, include_in_schema=settings.is_development)
     async def recover_mycarlos_link(
-        request: Request, now: Annotated[int, Depends(mycarlos_clock)],
+        request: Request,
+        now: Annotated[int, Depends(mycarlos_clock)],
     ) -> JSONResponse:
         return await inventory_request(request, now, recovery=True)
 
     @app.get("/api/mycarlos/clinic-keys", include_in_schema=settings.is_development)
     async def refresh_mycarlos_clinic_keys(
-        request: Request, now: Annotated[int, Depends(mycarlos_clock)],
+        request: Request,
+        now: Annotated[int, Depends(mycarlos_clock)],
     ) -> JSONResponse:
         return await inventory_request(request, now, recovery=False)

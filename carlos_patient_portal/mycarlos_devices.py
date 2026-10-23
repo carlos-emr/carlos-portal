@@ -40,7 +40,6 @@ from carlos_patient_portal.clinic_key_proofs import (
     ClinicKeyMaterial,
     validate_clinic_key_inventory,
 )
-
 from carlos_patient_portal.models import (
     CLINIC_KEY_STATUS_ACTIVE,
     CLINIC_KEY_STATUS_REVOKED,
@@ -180,10 +179,18 @@ def publish_clinic_keys(
     try:
         validate_clinic_key_inventory(
             clinic_id,
-            [ClinicKeyMaterial(spec.kid, spec.spki, spec.status, spec.replaces_kid,
-                               spec.replacement_signature) for spec in specs],
-            [ClinicKeyMaterial(key.kid, key.spki, key.status, key.replaces_kid,
-                               key.replacement_signature) for key in stored.values()],
+            [
+                ClinicKeyMaterial(
+                    spec.kid, spec.spki, spec.status, spec.replaces_kid, spec.replacement_signature
+                )
+                for spec in specs
+            ],
+            [
+                ClinicKeyMaterial(
+                    key.kid, key.spki, key.status, key.replaces_kid, key.replacement_signature
+                )
+                for key in stored.values()
+            ],
         )
     except ClinicKeyInventoryError as exc:
         raise ClinicKeyPublishError(exc.code) from exc

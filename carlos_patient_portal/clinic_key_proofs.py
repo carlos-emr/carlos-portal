@@ -33,10 +33,14 @@ class ClinicKeyInventoryError(ValueError):
         self.code = code
 
 
-def replacement_statement(clinic_id: str, predecessor_kid: str, successor: ClinicKeyMaterial) -> bytes:
+def replacement_statement(
+    clinic_id: str, predecessor_kid: str, successor: ClinicKeyMaterial
+) -> bytes:
     parts = (
-        clinic_id.encode("utf-8"), predecessor_kid.encode("utf-8"),
-        successor.kid.encode("utf-8"), successor.spki,
+        clinic_id.encode("utf-8"),
+        predecessor_kid.encode("utf-8"),
+        successor.kid.encode("utf-8"),
+        successor.spki,
     )
     return REPLACEMENT_DOMAIN + b"".join(len(part).to_bytes(8, "big") + part for part in parts)
 
@@ -46,9 +50,13 @@ def checked_public_key(material: ClinicKeyMaterial) -> ec.EllipticCurvePublicKey
         public = serialization.load_der_public_key(material.spki)
     except (TypeError, ValueError) as exc:
         raise ClinicKeyInventoryError() from exc
-    if not isinstance(public, ec.EllipticCurvePublicKey) or not isinstance(public.curve, ec.SECP256R1):
+    if not isinstance(public, ec.EllipticCurvePublicKey) or not isinstance(
+        public.curve, ec.SECP256R1
+    ):
         raise ClinicKeyInventoryError()
-    canonical = public.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    canonical = public.public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    )
     if canonical != material.spki or b64url(sha256(canonical).digest()) != material.kid:
         raise ClinicKeyInventoryError()
     return public
@@ -69,7 +77,9 @@ def verify_replacement_proof(
     )
     try:
         old_public.verify(
-            der, replacement_statement(clinic_id, predecessor.kid, successor), ec.ECDSA(hashes.SHA256())
+            der,
+            replacement_statement(clinic_id, predecessor.kid, successor),
+            ec.ECDSA(hashes.SHA256()),
         )
     except (InvalidSignature, ValueError) as exc:
         raise ClinicKeyInventoryError() from exc
@@ -103,7 +113,9 @@ def validate_clinic_key_inventory(
     for kid, before in old.items():
         after = listed[kid]
         if (before.spki, before.replaces_kid, before.replacement_signature) != (
-            after.spki, after.replaces_kid, after.replacement_signature,
+            after.spki,
+            after.replaces_kid,
+            after.replacement_signature,
         ):
             raise ClinicKeyInventoryError("key_changed")
         if before.status == "revoked" and after.status != "revoked":
@@ -135,7 +147,9 @@ def validate_clinic_key_inventory(
             current = listed.get(current.replaces_kid) if current.replaces_kid else None
     if not old:
         return ()
-    unsigned_roots = tuple(key.kid for key in incoming if key.kid not in old and key.replaces_kid is None)
+    unsigned_roots = tuple(
+        key.kid for key in incoming if key.kid not in old and key.replaces_kid is None
+    )
     for key in incoming:
         if key.kid in old or key.replaces_kid is None:
             continue

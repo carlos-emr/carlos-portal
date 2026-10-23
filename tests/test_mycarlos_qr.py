@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from carlos_patient_portal.models import utc_now
 from carlos_patient_portal.mycarlos_links import IssuedLinkCode
 from carlos_patient_portal.mycarlos_qr import link_qr_data_uri, link_qr_payload
-from carlos_patient_portal.models import utc_now
 from carlos_patient_portal.view_models import MyCarlosViewModel
 from carlos_patient_portal.web_support import CONTENT_SECURITY_POLICY
 from tests.test_mycarlos_portal import form_token, make_portal, sign_in
@@ -17,8 +17,11 @@ from tests.test_mycarlos_portal import form_token, make_portal, sign_in
 FIXTURE = json.loads((Path(__file__).parent / "fixtures/qr-link-v1.json").read_text())
 
 
-@pytest.mark.parametrize("vector", [value for value in FIXTURE["vectors"] if value["expect_accept"]],
-                         ids=lambda value: value["name"])
+@pytest.mark.parametrize(
+    "vector",
+    [value for value in FIXTURE["vectors"] if value["expect_accept"]],
+    ids=lambda value: value["name"],
+)
 def test_producer_matches_shared_original_utf8_bytes(vector):
     expected = bytes.fromhex(vector["payload_hex"])
     values = json.loads(expected)
@@ -27,7 +30,9 @@ def test_producer_matches_shared_original_utf8_bytes(vector):
     image = link_qr_data_uri(issued, values["portal_url"])
     assert image.startswith("data:image/png;base64,")
     assert base64.b64decode(image.partition(",")[2], validate=True).startswith(b"\x89PNG\r\n\x1a\n")
-    assert values["code"] not in repr(MyCarlosViewModel(code_display=values["code"], qr_png_data_uri=image))
+    assert values["code"] not in repr(
+        MyCarlosViewModel(code_display=values["code"], qr_png_data_uri=image)
+    )
 
 
 def test_qr_only_appears_in_no_store_creation_post_with_full_response_csp(caplog):
@@ -40,7 +45,10 @@ def test_qr_only_appears_in_no_store_creation_post_with_full_response_csp(caplog
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["pragma"] == "no-cache"
-    assert response.headers["content-security-policy"] == CONTENT_SECURITY_POLICY + "; img-src 'self' data:"
+    assert (
+        response.headers["content-security-policy"]
+        == CONTENT_SECURITY_POLICY + "; img-src 'self' data:"
+    )
     image = re.search(r'src="(data:image/png;base64,[A-Za-z0-9+/=]+)"', response.text)
     assert image is not None
     assert image.group(1) not in caplog.text

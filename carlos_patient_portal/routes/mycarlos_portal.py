@@ -245,7 +245,10 @@ def register_mycarlos_portal_routes(
         qr_png_data_uri = link_qr_data_uri(issued, settings.public_base_url)
         session.commit()
         return render(
-            request, session, authenticated, code_display=issued.display,
+            request,
+            session,
+            authenticated,
+            code_display=issued.display,
             qr_png_data_uri=qr_png_data_uri,
         )
 
