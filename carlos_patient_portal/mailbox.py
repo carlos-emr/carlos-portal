@@ -723,10 +723,22 @@ def prune_terminal_copies(
             )
             if device is None:
                 raise RuntimeError("Terminal copy lacks its owning identity")
-            # Unlike upload admission, cleanup must never initialize missing counters.
-            if session.get(MailboxClinic, clinic_id) is None:
+            # Use the exact existing mutex, then lock ONLY an existing clinic row.
+            # Admission's clinic_lock initializer must never run during cleanup.
+            if session.get_bind().dialect.name == "postgresql":
+                lock_id = int.from_bytes(
+                    sha256(b"mycarlos-mailbox-v1\0" + clinic_id.encode("utf-8")).digest()[:8],
+                    "big",
+                    signed=True,
+                )
+                session.execute(
+                    text("select pg_advisory_xact_lock(:lock_id)"), {"lock_id": lock_id}
+                )
+            if (
+                locked(session, select(MailboxClinic).where(MailboxClinic.clinic_id == clinic_id))
+                is None
+            ):
                 raise RuntimeError("Terminal copy lacks its existing quota counters")
-            clinic_lock(session, clinic_id)
             account_quota = locked(
                 session, select(MailboxAccount).where(MailboxAccount.account_id == account_id)
             )
