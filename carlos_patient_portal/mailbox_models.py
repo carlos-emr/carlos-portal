@@ -29,12 +29,20 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from carlos_patient_portal.database import Base
+from carlos_patient_portal.models import PatientPortalAccount, PatientPortalMyCarlosDevice
 
 
-class MailboxClinic(Base):
+class MailboxBase(DeclarativeBase):
+    """Proposed mailbox schema, separate from deployed migration/role metadata.
+
+    Only explicit owned test fixtures create these nine tables. Production schema
+    numbering, grants and audit-union review remain required before deployment.
+    """
+
+
+class MailboxClinic(MailboxBase):
     __tablename__ = "patient_portal_mycarlos_mailbox_clinics"
     __table_args__ = (
         CheckConstraint(
@@ -58,7 +66,7 @@ class MailboxClinic(Base):
     retained_floor: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
 
 
-class MailboxAccount(Base):
+class MailboxAccount(MailboxBase):
     __tablename__ = "patient_portal_mycarlos_mailbox_accounts"
     __table_args__ = (
         CheckConstraint(
@@ -66,13 +74,13 @@ class MailboxAccount(Base):
         ),
     )
     account_id: Mapped[int] = mapped_column(
-        ForeignKey("patient_portal_accounts.id", ondelete="RESTRICT"), primary_key=True
+        ForeignKey(PatientPortalAccount.__table__.c.id, ondelete="RESTRICT"), primary_key=True
     )
     waiting_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     waiting_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
-class MailboxDevice(Base):
+class MailboxDevice(MailboxBase):
     __tablename__ = "patient_portal_mycarlos_mailbox_devices"
     __table_args__ = (
         CheckConstraint(
@@ -81,7 +89,8 @@ class MailboxDevice(Base):
         ),
     )
     device_id: Mapped[int] = mapped_column(
-        ForeignKey("patient_portal_mycarlos_devices.id", ondelete="RESTRICT"), primary_key=True
+        ForeignKey(PatientPortalMyCarlosDevice.__table__.c.id, ondelete="RESTRICT"),
+        primary_key=True,
     )
     waiting_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     waiting_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -90,7 +99,7 @@ class MailboxDevice(Base):
     removal_event_recorded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
-class MailboxCopy(Base):
+class MailboxCopy(MailboxBase):
     __tablename__ = "patient_portal_mycarlos_mailbox_copies"
     __table_args__ = (
         UniqueConstraint(
@@ -125,10 +134,12 @@ class MailboxCopy(Base):
     )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     account_id: Mapped[int] = mapped_column(
-        ForeignKey("patient_portal_accounts.id", ondelete="RESTRICT"), nullable=False, index=True
+        ForeignKey(PatientPortalAccount.__table__.c.id, ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
     )
     device_id: Mapped[int] = mapped_column(
-        ForeignKey("patient_portal_mycarlos_devices.id", ondelete="RESTRICT"),
+        ForeignKey(PatientPortalMyCarlosDevice.__table__.c.id, ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
@@ -148,7 +159,7 @@ class MailboxCopy(Base):
     receipt_sha256: Mapped[str | None] = mapped_column(String(64))
 
 
-class MailboxBlob(Base):
+class MailboxBlob(MailboxBase):
     __tablename__ = "patient_portal_mycarlos_mailbox_blobs"
     __table_args__ = (
         CheckConstraint("length(sealed) between 49 and 20971520", name="ck_pp_mailbox_blob_size"),
@@ -160,7 +171,7 @@ class MailboxBlob(Base):
     sealed: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
 
 
-class MailboxProof(Base):
+class MailboxProof(MailboxBase):
     """One retained original compact; anchor and event rows refer to it without copying."""
 
     __tablename__ = "patient_portal_mycarlos_mailbox_proofs"
@@ -181,7 +192,7 @@ class MailboxProof(Base):
     recorded_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
-class MailboxAnchor(Base):
+class MailboxAnchor(MailboxBase):
     __tablename__ = "patient_portal_mycarlos_mailbox_anchors"
     __table_args__ = (
         UniqueConstraint("device_key_id", "sequence", name="uq_pp_mailbox_anchor_sequence"),
@@ -207,7 +218,7 @@ class MailboxAnchor(Base):
     )
 
 
-class MailboxEvent(Base):
+class MailboxEvent(MailboxBase):
     __tablename__ = "patient_portal_mycarlos_mailbox_events"
     __table_args__ = (
         UniqueConstraint("clinic_id", "sequence", name="uq_pp_mailbox_event_sequence"),
@@ -253,7 +264,7 @@ class MailboxEvent(Base):
     charged_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
-class MailboxRate(Base):
+class MailboxRate(MailboxBase):
     __tablename__ = "patient_portal_mycarlos_mailbox_rates"
     # All updates under the owning clinic mutex; window is a fixed UTC minute.
     clinic_id: Mapped[str] = mapped_column(String(64), primary_key=True)

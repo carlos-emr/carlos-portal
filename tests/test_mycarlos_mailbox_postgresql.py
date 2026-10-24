@@ -24,7 +24,6 @@ import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import sessionmaker
 
-from carlos_patient_portal.database import Base
 from carlos_patient_portal.mailbox import (
     MailboxLimits,
     admit_upload,
@@ -33,6 +32,7 @@ from carlos_patient_portal.mailbox import (
 )
 from carlos_patient_portal.mailbox_codec import MailboxRefusal
 from carlos_patient_portal.mailbox_models import (
+    MailboxBase,
     MailboxBlob,
     MailboxClinic,
     MailboxCopy,
@@ -59,12 +59,7 @@ def pg_mailboxes(request):
     with engine.connect() as connection:
         assert connection.scalar(text("select current_schema()")).startswith("mycarlos_test_")
     # Future separately authorized PG runtime ONLY. No protected/versioned migration here.
-    Base.metadata.create_all(
-        engine,
-        tables=[
-            table for name, table in Base.metadata.tables.items() if "mycarlos_mailbox_" in name
-        ],
-    )
+    MailboxBase.metadata.create_all(engine)
     factory = sessionmaker(engine, expire_on_commit=False)
     targets = []
     for index in range(2):

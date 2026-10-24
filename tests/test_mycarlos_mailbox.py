@@ -39,6 +39,7 @@ from carlos_patient_portal.mailbox import (
 from carlos_patient_portal.mailbox_codec import MailboxRefusal, parse_upload
 from carlos_patient_portal.mailbox_models import (
     MailboxAnchor,
+    MailboxBase,
     MailboxBlob,
     MailboxClinic,
     MailboxCopy,
@@ -73,8 +74,7 @@ def mailbox_factory(request):
     factory = request.getfixturevalue("portal")
     with factory() as session:
         engine = session.get_bind()
-    tables = [table for name, table in Base.metadata.tables.items() if "mycarlos_mailbox_" in name]
-    Base.metadata.create_all(engine, tables=tables)
+    MailboxBase.metadata.create_all(engine)
     return factory
 
 
@@ -440,3 +440,33 @@ def test_repeated_pickups_fill_finite_event_budget_and_collection_reopens_admiss
         clinic = clinic_lock(session, "clinic-a")
         assert prune_collected_events(session, clinic, limit=100) > 0
         assert clinic.ordinary_event_bytes == clinic.terminal_event_bytes == 0
+
+
+def test_proposed_mailbox_metadata_keeps_deployed_schema_and_domain_foreign_keys():
+    proposed = MailboxBase.metadata
+    expected = {
+        "patient_portal_mycarlos_mailbox_clinics",
+        "patient_portal_mycarlos_mailbox_accounts",
+        "patient_portal_mycarlos_mailbox_devices",
+        "patient_portal_mycarlos_mailbox_copies",
+        "patient_portal_mycarlos_mailbox_blobs",
+        "patient_portal_mycarlos_mailbox_proofs",
+        "patient_portal_mycarlos_mailbox_anchors",
+        "patient_portal_mycarlos_mailbox_events",
+        "patient_portal_mycarlos_mailbox_rates",
+    }
+    assert set(proposed.tables) == expected
+    assert proposed is not Base.metadata
+    assert expected.isdisjoint(Base.metadata.tables)
+    domain = {"patient_portal_accounts", "patient_portal_mycarlos_devices"}
+    external = []
+    for table in proposed.tables.values():
+        for foreign in table.foreign_keys:
+            assert foreign.ondelete == "RESTRICT"
+            target = foreign.column
+            if target.table.name in domain:
+                assert target is Base.metadata.tables[target.table.name].c.id
+                external.append(foreign)
+            else:
+                assert target.table.metadata is proposed
+    assert len(external) == 4
