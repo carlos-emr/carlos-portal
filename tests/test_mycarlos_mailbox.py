@@ -21,7 +21,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from carlos_patient_portal.database import Base
 from carlos_patient_portal.mailbox import (
@@ -34,18 +34,27 @@ from carlos_patient_portal.mailbox import (
     expire_batch,
     mailbox_lock,
     prune_collected_events,
+    prune_terminal_copies,
     record_request_anchor,
+    terminate,
 )
 from carlos_patient_portal.mailbox_codec import MailboxRefusal, parse_upload
 from carlos_patient_portal.mailbox_models import (
+    MailboxAccount,
     MailboxAnchor,
     MailboxBlob,
     MailboxClinic,
     MailboxCopy,
+    MailboxDevice,
     MailboxEvent,
     MailboxProof,
+    MailboxRate,
 )
-from carlos_patient_portal.models import PatientPortalMyCarlosDevice
+from carlos_patient_portal.models import (
+    PatientPortalAccount,
+    PatientPortalMyCarlosDevice,
+    PatientPortalMyCarlosRecipient,
+)
 from carlos_patient_portal.mycarlos_devices import remove_device
 from tests import delivery_contract_reference as ref
 from tests.test_device_identity import portal  # noqa: F401 -- reused owned migrated fixture
@@ -440,3 +449,167 @@ def test_repeated_pickups_fill_finite_event_budget_and_collection_reopens_admiss
         clinic = clinic_lock(session, "clinic-a")
         assert prune_collected_events(session, clinic, limit=100) > 0
         assert clinic.ordinary_event_bytes == clinic.terminal_event_bytes == 0
+
+
+def _retention_snapshot(factory, *, include_copies=False):
+    models = (
+        MailboxAccount,
+        MailboxAnchor,
+        MailboxBlob,
+        MailboxClinic,
+        MailboxDevice,
+        MailboxEvent,
+        MailboxProof,
+        MailboxRate,
+        PatientPortalAccount,
+        PatientPortalMyCarlosDevice,
+        PatientPortalMyCarlosRecipient,
+    )
+    if include_copies:
+        models += (MailboxCopy,)
+    with factory() as session:
+        return {
+            model.__tablename__: session.execute(
+                select(model.__table__).order_by(*model.__table__.primary_key.columns)
+            ).all()
+            for model in models
+        }
+
+
+def _picked_up_for_retention(factory, *, prune=True, acknowledge=True):
+    store(factory)
+    with factory() as session, session.begin():
+        accept_receipt(
+            session,
+            target(session),
+            delivery_id=VALUE.outer["delivery_id"],
+            compact=RECEIPT,
+            request_assertion=ASSERTION,
+            request_anchor=None,
+            clock=lambda: NOW,
+            limits=LIMITS,
+        )
+        clinic = clinic_lock(session, "clinic-a")
+        if acknowledge:
+            acknowledge_events(session, clinic, through=clinic.event_sequence)
+        if prune:
+            assert prune_collected_events(session, clinic) == 1
+
+
+@pytest.mark.parametrize("retention_days", [1, 14])
+@pytest.mark.parametrize("offset", [-1, 0, 1])
+def test_terminal_retention_requires_both_original_expiry_and_audit_horizon(
+    mailbox_factory, retention_days, offset
+):
+    _picked_up_for_retention(mailbox_factory)
+    before = _retention_snapshot(mailbox_factory)
+    eligible_at = max(VALUE.outer["expires_at"], NOW + retention_days * 86400)
+    assert prune_terminal_copies(
+        mailbox_factory, retention_days=retention_days, clock=lambda: eligible_at + offset
+    ) == int(offset >= 0)
+    assert _retention_snapshot(mailbox_factory) == before
+    with mailbox_factory() as session:
+        assert count(session, MailboxCopy) == int(offset < 0)
+    assert (
+        prune_terminal_copies(
+            mailbox_factory, retention_days=retention_days, clock=lambda: eligible_at + offset
+        )
+        == 0
+    )
+
+
+@pytest.mark.parametrize("acknowledged", [False, True])
+def test_terminal_retention_any_retained_event_keeps_tombstone_and_exact_proofs(
+    mailbox_factory, acknowledged
+):
+    _picked_up_for_retention(mailbox_factory, prune=False, acknowledge=acknowledged)
+    before = _retention_snapshot(mailbox_factory, include_copies=True)
+    far_future = NOW + 30 * 86400
+    assert prune_terminal_copies(mailbox_factory, retention_days=14, clock=lambda: far_future) == 0
+    assert _retention_snapshot(mailbox_factory, include_copies=True) == before
+    with mailbox_factory() as session, session.begin():
+        clinic = clinic_lock(session, "clinic-a")
+        assert clinic.acked_through == int(acknowledged)
+        acknowledge_events(session, clinic, through=clinic.event_sequence)
+        assert prune_collected_events(session, clinic) == 1
+    retained = _retention_snapshot(mailbox_factory)
+    with mailbox_factory() as session:
+        assert count(session, MailboxProof) == 2
+        assert count(session, MailboxAnchor) == 1
+        assert session.scalar(select(MailboxCopy.receipt_sha256)) is not None
+    assert prune_terminal_copies(mailbox_factory, retention_days=14, clock=lambda: far_future) == 1
+    assert _retention_snapshot(mailbox_factory) == retained
+
+
+def test_terminal_retention_never_expires_waiting_copy_or_touches_its_blob(mailbox_factory):
+    store(mailbox_factory)
+    before = _retention_snapshot(mailbox_factory, include_copies=True)
+    assert (
+        prune_terminal_copies(mailbox_factory, retention_days=1, clock=lambda: NOW + 30 * 86400)
+        == 0
+    )
+    assert _retention_snapshot(mailbox_factory, include_copies=True) == before
+    with mailbox_factory() as session:
+        assert session.scalar(select(MailboxCopy.status)) == "waiting"
+        assert session.scalar(select(MailboxBlob.sealed)) == VALUE.sealed
+
+
+def test_terminal_retention_refuses_inconsistent_primary_blob_without_mutation(mailbox_factory):
+    _picked_up_for_retention(mailbox_factory)
+    with mailbox_factory() as session, session.begin():
+        copy_id = session.scalar(select(MailboxCopy.id))
+        session.add(MailboxBlob(copy_id=copy_id, sealed=VALUE.sealed))
+    before = _retention_snapshot(mailbox_factory, include_copies=True)
+    with pytest.raises(RuntimeError, match="Terminal copy retains primary ciphertext"):
+        prune_terminal_copies(mailbox_factory, retention_days=1, clock=lambda: NOW + 30 * 86400)
+    assert _retention_snapshot(mailbox_factory, include_copies=True) == before
+
+
+@pytest.mark.parametrize("missing", [MailboxClinic, MailboxAccount, MailboxDevice])
+def test_terminal_retention_never_initializes_missing_quota_rows(mailbox_factory, missing):
+    _picked_up_for_retention(mailbox_factory)
+    with mailbox_factory() as session, session.begin():
+        session.execute(delete(missing))
+    before = _retention_snapshot(mailbox_factory, include_copies=True)
+    with pytest.raises(RuntimeError, match="Terminal copy lacks its existing quota counters"):
+        prune_terminal_copies(mailbox_factory, retention_days=1, clock=lambda: NOW + 30 * 86400)
+    assert _retention_snapshot(mailbox_factory, include_copies=True) == before
+
+
+def test_terminal_retention_default_batch_never_exceeds_one_hundred(mailbox_factory):
+    preparation_limits = replace(LIMITS, clinic_uploads_per_minute=200)
+    for _index in range(101):
+        upload = parse_upload(
+            ref.frame(ref.canonical_json(dict(VALUE.outer, delivery_id=str(uuid4()))), VALUE.sealed)
+        )
+        with mailbox_factory() as session, session.begin():
+            m = target(session)
+            admit_upload(session, m, upload, now=NOW, limits=preparation_limits)
+            copy = session.scalar(
+                select(MailboxCopy).where(MailboxCopy.delivery_id == upload.outer["delivery_id"])
+            )
+            terminate(session, m, copy, status="expired", now=VALUE.outer["expires_at"])
+    with mailbox_factory() as session, session.begin():
+        clinic = clinic_lock(session, "clinic-a")
+        acknowledge_events(session, clinic, through=clinic.event_sequence)
+        assert prune_collected_events(session, clinic) == 100
+        assert prune_collected_events(session, clinic) == 1
+    before = _retention_snapshot(mailbox_factory)
+
+    def clock():
+        return VALUE.outer["expires_at"] + 86400
+
+    assert prune_terminal_copies(mailbox_factory, retention_days=1, clock=clock) == 100
+    with mailbox_factory() as session:
+        assert count(session, MailboxCopy) == 1
+    assert prune_terminal_copies(mailbox_factory, retention_days=1, clock=clock) == 1
+    assert prune_terminal_copies(mailbox_factory, retention_days=1, clock=clock) == 0
+    assert _retention_snapshot(mailbox_factory) == before
+
+
+@pytest.mark.parametrize("limit", [0, 101, True, 1.5])
+def test_terminal_retention_rejects_unbounded_or_noninteger_limit(mailbox_factory, limit):
+    before = _retention_snapshot(mailbox_factory, include_copies=True)
+    with pytest.raises(ValueError, match="limit must be an integer between 1 and 100"):
+        prune_terminal_copies(mailbox_factory, retention_days=1, limit=limit)
+    assert _retention_snapshot(mailbox_factory, include_copies=True) == before

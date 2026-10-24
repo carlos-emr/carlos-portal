@@ -658,3 +658,117 @@ def expire_batch(
                     terminate(session, m, copy, status="expired", now=now)
                     expired += 1
     return expired
+
+
+def prune_terminal_copies(
+    session_factory: sessionmaker[Session],
+    *,
+    retention_days: int,
+    limit: int = 100,
+    clock: Callable[[], int | float] = time,
+) -> int:
+    """Delete aged terminal tombstones only after physical event collection.
+
+    The caller supplies the configured, policy-validated audit horizon. This service
+    has no scheduling or maintenance credentials and never purges an identity,
+    retained proof/anchor, waiting blob, or quota charge.
+    """
+    if type(retention_days) is not int or retention_days < 1:
+        raise ValueError("retention_days must be a positive integer")
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError("limit must be an integer between 1 and 100")
+    horizon = retention_days * 86400
+    now = int(clock())
+    matching_event = select(MailboxEvent.id).where(
+        MailboxEvent.clinic_id == MailboxCopy.clinic_id,
+        MailboxEvent.device_key_id == MailboxCopy.device_key_id,
+        MailboxEvent.delivery_id == MailboxCopy.delivery_id,
+    )
+    # Candidate discovery takes no row locks; every decision is repeated below.
+    with session_factory() as session:
+        candidates = list(
+            session.execute(
+                select(
+                    MailboxCopy.id,
+                    MailboxCopy.account_id,
+                    MailboxCopy.device_id,
+                    MailboxCopy.device_key_id,
+                    MailboxCopy.clinic_id,
+                )
+                .where(
+                    MailboxCopy.status.in_(("picked_up", "expired", "removed")),
+                    MailboxCopy.expires_at <= now,
+                    MailboxCopy.terminal_at <= now - horizon,
+                    ~matching_event.exists(),
+                )
+                .order_by(MailboxCopy.terminal_at, MailboxCopy.id)
+                .limit(limit)
+            )
+        )
+    deleted = 0
+    for copy_id, account_id, device_id, device_key_id, clinic_id in candidates:
+        with session_factory() as session, session.begin():
+            account = locked(
+                session, select(PatientPortalAccount).where(PatientPortalAccount.id == account_id)
+            )
+            if account is None or account.clinic_id != clinic_id:
+                raise RuntimeError("Terminal copy lacks its owning identity")
+            device = locked(
+                session,
+                select(PatientPortalMyCarlosDevice).where(
+                    PatientPortalMyCarlosDevice.id == device_id,
+                    PatientPortalMyCarlosDevice.account_id == account_id,
+                    PatientPortalMyCarlosDevice.device_key_id == device_key_id,
+                ),
+            )
+            if device is None:
+                raise RuntimeError("Terminal copy lacks its owning identity")
+            # Unlike upload admission, cleanup must never initialize missing counters.
+            if session.get(MailboxClinic, clinic_id) is None:
+                raise RuntimeError("Terminal copy lacks its existing quota counters")
+            clinic_lock(session, clinic_id)
+            account_quota = locked(
+                session, select(MailboxAccount).where(MailboxAccount.account_id == account_id)
+            )
+            device_quota = session.get(MailboxDevice, device_id, populate_existing=True)
+            if account_quota is None or device_quota is None:
+                raise RuntimeError("Terminal copy lacks its existing quota counters")
+            copy = locked(session, select(MailboxCopy).where(MailboxCopy.id == copy_id))
+            if copy is None:
+                continue
+            if (
+                copy.account_id,
+                copy.device_id,
+                copy.device_key_id,
+                copy.clinic_id,
+            ) != (account_id, device_id, device_key_id, clinic_id):
+                raise RuntimeError("Terminal copy changed its owning identity")
+            fresh_now = int(clock())
+            if (
+                copy.status not in ("picked_up", "expired", "removed")
+                or copy.terminal_at is None
+                or copy.expires_at > fresh_now
+                or copy.terminal_at > fresh_now - horizon
+            ):
+                continue
+            # The clinic mutex excludes append/prune. ACK alone is insufficient:
+            # even an acknowledged row must remain until physical event pruning.
+            if (
+                session.scalar(
+                    select(MailboxEvent.id)
+                    .where(
+                        MailboxEvent.clinic_id == clinic_id,
+                        MailboxEvent.device_key_id == device_key_id,
+                        MailboxEvent.delivery_id == copy.delivery_id,
+                    )
+                    .limit(1)
+                )
+                is not None
+            ):
+                continue
+            if session.get(MailboxBlob, copy.id) is not None:
+                raise RuntimeError("Terminal copy retains primary ciphertext")
+            session.delete(copy)
+            session.flush()
+        deleted += 1
+    return deleted

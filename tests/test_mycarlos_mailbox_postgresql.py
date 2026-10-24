@@ -27,8 +27,13 @@ from sqlalchemy.orm import sessionmaker
 from carlos_patient_portal.database import Base
 from carlos_patient_portal.mailbox import (
     MailboxLimits,
+    accept_receipt,
+    acknowledge_events,
     admit_upload,
+    clinic_lock,
     mailbox_lock,
+    prune_collected_events,
+    prune_terminal_copies,
     record_request_anchor,
 )
 from carlos_patient_portal.mailbox_codec import MailboxRefusal
@@ -37,6 +42,7 @@ from carlos_patient_portal.mailbox_models import (
     MailboxClinic,
     MailboxCopy,
     MailboxEvent,
+    MailboxProof,
 )
 from carlos_patient_portal.models import (
     PatientPortalAccount,
@@ -45,7 +51,7 @@ from carlos_patient_portal.models import (
 )
 from carlos_patient_portal.mycarlos_devices import remove_device
 from tests import delivery_contract_reference as ref
-from tests.test_mycarlos_mailbox import NOW, VALUE
+from tests.test_mycarlos_mailbox import ASSERTION, NOW, RECEIPT, VALUE
 from tests.test_mycarlos_postgresql import migrated_postgresql_engine  # noqa: F401
 from tests.test_postgresql_integration import POSTGRES_URL
 
@@ -260,3 +266,79 @@ def test_removal_commits_before_waiting_upload_cannot_create_or_resurrect_blob(p
             "device_removed",
             "removed",
         ]
+
+
+def test_terminal_retention_waits_for_inflight_idempotent_receipt_transaction(pg_mailboxes):
+    engine, factory, targets = pg_mailboxes
+    account_id, device = targets[0]
+    with factory() as session, session.begin():
+        m = mailbox_lock(session, account_id=account_id, device_key_id=device.device_key_id)
+        admit_upload(session, m, VALUE, now=NOW, limits=LIMITS)
+        accept_receipt(
+            session,
+            m,
+            delivery_id=VALUE.outer["delivery_id"],
+            compact=RECEIPT,
+            request_assertion=ASSERTION,
+            request_anchor=None,
+            clock=lambda: NOW,
+            limits=LIMITS,
+        )
+        clinic = clinic_lock(session, "clinic-a")
+        acknowledge_events(session, clinic, through=clinic.event_sequence)
+        assert prune_collected_events(session, clinic) == 1
+    with factory() as session:
+        original_proofs = list(
+            session.execute(select(MailboxProof.id, MailboxProof.compact).order_by(MailboxProof.id))
+        )
+    connected = Event()
+    request_pid = []
+
+    def cleanup():
+        # Both service sessions share this owned connection/backend. The PID is
+        # observed before beginning either transaction, without an extra open txn.
+        with engine.connect() as connection:
+            request_pid.append(connection.scalar(text("select pg_backend_pid()")))
+            connection.rollback()
+            cleanup_factory = sessionmaker(connection, expire_on_commit=False)
+            connected.set()
+            return prune_terminal_copies(
+                cleanup_factory,
+                retention_days=1,
+                clock=lambda: VALUE.outer["expires_at"] + 86400,
+            )
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with factory() as holder, holder.begin():
+            m = mailbox_lock(holder, account_id=account_id, device_key_id=device.device_key_id)
+            holder_pid = holder.scalar(text("select pg_backend_pid()"))
+            assert accept_receipt(
+                holder,
+                m,
+                delivery_id=VALUE.outer["delivery_id"],
+                compact=RECEIPT,
+                request_assertion=ASSERTION,
+                request_anchor=None,
+                clock=lambda: VALUE.outer["expires_at"] + 86400,
+                limits=LIMITS,
+            ) == {"status": "picked_up"}
+            pending = pool.submit(cleanup)
+            assert connected.wait(5)
+            observe_block(engine, holder_pid, request_pid[0], pending)
+            with engine.connect() as observer:
+                assert observer.scalar(select(func.count()).select_from(MailboxCopy)) == 1
+        assert pending.result(timeout=5) == 1
+    with factory() as session:
+        assert session.scalar(select(func.count()).select_from(MailboxCopy)) == 0
+        assert session.scalar(select(func.count()).select_from(MailboxBlob)) == 0
+        assert (
+            list(
+                session.execute(
+                    select(MailboxProof.id, MailboxProof.compact).order_by(MailboxProof.id)
+                )
+            )
+            == original_proofs
+        )
+        assert session.scalar(select(MailboxClinic.waiting_count)) == 0
+        assert session.scalar(select(MailboxClinic.terminal_event_bytes)) == 0
+        assert session.scalar(select(MailboxClinic.reserved_terminal_bytes)) == 0
