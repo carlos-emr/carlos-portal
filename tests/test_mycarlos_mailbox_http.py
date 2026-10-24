@@ -24,9 +24,13 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
-from carlos_patient_portal.database import Base
 from carlos_patient_portal.mailbox_codec import parse_upload
-from carlos_patient_portal.mailbox_models import MailboxAnchor, MailboxBlob, MailboxCopy
+from carlos_patient_portal.mailbox_models import (
+    MailboxAnchor,
+    MailboxBase,
+    MailboxBlob,
+    MailboxCopy,
+)
 from carlos_patient_portal.models import (
     PatientPortalAccount,
     PatientPortalMyCarlosDevice,
@@ -90,8 +94,7 @@ def http_mailbox(monkeypatch, request):
             {"delivery-sync": {JOB_KID: ref.b64url(JOB.ed25519_public)}}
         ),
     )
-    tables = [table for name, table in Base.metadata.tables.items() if "mycarlos_mailbox_" in name]
-    Base.metadata.create_all(app.state.database_engine, tables=tables)
+    MailboxBase.metadata.create_all(app.state.database_engine)
     with app.state.session_factory() as session, session.begin():
         account = PatientPortalAccount(
             clinic_id="clinic-a",
