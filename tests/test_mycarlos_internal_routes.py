@@ -15,8 +15,8 @@
 """CARLOS's internal myCarlos routes (carlos-portal#41, M2-d): clinic keys and patient devices."""
 
 import json
-from pathlib import Path
 from hashlib import sha256
+from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -48,13 +48,13 @@ from carlos_patient_portal.mycarlos_devices import (
     publish_clinic_keys,
 )
 from carlos_patient_portal.system_jobs import JOB_ONLY_PERMISSIONS, SYSTEM_JOBS
+from tests import delivery_contract_reference as ref
 from tests.support import (
     TEST_JOB_ASSERTION_KEY_IDS,
     TEST_JOB_ASSERTION_PUBLIC_KEYS,
     carlos_job_headers,
     carlos_staff_headers,
 )
-from tests import delivery_contract_reference as ref
 from tests.test_internal_api import INTERNAL_API_TOKEN, internal_app
 
 CLINIC = "clinic-a"

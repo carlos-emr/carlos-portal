@@ -245,8 +245,7 @@ def _check_claims(
         or (
             "recipient_id" in required
             and (
-                not isinstance(claims["recipient_id"], str)
-                or not claims["recipient_id"].isascii()
+                not isinstance(claims["recipient_id"], str) or not claims["recipient_id"].isascii()
             )
         )
         or ("vault_head_link" in claims and not _is_hex_64(claims["vault_head_link"]))

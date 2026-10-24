@@ -31,7 +31,10 @@ def decode(value):
 
 def material(value):
     return ClinicKeyMaterial(
-        value["kid"], decode(value["spki"]), value["status"], value.get("replaces_kid"),
+        value["kid"],
+        decode(value["spki"]),
+        value["status"],
+        value.get("replaces_kid"),
         decode(value["replacement_signature"]) if "replacement_signature" in value else None,
     )
 
@@ -40,9 +43,14 @@ def material(value):
 def test_actual_proof_verifier_consumes_shared_bytes(vector):
     valid = False
     try:
-        predecessor = ClinicKeyMaterial(vector["replaces_kid"], decode(vector["predecessor_spki"]), "active")
+        predecessor = ClinicKeyMaterial(
+            vector["replaces_kid"], decode(vector["predecessor_spki"]), "active"
+        )
         successor = ClinicKeyMaterial(
-            vector["kid"], decode(vector["spki"]), "active", vector["replaces_kid"],
+            vector["kid"],
+            decode(vector["spki"]),
+            "active",
+            vector["replaces_kid"],
             decode(vector["signature"]),
         )
         verify_replacement_proof(vector["clinic_id"], predecessor, successor)
@@ -75,24 +83,36 @@ def test_actual_inventory_validator_consumes_shared_cases(vector):
 def test_actual_recovery_authentication_primitive(vector):
     device = FIXTURE["device"]
     record = DeviceRecord(
-        device_id=1, account_id=1, device_key_id=device["device_key_id"],
+        device_id=1,
+        account_id=1,
+        device_key_id=device["device_key_id"],
         ed25519_public_key=decode(device["ed25519_public_key"]),
         status=vector["device_status"],
         recipient_id="FAKE recipient" if vector["recipient_exists"] else None,
     )
     expected_hash = staff_request_hash(
-        vector["method"], bytes.fromhex(vector["raw_path_hex"]),
-        bytes.fromhex(vector["raw_query_hex"]), bytes.fromhex(vector["body_hex"]),
+        vector["method"],
+        bytes.fromhex(vector["raw_path_hex"]),
+        bytes.fromhex(vector["raw_query_hex"]),
+        bytes.fromhex(vector["body_hex"]),
     )
     valid_primitive_names = {
-        "valid-prefixed-recovery", "valid-original-noncanonical-signed-json", "nonce-replay",
-        "fresh-valid-removed", "replayed-removed-is-generic", "missing-account", "missing-recipient",
+        "valid-prefixed-recovery",
+        "valid-original-noncanonical-signed-json",
+        "nonce-replay",
+        "fresh-valid-removed",
+        "replayed-removed-is-generic",
+        "missing-account",
+        "missing-recipient",
     }
     try:
         principal = verify_link_recovery_assertion(
             vector["assertion"],
-            find_device=lambda kid: record if vector["known_device"] and kid == record.device_key_id else None,
-            expected_request_hash=expected_hash, now=vector["now"],
+            find_device=lambda kid: (
+                record if vector["known_device"] and kid == record.device_key_id else None
+            ),
+            expected_request_hash=expected_hash,
+            now=vector["now"],
         )
     except DeviceRefusal as refusal:
         assert vector["name"] not in valid_primitive_names

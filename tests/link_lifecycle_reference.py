@@ -27,16 +27,20 @@ PREFIXED_PATH = b"/patients/api/mycarlos/link"
 
 def replacement_statement(clinic, predecessor, successor):
     return REPLACEMENT_DOMAIN + ref.frame(
-        clinic.encode("utf-8"), predecessor.kid.encode("utf-8"),
-        successor.kid.encode("utf-8"), successor.spki,
+        clinic.encode("utf-8"),
+        predecessor.kid.encode("utf-8"),
+        successor.kid.encode("utf-8"),
+        successor.spki,
     )
 
 
 def entry(key, *, status="active", predecessor=None, signature=None):
     result = {"kid": key.kid, "spki": ref.b64url(key.spki), "status": status}
     if predecessor is not None:
-        proof = signature if signature is not None else predecessor.sign(
-            replacement_statement(key.clinic_id, predecessor, key)
+        proof = (
+            signature
+            if signature is not None
+            else predecessor.sign(replacement_statement(key.clinic_id, predecessor, key))
         )
         result.update(replaces_kid=predecessor.kid, replacement_signature=ref.b64url(proof))
     return result
@@ -72,10 +76,15 @@ def generate():
         raw = replacement_statement(clinic, old, new)
         proof = old.sign(raw) if proof is None else proof
         return {
-            "name": name, "clinic_id": clinic, "replaces_kid": old.kid,
-            "predecessor_spki": ref.b64url(old.spki), "kid": new.kid,
-            "spki": ref.b64url(new.spki), "statement_hex": raw.hex(),
-            "signature": ref.b64url(proof), "expect_valid": valid,
+            "name": name,
+            "clinic_id": clinic,
+            "replaces_kid": old.kid,
+            "predecessor_spki": ref.b64url(old.spki),
+            "kid": new.kid,
+            "spki": ref.b64url(new.spki),
+            "statement_hex": raw.hex(),
+            "signature": ref.b64url(proof),
+            "expect_valid": valid,
         }
 
     proofs = [
@@ -97,12 +106,18 @@ def generate():
 
     def inventory(name, previous, incoming, *, mode="refresh", accept=True, notice=None):
         current_response = response(device, incoming)
-        inventories.append({
-            "name": name, "mode": mode, "previous": previous,
-            "incoming": incoming, "response_utf8_hex": ref.canonical_json(current_response).hex(),
-            "expect_accept": accept, "required_notice": notice,
-            "refusal_preserves_previous": not accept,
-        })
+        inventories.append(
+            {
+                "name": name,
+                "mode": mode,
+                "previous": previous,
+                "incoming": incoming,
+                "response_utf8_hex": ref.canonical_json(current_response).hex(),
+                "expect_accept": accept,
+                "required_notice": notice,
+                "refusal_preserves_previous": not accept,
+            }
+        )
 
     active_a = entry(a)
     revoked_a = entry(a, status="revoked")
@@ -113,47 +128,99 @@ def generate():
     inventory("bootstrap-all-revoked", [], [revoked_a], mode="bootstrap", accept=False)
     inventory("signed-replacement", [active_a], [revoked_a, signed_b], notice="signed")
     inventory("historical-edge-stays-valid", [revoked_a, signed_b], [revoked_a, signed_b])
-    inventory("two-skipped-rotations", [active_a], [revoked_a, revoked_b, signed_c], notice="signed")
-    inventory("nearest-prior-active-ancestor", [active_a, signed_b],
-              [revoked_a, revoked_b, signed_c], notice="signed")
+    inventory(
+        "two-skipped-rotations", [active_a], [revoked_a, revoked_b, signed_c], notice="signed"
+    )
+    inventory(
+        "nearest-prior-active-ancestor",
+        [active_a, signed_b],
+        [revoked_a, revoked_b, signed_c],
+        notice="signed",
+    )
     inventory("unsigned-replacement", [active_a], [revoked_a, entry(b)], notice="unsigned")
-    inventory("offline-unsigned-root-then-signed-child", [active_a],
-              [revoked_a, entry(b, status="revoked"), signed_c], notice="unsigned")
-    inventory("previously-revoked-cannot-authorize-new-edge", [revoked_a],
-              [revoked_a, signed_b], accept=False)
+    inventory(
+        "offline-unsigned-root-then-signed-child",
+        [active_a],
+        [revoked_a, entry(b, status="revoked"), signed_c],
+        notice="unsigned",
+    )
+    inventory(
+        "previously-revoked-cannot-authorize-new-edge",
+        [revoked_a],
+        [revoked_a, signed_b],
+        accept=False,
+    )
     inventory("revocation-replay-cannot-revive", [revoked_a], [active_a], accept=False)
     inventory("all-revoked-refresh-and-reopen", [active_a], [revoked_a], notice="revocation")
     inventory("omitted-historical-key", [revoked_a, signed_b], [signed_b], accept=False)
     changed_proof_b = entry(b, predecessor=a, signature=high)
-    inventory("valid-resigned-proof-cannot-replace-immutable-bytes", [revoked_a, signed_b],
-              [revoked_a, changed_proof_b], accept=False)
-    inventory("fork-two-valid-successors", [active_a],
-              [revoked_a, signed_b, entry(d, predecessor=a)], accept=False)
-    inventory("cycle-valid-individual-signatures", [],
-              [entry(a, predecessor=b), signed_b], mode="bootstrap", accept=False)
+    inventory(
+        "valid-resigned-proof-cannot-replace-immutable-bytes",
+        [revoked_a, signed_b],
+        [revoked_a, changed_proof_b],
+        accept=False,
+    )
+    inventory(
+        "fork-two-valid-successors",
+        [active_a],
+        [revoked_a, signed_b, entry(d, predecessor=a)],
+        accept=False,
+    )
+    inventory(
+        "cycle-valid-individual-signatures",
+        [],
+        [entry(a, predecessor=b), signed_b],
+        mode="bootstrap",
+        accept=False,
+    )
     inventory("missing-predecessor", [], [signed_b], mode="bootstrap", accept=False)
     invalid_proof_b = entry(b, predecessor=a, signature=b"\x00" * 64)
-    inventory("invalid-proof-is-not-unsigned", [active_a],
-              [revoked_a, invalid_proof_b], accept=False)
+    inventory(
+        "invalid-proof-is-not-unsigned", [active_a], [revoked_a, invalid_proof_b], accept=False
+    )
     missing_pair = dict(signed_b)
     del missing_pair["replacement_signature"]
     inventory("one-paired-field-missing", [active_a], [revoked_a, missing_pair], accept=False)
     chain = [ref.ClinicKey(f"lifecycle-v1 long-chain {index}", CLINIC) for index in range(17)]
-    long_entries = [entry(key, status="revoked" if index < 15 else "active",
-                          predecessor=chain[index - 1] if index else None)
-                    for index, key in enumerate(chain)]
+    long_entries = [
+        entry(
+            key,
+            status="revoked" if index < 15 else "active",
+            predecessor=chain[index - 1] if index else None,
+        )
+        for index, key in enumerate(chain)
+    ]
     inventory("sixteen-keys-fifteen-edges", [entry(chain[0])], long_entries[:16], notice="signed")
     inventory("seventeen-keys-over-limit", [entry(chain[0])], long_entries, accept=False)
 
     assertions = []
 
-    def recovery(name, *, changes=None, key=device, known=True, removed=False,
-                 account=True, recipient=True, replay=False, method="GET", path=PREFIXED_PATH,
-                 query=b"", body=b"", expected=200, duplicate=False, pretty=False):
+    def recovery(
+        name,
+        *,
+        changes=None,
+        key=device,
+        known=True,
+        removed=False,
+        account=True,
+        recipient=True,
+        replay=False,
+        method="GET",
+        path=PREFIXED_PATH,
+        query=b"",
+        body=b"",
+        expected=200,
+        duplicate=False,
+        pretty=False,
+    ):
         claims = {
-            "aud": RECOVERY_AUDIENCE, "exp": ref.NOW + 60, "iat": ref.NOW,
-            "iss": "mycarlos", "jti": str(UUID(int=len(assertions) + 1)),
-            "kid": device.device_key_id, "request_hash": ref.request_hash("GET", PREFIXED_PATH, b"", b""),
+            "aud": RECOVERY_AUDIENCE,
+            "exp": ref.NOW + 60,
+            "iat": ref.NOW,
+            "iss": "mycarlos",
+            "jti": str(UUID(int=len(assertions) + 1)),
+            "kid": device.device_key_id,
+            "request_hash": ref.request_hash("GET", PREFIXED_PATH, b"", b""),
         }
         claims.update(changes or {})
         payload = ref.canonical_json(claims)
@@ -162,17 +229,30 @@ def generate():
         if pretty:
             payload = json.dumps(claims, ensure_ascii=False, indent=1).encode()
         compact = ref.compact_ed25519_bytes(key.ed25519, payload)
-        expected_body = response(device, [revoked_a, signed_b]) if expected == 200 else (
-            {"code": "device_removed"} if expected == 403 else {"detail": "not found"}
+        expected_body = (
+            response(device, [revoked_a, signed_b])
+            if expected == 200
+            else ({"code": "device_removed"} if expected == 403 else {"detail": "not found"})
         )
-        assertions.append({
-            "name": name, "assertion": compact, "payload_hex": payload.hex(),
-            "method": method, "raw_path_hex": path.hex(), "raw_query_hex": query.hex(),
-            "body_hex": body.hex(), "now": ref.NOW, "known_device": known,
-            "device_status": "removed" if removed else "active", "account_exists": account,
-            "recipient_exists": recipient, "nonce_already_consumed": replay,
-            "expected_status": expected, "expected_response_utf8_hex": ref.canonical_json(expected_body).hex(),
-        })
+        assertions.append(
+            {
+                "name": name,
+                "assertion": compact,
+                "payload_hex": payload.hex(),
+                "method": method,
+                "raw_path_hex": path.hex(),
+                "raw_query_hex": query.hex(),
+                "body_hex": body.hex(),
+                "now": ref.NOW,
+                "known_device": known,
+                "device_status": "removed" if removed else "active",
+                "account_exists": account,
+                "recipient_exists": recipient,
+                "nonce_already_consumed": replay,
+                "expected_status": expected,
+                "expected_response_utf8_hex": ref.canonical_json(expected_body).hex(),
+            }
+        )
 
     recovery("valid-prefixed-recovery")
     recovery("valid-original-noncanonical-signed-json", pretty=True)
@@ -183,7 +263,13 @@ def generate():
     recovery("expired", changes={"iat": ref.NOW - 100, "exp": ref.NOW - 40}, expected=404)
     recovery("future", changes={"iat": ref.NOW + 31, "exp": ref.NOW + 91}, expected=404)
     recovery("duplicate-signed-claim", duplicate=True, expected=404)
-    recovery("unknown-key", changes={"kid": stranger.device_key_id}, key=stranger, known=False, expected=404)
+    recovery(
+        "unknown-key",
+        changes={"kid": stranger.device_key_id},
+        key=stranger,
+        known=False,
+        expected=404,
+    )
     recovery("forged-known-key", key=stranger, expected=404)
     recovery("wrong-prefix", path=b"/api/mycarlos/link", expected=404)
     recovery("wrong-method", method="POST", expected=404)
@@ -191,8 +277,12 @@ def generate():
     recovery("nonempty-body", body=b"{}", expected=404)
     recovery("nonce-replay", replay=True, expected=404)
     recovery("fresh-valid-removed", removed=True, expected=403)
-    recovery("expired-removed-is-generic", removed=True,
-             changes={"iat": ref.NOW - 100, "exp": ref.NOW - 40}, expected=404)
+    recovery(
+        "expired-removed-is-generic",
+        removed=True,
+        changes={"iat": ref.NOW - 100, "exp": ref.NOW - 40},
+        expected=404,
+    )
     recovery("replayed-removed-is-generic", removed=True, replay=True, expected=404)
     recovery("missing-account", account=False, expected=404)
     recovery("missing-recipient", recipient=False, expected=404)
@@ -203,42 +293,77 @@ def generate():
             "tests/link_lifecycle_reference.py and copied unchanged. No real patient or "
             "production key. Fixed scenario clock; do not use these test seeds operationally."
         ),
-        "fixture_version": 1, "frozen_contract_sha256": CONTRACT_SHA256,
-        "existing_delivery_fixture_sha256": hashlib.sha256(ref.FIXTURE_PATH.read_bytes()).hexdigest(),
+        "fixture_version": 1,
+        "frozen_contract_sha256": CONTRACT_SHA256,
+        "existing_delivery_fixture_sha256": hashlib.sha256(
+            ref.FIXTURE_PATH.read_bytes()
+        ).hexdigest(),
         "constants": {
             "replacement_domain_hex": REPLACEMENT_DOMAIN.hex(),
-            "frame_length_bytes": 8, "recovery_audience": RECOVERY_AUDIENCE,
-            "recovery_route": "/api/mycarlos/link", "refresh_route": "/api/mycarlos/clinic-keys",
-            "maximum_keys": 16, "maximum_edges": 15, "signature_bytes": 64,
-            "accept_high_and_low_s": True, "now": ref.NOW,
+            "frame_length_bytes": 8,
+            "recovery_audience": RECOVERY_AUDIENCE,
+            "recovery_route": "/api/mycarlos/link",
+            "refresh_route": "/api/mycarlos/clinic-keys",
+            "maximum_keys": 16,
+            "maximum_edges": 15,
+            "signature_bytes": 64,
+            "accept_high_and_low_s": True,
+            "now": ref.NOW,
         },
-        "keys": {**{name: key.described() for name, key in keys.items()},
-                 "unicode_predecessor": ua.described(), "unicode_successor": ub.described()},
-        "device": device.described(), "unknown_device": stranger.described(),
-        "proof_vectors": proofs, "inventory_vectors": inventories, "recovery_vectors": assertions,
+        "keys": {
+            **{name: key.described() for name, key in keys.items()},
+            "unicode_predecessor": ua.described(),
+            "unicode_successor": ub.described(),
+        },
+        "device": device.described(),
+        "unknown_device": stranger.described(),
+        "proof_vectors": proofs,
+        "inventory_vectors": inventories,
+        "recovery_vectors": assertions,
         "state_cases": [
-            {"name": "pending-recovery-after-restart", "expect": (
-                "Reuse persisted original keys, bind returned device, save link/history "
-                "atomically; never reuse code."
-            )},
-            {"name": "completed-link-never-recovers", "expect": "No recovery request; preserve pinned trust and use refresh."},
-            {"name": "lock-or-stale-trust-revision", "expect": (
-                "Cancel pending result; no partial keys/notices/history/document-result "
-                "mutation."
-            )},
-            {"name": "unsigned-notice-durability", "expect": (
-                "Persist root and accepted descendant fingerprints with plain notice/history "
-                "before trust can produce Verified; no acknowledgment gate."
-            )},
-            {"name": "cross-origin-redirect", "expect": "No follow-up request and no completed link."},
-            {"name": "remove-during-recovery", "expect": (
-                "Fresh account then device lock/recheck gives removed403 if removal committed "
-                "first; never resurrect."
-            )},
-            {"name": "first-publish-concurrency", "expect": (
-                "Stable clinic mutex precedes full proof/graph/count validation even when "
-                "inventory was empty."
-            )},
+            {
+                "name": "pending-recovery-after-restart",
+                "expect": (
+                    "Reuse persisted original keys, bind returned device, save link/history "
+                    "atomically; never reuse code."
+                ),
+            },
+            {
+                "name": "completed-link-never-recovers",
+                "expect": "No recovery request; preserve pinned trust and use refresh.",
+            },
+            {
+                "name": "lock-or-stale-trust-revision",
+                "expect": (
+                    "Cancel pending result; no partial keys/notices/history/document-result "
+                    "mutation."
+                ),
+            },
+            {
+                "name": "unsigned-notice-durability",
+                "expect": (
+                    "Persist root and accepted descendant fingerprints with plain notice/history "
+                    "before trust can produce Verified; no acknowledgment gate."
+                ),
+            },
+            {
+                "name": "cross-origin-redirect",
+                "expect": "No follow-up request and no completed link.",
+            },
+            {
+                "name": "remove-during-recovery",
+                "expect": (
+                    "Fresh account then device lock/recheck gives removed403 if removal committed "
+                    "first; never resurrect."
+                ),
+            },
+            {
+                "name": "first-publish-concurrency",
+                "expect": (
+                    "Stable clinic mutex precedes full proof/graph/count validation even when "
+                    "inventory was empty."
+                ),
+            },
         ],
     }
 
