@@ -19,6 +19,7 @@ on:
       - feat/mycarlos-link-route
       - ci/agent3-portal48-postgresql-20261023
       - feat/agent3-portal-mycarlos-ui-20261023
+      - feat/agent3-portal-mycarlos-qr-20261023
   push:
     branches:
       - main
@@ -174,6 +175,7 @@ jobs:
           python -m pytest -q
           tests/test_postgresql_integration.py
           tests/test_mycarlos_postgresql.py
+          tests/test_mycarlos_mailbox_postgresql.py
 
       - name: Run patient portal Playwright browser checks
         if: matrix.python-version == '3.12'

@@ -45,6 +45,7 @@ from carlos_patient_portal.models import (
     CLINIC_KEY_STATUS_REVOKED,
     MYCARLOS_DEVICE_STATUS_ACTIVE,
     MYCARLOS_DEVICE_STATUS_REMOVED,
+    PatientPortalAccount,
     PatientPortalClinicKey,
     PatientPortalMyCarlosDevice,
     PatientPortalMyCarlosRecipient,
@@ -302,6 +303,7 @@ def remove_device(
     device_key_id: str,
     removed_by: str,
     now: datetime | None = None,
+    mailbox_enabled: bool = False,
 ) -> tuple[PatientPortalMyCarlosDevice, bool] | None:
     """Remove one of the account's devices. Returns the device and whether this call removed it.
 
@@ -309,6 +311,14 @@ def remove_device(
     caller cannot tell whether a key ID exists elsewhere. Removing a removed device changes
     nothing. Deleting the device's waiting copies arrives with the mailbox (milestone M4).
     """
+    account = session.scalar(
+        select(PatientPortalAccount)
+        .where(PatientPortalAccount.id == account_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if account is None:
+        return None
     device = session.scalar(
         select(PatientPortalMyCarlosDevice)
         .where(
@@ -316,11 +326,20 @@ def remove_device(
             PatientPortalMyCarlosDevice.device_key_id == device_key_id,
         )
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if device is None:
         return None
     if device.status != MYCARLOS_DEVICE_STATUS_ACTIVE:
         return device, False
+    if mailbox_enabled:
+        from carlos_patient_portal.mailbox import mailbox_lock, remove_waiting
+
+        m = mailbox_lock(
+            session, account_id=account_id, device_key_id=device_key_id, clinic_id=account.clinic_id
+        )
+        instant = utc_now() if now is None else now
+        remove_waiting(session, m, now=int(instant.timestamp()))
     device.status = MYCARLOS_DEVICE_STATUS_REMOVED
     device.removed_at = utc_now() if now is None else now
     device.removed_by = removed_by
