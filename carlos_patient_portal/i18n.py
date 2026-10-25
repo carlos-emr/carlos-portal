@@ -727,6 +727,11 @@ MYCARLOS_TEXT_CATALOG: dict[str, dict[str, str]] = {
         "mycarlos_mfa_required": "Verify your sign-in before linking or removing a device.",
         "mycarlos_verify": "Verify sign-in",
         "mycarlos_portal_address": "Portal address",
+        "mycarlos_qr_label": "Scan in myCarlos",
+        "mycarlos_qr_alt": "QR code for linking myCarlos to this portal.",
+        "mycarlos_qr_unavailable": (
+            "QR code unavailable. Contact your clinic if you cannot use this portal address."
+        ),
     },
     "fr": {
         "mycarlos_mfa_rate_limited": (
@@ -773,6 +778,12 @@ MYCARLOS_TEXT_CATALOG: dict[str, dict[str, str]] = {
         ),
         "mycarlos_verify": "Vérifier la connexion",
         "mycarlos_portal_address": "Adresse du portail",
+        "mycarlos_qr_label": "Scanner dans myCarlos",
+        "mycarlos_qr_alt": "Code QR pour lier myCarlos à ce portail.",
+        "mycarlos_qr_unavailable": (
+            "Code QR indisponible. Contactez votre clinique si vous ne pouvez pas utiliser "
+            "cette adresse du portail."
+        ),
     },
     "es": {
         "mycarlos_mfa_rate_limited": (
@@ -819,6 +830,12 @@ MYCARLOS_TEXT_CATALOG: dict[str, dict[str, str]] = {
         ),
         "mycarlos_verify": "Verificar inicio de sesión",
         "mycarlos_portal_address": "Dirección del portal",
+        "mycarlos_qr_label": "Escanear en myCarlos",
+        "mycarlos_qr_alt": "Código QR para vincular myCarlos con este portal.",
+        "mycarlos_qr_unavailable": (
+            "Código QR no disponible. Contacte con su clínica si no puede usar esta dirección "
+            "del portal."
+        ),
     },
     "pl": {
         "mycarlos_mfa_rate_limited": (
@@ -862,6 +879,12 @@ MYCARLOS_TEXT_CATALOG: dict[str, dict[str, str]] = {
         "mycarlos_mfa_required": "Potwierdź logowanie przed połączeniem lub usunięciem urządzenia.",
         "mycarlos_verify": "Potwierdź logowanie",
         "mycarlos_portal_address": "Adres portalu",
+        "mycarlos_qr_label": "Zeskanuj w myCarlos",
+        "mycarlos_qr_alt": "Kod QR do połączenia myCarlos z tym portalem.",
+        "mycarlos_qr_unavailable": (
+            "Kod QR jest niedostępny. Skontaktuj się ze swoją przychodnią, jeśli nie możesz "
+            "użyć tego adresu portalu."
+        ),
     },
     "pt-BR": {
         "mycarlos_mfa_rate_limited": (
@@ -907,6 +930,12 @@ MYCARLOS_TEXT_CATALOG: dict[str, dict[str, str]] = {
         ),
         "mycarlos_verify": "Verificar acesso",
         "mycarlos_portal_address": "Endereço do portal",
+        "mycarlos_qr_label": "Escanear no myCarlos",
+        "mycarlos_qr_alt": "Código QR para vincular o myCarlos a este portal.",
+        "mycarlos_qr_unavailable": (
+            "Código QR indisponível. Entre em contato com sua clínica se não conseguir usar "
+            "este endereço do portal."
+        ),
     },
 }
 

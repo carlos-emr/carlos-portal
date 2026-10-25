@@ -154,6 +154,7 @@ class MyCarlosViewModel:
     devices: tuple[MyCarlosDeviceRowViewModel, ...] = ()
     portal_address: str | None = None
     code_display: str | None = field(default=None, repr=False)
+    qr_png_data_uri: str | None = field(default=None, repr=False)
     error: str | None = None
     confirmation: MyCarlosDeviceRowViewModel | None = None
     mfa_required: bool = False

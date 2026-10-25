@@ -1218,3 +1218,11 @@ a.module-tile:focus-visible {
 .mycarlos-portal-address {
   overflow-wrap: anywhere;
 }
+
+.mycarlos-link-qr {
+  display: block;
+  max-inline-size: 100%;
+  block-size: auto;
+  background: white;
+  image-rendering: pixelated;
+}
