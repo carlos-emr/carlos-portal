@@ -974,16 +974,39 @@ up (plan: carlos-portal#41; format: `docs/architecture/mycarlos-delivery.md`). T
 - pending "Link myCarlos" codes, as keyed hashes only, and the wrong codes for the limits;
 - the CARLOS clinic public keys handed to myCarlos when it links.
 
-The audit trail accepts five new event types, which nothing writes yet: `mycarlos.link_code_create`,
-`mycarlos.link` (a device link attempt; refusals have outcome `failure`), `mycarlos.device_list`,
-`mycarlos.device_remove` and `mycarlos.clinic_keys_publish`.
+The audit trail has five event types for it: `mycarlos.link_code_create`, `mycarlos.link` (every
+device link attempt, with its answer as the reason; refusals have outcome `failure`),
+`mycarlos.device_list`, `mycarlos.device_remove` and `mycarlos.clinic_keys_publish`.
 
 Requests from a linked device carry `X-MyCarlos-Device-Assertion`: a compact Ed25519 object
 signed with that link's device key and bound to the exact request, the same framing as CARLOS's
 staff and job assertions. `carlos_patient_portal/device_identity.py` checks it in the spec's order
 (and the link request, signed with the new device's key), and its nonce goes into the store
 staff and job assertions use. `tests/test_device_identity.py` runs every shared vector through
-those checks. No route uses them yet.
+those checks.
+
+`POST /api/mycarlos/link` links a device with a one-time code. The patient makes the code in the
+portal (the page arrives in a later step), and the device sends it, with its two new public keys
+and name, signed with the new key:
+
+- **The code:** a public 8-character `link_id` and a secret 10-character code (Crockford base32),
+  bound to the account and the signed-in session that made it, for 10 minutes and one use. Only an
+  HMAC-SHA256 of the code is stored, under its own key derived from
+  `PATIENT_PORTAL_SESSION_SECRET`; rotating that secret makes pending codes stop matching (they
+  expire within 10 minutes anyway, and the sessions that made them are signed out).
+- **Limits:** 5 wrong codes end a link; an account has at most 3 pending links (a fourth replaces
+  the oldest); 10 wrong codes within 24 hours pause linking until 24 hours after the last one. A
+  wrong code for a link that has ended counts nothing.
+- **Answers:** a failed assertion is the generic 404; a wrong, expired, used or paused code is 403
+  `{"code": "link_code_invalid"}`, the same for every reason; a key already linked is 409
+  `device_exists`; and while CARLOS has published no active clinic key, every link is 409
+  `clinic_keys_missing`, checked before the code, so the code stays pending and nothing is counted
+  (a device pins the key list it links with, and nothing refreshes it). On success: the recipient ID (made on the first link), the device key ID, the
+  clinic's ID and name, and its key list (`kid`, SubjectPublicKeyInfo, status).
+- **Per caller:** the route has the login limiter's budget in its own bucket, and the reference
+  nginx policy adds its own zone and a 4 KiB body limit (`/api/mycarlos/link` and its
+  `/patient/...` twin). Under a path prefix, the device signs the public path; the portal adds its
+  root path back before it checks the signature.
 
 `PATIENT_PORTAL_MYCARLOS_DELIVERY_ENABLED` (default `false`) turns the feature on. Leave it off:
 it is still being built, and while it is off none of its pages or routes exist.

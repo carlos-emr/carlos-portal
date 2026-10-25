@@ -26,8 +26,9 @@ The purpose strings inside `hash_auth_token` are deliberately kept as well. They
 sub-purposes that share one derived key (session tokens and their lookups), and they cost nothing.
 
 Rotating the configured secret rotates every derived key together, which signs every patient
-out and invalidates pending MFA challenges and reset tokens. That is already the documented
-behaviour of rotating `PATIENT_PORTAL_SESSION_SECRET`; deriving keys does not change it.
+out and invalidates pending MFA challenges, reset tokens and "Link myCarlos" codes (a pending code
+simply stops matching and expires; its session is signed out anyway). That is already the
+documented behaviour of rotating `PATIENT_PORTAL_SESSION_SECRET`; deriving keys does not change it.
 """
 
 from base64 import urlsafe_b64encode
@@ -46,6 +47,8 @@ MFA_KEY_PURPOSE = "mfa"
 # This is a public HKDF purpose label, not a password or credential.
 PASSWORD_RESET_KEY_PURPOSE = "password-reset"  # noqa: S105
 EMAIL_CHANGE_KEY_PURPOSE = "email-change"
+# Keys the stored hash of each "Link myCarlos" code (carlos-portal#41).
+MYCARLOS_LINK_KEY_PURPOSE = "mycarlos-link"
 
 
 def derive_token_key(session_secret: str, purpose: str) -> str:
@@ -72,7 +75,7 @@ def derive_token_key(session_secret: str, purpose: str) -> str:
 
 
 # repr suppressed: every field is live key material, and the default dataclass repr would put
-# all five into any log line or traceback that formats the object.
+# all six into any log line or traceback that formats the object.
 @dataclass(frozen=True, repr=False)
 class PortalTokenKeys:
     """One independent key per authentication-token purpose.
@@ -86,6 +89,7 @@ class PortalTokenKeys:
     mfa: str
     password_reset: str
     email_change: str
+    mycarlos_link: str
 
     @classmethod
     def derive(cls, session_secret: str) -> "PortalTokenKeys":
@@ -95,4 +99,5 @@ class PortalTokenKeys:
             mfa=derive_token_key(session_secret, MFA_KEY_PURPOSE),
             password_reset=derive_token_key(session_secret, PASSWORD_RESET_KEY_PURPOSE),
             email_change=derive_token_key(session_secret, EMAIL_CHANGE_KEY_PURPOSE),
+            mycarlos_link=derive_token_key(session_secret, MYCARLOS_LINK_KEY_PURPOSE),
         )

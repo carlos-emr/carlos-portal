@@ -78,6 +78,7 @@ from carlos_patient_portal.routes.activation import register_activation_routes
 from carlos_patient_portal.routes.auth import register_auth_routes, register_logout_route
 from carlos_patient_portal.routes.dev_admin import register_dev_admin_routes
 from carlos_patient_portal.routes.fhir import register_fhir_routes
+from carlos_patient_portal.routes.mycarlos import register_mycarlos_device_routes
 from carlos_patient_portal.routes.portal import (
     register_patient_email_password_routes,
     register_portal_routes,
@@ -105,6 +106,8 @@ from carlos_patient_portal.web_support import (
     FHIR_PATH_PREFIX,
     MAX_FORM_BODY_BYTES,
     MAX_FORM_FIELD_COUNT,
+    MYCARLOS_API_PREFIX,
+    MYCARLOS_LINK_PATH,
     NO_STORE_PATHS,
     NOT_FOUND_DETAIL,
     PACKAGE_DIR,
@@ -507,11 +510,20 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
             response.headers["Retry-After"] = str(settings.maintenance_retry_after_seconds)
         elif is_rate_limited_path(request.url.path):
             is_login = request.url.path == "/auth/login"
-            limiter = runtime.auth_rate_limiter if is_login else runtime.rate_limiter
-            client_reference = get_request_client_reference(request, settings)
-            retry_after_seconds = limiter.consume(
-                f"login:{client_reference}" if is_login else client_reference
+            # Linking a device checks a one-time code, so it gets the login limiter's stricter
+            # budget, in its own bucket.
+            is_mycarlos_link = request.url.path == MYCARLOS_LINK_PATH
+            limiter = (
+                runtime.auth_rate_limiter if is_login or is_mycarlos_link else runtime.rate_limiter
             )
+            client_reference = get_request_client_reference(request, settings)
+            if is_login:
+                bucket = f"login:{client_reference}"
+            elif is_mycarlos_link:
+                bucket = f"mycarlos-link:{client_reference}"
+            else:
+                bucket = client_reference
+            retry_after_seconds = limiter.consume(bucket)
             if retry_after_seconds is None:
                 response = await call_next(request)
             elif request.url.path.startswith(FHIR_PATH_PREFIX):
@@ -547,6 +559,7 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
             request.url.path in NO_STORE_PATHS
             or request.url.path.startswith("/auth/")
             or request.url.path.startswith("/api/patient/")
+            or request.url.path.startswith(MYCARLOS_API_PREFIX)
             or request.url.path.startswith(FHIR_PATH_PREFIX)
             or is_portal_path(request.url.path)
             or request.url.path.startswith("/internal/")
@@ -978,3 +991,5 @@ def register_app_routes(app: FastAPI, runtime: PortalRuntime) -> None:
     register_activation_routes(app, runtime, route_dependencies)
     register_dev_admin_routes(app, runtime, route_dependencies)
     register_carlos_internal_routes(app, runtime)
+    if runtime.settings.mycarlos_delivery_enabled:
+        register_mycarlos_device_routes(app, runtime)

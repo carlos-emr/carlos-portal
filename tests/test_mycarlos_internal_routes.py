@@ -211,7 +211,11 @@ def test_each_route_names_its_one_caller() -> None:
     app = mycarlos_app()
     policies = {}
     for route in app.routes:
-        if isinstance(route, APIRoute) and "/mycarlos" in route.path:
+        if (
+            isinstance(route, APIRoute)
+            and route.path.startswith("/internal/carlos/")
+            and ("/mycarlos" in route.path)
+        ):
             dependency = next(
                 dependency.call
                 for dependency in route.dependant.dependencies
