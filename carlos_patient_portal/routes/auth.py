@@ -52,6 +52,7 @@ from carlos_patient_portal.auth import (
     PortalSessionInvalidError,
     complete_password_reset,
     get_mfa_challenge_delivery_state,
+    get_mfa_challenge_for_token,
     logout_patient_session,
     record_password_reset_delivery_outcome,
     request_password_reset,
@@ -68,7 +69,13 @@ from carlos_patient_portal.delivery_outbox import (
 )
 from carlos_patient_portal.email_delivery import PortalEmailDeliveryError
 from carlos_patient_portal.i18n import portal_text
-from carlos_patient_portal.models import AUDIT_OUTCOME_FAILURE, AUDIT_OUTCOME_SUCCESS
+from carlos_patient_portal.models import (
+    AUDIT_OUTCOME_FAILURE,
+    AUDIT_OUTCOME_SUCCESS,
+    MFA_CHALLENGE_STATUS_VERIFIED,
+    MFA_DELIVERY_METHOD_EMAIL,
+    MFA_DELIVERY_METHOD_SMS,
+)
 from carlos_patient_portal.notifications import (
     build_password_reset_url,
     record_mfa_delivery_and_commit,
@@ -122,6 +129,7 @@ from carlos_patient_portal.web_support import (
     render_public_auth_template,
     request_locale,
     set_csrf_cookie,
+    set_portal_mfa_proof_cookie,
     set_portal_session_cookie,
     templates,
 )
@@ -240,7 +248,6 @@ def build_auth_dependencies(
             allow_email=auth_policy.allow_email_mfa,
         )
 
-
     return AuthRouteDependencies(
         settings=settings,
         get_app_database_session=get_app_database_session,
@@ -262,6 +269,7 @@ def register_login_routes(
     deps: AuthRouteDependencies,
 ) -> None:
     """Password sign-in, browser and JSON."""
+
     @app.post("/auth/login", response_model=LoginResponse)
     async def login(
         request: Request,
@@ -401,13 +409,13 @@ def register_login_routes(
         return login_response_payload(result, settings=deps.settings)
 
 
-
 def register_mfa_routes(
     app: FastAPI,
     runtime: PortalRuntime,
     deps: AuthRouteDependencies,
 ) -> None:
     """MFA challenge resend and verification."""
+
     @app.post("/auth/mfa/resend", response_model=MfaChallengeResponse)
     async def resend_mfa(
         request: Request,
@@ -624,9 +632,33 @@ def register_mfa_routes(
                 status_code=status.HTTP_303_SEE_OTHER,
             )
             set_portal_session_cookie(redirect_response, session_token, settings=deps.settings)
+            if deps.settings.mycarlos_delivery_enabled:
+                verified_challenge = await run_in_threadpool(
+                    get_mfa_challenge_for_token,
+                    session,
+                    payload.mfa_challenge_token,
+                    challenge_token_secret=runtime.token_keys.mfa,
+                )
+                if (
+                    verified_challenge is not None
+                    and verified_challenge.status == MFA_CHALLENGE_STATUS_VERIFIED
+                    and (
+                        verified_challenge.delivery_method == MFA_DELIVERY_METHOD_SMS
+                        or (
+                            verified_challenge.delivery_method == MFA_DELIVERY_METHOD_EMAIL
+                            and deps.settings.is_development
+                        )
+                    )
+                ):
+                    set_portal_mfa_proof_cookie(
+                        redirect_response,
+                        session_token,
+                        delivery_method=verified_challenge.delivery_method,
+                        proof_secret=runtime.token_keys.mycarlos_mfa_proof,
+                        settings=deps.settings,
+                    )
             return redirect_response
         return {"status": "signed_in", "session_token": session_token}
-
 
 
 def register_password_reset_routes(
@@ -635,6 +667,7 @@ def register_password_reset_routes(
     deps: AuthRouteDependencies,
 ) -> None:
     """Password reset: request, page, and completion."""
+
     @app.get("/auth/password-reset", name="password_reset_request_page")
     def password_reset_request_page(request: Request) -> Response:
         return deps.render_password_reset_request(request)
@@ -702,9 +735,7 @@ def register_password_reset_routes(
                 await run_in_threadpool(session.rollback)
                 runtime.operational_metrics.record_failure("password_reset_queue_full")
                 headers = {
-                    "Retry-After": str(
-                        deps.settings.password_reset_queue_retry_after_seconds
-                    )
+                    "Retry-After": str(deps.settings.password_reset_queue_retry_after_seconds)
                 }
                 if is_browser_form:
                     response = deps.render_password_reset_request(
@@ -871,13 +902,13 @@ def register_password_reset_routes(
         return {"status": "password_reset", "username": account.username}
 
 
-
 def register_email_change_routes(
     app: FastAPI,
     runtime: PortalRuntime,
     deps: AuthRouteDependencies,
 ) -> None:
     """Confirming a portal email change from the new mailbox."""
+
     @app.get("/auth/email-change/confirm", name="email_change_confirm_page")
     def email_change_confirm_page(request: Request) -> Response:
         return render_public_auth_template(
@@ -981,12 +1012,12 @@ def register_email_change_routes(
         )
 
 
-
 def register_session_routes(
     app: FastAPI,
     deps: AuthRouteDependencies,
 ) -> None:
     """Reading the current authenticated session."""
+
     @app.get("/auth/session", response_model=SessionResponse)
     def read_session(
         authenticated_session: Annotated[
@@ -1001,8 +1032,6 @@ def register_session_routes(
             "clinic_id": account.clinic_id,
             "demographic_no": account.demographic_no,
         }
-
-
 
 
 def register_auth_routes(

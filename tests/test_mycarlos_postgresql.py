@@ -22,23 +22,28 @@ the database constraints, audit event vocabulary and downgrade guards.
 
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import timedelta
 from hashlib import sha256
 from itertools import count
-from threading import Barrier
+from threading import Barrier, Event
 from uuid import uuid4
 
 import pytest
 from alembic import command
-from sqlalchemy import Engine, create_engine, func, inspect, select
+from fastapi.testclient import TestClient
+from sqlalchemy import Engine, create_engine, delete, func, inspect, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.schema import CreateSchema, DropSchema
 
+from carlos_patient_portal import main, web_support
+from carlos_patient_portal.auth import AuthenticatedPortalSession, create_patient_session
 from carlos_patient_portal.device_identity import LinkRequest
 from carlos_patient_portal.models import (
     PatientPortalAccount,
     PatientPortalAuditEvent,
+    PatientPortalMfaChallenge,
     PatientPortalMyCarlosDevice,
     PatientPortalMyCarlosLinkCode,
     PatientPortalMyCarlosLinkFailure,
@@ -47,9 +52,15 @@ from carlos_patient_portal.models import (
     utc_now,
 )
 from carlos_patient_portal.mycarlos_links import create_link_code, link_device
+from carlos_patient_portal.runtime import auth_policy_from_settings
 from carlos_patient_portal.token_keys import PortalTokenKeys
 from tests import delivery_contract_reference as ref
-from tests.support import alembic_config_for_tests, upgrade_to_head
+from tests.support import (
+    RecordingPortalSmsSender,
+    alembic_config_for_tests,
+    migrated_development_app,
+    upgrade_to_head,
+)
 from tests.test_postgresql_integration import POSTGRES_URL
 
 pytestmark = pytest.mark.skipif(
@@ -355,3 +366,155 @@ def test_postgresql_linking_migration_round_trip_and_populated_downgrade_guard(
     with pytest.raises(RuntimeError, match="myCarlos devices are linked"):
         downgrade_linking(engine)
     assert tables <= set(inspect(engine).get_table_names())
+
+
+def step_up_app(monkeypatch, engine: Engine, initial_snapshot):
+    """Exercise real HTTP handlers against only the fixture's migrated, owned PostgreSQL schema."""
+    with engine.connect() as connection:
+        assert connection.scalar(text("select current_schema()")).startswith("mycarlos_test_")
+    monkeypatch.setattr(main, "create_portal_engine", lambda *_args, **_kwargs: engine)
+    original_builder = main.build_route_dependencies
+
+    def synchronized_dependencies(runtime):
+        dependencies = original_builder(runtime)
+        authenticate = dependencies.get_portal_cookie_session_or_redirect
+
+        def synchronized_authentication(request, session):
+            result = authenticate(request, session)
+            if (
+                isinstance(result, AuthenticatedPortalSession)
+                and request.url.path == "/portal/mycarlos/mfa"
+                and not getattr(request.state, "mfa_test_snapshot", False)
+            ):
+                request.state.mfa_test_snapshot = True
+                initial_snapshot()
+            return result
+
+        return replace(
+            dependencies, get_portal_cookie_session_or_redirect=synchronized_authentication
+        )
+
+    monkeypatch.setattr(main, "build_route_dependencies", synchronized_dependencies)
+    sms = RecordingPortalSmsSender()
+    app = migrated_development_app(
+        database_url=POSTGRES_URL,
+        session_secret="FAKE PostgreSQL MFA session root" * 2,
+        require_mfa=False,
+        session_idle_timeout_seconds=1800,
+        mycarlos_delivery_enabled=True,
+        sms_sender=sms,
+    )
+    return app, sms
+
+
+def step_up_sessions(app, *, count: int = 2, stale: bool = False):
+    settings = app.state.settings
+    assert settings.session_secret is not None
+    keys = PortalTokenKeys.derive(settings.session_secret.get_secret_value())
+    policy = auth_policy_from_settings(settings)
+    now = utc_now()
+    with app.state.session_factory() as session, session.begin():
+        account = PatientPortalAccount(
+            clinic_id=settings.clinic_id,
+            demographic_no=7101,
+            username="fake.postgres.mfa",
+            email="mfa@example.test",
+            phone_number="+15555550123",
+            preferred_mfa_method="sms",
+            password_hash="FAKE-cookie-session-already-authenticated",
+            status="active",
+            created_at=now - timedelta(hours=1),
+        )
+        session.add(account)
+        session.flush()
+        tokens = [
+            create_patient_session(
+                session,
+                account,
+                policy=policy,
+                session_token_secret=keys.session,
+                now=now - timedelta(minutes=6) if stale else now,
+            )
+            for _ in range(count)
+        ]
+        session_ids = list(session.scalars(select(PatientPortalSession.id)))
+        account_id = account.id
+    return account_id, tokens, session_ids, keys
+
+
+def step_up_client(app, token: str, keys: PortalTokenKeys):
+    client = TestClient(app)
+    csrf = web_support.create_csrf_token(keys.csrf)
+    client.cookies.set(web_support.PORTAL_SESSION_COOKIE_NAME, token, path="/portal")
+    client.cookies.set(web_support.CSRF_COOKIE_NAME, csrf)
+    return client, csrf
+
+
+def test_postgresql_two_authenticated_sessions_cannot_bypass_sms_cooldown(
+    migrated_postgresql_engine: Engine, monkeypatch
+) -> None:
+    snapshots = Barrier(2)
+    app, sms = step_up_app(
+        monkeypatch, migrated_postgresql_engine, lambda: snapshots.wait(timeout=10)
+    )
+    _account_id, tokens, _session_ids, keys = step_up_sessions(app)
+    clients = [step_up_client(app, token, keys) for token in tokens]
+    try:
+
+        def request_step_up(client_and_csrf):
+            client, csrf = client_and_csrf
+            return client.post("/portal/mycarlos/mfa", data={"csrf_token": csrf}).status_code
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = sorted(executor.map(request_step_up, clients))
+        assert results == [200, 429]
+        assert len(sms.messages) == 1
+        with app.state.session_factory() as session:
+            assert session.scalar(select(func.count()).select_from(PatientPortalMfaChallenge)) == 1
+    finally:
+        for client, _csrf in clients:
+            client.close()
+
+
+@pytest.mark.parametrize("change", ["revoked", "deleted"])
+def test_postgresql_session_invalidated_while_waiting_never_starts_mfa(
+    migrated_postgresql_engine: Engine, monkeypatch, change: str
+) -> None:
+    authenticated = Event()
+    app, sms = step_up_app(monkeypatch, migrated_postgresql_engine, authenticated.set)
+    account_id, tokens, session_ids, keys = step_up_sessions(app, count=1, stale=True)
+    client, csrf = step_up_client(app, tokens[0], keys)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            with app.state.session_factory() as holder, holder.begin():
+                holder.scalar(
+                    select(PatientPortalAccount)
+                    .where(PatientPortalAccount.id == account_id)
+                    .with_for_update()
+                )
+                pending = executor.submit(
+                    client.post,
+                    "/portal/mycarlos/mfa",
+                    data={"csrf_token": csrf},
+                    follow_redirects=False,
+                )
+                assert authenticated.wait(timeout=10)
+                if change == "deleted":
+                    holder.execute(
+                        delete(PatientPortalSession).where(
+                            PatientPortalSession.id == session_ids[0]
+                        )
+                    )
+                else:
+                    holder.execute(
+                        update(PatientPortalSession)
+                        .where(PatientPortalSession.id == session_ids[0])
+                        .values(revoked_at=utc_now(), revoked_reason="FAKE concurrent removal")
+                    )
+            response = pending.result(timeout=10)
+        assert response.status_code == 303
+        assert not sms.messages
+        with app.state.session_factory() as session:
+            assert session.scalar(select(func.count()).select_from(PatientPortalMfaChallenge)) == 0
+    finally:
+        client.close()

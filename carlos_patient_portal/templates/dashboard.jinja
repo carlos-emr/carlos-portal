@@ -48,6 +48,13 @@
               </div>
             </header>
             <div class="module-grid">
+              {% if mycarlos_enabled %}
+                <a class="module-tile" href="{{ url_for('portal_mycarlos') }}">
+                  <h2>{{ text.mycarlos_link }}</h2>
+                  <p>{{ text.mycarlos_approval }}</p>
+                  <span>{{ text.view_module }}</span>
+                </a>
+              {% endif %}
               <a class="module-tile" href="{{ url_for('portal_account') }}">
                 <h2>{{ text.account }}</h2>
                 <p>{{ text.dashboard_account_description }}</p>
@@ -81,6 +88,8 @@
                 <span>{{ text.view_module }}</span>
               </a>
             </div>
+          {% elif active_module == "mycarlos" %}
+            {% include "_mycarlos_link.jinja" %}
           {% elif active_module == "account" %}
             <header class="module-header">
               <h1>{{ text.account }}</h1>
@@ -202,6 +211,9 @@
                 </form>
               </section>
             </div>
+            {% if mycarlos_enabled and mycarlos %}
+              {% include "_mycarlos_devices.jinja" %}
+            {% endif %}
           {% elif active_module == "email-passwords" %}
             <header class="module-header">
               <h1>{{ text.email_passwords }}</h1>

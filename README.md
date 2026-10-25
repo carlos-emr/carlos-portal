@@ -986,7 +986,7 @@ staff and job assertions use. `tests/test_device_identity.py` runs every shared 
 those checks.
 
 `POST /api/mycarlos/link` links a device with a one-time code. The patient makes the code in the
-portal (the page arrives in a later step), and the device sends it, with its two new public keys
+portal at `/portal/mycarlos`, and the device sends it, with its two new public keys
 and name, signed with the new key:
 
 - **The code:** a public 8-character `link_id` and a secret 10-character code (Crockford base32),
@@ -1010,6 +1010,27 @@ and name, signed with the new key:
 
 `PATIENT_PORTAL_MYCARLOS_DELIVERY_ENABLED` (default `false`) turns the feature on. Leave it off:
 it is still being built, and while it is off none of its pages or routes exist.
+
+The patient browser controls use the same off switch:
+
+- `GET /portal/mycarlos` shows instructions without creating a code. `POST /portal/mycarlos/code`
+  requires CSRF and the current account's live session with proof of actual SMS MFA. Development
+  email MFA is accepted only in development; its proof is refused outside that mode. A
+  password-only session can complete the existing MFA flow through `POST /portal/mycarlos/mfa`.
+- A separate HKDF-derived key authenticates the HttpOnly, SameSite-Strict MFA proof cookie, bound
+  to the exact session token and factor. It is Secure outside development, respects the deployment
+  path prefix, and is cleared on logout or session replacement. It never authenticates device API
+  calls. No new browser cookie is issued while the feature is off.
+- Codes appear once in the no-store POST response, never in URLs or plaintext database fields.
+  Creating another retains the existing three-pending-code rule; it does not promise to revoke all
+  preceding codes immediately.
+- Account → Linked devices lists the account's active devices. Removal has a read-only confirmation
+  and a CSRF-protected POST, is account-scoped and idempotent, and preserves the device audit row.
+  Waiting-copy deletion belongs to the mailbox step; this browser checkpoint does not add it.
+
+This is the typed-code browser checkpoint. QR rendering/scanning and content-free device notices
+remain separate completion gates before the full M2 linking flow is complete. There is no new
+runtime dependency, database migration, document verification result or mailbox in this checkpoint.
 
 The internal routes CARLOS calls (registered only while the switch is on):
 

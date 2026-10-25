@@ -17,6 +17,8 @@ on:
       - feat/mycarlos-internal-routes
       - feat/mycarlos-device-identity
       - feat/mycarlos-link-route
+      - ci/agent3-portal48-postgresql-20261023
+      - feat/agent3-portal-mycarlos-ui-20261023
   push:
     branches:
       - main

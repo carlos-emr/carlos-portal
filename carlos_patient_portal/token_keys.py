@@ -49,6 +49,7 @@ PASSWORD_RESET_KEY_PURPOSE = "password-reset"  # noqa: S105
 EMAIL_CHANGE_KEY_PURPOSE = "email-change"
 # Keys the stored hash of each "Link myCarlos" code (carlos-portal#41).
 MYCARLOS_LINK_KEY_PURPOSE = "mycarlos-link"
+MYCARLOS_MFA_PROOF_KEY_PURPOSE = "mycarlos-session-mfa-proof-v1"
 
 
 def derive_token_key(session_secret: str, purpose: str) -> str:
@@ -75,7 +76,7 @@ def derive_token_key(session_secret: str, purpose: str) -> str:
 
 
 # repr suppressed: every field is live key material, and the default dataclass repr would put
-# all six into any log line or traceback that formats the object.
+# every purpose key into any log line or traceback that formats the object.
 @dataclass(frozen=True, repr=False)
 class PortalTokenKeys:
     """One independent key per authentication-token purpose.
@@ -90,6 +91,7 @@ class PortalTokenKeys:
     password_reset: str
     email_change: str
     mycarlos_link: str
+    mycarlos_mfa_proof: str
 
     @classmethod
     def derive(cls, session_secret: str) -> "PortalTokenKeys":
@@ -100,4 +102,5 @@ class PortalTokenKeys:
             password_reset=derive_token_key(session_secret, PASSWORD_RESET_KEY_PURPOSE),
             email_change=derive_token_key(session_secret, EMAIL_CHANGE_KEY_PURPOSE),
             mycarlos_link=derive_token_key(session_secret, MYCARLOS_LINK_KEY_PURPOSE),
+            mycarlos_mfa_proof=derive_token_key(session_secret, MYCARLOS_MFA_PROOF_KEY_PURPOSE),
         )

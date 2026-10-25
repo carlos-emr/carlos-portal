@@ -1,0 +1,20 @@
+<section class="settings-section" aria-labelledby="mycarlos-devices-heading">
+  <h2 id="mycarlos-devices-heading">{{ text.mycarlos_devices }}</h2>
+  {% if mycarlos.devices %}
+    <ul class="mycarlos-devices">
+      {% for device in mycarlos.devices %}
+        <li>
+          <h3 class="mycarlos-device-name">{{ device.name }}</h3>
+          <dl>
+            <dt>{{ text.mycarlos_linked }}</dt><dd>{{ device.linked_at }}</dd>
+            <dt>{{ text.mycarlos_last_seen }}</dt><dd>{{ device.last_seen_at }}</dd>
+          </dl>
+          <a class="secondary-action" href="{{ device.remove_href }}" aria-label="{{ text.mycarlos_remove }}: {{ device.name }}">{{ text.mycarlos_remove }}</a>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p>{{ text.mycarlos_empty }}</p>
+  {% endif %}
+  <p><a href="{{ url_for('portal_mycarlos') }}">{{ text.mycarlos_link }}</a></p>
+</section>
