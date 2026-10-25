@@ -12,37 +12,45 @@
 # You should have received a copy of the GNU Affero General Public License along with this program.
 # If not, see <https://www.gnu.org/licenses/>.
 
-"""Linking a myCarlos device under concurrent requests, on PostgreSQL (carlos-portal#41, M2-c).
+"""Migrate and check myCarlos linking on PostgreSQL (carlos-portal#41, M2-a/M2-c).
 
 The limits hold because checking a code locks the account row and then the link row: one code
 links one device however many requests race, and concurrent wrong codes never count past 5 per
-link or 10 per account.
+link or 10 per account. Each test runs real migrations in its own disposable schema, including
+the database constraints, audit event vocabulary and downgrade guards.
 """
 
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from hashlib import sha256
 from itertools import count
 from threading import Barrier
+from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, select
+from alembic import command
+from sqlalchemy import Engine, create_engine, func, inspect, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.schema import CreateSchema, DropSchema
 
-from carlos_patient_portal.database import create_portal_engine
 from carlos_patient_portal.device_identity import LinkRequest
 from carlos_patient_portal.models import (
     PatientPortalAccount,
+    PatientPortalAuditEvent,
     PatientPortalMyCarlosDevice,
     PatientPortalMyCarlosLinkCode,
     PatientPortalMyCarlosLinkFailure,
+    PatientPortalMyCarlosRecipient,
     PatientPortalSession,
     utc_now,
 )
 from carlos_patient_portal.mycarlos_links import create_link_code, link_device
 from carlos_patient_portal.token_keys import PortalTokenKeys
 from tests import delivery_contract_reference as ref
-from tests.test_postgresql_integration import POSTGRES_URL, clean_postgresql_database
+from tests.support import alembic_config_for_tests, upgrade_to_head
+from tests.test_postgresql_integration import POSTGRES_URL
 
 pytestmark = pytest.mark.skipif(
     POSTGRES_URL is None,
@@ -54,14 +62,47 @@ IDLE = timedelta(minutes=10)
 SESSION_NUMBERS = count(1)
 
 
-def account_with_session(session_factory: sessionmaker) -> tuple[int, int]:
+@pytest.fixture
+def migrated_postgresql_engine() -> Iterator[Engine]:
+    """Migrate only a fresh, owned schema; never truncate the shared database."""
+    assert POSTGRES_URL is not None
+    schema = f"mycarlos_test_{uuid4().hex}"
+    admin_engine = create_engine(POSTGRES_URL)
+    engine = create_engine(POSTGRES_URL, connect_args={"options": f"-csearch_path={schema}"})
+    created = False
+    try:
+        with admin_engine.begin() as connection:
+            connection.execute(CreateSchema(schema))
+        created = True
+        upgrade_to_head(engine)
+        yield engine
+    finally:
+        engine.dispose()
+        try:
+            if created:
+                with admin_engine.begin() as connection:
+                    connection.execute(DropSchema(schema, cascade=True))
+        finally:
+            admin_engine.dispose()
+
+
+def downgrade_linking(engine: Engine) -> None:
+    with engine.begin() as connection:
+        config = alembic_config_for_tests()
+        config.attributes["connection"] = connection
+        command.downgrade(config, "0016_job_assertion_audit")
+
+
+def account_with_session(
+    session_factory: sessionmaker, demographic_no: int = 6001
+) -> tuple[int, int]:
     now = utc_now()
     with session_factory() as session, session.begin():
         account = PatientPortalAccount(
             clinic_id="postgres-clinic",
-            demographic_no=6001,
-            username="fake.postgres.link",
-            email="postgres.link@example.test",
+            demographic_no=demographic_no,
+            username=f"fake.postgres.link{demographic_no}",
+            email=f"postgres.link{demographic_no}@example.test",
             password_hash="FAKE-not-a-real-hash",
             status="active",
         )
@@ -120,10 +161,10 @@ def race(session_factory: sessionmaker, requests: list[LinkRequest]) -> list[str
         return sorted(executor.map(attempt, requests))
 
 
-def test_postgresql_one_code_links_one_device_when_two_requests_race() -> None:
-    assert POSTGRES_URL is not None
-    clean_postgresql_database()
-    engine = create_portal_engine(POSTGRES_URL)
+def test_postgresql_one_code_links_one_device_when_two_requests_race(
+    migrated_postgresql_engine: Engine,
+) -> None:
+    engine = migrated_postgresql_engine
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     try:
         account_id, session_id = account_with_session(session_factory)
@@ -142,10 +183,10 @@ def test_postgresql_one_code_links_one_device_when_two_requests_race() -> None:
         engine.dispose()
 
 
-def test_postgresql_concurrent_wrong_codes_stop_at_five_for_a_link() -> None:
-    assert POSTGRES_URL is not None
-    clean_postgresql_database()
-    engine = create_portal_engine(POSTGRES_URL)
+def test_postgresql_concurrent_wrong_codes_stop_at_five_for_a_link(
+    migrated_postgresql_engine: Engine,
+) -> None:
+    engine = migrated_postgresql_engine
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     try:
         account_id, session_id = account_with_session(session_factory)
@@ -165,10 +206,10 @@ def test_postgresql_concurrent_wrong_codes_stop_at_five_for_a_link() -> None:
         engine.dispose()
 
 
-def test_postgresql_concurrent_wrong_codes_stop_at_ten_for_an_account() -> None:
-    assert POSTGRES_URL is not None
-    clean_postgresql_database()
-    engine = create_portal_engine(POSTGRES_URL)
+def test_postgresql_concurrent_wrong_codes_stop_at_ten_for_an_account(
+    migrated_postgresql_engine: Engine,
+) -> None:
+    engine = migrated_postgresql_engine
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     try:
         account_id, session_id = account_with_session(session_factory)
@@ -187,3 +228,130 @@ def test_postgresql_concurrent_wrong_codes_stop_at_ten_for_an_account() -> None:
         assert failures == 10
     finally:
         engine.dispose()
+
+
+def stored_device(
+    owner_account_id: int, label: str, **changes: object
+) -> PatientPortalMyCarlosDevice:
+    keys = ref.DeviceKeys(label)
+    values: dict[str, object] = {
+        "account_id": owner_account_id,
+        "device_key_id": keys.device_key_id,
+        "x25519_public_key": keys.x25519_public,
+        "ed25519_public_key": keys.ed25519_public,
+        "device_name": "FAKE PostgreSQL device",
+        "status": "active",
+        "linked_at": utc_now(),
+    }
+    values.update(changes)
+    return PatientPortalMyCarlosDevice(**values)
+
+
+@pytest.mark.parametrize(
+    ("changes", "sqlstate"),
+    [
+        ({"x25519_public_key": b"x" * 31}, "23514"),
+        ({"ed25519_public_key": b"e" * 33}, "23514"),
+        ({"status": "removed"}, "23514"),
+        ({"account_id": 2_147_483_647}, "23503"),
+    ],
+)
+def test_postgresql_migration_enforces_device_checks_and_account_foreign_key(
+    migrated_postgresql_engine: Engine, changes: dict[str, object], sqlstate: str
+) -> None:
+    session_factory = sessionmaker(bind=migrated_postgresql_engine)
+    account_id, _session_id = account_with_session(session_factory)
+    with pytest.raises(IntegrityError) as refused:
+        with session_factory.begin() as session:
+            session.add(stored_device(account_id, "postgres invalid device", **changes))
+    assert refused.value.orig.sqlstate == sqlstate
+
+
+def test_postgresql_device_keys_and_recipients_are_unique_across_accounts(
+    migrated_postgresql_engine: Engine,
+) -> None:
+    session_factory = sessionmaker(bind=migrated_postgresql_engine)
+    first, _first_session = account_with_session(session_factory, 6001)
+    second, _second_session = account_with_session(session_factory, 6002)
+    with session_factory.begin() as session:
+        session.add(stored_device(first, "postgres same device"))
+        session.add(
+            PatientPortalMyCarlosRecipient(
+                account_id=first, recipient_id="rcp-FAKE-postgres-unique", created_at=utc_now()
+            )
+        )
+    with pytest.raises(IntegrityError) as duplicate_device:
+        with session_factory.begin() as session:
+            session.add(stored_device(second, "postgres same device"))
+    assert duplicate_device.value.orig.sqlstate == "23505"
+    with pytest.raises(IntegrityError) as duplicate_recipient:
+        with session_factory.begin() as session:
+            session.add(
+                PatientPortalMyCarlosRecipient(
+                    account_id=second, recipient_id="rcp-FAKE-postgres-unique", created_at=utc_now()
+                )
+            )
+    assert duplicate_recipient.value.orig.sqlstate == "23505"
+
+
+def test_postgresql_audit_constraint_keeps_existing_and_mycarlos_events(
+    migrated_postgresql_engine: Engine,
+) -> None:
+    session_factory = sessionmaker(bind=migrated_postgresql_engine)
+    with session_factory.begin() as session:
+        for event_type in (
+            "job.auth_refused",
+            "mycarlos.clinic_keys_publish",
+            "mycarlos.device_list",
+            "mycarlos.device_remove",
+            "mycarlos.link",
+            "mycarlos.link_code_create",
+        ):
+            session.add(
+                PatientPortalAuditEvent(
+                    event_type=event_type,
+                    outcome="success",
+                    actor_type="system",
+                    created_at=utc_now(),
+                )
+            )
+    with pytest.raises(IntegrityError) as unknown_event:
+        with session_factory.begin() as session:
+            session.add(
+                PatientPortalAuditEvent(
+                    event_type="mycarlos.made_up",
+                    outcome="success",
+                    actor_type="system",
+                    created_at=utc_now(),
+                )
+            )
+    assert unknown_event.value.orig.sqlstate == "23514"
+    with pytest.raises(RuntimeError, match="myCarlos audit events exist"):
+        downgrade_linking(migrated_postgresql_engine)
+
+
+def test_postgresql_linking_migration_round_trip_and_populated_downgrade_guard(
+    migrated_postgresql_engine: Engine,
+) -> None:
+    engine = migrated_postgresql_engine
+    tables = {
+        "patient_portal_clinic_keys",
+        "patient_portal_mycarlos_devices",
+        "patient_portal_mycarlos_link_codes",
+        "patient_portal_mycarlos_link_failures",
+        "patient_portal_mycarlos_recipients",
+    }
+    assert tables <= set(inspect(engine).get_table_names())
+    indexes = inspect(engine).get_indexes("patient_portal_mycarlos_link_codes")
+    assert any(index["column_names"] == ["session_id"] for index in indexes)
+    downgrade_linking(engine)
+    assert tables.isdisjoint(inspect(engine).get_table_names())
+    upgrade_to_head(engine)
+    assert tables <= set(inspect(engine).get_table_names())
+    session_factory = sessionmaker(bind=engine)
+    account_id, _session_id = account_with_session(session_factory)
+    with session_factory.begin() as session:
+        session.add(stored_device(account_id, "postgres retained device"))
+    with pytest.raises(RuntimeError, match="myCarlos devices are linked"):
+        downgrade_linking(engine)
+    assert tables <= set(inspect(engine).get_table_names())
