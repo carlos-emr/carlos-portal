@@ -963,8 +963,10 @@ def register_internal_failure_audit(app: FastAPI, runtime: InternalRuntime) -> N
             )
         return response
 
+
 def build_internal_dependencies(runtime: InternalRuntime) -> InternalRouteDependencies:
     """Construct the authentication, transaction, and disclosure dependencies once."""
+
     def get_database_session() -> Generator[Session, None, None]:
         with runtime.session_factory() as session:
             with session.begin():
@@ -1340,10 +1342,7 @@ def register_internal_invite_routes(
             clinic_id=principal.clinic_id,
             demographic_no=demographic_no,
         )
-        return [
-            invite_payload(invite)
-            for invite in invites
-        ]
+        return [invite_payload(invite) for invite in invites]
 
     @app.post(
         "/internal/carlos/invites/{invite_id}/resend",
@@ -1413,6 +1412,7 @@ def register_internal_account_routes(
     deps: InternalRouteDependencies,
 ) -> None:
     """Portal account state: unlock, status, and access."""
+
     @app.post(
         "/internal/carlos/patients/{demographic_no}/unlock",
         response_model=InternalAccountUnlockResponse,
@@ -1551,6 +1551,7 @@ def register_internal_unlock_secret_routes(
     deps: InternalRouteDependencies,
 ) -> None:
     """Unlock secrets: create, publish, and revoke."""
+
     @app.post(
         "/internal/carlos/patients/{demographic_no}/unlock-secrets",
         status_code=status.HTTP_201_CREATED,
@@ -1720,6 +1721,7 @@ def register_internal_contact_review_routes(
     deps: InternalRouteDependencies,
 ) -> None:
     """CARLOS-chart contact reviews: list and decide."""
+
     @app.get(
         "/internal/carlos/contact-reviews",
         response_model=InternalContactReviewListResponse,
@@ -1987,9 +1989,7 @@ def register_internal_booking_sync_routes(
         request: Request,
         principal: Annotated[
             JobPrincipal,
-            Depends(
-                deps.job_principal_requiring(JOB_BOOKING_SYNC, PERMISSION_BOOKING_PROMPT_SYNC)
-            ),
+            Depends(deps.job_principal_requiring(JOB_BOOKING_SYNC, PERMISSION_BOOKING_PROMPT_SYNC)),
         ],
         session: Annotated[Session, deps.session_dependency],
         state: Annotated[Literal["pending"], Query()],
@@ -2048,9 +2048,7 @@ def register_internal_booking_sync_routes(
         payload: InternalBookingChoiceResultRequest,
         principal: Annotated[
             JobPrincipal,
-            Depends(
-                deps.job_principal_requiring(JOB_BOOKING_SYNC, PERMISSION_BOOKING_PROMPT_SYNC)
-            ),
+            Depends(deps.job_principal_requiring(JOB_BOOKING_SYNC, PERMISSION_BOOKING_PROMPT_SYNC)),
         ],
         session: Annotated[Session, deps.session_dependency],
     ) -> dict[str, object]:
@@ -2163,6 +2161,8 @@ CLINIC_KEY_CONFLICTS = frozenset({"key_missing", "key_revoked", "key_changed"})
 def register_internal_mycarlos_routes(
     app: FastAPI,
     deps: InternalRouteDependencies,
+    *,
+    mailbox_enabled: bool = False,
 ) -> None:
     """Send to myCarlos (carlos-portal#41): clinic keys from CARLOS, and a patient's devices.
 
@@ -2179,9 +2179,7 @@ def register_internal_mycarlos_routes(
         payload: InternalClinicKeysPublishRequest,
         principal: Annotated[
             JobPrincipal,
-            Depends(
-                deps.job_principal_requiring(JOB_KEY_PUBLISH, PERMISSION_CLINIC_KEYS_PUBLISH)
-            ),
+            Depends(deps.job_principal_requiring(JOB_KEY_PUBLISH, PERMISSION_CLINIC_KEYS_PUBLISH)),
         ],
         session: Annotated[Session, deps.session_dependency],
     ) -> dict[str, object]:
@@ -2278,6 +2276,7 @@ def register_internal_mycarlos_routes(
             account_id=account_id,
             device_key_id=device_key_id,
             removed_by=MYCARLOS_REMOVED_BY_STAFF,
+            mailbox_enabled=mailbox_enabled,
         )
         if removal is None:
             raise HTTPException(status_code=404, detail="device not found")
@@ -2312,4 +2311,15 @@ def register_carlos_internal_routes(app: FastAPI, runtime: InternalRuntime) -> N
     register_internal_booking_prompt_routes(app, runtime, deps)
     register_internal_booking_sync_routes(app, runtime, deps)
     if runtime.settings.mycarlos_delivery_enabled:
-        register_internal_mycarlos_routes(app, deps)
+        register_internal_mycarlos_routes(
+            app, deps, mailbox_enabled=runtime.settings.mycarlos_mailbox_enabled
+        )
+        if runtime.settings.mycarlos_mailbox_enabled:
+            from carlos_patient_portal.routes.mycarlos_mailbox import (
+                register_internal_mailbox_routes,
+            )
+
+            # The independently configured internal service is origin-root in the
+            # current CARLOS adapter. Its actual raw target never borrows the public
+            # patient-page prefix; reuse the existing internal authentication policy.
+            register_internal_mailbox_routes(app, runtime, deps)

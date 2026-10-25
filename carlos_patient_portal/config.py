@@ -76,9 +76,7 @@ CLINIC_BOOKING_PHONE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 BOOKING_LOCATIONS_VARIABLE = "PATIENT_PORTAL_BOOKING_LOCATIONS"
-BOOKING_LOCATION_CODE_PATTERN = re.compile(
-    rf"[a-z0-9_-]{{1,{MAX_BOOKING_LOCATION_CODE_LENGTH}}}"
-)
+BOOKING_LOCATION_CODE_PATTERN = re.compile(rf"[a-z0-9_-]{{1,{MAX_BOOKING_LOCATION_CODE_LENGTH}}}")
 MAX_BOOKING_LOCATION_LABEL_LENGTH = 64
 DEFAULT_BOOKING_CHOICE_WAIT_MINUTES = 15
 # A conservative day count guarantees at least 25 complete calendar years,
@@ -345,6 +343,22 @@ class Settings(BaseSettings):
     # Send to myCarlos (carlos-portal#41). Off by default; while off, none of its pages or routes
     # exist. The schema is there either way, so turning it on needs no migration.
     mycarlos_delivery_enabled: bool = False
+    # Private M4 source is separately gated while its migration/security holds remain.
+    # Enabling M2 linking alone never assumes these new tables already exist.
+    mycarlos_mailbox_enabled: bool = False
+    mycarlos_mailbox_device_bytes: int = Field(default=268435456, ge=20971520)
+    mycarlos_mailbox_account_bytes: int = Field(default=1073741824, ge=20971520)
+    mycarlos_mailbox_clinic_bytes: int = Field(default=21474836480, ge=20971520)
+    mycarlos_mailbox_device_copies: int = Field(default=100, ge=1)
+    mycarlos_mailbox_account_copies: int = Field(default=500, ge=1)
+    mycarlos_mailbox_clinic_copies: int = Field(default=20000, ge=1)
+    mycarlos_mailbox_ordinary_event_bytes: int = Field(default=536870912, ge=16384)
+    mycarlos_mailbox_clinic_uploads_per_minute: int = Field(default=60, ge=1)
+    mycarlos_mailbox_clinic_upload_bytes_per_minute: int = Field(default=268435456, ge=20971520)
+    mycarlos_mailbox_device_lists_per_minute: int = Field(default=60, ge=1)
+    mycarlos_mailbox_device_downloads_per_minute: int = Field(default=60, ge=1)
+    mycarlos_mailbox_device_receipts_per_minute: int = Field(default=120, ge=1)
+    mycarlos_mailbox_clinic_sync_pages_per_minute: int = Field(default=120, ge=1)
     public_base_url: str | None = Field(default=None, max_length=2048)
     # Linked from every page footer as the "Source code" offer AGPL-3.0 section 13 requires. Never
     # optional: the offer must be present on every page, so a blank value fails startup.
@@ -845,9 +859,7 @@ class Settings(BaseSettings):
     def normalize_clinic_id(cls, value: str) -> str:
         clinic_id = value.strip()
         if not 1 <= len(clinic_id) <= MAX_CONFIG_CLINIC_ID_LENGTH:
-            raise ValueError(
-                "PATIENT_PORTAL_CLINIC_ID must contain 1 to 20 characters"
-            )
+            raise ValueError("PATIENT_PORTAL_CLINIC_ID must contain 1 to 20 characters")
         if CLINIC_ID_PATTERN.fullmatch(clinic_id) is None:
             raise ValueError(
                 "PATIENT_PORTAL_CLINIC_ID may contain only letters, numbers, dots, "
@@ -959,9 +971,7 @@ class Settings(BaseSettings):
                 "configure either PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY or "
                 "PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING, not both"
             )
-        return parse_staff_assertion_public_keyring(
-            self.internal_staff_assertion_public_keyring
-        )
+        return parse_staff_assertion_public_keyring(self.internal_staff_assertion_public_keyring)
 
     @property
     def resolved_internal_job_assertion_public_keys(self) -> dict[str, dict[str, str]]:
@@ -1190,10 +1200,14 @@ class Settings(BaseSettings):
             self.database_url,
             environment_name="PATIENT_PORTAL_DATABASE_URL",
         )
-        if runtime_role in {
-            self.database_schema_owner_role,
-            self.database_maintenance_role,
-        } or self.database_schema_owner_role == self.database_maintenance_role:
+        if (
+            runtime_role
+            in {
+                self.database_schema_owner_role,
+                self.database_maintenance_role,
+            }
+            or self.database_schema_owner_role == self.database_maintenance_role
+        ):
             raise ValueError(
                 "production database runtime, schema-owner, and maintenance roles must differ"
             )
@@ -1227,8 +1241,7 @@ class Settings(BaseSettings):
         if parsed_url.scheme != "postgresql+psycopg":
             raise ValueError(f"production {environment_name} must use postgresql+psycopg")
         query_parameters = {
-            parameter.casefold()
-            for parameter in parse_qs(parsed_url.query, keep_blank_values=True)
+            parameter.casefold() for parameter in parse_qs(parsed_url.query, keep_blank_values=True)
         }
         restricted_overrides = sorted(
             query_parameters & PRODUCTION_DATABASE_RESTRICTED_QUERY_PARAMETERS
@@ -1355,12 +1368,8 @@ class OutboxSettings(Settings):
             "maintenance_database_url": "PATIENT_PORTAL_MAINTENANCE_DATABASE_URL",
             "identity_proof_secret": "PATIENT_PORTAL_IDENTITY_PROOF_SECRET",
             "audit_hash_secret": "PATIENT_PORTAL_AUDIT_HASH_SECRET",
-            "unlock_secret_encryption_secret": (
-                "PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_SECRET"
-            ),
-            "unlock_secret_encryption_keyring": (
-                "PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_KEYRING"
-            ),
+            "unlock_secret_encryption_secret": ("PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_SECRET"),
+            "unlock_secret_encryption_keyring": ("PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_KEYRING"),
             "internal_health_token": "PATIENT_PORTAL_INTERNAL_HEALTH_TOKEN",
             "internal_api_token": "PATIENT_PORTAL_INTERNAL_API_TOKEN",
             "internal_api_token_previous": "PATIENT_PORTAL_INTERNAL_API_TOKEN_PREVIOUS",

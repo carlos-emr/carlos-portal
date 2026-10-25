@@ -342,6 +342,34 @@ def register_mycarlos_device_routes(app: FastAPI, runtime: PortalRuntime) -> Non
                     session=session,
                 )
                 return inventory_response({"code": LINK_RESULT_CLINIC_KEYS_MISSING}, 409)
+            if settings.mycarlos_mailbox_enabled and principal.vault_head_link is not None:
+                from carlos_patient_portal.mailbox import mailbox_lock, record_request_anchor
+                from carlos_patient_portal.mailbox_codec import MailboxRefusal
+                from carlos_patient_portal.routes.mycarlos_mailbox import (
+                    limits_from_settings,
+                    refusal_response,
+                )
+
+                try:
+                    # Roll back the entire attempted anchor admission on quota refusal;
+                    # never commit a half-written proof/index or silently acknowledge it.
+                    with session.begin_nested():
+                        mailbox = mailbox_lock(
+                            session,
+                            account_id=account.id,
+                            device_key_id=device.device_key_id,
+                            clinic_id=settings.clinic_id,
+                        )
+                        record_request_anchor(
+                            session,
+                            mailbox,
+                            compact=assertion,
+                            anchor=principal.vault_head_link,
+                            now=int(time()),
+                            limits=limits_from_settings(settings),
+                        )
+                except MailboxRefusal as exc:
+                    return refusal_response(exc)
             record_link_attempt(
                 outcome=AUDIT_OUTCOME_SUCCESS,
                 reason="recovered" if recovery else "keys_refreshed",
