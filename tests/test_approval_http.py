@@ -346,3 +346,56 @@ def test_existing_signed_outer_json_encodings_do_not_trigger_second_parse_failur
     compact = ref.b64url(payload) + "." + ref.b64url(PRIVATE.sign(payload))
     result = client.post(PUBLIC, content=raw, headers={"X-MyCarlos-Device-Assertion": compact})
     assert result.status_code == 201, result.text
+
+
+def test_saved_decision_retry_survives_removal_without_new_state_revival(approval_http):
+    app, client = approval_http
+    assert post_intent(client).status_code == 201
+    assert put_challenge(client).status_code == 200
+    raw = body(
+        {
+            "challenge_id": FLOW["challenge"]["claims"]["challenge_id"],
+            "status": "accepted",
+            "acceptance": FLOW["acceptance"]["compact"],
+            "reason": None,
+        }
+    )
+    target = INTERNAL + "/" + REQUEST + "/decision"
+    assert (
+        client.put(
+            target, content=raw, headers=job_headers(target, "decisions.publish", "PUT", raw)
+        ).status_code
+        == 200
+    )
+    with app.state.session_factory() as s, s.begin():
+        device = s.scalar(select(PatientPortalMyCarlosDevice))
+        device.status, device.removed_by, device.removed_at = (
+            "removed",
+            "patient",
+            datetime.fromtimestamp(F["now"], UTC),
+        )
+    retry = client.put(
+        target, content=raw, headers=job_headers(target, "decisions.publish", "PUT", raw)
+    )
+    assert retry.status_code == 200, retry.text
+    changed = body(
+        {
+            "challenge_id": FLOW["challenge"]["claims"]["challenge_id"],
+            "status": "cancelled",
+            "acceptance": None,
+            "reason": "challenge_cancelled",
+        }
+    )
+    assert (
+        client.put(
+            target,
+            content=changed,
+            headers=job_headers(target, "decisions.publish", "PUT", changed),
+        ).status_code
+        == 409
+    )
+    with app.state.session_factory() as s:
+        assert s.scalar(select(PatientPortalMyCarlosDevice.status)) == "removed"
+        assert s.scalar(select(ApprovalRequest.status)) == "accepted"
+    public = PUBLIC + "/" + REQUEST
+    assert client.get(public, headers=device_headers(public)).status_code == 403

@@ -400,7 +400,11 @@ def register_internal_approval_routes(
                 account, kid = target.account_id, target.candidate_kid
             with runtime.session_factory() as session, session.begin():
                 m = mailbox_lock(
-                    session, account_id=account, device_key_id=kid, clinic_id=principal.clinic_id
+                    session,
+                    account_id=account,
+                    device_key_id=kid,
+                    clinic_id=principal.clinic_id,
+                    allow_removed=not challenge,
                 )
                 row = request_row(session, m, request_id)
                 if challenge:
@@ -414,6 +418,8 @@ def register_internal_approval_routes(
                         now=int(time()),
                     )
                 else:
+                    if m.device.status != "active" and row.decision_body_hash is None:
+                        raise invalid("device_removed", 403)
                     publish_decision(
                         session, m, row, value=value, body=raw, public_base=public_base
                     )

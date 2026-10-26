@@ -70,7 +70,12 @@ def request_row(session: Session, m: LockedMailbox, request_id: str) -> Approval
             ApprovalRequest.request_id == request_id,
         ),
     )
-    if row is None or row.account_id != m.account.id:
+    if (
+        row is None
+        or row.account_id != m.account.id
+        or row.recipient_id != m.recipient
+        or row.demographic_no != m.account.demographic_no
+    ):
         raise invalid("approval_not_found", 404)
     return row
 
