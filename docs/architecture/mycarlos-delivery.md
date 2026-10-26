@@ -124,6 +124,15 @@ says what it is once it leaves the vault. A receiver reads it only after the PDF
 out. Its field names match this manifest's where the two overlap. Its format is set in CARLOS
 (`DocumentManifest`, carlos#4691), not here.
 
+`document.service_date` is a required JSON string: a valid Gregorian date in `YYYY-MM-DD` form,
+or `""` when the service date was not recorded. Receivers display the latter as "Date not recorded".
+For an unknown date, a new CARLOS embedded PDF manifest uses JSON `null`; a legacy PDF's `""` is
+also accepted, and either matches only `""` in the delivery manifest. For a known date, both
+manifests must contain the same valid date string. Missing date members, JSON `null` in the
+delivery manifest, invalid nonempty dates and known/unknown mismatches are refused. Senders must
+not substitute an upload or creation date. These representations retain the existing signature,
+exact PDF hash, clinic, recipient and embedded document-manifest checks.
+
 ### 2. The sealed plaintext
 
 ```
