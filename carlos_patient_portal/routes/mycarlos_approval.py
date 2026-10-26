@@ -37,6 +37,7 @@ from carlos_patient_portal.approvals import (
 )
 from carlos_patient_portal.device_identity import (
     DEVICE_ASSERTION_HEADER,
+    DeviceRecord,
     DeviceRefusal,
     consume_device_assertion,
     find_device_record,
@@ -57,7 +58,6 @@ from carlos_patient_portal.mailbox_codec import (
     strict_object,
     uuid_text,
 )
-from carlos_patient_portal.mycarlos_devices import strict_b64url_decode
 from carlos_patient_portal.public_portal_base import normalize_portal
 from carlos_patient_portal.routes.mycarlos import signed_path
 from carlos_patient_portal.routes.mycarlos_mailbox import (
@@ -102,15 +102,21 @@ def register_device_approval_routes(app: FastAPI, runtime: PortalRuntime) -> Non
         )
         try:
             with runtime.session_factory() as lookup:
+                verified_recipient: str | None = None
+
+                def find_record(kid: str) -> DeviceRecord | None:
+                    nonlocal verified_recipient
+                    record = find_device_record(lookup, kid)
+                    if record is not None:
+                        verified_recipient = record.recipient_id
+                    return record
+
                 principal = verify_device_assertion(
                     assertion,
-                    find_device=lambda kid: find_device_record(lookup, kid),
+                    find_device=find_record,
                     expected_request_hash=request_hash,
                     now=int(time()),
                 )
-            verified_recipient = strict_object(
-                strict_b64url_decode(assertion.split(".")[0]), limit=4096, code="invalid_approval"
-            )["recipient_id"]
             consume_device_assertion(runtime.session_factory, principal, now=int(time()))
         except DeviceRefusal as exc:
             if exc.code in {"device_removed", "recipient_mismatch"}:

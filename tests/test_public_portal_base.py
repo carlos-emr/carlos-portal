@@ -46,3 +46,24 @@ def test_shared_qr_url_normalization_bytes_are_unchanged():
             continue
         raw = json.loads(bytes.fromhex(vector["payload_hex"]))["portal_url"]
         assert normalize_portal(raw) == vector["normalized_portal_url"], vector["name"]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "https://portal.example/" + "/" * 1100,
+        "https://portal.example\\clinic",
+        " https://portal.example/",
+    ],
+)
+def test_raw_configured_m3_base_is_validated_before_legacy_normalization(raw):
+    from carlos_patient_portal.config import Settings
+
+    with pytest.raises(ValueError):
+        Settings(
+            environment="development",
+            mycarlos_delivery_enabled=True,
+            mycarlos_mailbox_enabled=True,
+            mycarlos_approval_enabled=True,
+            public_base_url=raw,
+        )

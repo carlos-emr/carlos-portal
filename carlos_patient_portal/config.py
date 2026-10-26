@@ -23,7 +23,7 @@ from typing import Literal
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
@@ -767,6 +767,15 @@ class Settings(BaseSettings):
                 )
         return value
 
+    @field_validator("public_base_url", mode="before")
+    @classmethod
+    def validate_raw_approval_public_base(cls, value: object, info: ValidationInfo) -> object:
+        if info.data.get("mycarlos_approval_enabled"):
+            from carlos_patient_portal.public_portal_base import normalize_portal
+
+            normalize_portal(value)
+        return value
+
     @field_validator("public_base_url")
     @classmethod
     def validate_public_base_url(cls, value: str | None) -> str | None:
@@ -1338,6 +1347,12 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def reject_unsafe_runtime_policy(self) -> "Settings":
+        if self.mycarlos_approval_enabled:
+            if not self.mycarlos_delivery_enabled or not self.mycarlos_mailbox_enabled:
+                raise ValueError("myCarlos approval requires delivery and mailbox to be enabled")
+            from carlos_patient_portal.public_portal_base import normalize_portal
+
+            normalize_portal(self.public_base_url)
         self.validate_audit_retention_policy()
         self.validate_secret_policy()
         self.validate_required_production_services()

@@ -14,8 +14,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from carlos_patient_portal.approval_models import ApprovalBase, ApprovalRequest
-from carlos_patient_portal.mailbox_models import MailboxBase
+from carlos_patient_portal.approval_models import ApprovalRequest
 from carlos_patient_portal.models import (
     PatientPortalAccount,
     PatientPortalClinicKey,
@@ -101,8 +100,6 @@ def approval_http(monkeypatch):
             }
         ),
     )
-    MailboxBase.metadata.create_all(app.state.database_engine)
-    ApprovalBase.metadata.create_all(app.state.database_engine)
     with app.state.session_factory() as s, s.begin():
         account = PatientPortalAccount(
             clinic_id=F["clinic_id"],
@@ -327,3 +324,25 @@ def test_late_challenge_publication_remains_visible_after_approver_cursor(approv
         assert [row["request_id"] for row in result.json()["requests"]] == [request_id]
         seen.append(result.json()["last_sequence"])
     assert seen == ["1", "2"]
+
+
+@pytest.mark.parametrize("encoding", ["utf-8-sig", "utf-16"])
+def test_existing_signed_outer_json_encodings_do_not_trigger_second_parse_failure(
+    approval_http, encoding
+):
+    _, client = approval_http
+    raw = body({"intent": FLOW["intent"]["compact"]})
+    claims = {
+        "aud": ref.DEVICE_AUDIENCE,
+        "iss": "mycarlos",
+        "kid": KEY["device_key_id"],
+        "recipient_id": F["recipient_id"],
+        "jti": str(uuid4()),
+        "iat": F["now"],
+        "exp": F["now"] + 60,
+        "request_hash": ref.request_hash("POST", PUBLIC.encode(), b"", raw),
+    }
+    payload = json.dumps(claims, sort_keys=True, separators=(",", ":")).encode(encoding)
+    compact = ref.b64url(payload) + "." + ref.b64url(PRIVATE.sign(payload))
+    result = client.post(PUBLIC, content=raw, headers={"X-MyCarlos-Device-Assertion": compact})
+    assert result.status_code == 201, result.text

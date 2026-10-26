@@ -67,3 +67,41 @@ def test_strict_json_refuses_ambiguous_body(raw):
 
     with pytest.raises(MailboxRefusal):
         body_object(raw, {"a"})
+
+
+@pytest.mark.parametrize(
+    "vector", FIXTURE["signed_object_vectors"], ids=lambda vector: vector["id"]
+)
+def test_every_shared_signed_object_vector(vector):
+    def verify():
+        kind = vector["kind"]
+        if kind == "intent":
+            value = verify_intent(vector["compact"], **SCOPE)
+            if value["iat"] > vector["now"] + 30 or value["exp"] <= vector["now"]:
+                raise MailboxRefusal("approval_expired")
+        elif kind == "approval":
+            key = FIXTURE["keys"]["predecessor"]
+            value = verify_approval(
+                vector["compact"],
+                predecessor_kid=key["device_key_id"],
+                predecessor_ed=strict_b64url_decode(key["ed25519_public_key"]),
+                **SCOPE,
+            )
+        else:
+            if vector["clinic_key_status"] != "active":
+                raise MailboxRefusal("invalid_approval")
+            value = verify_clinic(
+                kind,
+                vector["compact"],
+                spki=strict_b64url_decode(FIXTURE["keys"]["clinic"]["spki"]),
+                **SCOPE,
+            )
+            if kind == "challenge" and value["expires_at"] <= vector["now"]:
+                raise MailboxRefusal("approval_expired")
+        return value
+
+    if vector["valid"]:
+        assert verify()
+    else:
+        with pytest.raises(MailboxRefusal):
+            verify()
