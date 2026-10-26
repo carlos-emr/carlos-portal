@@ -2323,3 +2323,7 @@ def register_carlos_internal_routes(app: FastAPI, runtime: InternalRuntime) -> N
             # current CARLOS adapter. Its actual raw target never borrows the public
             # patient-page prefix; reuse the existing internal authentication policy.
             register_internal_mailbox_routes(app, runtime, deps)
+            if runtime.settings.mycarlos_approval_enabled:
+                from carlos_patient_portal.routes.mycarlos_approval import register_internal_approval_routes
+
+                register_internal_approval_routes(app, runtime, deps)
