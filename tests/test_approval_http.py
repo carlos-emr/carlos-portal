@@ -399,3 +399,160 @@ def test_saved_decision_retry_survives_removal_without_new_state_revival(approva
         assert s.scalar(select(ApprovalRequest.status)) == "accepted"
     public = PUBLIC + "/" + REQUEST
     assert client.get(public, headers=device_headers(public)).status_code == 403
+
+
+@pytest.fixture
+def later_approval_http(approval_http):
+    app, client = approval_http
+    later = F["flows"]["later"]
+    candidate = F["keys"]["candidate"]
+    predecessor = F["keys"]["predecessor"]
+    with app.state.session_factory() as s, s.begin():
+        account = s.scalar(select(PatientPortalAccount))
+        for key in [candidate, predecessor]:
+            s.add(
+                PatientPortalMyCarlosDevice(
+                    account_id=account.id,
+                    device_key_id=key["device_key_id"],
+                    ed25519_public_key=strict_b64url_decode(key["ed25519_public_key"]),
+                    x25519_public_key=strict_b64url_decode(key["x25519_public_key"]),
+                    device_name="FAKE later approval device",
+                    status="active",
+                    linked_at=datetime.fromtimestamp(F["now"], UTC),
+                )
+            )
+    candidate_private = serialization.load_der_private_key(
+        strict_b64url_decode(candidate["FAKE_ed25519_private_pkcs8_b64url"]), None
+    )
+    predecessor_private = serialization.load_der_private_key(
+        strict_b64url_decode(predecessor["FAKE_ed25519_private_pkcs8_b64url"]), None
+    )
+    raw = body({"intent": later["intent"]["compact"]})
+    assert (
+        client.post(
+            PUBLIC,
+            content=raw,
+            headers=device_headers(PUBLIC, "POST", raw, candidate, candidate_private),
+        ).status_code
+        == 201
+    )
+    request = later["intent"]["claims"]["request_id"]
+    raw = body({"intent": later["intent"]["compact"], "challenge": later["challenge"]["compact"]})
+    target = INTERNAL + "/" + request + "/challenge"
+    assert (
+        client.put(
+            target, content=raw, headers=job_headers(target, "challenges.publish", "PUT", raw)
+        ).status_code
+        == 200
+    )
+    return app, client, later, candidate, candidate_private, predecessor, predecessor_private
+
+
+def test_later_proof_receipt_is_not_acceptance_and_exact_retry_survives_expiry(
+    later_approval_http, monkeypatch
+):
+    app, client, later, candidate, candidate_private, predecessor, private = later_approval_http
+    target = PREFIX + "/api/mycarlos/device-approvals"
+    listing = client.get(target, headers=device_headers(target, key=predecessor, private=private))
+    assert listing.status_code == 200, listing.text
+    assert listing.json()["requests"][0]["challenge"] == later["challenge"]["compact"]
+    target += "/" + later["challenge"]["claims"]["challenge_id"]
+    raw = body({"approval": later["approval"]["compact"]})
+    result = client.post(
+        target, content=raw, headers=device_headers(target, "POST", raw, predecessor, private)
+    )
+    assert result.status_code == 200 and result.json() == {"status": "received"}
+    status = PUBLIC + "/" + later["intent"]["claims"]["request_id"]
+    assert (
+        client.get(
+            status, headers=device_headers(status, key=candidate, private=candidate_private)
+        ).json()["status"]
+        == "challenge_ready"
+    )
+    monkeypatch.setitem(F, "now", F["now"] + 601)
+    retry = client.post(
+        target, content=raw, headers=device_headers(target, "POST", raw, predecessor, private)
+    )
+    assert retry.status_code == 200, retry.text
+    decision = body(
+        {
+            "challenge_id": later["challenge"]["claims"]["challenge_id"],
+            "status": "accepted",
+            "acceptance": later["acceptance"]["compact"],
+            "reason": None,
+        }
+    )
+    route = INTERNAL + "/" + later["intent"]["claims"]["request_id"] + "/decision"
+    assert (
+        client.put(
+            route,
+            content=decision,
+            headers=job_headers(route, "decisions.publish", "PUT", decision),
+        ).status_code
+        == 200
+    )
+    with app.state.session_factory() as s, s.begin():
+        device = s.scalar(
+            select(PatientPortalMyCarlosDevice).where(
+                PatientPortalMyCarlosDevice.device_key_id == predecessor["device_key_id"]
+            )
+        )
+        device.status, device.removed_by, device.removed_at = (
+            "removed",
+            "patient",
+            datetime.fromtimestamp(F["now"], UTC),
+        )
+    assert (
+        client.post(
+            target, content=raw, headers=device_headers(target, "POST", raw, predecessor, private)
+        ).status_code
+        == 403
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value", [("challenge_sha256", "00" * 32), ("predecessor_version", "1")]
+)
+def test_later_signed_hash_or_version_mismatch_does_not_collect_proof(
+    later_approval_http, field, value
+):
+    app, client, later, _, _, predecessor, private = later_approval_http
+    claims = dict(later["approval"]["claims"])
+    claims[field] = value
+    raw = body({"approval": ref.compact_ed25519(private, claims)})
+    target = (
+        PREFIX + "/api/mycarlos/device-approvals/" + later["challenge"]["claims"]["challenge_id"]
+    )
+    result = client.post(
+        target, content=raw, headers=device_headers(target, "POST", raw, predecessor, private)
+    )
+    assert result.status_code == 409, result.text
+    with app.state.session_factory() as s:
+        row = s.get(ApprovalRequest, (F["clinic_id"], later["intent"]["claims"]["request_id"]))
+        assert row.approval is None and row.approval_sequence is None
+
+
+def test_later_changed_saved_proof_conflicts_without_overwriting_original(later_approval_http):
+    app, client, later, _, _, predecessor, private = later_approval_http
+    target = (
+        PREFIX + "/api/mycarlos/device-approvals/" + later["challenge"]["claims"]["challenge_id"]
+    )
+    raw = body({"approval": later["approval"]["compact"]})
+    assert (
+        client.post(
+            target, content=raw, headers=device_headers(target, "POST", raw, predecessor, private)
+        ).status_code
+        == 200
+    )
+    changed = body({"approval": later["approval"]["compact"] + "x"})
+    assert (
+        client.post(
+            target,
+            content=changed,
+            headers=device_headers(target, "POST", changed, predecessor, private),
+        ).status_code
+        == 409
+    )
+    with app.state.session_factory() as s:
+        row = s.get(ApprovalRequest, (F["clinic_id"], later["intent"]["claims"]["request_id"]))
+        assert row.approval == later["approval"]["compact"] and row.approval_sequence == 1
