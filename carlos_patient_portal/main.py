@@ -1034,6 +1034,8 @@ def register_app_routes(app: FastAPI, runtime: PortalRuntime) -> None:
 
             register_device_mailbox_routes(app, runtime)
             if runtime.settings.mycarlos_approval_enabled:
-                from carlos_patient_portal.routes.mycarlos_approval import register_device_approval_routes
+                from carlos_patient_portal.routes.mycarlos_approval import (
+                    register_device_approval_routes,
+                )
 
                 register_device_approval_routes(app, runtime)
