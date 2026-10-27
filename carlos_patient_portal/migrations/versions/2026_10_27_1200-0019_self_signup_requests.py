@@ -18,9 +18,9 @@ A patient asks for a portal account on a public page with their health card numb
 and email address (carlos-portal#15). The portal stores the request encrypted until CARLOS collects
 it (carlos-portal#16) or it expires, and audits each one with keyed hashes only.
 
-Revision ID: 0016_self_signup_requests
-Revises: 0015_booking_offered_slots
-Create Date: 2026-10-15 12:00:00+00:00
+Revision ID: 0019_self_signup_requests
+Revises: 0018_mycarlos_mailbox_approval
+Create Date: 2026-10-27 12:00:00+00:00
 """
 
 from collections.abc import Sequence
@@ -29,8 +29,8 @@ import sqlalchemy as sa
 from alembic import context, op
 
 _ALEMBIC_REVISION_IDENTIFIERS: dict[str, str | Sequence[str] | None] = {
-    "revision": "0016_self_signup_requests",
-    "down_revision": "0015_booking_offered_slots",
+    "revision": "0019_self_signup_requests",
+    "down_revision": "0018_mycarlos_mailbox_approval",
     "branch_labels": None,
     "depends_on": None,
 }
@@ -39,7 +39,7 @@ globals().update(_ALEMBIC_REVISION_IDENTIFIERS)
 _AUDIT_TABLE = "patient_portal_audit_events"
 _SIGNUP_TABLE = "patient_portal_signup_requests"
 
-# Preserve audit rows from the other applied branch before replacing its CHECK.
+# The exact 47-type policy left by 0017 and unchanged by 0018.
 _OLD_EVENT_TYPES = (
     "'activation', 'account.contact_update', 'account.disable', "
     "'account.email_change_confirm', 'account.email_change_request', "
@@ -112,19 +112,37 @@ def upgrade() -> None:
 def downgrade() -> None:
     if context.is_offline_mode():
         raise RuntimeError(
-            "migration 0016 downgrade requires an online connection to check sign-up audit events"
+            "migration 0019 downgrade requires an online connection to check retained signup data"
         )
     connection = op.get_bind()
+    if connection.dialect.name == "postgresql":
+        # Keep both retention decisions valid through CHECK replacement and DROP.
+        connection.execute(
+            sa.text(
+                "LOCK TABLE patient_portal_audit_events, patient_portal_signup_requests "
+                "IN ACCESS EXCLUSIVE MODE"
+            )
+        )
+    elif connection.dialect.name == "sqlite":
+        # sqlite3's legacy transaction mode leaves SELECT/DDL outside a transaction.
+        # Reserve the writer before reading; an existing real transaction already
+        # keeps a read snapshot whose promotion cannot overwrite a newer commit.
+        if not connection.connection.driver_connection.in_transaction:
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+    else:
+        raise RuntimeError("migration 0019 supports only SQLite and PostgreSQL")
     signup_events = connection.scalar(
         sa.text(
-            "select count(*) from patient_portal_audit_events "
-            "where event_type = 'signup.request'"
+            "select count(*) from patient_portal_audit_events where event_type = 'signup.request'"
         )
     )
     if signup_events:
         # As in 0014 and 0015: audit events are append-only, and the old constraint cannot hold
         # these rows.
-        raise RuntimeError("cannot downgrade migration 0016 while sign-up audit events exist")
+        raise RuntimeError("cannot downgrade migration 0019 while sign-up audit events exist")
+
+    if connection.scalar(sa.text("select count(*) from patient_portal_signup_requests")):
+        raise RuntimeError("cannot downgrade migration 0019 while stored sign-up requests exist")
 
     with op.batch_alter_table(_AUDIT_TABLE) as batch_op:
         batch_op.drop_constraint("ck_patient_portal_audit_events_event_type", type_="check")
@@ -133,6 +151,6 @@ def downgrade() -> None:
             f"event_type in ({_OLD_EVENT_TYPES})",
         )
 
-    # Stored requests are transient: each one is deleted within a day anyway.
+    # Only empty signup storage can be removed; unrelated retained data is untouched.
     op.drop_index("ix_pp_signup_requests_expires", table_name=_SIGNUP_TABLE)
     op.drop_table(_SIGNUP_TABLE)

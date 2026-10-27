@@ -930,7 +930,7 @@ def test_signup_migration_downgrades_only_without_signup_audit_events(tmp_path) 
     config.set_main_option("script_location", "carlos_patient_portal:migrations")
     database_url = f"sqlite+pysqlite:///{tmp_path / 'signup.db'}"
     config.set_main_option("sqlalchemy.url", database_url)
-    command.upgrade(config, "0016_self_signup_requests")
+    command.upgrade(config, "0019_self_signup_requests")
     engine = create_engine(database_url)
     try:
         with engine.begin() as connection:
@@ -943,10 +943,14 @@ def test_signup_migration_downgrades_only_without_signup_audit_events(tmp_path) 
                 {"now": utc_now()},
             )
         with pytest.raises(RuntimeError, match="sign-up audit events exist"):
-            command.downgrade(config, "0015_booking_offered_slots")
-        with engine.begin() as connection:
-            connection.execute(text("delete from patient_portal_audit_events"))
-        command.downgrade(config, "0015_booking_offered_slots")
+            command.downgrade(config, "0018_mycarlos_mailbox_approval")
+        # Keep the refused fixture and its audit evidence; use a fresh empty database.
+        engine.dispose()
+        empty_url = f"sqlite+pysqlite:///{tmp_path / 'signup-empty.db'}"
+        config.set_main_option("sqlalchemy.url", empty_url)
+        engine = create_engine(empty_url)
+        command.upgrade(config, "head")
+        command.downgrade(config, "0018_mycarlos_mailbox_approval")
         assert "patient_portal_signup_requests" not in inspect(engine).get_table_names()
         with pytest.raises(Exception, match="(?i)constraint"):
             with engine.begin() as connection:

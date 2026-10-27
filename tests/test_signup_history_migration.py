@@ -1,20 +1,19 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (c) 2026 CARLOS Contributors. All Rights Reserved.
-"""Populated historical branches converge without changing retained application data."""
+"""Linear signup upgrades and guarded rollback preserve canonical portal data."""
 
-import json
 import os
 import re
 from base64 import urlsafe_b64decode
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from hashlib import sha256
-from pathlib import Path
+from threading import Event
 from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
 from alembic import command
-from alembic.operations import Operations
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy.orm import Session, sessionmaker
@@ -44,11 +43,10 @@ from tests.support import alembic_config_for_tests
 from tests.test_device_identity import STATE
 from tests.test_mycarlos_mailbox import ASSERTION, LIMITS, NOW, RECEIPT, VALUE, target
 
-SIGNUP = "0016_self_signup_requests"
+SIGNUP = "0019_self_signup_requests"
 JOB = "0016_job_assertion_audit"
 LINK = "0017_mycarlos_linking"
 APPROVAL = "0018_mycarlos_mailbox_approval"
-MERGE = "0019_signup_history_merge"
 SCRIPT = ScriptDirectory.from_config(alembic_config_for_tests())
 EVENTS = frozenset(
     re.findall(
@@ -63,7 +61,6 @@ EVENTS = frozenset(
     )
 )
 MYCARLOS = {value for value in EVENTS if value.startswith("mycarlos.")}
-COMMON = EVENTS - MYCARLOS - {"signup.request", "job.auth_refused"}
 DETAILS = SignupRequestDetails("FAKE123456", date(1970, 1, 2), "fake@example.test")
 ENCRYPTION_KEY = "FAKE historical signup encryption " + "x" * 32
 
@@ -102,19 +99,7 @@ def migrate(engine, target_revision, direction="upgrade"):
         getattr(command, direction)(config, target_revision)
 
 
-def set_historical_policy(engine, values):
-    """Reproduce the released CHECK; all other historical DDL is unchanged."""
-    with engine.begin() as connection:
-        operations = Operations(MigrationContext.configure(connection))
-        with operations.batch_alter_table("patient_portal_audit_events") as batch:
-            batch.drop_constraint("ck_patient_portal_audit_events_event_type", type_="check")
-            batch.create_check_constraint(
-                "ck_patient_portal_audit_events_event_type",
-                "event_type in (" + ", ".join(repr(v) for v in sorted(values)) + ")",
-            )
-
-
-def seed(engine, *, signup=False, job=False, link=False, mailbox=False):
+def seed(engine, *, signup=False, signup_audit=True, job=False, link=False, mailbox=False):
     with Session(engine) as session, session.begin():
         account = PatientPortalAccount(
             clinic_id="clinic-a",
@@ -182,7 +167,7 @@ def seed(engine, *, signup=False, job=False, link=False, mailbox=False):
         audit = sa.Table("patient_portal_audit_events", sa.MetaData(), autoload_with=connection)
         kinds = (
             {"login"}
-            | ({"signup.request"} if signup else set())
+            | ({"signup.request"} if signup and signup_audit else set())
             | ({"job.auth_refused"} if job else set())
             | (MYCARLOS if link else set())
         )
@@ -343,86 +328,109 @@ def assert_schema_and_sequences(engine):
             assert actual == set(EXPECTED_SEQUENCE_PRIVILEGES)
 
 
-def prepare(engine, state):
-    if state == "clean":
-        return
-    if state == "0015":
-        migrate(engine, "0015_booking_offered_slots")
-        seed(engine)
-    elif state == "signup":
-        migrate(engine, SIGNUP)
-        set_historical_policy(engine, COMMON | {"signup.request"})
-        seed(engine, signup=True)
-    elif state == "job":
-        migrate(engine, JOB)
-        set_historical_policy(engine, COMMON | {"job.auth_refused"})
-        seed(engine, job=True)
-    elif state in {"link", "approval"}:
-        migrate(engine, LINK if state == "link" else APPROVAL)
-        set_historical_policy(engine, EVENTS - {"signup.request"})
-        seed(engine, job=True, link=True, mailbox=state == "approval")
-    else:
-        if state == "combined_signup_last":
-            migrate(engine, APPROVAL)
-            migrate(engine, SIGNUP)
-            set_historical_policy(engine, COMMON | {"signup.request"})
-            seed(engine, signup=True)
-        else:
-            migrate(engine, SIGNUP)
-            migrate(engine, APPROVAL)
-            set_historical_policy(
-                engine, EVENTS - {"signup.request"} if state == "combined_link_last" else EVENTS
-            )
-            seed(engine, signup=state == "combined_union", job=True, link=True, mailbox=True)
-
-
-@pytest.mark.parametrize(
-    "state",
-    [
-        "clean",
-        "0015",
-        "signup",
-        "job",
-        "link",
-        "approval",
-        "combined_signup_last",
-        "combined_link_last",
-        "combined_union",
-    ],
-)
-def test_should_preserve_all_historical_bytes_when_both_branches_converge(lineage_engine, state):
+@pytest.mark.parametrize("state", ["clean", "0015", "job", "link", "approval"])
+def test_should_preserve_canonical_data_when_signup_follows_approval(lineage_engine, state):
     engine = lineage_engine
-    prepare(engine, state)
+    if state != "clean":
+        revision = {
+            "0015": "0015_booking_offered_slots",
+            "job": JOB,
+            "link": LINK,
+            "approval": APPROVAL,
+        }[state]
+        migrate(engine, revision)
+        seed(
+            engine,
+            job=state != "0015",
+            link=state in {"link", "approval"},
+            mailbox=state == "approval",
+        )
     before = snapshot(engine)
     migrate(engine, "head")
     assert_preserved(engine, before)
     assert_schema_and_sequences(engine)
     with engine.connect() as connection:
-        assert MigrationContext.configure(connection).get_current_heads() == (MERGE,)
-    with Session(engine) as session:
-        for row in session.scalars(sa.select(PatientPortalSignupRequest)):
-            assert (
-                decrypt_signup_request(row, encryption_keys={"FAKE-old-key": ENCRYPTION_KEY})
-                == DETAILS
-            )
+        assert MigrationContext.configure(connection).get_current_heads() == (SIGNUP,)
+    assert SCRIPT.get_heads() == [SIGNUP]
+    assert SCRIPT.get_revision(SIGNUP).down_revision == APPROVAL
+    assert SCRIPT.get_revision(APPROVAL).down_revision == LINK
+    assert SCRIPT.get_revision(LINK).down_revision == JOB
     after = snapshot(engine, versions=True)
     migrate(engine, "head")
     assert snapshot(engine, versions=True) == after
-    assert SCRIPT.get_heads() == [MERGE]
-    assert len(EVENTS) == 48
-    assert set(SCRIPT.get_revision(MERGE).down_revision) == {APPROVAL, SIGNUP}
-    assert SCRIPT.get_revision(SIGNUP).down_revision == "0015_booking_offered_slots"
-    assert SCRIPT.get_revision(JOB).down_revision == "0015_booking_offered_slots"
 
 
-@pytest.mark.parametrize("retained", [False, True])
-def test_should_refuse_unmerge_before_writes_even_when_no_data_is_retained(
+def test_should_keep_encrypted_signup_bytes_when_head_is_repeated(lineage_engine):
+    engine = lineage_engine
+    migrate(engine, "head")
+    seed(engine, signup=True, job=True, link=True, mailbox=True)
+    before = snapshot(engine, versions=True)
+    migrate(engine, "head")
+    assert snapshot(engine, versions=True) == before
+    with Session(engine) as session:
+        rows = list(session.scalars(sa.select(PatientPortalSignupRequest)))
+        assert len(rows) == 1
+        assert (
+            decrypt_signup_request(rows[0], encryption_keys={"FAKE-old-key": ENCRYPTION_KEY})
+            == DETAILS
+        )
+
+
+def test_should_roundtrip_empty_database_through_base_and_head(lineage_engine):
+    engine = lineage_engine
+    migrate(engine, "head")
+    migrate(engine, "base", "downgrade")
+    assert set(sa.inspect(engine).get_table_names()) <= {"alembic_version"}
+    with engine.connect() as connection:
+        assert MigrationContext.configure(connection).get_current_heads() == ()
+    migrate(engine, "head")
+    assert_schema_and_sequences(engine)
+
+
+def test_should_preserve_unrelated_retained_data_when_empty_signup_is_rolled_back(lineage_engine):
+    engine = lineage_engine
+    migrate(engine, "head")
+    seed(engine, job=True, link=True, mailbox=True)
+    before = snapshot(engine)
+    assert before.pop("patient_portal_signup_requests")[1] == []
+    migrate(engine, APPROVAL, "downgrade")
+    assert "patient_portal_signup_requests" not in sa.inspect(engine).get_table_names()
+    assert_preserved(engine, before)
+    check = next(
+        c
+        for c in sa.inspect(engine).get_check_constraints("patient_portal_audit_events")
+        if c["name"] == "ck_patient_portal_audit_events_event_type"
+    )
+    assert frozenset(re.findall(r"'([a-z][a-z_.]*)'", check["sqltext"])) == EVENTS - {
+        "signup.request"
+    }
+    with engine.connect() as connection:
+        assert MigrationContext.configure(connection).get_current_heads() == (APPROVAL,)
+    migrate(engine, "head")
+    assert_preserved(engine, before)
+    assert_schema_and_sequences(engine)
+
+
+@pytest.mark.parametrize("retained", ["audit", "request"])
+def test_should_refuse_signup_rollback_before_writes_when_either_record_exists(
     lineage_engine, retained
 ):
     engine = lineage_engine
     migrate(engine, "head")
-    if retained:
-        seed(engine, signup=True, job=True, link=True, mailbox=True)
+    if retained == "request":
+        # Deliberately no signup audit: a missing companion must not permit data loss.
+        seed(engine, signup=True, signup_audit=False)
+    else:
+        with engine.begin() as connection:
+            table = sa.Table("patient_portal_audit_events", sa.MetaData(), autoload_with=connection)
+            connection.execute(
+                table.insert().values(
+                    event_type="signup.request",
+                    outcome="success",
+                    actor_type="patient",
+                    created_at=utc_now(),
+                )
+            )
     before = snapshot(engine, versions=True)
     writes = []
 
@@ -439,7 +447,9 @@ def test_should_refuse_unmerge_before_writes_even_when_no_data_is_retained(
 
     sa.event.listen(engine, "before_cursor_execute", record_write)
     try:
-        with pytest.raises(RuntimeError, match="0019 is forward-only"):
+        with pytest.raises(
+            RuntimeError, match="sign-up audit events exist|stored sign-up requests exist"
+        ):
             migrate(engine, APPROVAL, "downgrade")
     finally:
         sa.event.remove(engine, "before_cursor_execute", record_write)
@@ -447,211 +457,63 @@ def test_should_refuse_unmerge_before_writes_even_when_no_data_is_retained(
     assert snapshot(engine, versions=True) == before
 
 
-@pytest.mark.parametrize(
-    "drift",
-    [
-        "missing_table",
-        "missing_column",
-        "column_type",
-        "column_nullability",
-        "missing_check",
-        "unknown_event",
-        "weakened_check",
-        "dropped_unique_index",
-        "altered_unique_index",
-        "index_predicate",
-        "fk_target",
-        "fk_action",
-        "weakened_nonce_check",
-        "missing_primary_key",
-        "default",
-        "identity",
-        "sequence_counter",
-        "sequence_ownership",
-        "not_valid_check",
-    ],
-)
-def test_should_refuse_unknown_parent_schema_before_any_merge_write(lineage_engine, drift):
+@pytest.mark.parametrize("writer", ["audit", "request"])
+def test_should_hold_retention_decision_against_concurrent_inserts(lineage_engine, writer):
     engine = lineage_engine
-    migrate(engine, APPROVAL)
-    migrate(engine, SIGNUP)
-    if drift in {"sequence_ownership", "not_valid_check"} and engine.dialect.name != "postgresql":
-        pytest.skip("PostgreSQL-specific physical metadata")
-    if drift == "sequence_counter":
-        seed(engine, signup=True)
-    with engine.begin() as connection:
-        if drift == "missing_table":
-            connection.execute(
-                sa.text(
-                    "ALTER TABLE patient_portal_signup_requests RENAME TO fake_unexpected_signup"
-                )
-            )
-        elif drift == "missing_column":
-            connection.execute(
-                sa.text(
-                    "ALTER TABLE patient_portal_audit_events "
-                    "RENAME COLUMN assertion_key_id TO fake_unknown_key"
-                )
-            )
-        elif drift in {"column_type", "column_nullability", "missing_check"}:
-            operations = Operations(MigrationContext.configure(connection))
-            with operations.batch_alter_table("patient_portal_audit_events") as batch:
-                if drift == "column_type":
-                    batch.alter_column(
-                        "assertion_key_id", existing_type=sa.String(64), type_=sa.String(65)
-                    )
-                elif drift == "column_nullability":
-                    batch.alter_column(
-                        "assertion_key_id", existing_type=sa.String(64), nullable=False
-                    )
-                else:
-                    batch.drop_constraint(
-                        "ck_patient_portal_audit_events_assertion_id_length", type_="check"
-                    )
-        elif drift in {"dropped_unique_index", "altered_unique_index", "index_predicate"}:
-            operations = Operations(MigrationContext.configure(connection))
-            if drift == "index_predicate":
-                name = "ux_portal_contact_review_pending_account"
-                table = "patient_portal_contact_review_requests"
-                operations.drop_index(name, table_name=table)
-                operations.create_index(
-                    name,
-                    table,
-                    ["account_id"],
-                    unique=True,
-                    sqlite_where=sa.text("status='reviewed'"),
-                    postgresql_where=sa.text("status='reviewed'"),
-                )
-            else:
-                name = "ux_pp_mycarlos_devices_device_key_id"
-                operations.drop_index(name, table_name="patient_portal_mycarlos_devices")
-                if drift == "altered_unique_index":
-                    operations.create_index(
-                        name, "patient_portal_mycarlos_devices", ["device_key_id"], unique=False
-                    )
-        elif drift in {"fk_target", "fk_action"}:
-            operations = Operations(MigrationContext.configure(connection))
-            with operations.batch_alter_table("patient_portal_mycarlos_recipients") as batch:
-                batch.drop_constraint("fk_pp_mycarlos_recipients_account", type_="foreignkey")
-                batch.create_foreign_key(
-                    "fk_pp_mycarlos_recipients_account",
-                    "patient_portal_mfa_challenges"
-                    if drift == "fk_target"
-                    else "patient_portal_accounts",
-                    ["account_id"],
-                    ["id"],
-                    ondelete="CASCADE" if drift == "fk_action" else None,
-                )
-        elif drift == "weakened_nonce_check":
-            operations = Operations(MigrationContext.configure(connection))
-            with operations.batch_alter_table(
-                "patient_portal_signup_requests", table_kwargs={"sqlite_autoincrement": True}
-            ) as batch:
-                batch.drop_constraint("ck_pp_signup_requests_nonce_length", type_="check")
-                batch.create_check_constraint(
-                    "ck_pp_signup_requests_nonce_length", "length(encryption_nonce)>=0"
-                )
-        elif drift == "missing_primary_key":
-            operations = Operations(MigrationContext.configure(connection))
-            table = "patient_portal_mycarlos_mailbox_clinics"
-            name = sa.inspect(connection).get_pk_constraint(table)["name"] or "lineage_pk_" + table
-            with operations.batch_alter_table(
-                table, naming_convention={"pk": "lineage_pk_%(table_name)s"}
-            ) as batch:
-                batch.drop_constraint(name, type_="primary")
-        elif drift == "default":
-            operations = Operations(MigrationContext.configure(connection))
-            with operations.batch_alter_table("patient_portal_accounts") as batch:
-                batch.alter_column(
-                    "failed_mfa_count", existing_type=sa.Integer(), server_default=sa.text("1")
-                )
-        elif drift == "identity":
-            if engine.dialect.name == "sqlite":
-                operations = Operations(MigrationContext.configure(connection))
-                with operations.batch_alter_table(
-                    "patient_portal_signup_requests",
-                    recreate="always",
-                    table_kwargs={"sqlite_autoincrement": False},
-                ):
-                    pass
-            else:
-                connection.execute(
-                    sa.text(
-                        "ALTER TABLE patient_portal_signup_requests ALTER COLUMN id DROP DEFAULT"
-                    )
-                )
-                connection.execute(
-                    sa.text("ALTER SEQUENCE patient_portal_signup_requests_id_seq OWNED BY NONE")
-                )
-                connection.execute(
-                    sa.text(
-                        "ALTER TABLE patient_portal_signup_requests "
-                        "ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY"
-                    )
-                )
-        elif drift == "sequence_counter":
-            if engine.dialect.name == "sqlite":
-                connection.execute(
-                    sa.text(
-                        "UPDATE sqlite_sequence SET seq=0 "
-                        "WHERE name='patient_portal_signup_requests'"
-                    )
-                )
-            else:
-                connection.execute(
-                    sa.text("ALTER SEQUENCE patient_portal_signup_requests_id_seq RESTART WITH 1")
-                )
-        elif drift == "sequence_ownership":
-            connection.execute(
-                sa.text("ALTER SEQUENCE patient_portal_signup_requests_id_seq OWNED BY NONE")
-            )
-        else:
-            operations = Operations(MigrationContext.configure(connection))
-            with operations.batch_alter_table("patient_portal_audit_events") as batch:
-                batch.drop_constraint("ck_patient_portal_audit_events_event_type", type_="check")
-                values = EVENTS | {"fake.unexpected"} if drift == "unknown_event" else EVENTS
-                sql = "event_type in (" + ", ".join(repr(v) for v in sorted(values)) + ")"
-                if drift == "not_valid_check":
-                    batch.create_check_constraint(
-                        "ck_patient_portal_audit_events_event_type", sql, postgresql_not_valid=True
-                    )
-                else:
-                    batch.create_check_constraint(
-                        "ck_patient_portal_audit_events_event_type",
-                        sql + (" OR 1=1" if drift == "weakened_check" else ""),
-                    )
-    before = snapshot(engine, versions=True)
-    writes = []
+    migrate(engine, "head")
+    locked = Event()
+    release = Event()
 
-    def record_write(_connection, _cursor, statement, _parameters, _context, _many):
-        if statement.lstrip().split()[0].upper() in {
-            "ALTER",
-            "CREATE",
-            "DROP",
-            "DELETE",
-            "INSERT",
-            "UPDATE",
-        }:
-            writes.append(statement)
+    def pause_before_request_count(_connection, _cursor, statement, _parameters, _context, _many):
+        if statement.lower().strip() == "select count(*) from patient_portal_signup_requests":
+            locked.set()
+            assert release.wait(10), "test did not release the owned migration transaction"
 
-    sa.event.listen(engine, "before_cursor_execute", record_write)
+    sa.event.listen(engine, "before_cursor_execute", pause_before_request_count)
     try:
-        with pytest.raises(RuntimeError, match="0019 refuses"):
-            migrate(engine, "head")
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            result = executor.submit(migrate, engine, APPROVAL, "downgrade")
+            try:
+                assert locked.wait(10), "migration never reached its locked retention check"
+                with pytest.raises(sa.exc.OperationalError) as failure:
+                    with engine.begin() as connection:
+                        if engine.dialect.name == "postgresql":
+                            connection.exec_driver_sql("SET LOCAL lock_timeout='200ms'")
+                        else:
+                            connection.exec_driver_sql("PRAGMA busy_timeout=200")
+                        if writer == "audit":
+                            connection.execute(
+                                sa.text(
+                                    "INSERT INTO patient_portal_audit_events "
+                                    "(event_type,outcome,actor_type,created_at) "
+                                    "VALUES ('signup.request','success','patient',:now)"
+                                ),
+                                {"now": utc_now()},
+                            )
+                        else:
+                            connection.execute(
+                                sa.text(
+                                    "INSERT INTO patient_portal_signup_requests "
+                                    "(clinic_id,health_card_hash,encrypted_payload,encryption_nonce,"
+                                    "encryption_key_id,created_at,expires_at) "
+                                    "VALUES ('FAKE',:digest,:payload,:nonce,'FAKE',:now,:expires)"
+                                ),
+                                {
+                                    "digest": "a" * 64,
+                                    "payload": b"FAKE",
+                                    "nonce": b"x" * 12,
+                                    "now": utc_now(),
+                                    "expires": utc_now() + timedelta(hours=1),
+                                },
+                            )
+                if engine.dialect.name == "postgresql":
+                    assert failure.value.orig.sqlstate == "55P03"
+                else:
+                    assert "locked" in str(failure.value).lower()
+            finally:
+                release.set()
+                result.result(timeout=10)
     finally:
-        sa.event.remove(engine, "before_cursor_execute", record_write)
-    assert writes == []
-    assert snapshot(engine, versions=True) == before
-
-
-def test_frozen_physical_contract_hashes_match_readable_historical_catalogs():
-    from carlos_patient_portal.migrations._signup_history_schema_0019 import EXPECTED_TABLE_HASHES
-
-    fixture = json.loads(
-        (Path(__file__).parent / "fixtures/signup_history_schema_v19.json").read_text()
-    )
-    for backend, tables in fixture.items():
-        assert set(EXPECTED_TABLE_HASHES[backend]) == set(tables)
-        for table, value in tables.items():
-            raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
-            assert sha256(raw).hexdigest() == EXPECTED_TABLE_HASHES[backend][table]
+        sa.event.remove(engine, "before_cursor_execute", pause_before_request_count)
+    with engine.connect() as connection:
+        assert MigrationContext.configure(connection).get_current_heads() == (APPROVAL,)

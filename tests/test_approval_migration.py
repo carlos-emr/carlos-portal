@@ -18,7 +18,7 @@ from tests.support import alembic_config_for_tests
 
 @pytest.fixture
 def approval_storage():
-    # Exercise 0018's existing downgrade policy without crossing 0019's forward-only boundary.
+    # Exercise 0018's retention guard independently of later signup storage.
     engine = create_engine("sqlite+pysqlite:///:memory:")
     with engine.begin() as connection:
         config = alembic_config_for_tests()

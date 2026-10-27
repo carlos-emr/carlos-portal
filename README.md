@@ -1162,19 +1162,20 @@ and the sign-in page links to it. While it is off the route is not registered at
 `/auth/sign-up` answers `404` exactly as an unknown path does, nothing can be stored, and staff
 invites are unaffected (carlos-portal#15, designed in #10).
 
-The signup and job/linking migration histories converge at `0019_signup_history_merge`, after
-`0018_mycarlos_mailbox_approval`. Both original `0016` revision IDs and their original parents
-remain valid. Compatibility amendments to their audit CHECK lists preserve existing signup,
-job and myCarlos audit rows while the missing branch is applied. The result has one migration
-head; the historical branch point is retained. Existing encrypted requests and key references
-are preserved, and this migration does not enable signup or myCarlos delivery.
+Migration `0019_self_signup_requests` follows `0018_mycarlos_mailbox_approval` in
+one linear history. It adds the encrypted signup request table and `signup.request`
+to the existing 47-type audit policy; the earlier job, linking and approval migrations
+are unchanged. Existing job, device, mailbox and approval data remain intact.
+Downgrade to `0018` is allowed only when there are no stored signup requests and no
+`signup.request` audit events. Retained signup data causes an explicit refusal before
+schema or version writes; a downgrade never deletes requests or audit evidence.
+This migration does not enable signup or myCarlos delivery.
 
-This convergence requires an online connection to verify frozen physical prerequisites,
-including primary/foreign keys, unique indexes and predicates, CHECK bodies, column defaults,
-and sequence ownership and high-water marks. Unknown or partial schemas are refused before
-the merge writes instead of being stamped or silently repaired. Revision `0019`
-is **forward-only**, including on an empty database: a downgrade fails before writes. Plan a
-compatible backup/restore for rollback; do not expect an older image to accept the new head.
+Earlier unmerged #35 draft schemas used `0016_self_signup_requests` and
+`0019_signup_history_merge`. They are not supported upgrade inputs for this chain.
+Keep those development databases with their original source and evidence; do not
+stamp, reset or migrate them using this revision. Publishing this source does not
+authorize upgrading any existing database.
 
 The rule: **nothing typed on this page is ever used as a destination.** The portal looks nothing
 up, sends nothing, and never calls CARLOS. CARLOS collects stored requests (carlos-portal#16),
