@@ -255,7 +255,7 @@ h2 {
 }
 
 .password-toggle:focus-visible {
-  outline: 3px solid #f5b82e;
+  outline: 3px solid currentColor;
   outline-offset: 2px;
 }
 
