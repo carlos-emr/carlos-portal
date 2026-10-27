@@ -32,7 +32,7 @@ def owned_approval_pg():
     with engine.begin() as connection:
         config = alembic_config_for_tests()
         config.attributes["connection"] = connection
-        command.upgrade(config, "head")
+        command.upgrade(config, "0018_mycarlos_mailbox_approval")
     yield engine, schema
     # Never drop schemas. These empty/synthetic fixtures are retained for review.
     engine.dispose()
@@ -72,7 +72,7 @@ def test_actual_pg_empty_downgrade_reupgrade_and_retained_row_refusal(owned_appr
         migrate(connection, "0017_mycarlos_linking", "downgrade")
     assert not names.intersection(inspect(engine).get_table_names(schema=schema))
     with engine.begin() as connection:
-        migrate(connection, "head", "upgrade")
+        migrate(connection, "0018_mycarlos_mailbox_approval", "upgrade")
     with Session(engine) as session, session.begin():
         session.add(ApprovalClinic(clinic_id="FAKE-PG-retained-proof"))
     with pytest.raises(RuntimeError, match="retained proof/history"):

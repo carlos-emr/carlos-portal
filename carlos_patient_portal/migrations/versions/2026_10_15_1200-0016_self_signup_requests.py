@@ -39,12 +39,15 @@ globals().update(_ALEMBIC_REVISION_IDENTIFIERS)
 _AUDIT_TABLE = "patient_portal_audit_events"
 _SIGNUP_TABLE = "patient_portal_signup_requests"
 
+# Preserve audit rows from the other applied branch before replacing its CHECK.
 _OLD_EVENT_TYPES = (
     "'activation', 'account.contact_update', 'account.disable', "
     "'account.email_change_confirm', 'account.email_change_request', "
     "'account.enable', 'account.lock', "
     "'account.mfa_update', 'account.password_change', 'account.unlock', "
     "'invite.create', 'invite.list', 'invite.resend', 'invite.revoke', "
+    "'job.auth_refused', 'mycarlos.clinic_keys_publish', 'mycarlos.device_list', "
+    "'mycarlos.device_remove', 'mycarlos.link', 'mycarlos.link_code_create', "
     "'login', 'mfa.challenge', 'mfa.delivery', 'mfa.resend', 'mfa.verify', "
     "'password_reset.complete', 'password_reset.delivery', "
     "'password_reset.request', 'retention.policy_override', 'session.logout', "

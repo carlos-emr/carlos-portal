@@ -50,7 +50,7 @@ _LINK_FAILURE_TABLE = "patient_portal_mycarlos_link_failures"
 _CLINIC_KEY_TABLE = "patient_portal_clinic_keys"
 _ACCOUNTS = "patient_portal_accounts.id"
 
-# The list 0016 left. Another branch that also rewrites this CHECK must merge both lists.
+# Include the sibling signup type before replacing the CHECK, preserving its existing rows.
 _OLD_EVENT_TYPES = (
     "'activation', 'account.contact_update', 'account.disable', "
     "'account.email_change_confirm', 'account.email_change_request', "
@@ -61,6 +61,7 @@ _OLD_EVENT_TYPES = (
     "'login', 'mfa.challenge', 'mfa.delivery', 'mfa.resend', 'mfa.verify', "
     "'password_reset.complete', 'password_reset.delivery', "
     "'password_reset.request', 'retention.policy_override', 'session.logout', "
+    "'signup.request', "
     "'staff.action', "
     "'fhir.read', 'fhir.search', "
     "'booking_prompt.create', 'booking_prompt.delivery', 'booking_prompt.list', "

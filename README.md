@@ -1162,6 +1162,18 @@ and the sign-in page links to it. While it is off the route is not registered at
 `/auth/sign-up` answers `404` exactly as an unknown path does, nothing can be stored, and staff
 invites are unaffected (carlos-portal#15, designed in #10).
 
+The signup and job/linking migration histories converge at `0019_signup_history_merge`, after
+`0018_mycarlos_mailbox_approval`. Both original `0016` revision IDs and their original parents
+remain valid. Compatibility amendments to their audit CHECK lists preserve existing signup,
+job and myCarlos audit rows while the missing branch is applied. The result has one migration
+head; the historical branch point is retained. Existing encrypted requests and key references
+are preserved, and this migration does not enable signup or myCarlos delivery.
+
+This convergence requires an online connection to verify physical prerequisites. Unknown or
+partial schemas are refused instead of being stamped or silently repaired. Revision `0019`
+is **forward-only**, including on an empty database: a downgrade fails before writes. Plan a
+compatible backup/restore for rollback; do not expect an older image to accept the new head.
+
 The rule: **nothing typed on this page is ever used as a destination.** The portal looks nothing
 up, sends nothing, and never calls CARLOS. CARLOS collects stored requests (carlos-portal#16),
 matches them against a chart, and sends a normal invite to the email already on file

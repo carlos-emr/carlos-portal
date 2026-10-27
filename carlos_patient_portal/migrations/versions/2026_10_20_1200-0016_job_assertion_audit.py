@@ -40,6 +40,7 @@ globals().update(_ALEMBIC_REVISION_IDENTIFIERS)
 
 _AUDIT_TABLE = "patient_portal_audit_events"
 
+# Keep the sibling signup history valid when upgrading an already-applied branch.
 _OLD_EVENT_TYPES = (
     "'activation', 'account.contact_update', 'account.disable', "
     "'account.email_change_confirm', 'account.email_change_request', "
@@ -49,6 +50,7 @@ _OLD_EVENT_TYPES = (
     "'login', 'mfa.challenge', 'mfa.delivery', 'mfa.resend', 'mfa.verify', "
     "'password_reset.complete', 'password_reset.delivery', "
     "'password_reset.request', 'retention.policy_override', 'session.logout', "
+    "'signup.request', "
     "'staff.action', "
     "'fhir.read', 'fhir.search', "
     "'booking_prompt.create', 'booking_prompt.delivery', 'booking_prompt.list', "
