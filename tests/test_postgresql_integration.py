@@ -61,6 +61,7 @@ from carlos_patient_portal.invites import (
     prepare_create_invite,
     prepare_resend_invite,
 )
+from carlos_patient_portal.job_identity import CarlosJobRefusal, JobPrincipal, consume_job_assertion
 from carlos_patient_portal.main import auth_policy_from_settings, create_app
 from carlos_patient_portal.maintenance import cleanup_transient_auth_rows
 from carlos_patient_portal.models import (
@@ -347,6 +348,43 @@ def test_postgresql_consumes_one_staff_assertion_once_across_workers() -> None:
 
         assert results == ["accepted", "replayed"]
         assert stored_ids == [assertion_id]
+    finally:
+        engine.dispose()
+
+
+def test_postgresql_consumes_one_job_assertion_once_across_workers() -> None:
+    """Two portal workers receiving the same job call at once: one runs it, one is a replay."""
+    assert POSTGRES_URL is not None
+    clean_postgresql_database()
+    engine = create_portal_engine(POSTGRES_URL)
+    principal = JobPrincipal(
+        job="booking-sync",
+        display_name="Clinic booking",
+        clinic_id="postgres-clinic",
+        permission="portal.booking_prompt.sync",
+        key_id="booking-sync-postgres",
+        assertion_id=str(uuid4()),
+        assertion_expires_at=int((utc_now() + timedelta(minutes=1)).timestamp()),
+    )
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    barrier = Barrier(2)
+
+    def consume_from_worker() -> str:
+        barrier.wait(timeout=10)
+        try:
+            consume_job_assertion(session_factory, principal)
+            return "accepted"
+        except CarlosJobRefusal as refusal:
+            return refusal.code
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = sorted(executor.map(lambda _: consume_from_worker(), range(2)))
+        with Session(engine) as session:
+            stored_ids = list(session.scalars(select(PatientPortalStaffAssertionUse.assertion_id)))
+
+        assert results == ["accepted", "replay"]
+        assert stored_ids == [principal.assertion_id]
     finally:
         engine.dispose()
 
@@ -1764,8 +1802,8 @@ def test_postgresql_simultaneous_identical_results_record_once_and_notify_once()
                 clinic_id="postgres-clinic",
                 choice_id=choice_id,
                 result="booked",
-                actor="CARLOS booking sync",
-                actor_id="carlos-booking-sync",
+                actor="Clinic booking",
+                actor_id="job:booking-sync",
                 notice=POSTGRES_BOOKING_NOTICE,
             )
             return outcome.recorded

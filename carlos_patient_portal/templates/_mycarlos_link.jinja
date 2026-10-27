@@ -1,0 +1,44 @@
+<header class="module-header">
+  <h1>{{ text.mycarlos_remove_question if mycarlos.confirmation else text.mycarlos_link }}</h1>
+</header>
+{% if mycarlos.error %}
+  <p class="form-error" role="alert">{{ mycarlos.error }}</p>
+{% endif %}
+{% if mycarlos.confirmation %}
+  <p class="mycarlos-device-name"><strong>{{ mycarlos.confirmation.name }}</strong></p>
+  <p>{{ text.mycarlos_remove_effect }}</p>
+{% elif mycarlos.portal_address %}
+  <h2>{{ text.mycarlos_portal_address }}</h2>
+  <p class="mycarlos-portal-address"><code dir="ltr">{{ mycarlos.portal_address }}</code></p>
+{% endif %}
+{% if mycarlos.mfa_required %}
+  <p>{{ text.mycarlos_mfa_required }}</p>
+  <form method="post" action="{{ url_for('portal_mycarlos_mfa') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="primary-action">{{ text.mycarlos_verify }}</button>
+  </form>
+{% elif mycarlos.confirmation %}
+  <form method="post" action="{{ mycarlos.confirmation.remove_href }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="primary-action">{{ text.mycarlos_remove }}</button>
+  </form>
+{% else %}
+  <p>{{ text.mycarlos_instruction }}</p>
+  {% if mycarlos.code_display %}
+    {% if mycarlos.qr_png_data_uri %}
+      <h2>{{ text.mycarlos_qr_label }}</h2>
+      <img class="mycarlos-link-qr" src="{{ mycarlos.qr_png_data_uri }}" alt="{{ text.mycarlos_qr_alt }}">
+    {% else %}
+      <p class="form-notice">{{ text.mycarlos_qr_unavailable }}</p>
+    {% endif %}
+    <h2 id="mycarlos-code-label">{{ text.mycarlos_code_label }}</h2>
+    <p class="mycarlos-code"><code aria-labelledby="mycarlos-code-label" dir="ltr">{{ mycarlos.code_display }}</code></p>
+    <p>{{ text.mycarlos_lifetime }}</p>
+  {% endif %}
+  <p class="form-notice">{{ text.mycarlos_approval }}</p>
+  <form method="post" action="{{ url_for('portal_mycarlos_code') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="primary-action">{{ text.mycarlos_another if mycarlos.code_display else text.mycarlos_create }}</button>
+  </form>
+{% endif %}
+<p><a href="{{ url_for('portal_account') }}">{{ text.mycarlos_keep if mycarlos.confirmation else text.account }}</a></p>

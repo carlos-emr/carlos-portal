@@ -641,7 +641,8 @@ The remaining secrets have deliberately different rotation behavior:
 ## CARLOS Internal API
 
 Set `PATIENT_PORTAL_INTERNAL_API_TOKEN` to enable the production staff/service contract. Requests
-must include its Bearer token and an `X-CARLOS-Staff-Assertion`. Configure
+must include its Bearer token and an `X-CARLOS-Staff-Assertion` (a provider's action), or, for the
+CARLOS jobs described under *CARLOS jobs* below, an `X-CARLOS-Job-Assertion` instead. Configure
 `PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING` as a JSON object mapping stable key IDs to
 raw Ed25519 public keys encoded as unpadded base64url. CARLOS signs a compact
 `<payload>.<signature>` assertion for the authenticated provider. The JSON payload must contain
@@ -663,7 +664,7 @@ effective across every portal worker through PostgreSQL.
 The service token still authenticates CARLOS as a workload, while the signed assertion binds the
 specific provider and permissions. Keep `/internal/carlos/` reachable only from CARLOS application
 instances, terminate TLS on that path, and strip patient-supplied `X-CARLOS-*` headers at the edge.
-The reference nginx policy forwards only the signed assertion to the internal route.
+The reference nginx policy forwards only the two signed assertion headers to the internal route.
 
 Permissions are deliberately narrow:
 
@@ -675,9 +676,76 @@ Permissions are deliberately narrow:
 - `portal.booking_prompt.manage`: check booking eligibility, create, list, and withdraw booking
   prompts.
 - `portal.booking_prompt.sync`: list patients' pending picks of offered times and report whether
-  CARLOS booked them. Held only by the CARLOS polling job's dedicated, non-login system provider;
-  only the two sync endpoints accept it, and they accept nothing else. That provider is refused by
-  every other internal route, including prompt creation, account reads, and invite management.
+  CARLOS booked them. Only the `booking-sync` CARLOS job holds it (see *CARLOS jobs* below), and
+  the two sync endpoints take that job and nobody else. The job is refused by every other internal
+  route, including prompt creation, account reads, and invite management, and a staff assertion
+  carrying this permission is refused (`403`) on every route.
+- `portal.mycarlos.device.manage`: read a patient's linked myCarlos devices and remove one (only
+  while `PATIENT_PORTAL_MYCARLOS_DELIVERY_ENABLED` is on; see *Send to myCarlos* below).
+- `portal.mycarlos.clinic_keys.publish`: publish the clinic's signing public keys for Send to
+  myCarlos. Only the `key-publish` CARLOS job holds it; a staff assertion carrying it is refused
+  (`403`) on every route.
+
+### CARLOS jobs
+
+A CARLOS background job with no person behind it calls as a **job**, never as a CARLOS provider.
+The portal knows its jobs in code (`carlos_patient_portal/system_jobs.py`); adding one, or giving
+one another permission, is a reviewed code change:
+
+| Job | Shown as | May hold | Routes |
+| --- | --- | --- | --- |
+| `booking-sync` | Clinic booking | `portal.booking_prompt.sync` | the two booking sync endpoints |
+| `signup-poll` | Patient self sign-up | `portal.signup.manage`, `portal.invite.manage` | none yet |
+| `key-publish` | Clinic signing keys | `portal.mycarlos.clinic_keys.publish` | `PUT /internal/carlos/mycarlos/clinic-keys`, only while Send to myCarlos is on |
+
+A job call carries the same Bearer service token and, instead of the staff header, an
+`X-CARLOS-Job-Assertion`: the same compact `<payload>.<signature>` Ed25519 format, signed with
+that job's own key, never the staff key. The payload must contain exactly `iss` (`carlos`), `aud`
+(`carlos-patient-portal-job-api`, its own audience), `iat`, `exp` (at most 120 seconds apart,
+30 seconds of clock skew), `jti` (a canonical UUID, used once, in the same store as staff
+assertions), `clinic_id`, `job`, `kid`, `permission` (exactly one permission string, not a list),
+and `request_hash`, computed as for staff. Job assertions are always bound to the request, in
+every environment. There are no provider claims: the portal names the job from its own list.
+
+Configure the public halves in `PATIENT_PORTAL_INTERNAL_JOB_ASSERTION_PUBLIC_KEYRING` as JSON
+`{"<job>": {"<kid>": "<unpadded base64url Ed25519 public key>"}}`. A job left out (or the
+variable left empty) is off: its calls are refused. Startup fails on a job the portal does not
+know, an empty job entry, a key ID that is not 1 to 64 of `A-Z a-z 0-9 . _ -`, a key ID used
+twice (across jobs, or equal to a staff key ID), a key that is not 32 bytes, or the same public key
+under two jobs or in the staff keyring. Rotate a job key as a staff key: add the new `kid`,
+restart the portal, move CARLOS to it, and remove the old `kid` after two minutes. For a leaked
+key, remove its `kid` at once; the job stops until CARLOS has the new key. To make a job key by
+hand (with `openssl`, until a carlos-ctl command exists), see *Making a job key by hand* in
+`docs/architecture/patient-portal-runtime.md`.
+
+Every internal route declares its callers: staff only (the default), or one named job claiming
+one named permission. A request carrying both headers is refused. Refusals:
+
+| Reason | Status | When |
+| --- | --- | --- |
+| (none recorded) | `404` | no or wrong service token; a malformed job assertion; an unknown `kid` (a staff key ID included); a bad signature |
+| `unknown_job` | `404` | the signed `job` is not one the portal knows |
+| `wrong_key` | `404` | the `kid` belongs to another job |
+| `invalid_claims` | `404` | a missing, extra, or wrongly typed claim; another audience or issuer; a lifetime over 120 seconds; an `iat` in the future; a permission that is not one plain string |
+| `expired` | `404` | `exp` has passed |
+| `request_mismatch` | `404` | `request_hash` is not this request's |
+| `clinic_mismatch` | `404` | another clinic |
+| `replay` | `404` | the `jti` was already used |
+| `both_headers` | `404` | the request also carries `X-CARLOS-Staff-Assertion` |
+| `route_not_open` | `404` | the route is not open to this job, which includes every staff route |
+| `permission_not_held` | `403` | the job does not hold the permission it claims |
+| `wrong_permission` | `403` | the job holds it, but the route takes another |
+
+The `404` is the same "not found" an unauthenticated call gets, so a job cannot use the API to find
+out which routes exist. Unsigned or invalid job headers (the first row) keep the usual
+`staff.action` `authentication_failed` audit row, one per request, so a flood of them is as visible
+as a flood of bad staff headers. Every other refusal writes one `job.auth_refused` row instead:
+actor type `system`, the display name and `job:<name>` of the job whose key verified the signature,
+the portal's clinic, the route template (never the raw path or query), the reason, the key ID
+(`assertion_key_id`), and the assertion UUID (`assertion_id`). Job actions that succeed keep their
+usual event types with actor `Clinic booking`, actor ID `job:booking-sync`, the key ID and the
+assertion UUID; a job call that fails later (a `409` or `422`) gets the usual failure row with the
+same attribution.
 
 Staff-supplied text that the portal stores and shows back (an account-access reason, an unlock-secret
 revocation reason, and an unlock-secret label and source reference) is refused with `422` when it
@@ -833,8 +901,9 @@ collects the pick by polling.
   `409` `booking choice expired`, and the patient is told "That time passed before the clinic could
   confirm it." and can pick again from any times still on offer, with the update email. A poll that
   returns picks is audited as `staff.action` with reason `pending_choices_listed` and the count, with
-  actor type `system`; an empty poll writes nothing. The sync permission is only accepted on its
-  own: an assertion carrying it with any other permission is refused everywhere.
+  actor type `system`, actor `Clinic booking`, actor ID `job:booking-sync`, and the call's key ID
+  and assertion UUID; an empty poll writes nothing. Both sync endpoints take only the
+  `booking-sync` job (see *CARLOS jobs*); staff are refused with `403`, whatever they hold.
 - `POST /internal/carlos/booking-prompts/{id}/choice-result` with `{"choice_id": ...,
   "result": "booked" | "slot_unavailable", "offered_slots": [...]}` records the answer. Replacement
   `offered_slots` are accepted only with `slot_unavailable` and are validated as on create; they
@@ -898,6 +967,104 @@ collects the pick by polling.
 `code=Label` pairs, for example `main=Main Street Office,east=East Office`. Codes are 1 to 32 of
 `a-z 0-9 _ -`; labels are 1 to 64 characters of plain text, shown to patients, without commas,
 control characters, or hidden formatting characters. A code removed later is simply not shown.
+
+## Send to myCarlos (being built)
+
+Send to myCarlos lets a clinic send a document straight to the patient's myCarlos app. CARLOS seals
+it to one of the patient's devices, and the portal holds only the sealed copy until the app picks it
+up (plan: carlos-portal#41; format: `docs/architecture/mycarlos-delivery.md`). The portal keeps:
+
+- each patient's opaque recipient ID (random, never derived from the health card number);
+- linked devices and their public keys, one row per link;
+- pending "Link myCarlos" codes, as keyed hashes only, and the wrong codes for the limits;
+- the CARLOS clinic public keys handed to myCarlos when it links.
+
+The audit trail has five event types for it: `mycarlos.link_code_create`, `mycarlos.link` (every
+device link attempt, with its answer as the reason; refusals have outcome `failure`),
+`mycarlos.device_list`, `mycarlos.device_remove` and `mycarlos.clinic_keys_publish`.
+
+Requests from a linked device carry `X-MyCarlos-Device-Assertion`: a compact Ed25519 object
+signed with that link's device key and bound to the exact request, the same framing as CARLOS's
+staff and job assertions. `carlos_patient_portal/device_identity.py` checks it in the spec's order
+(and the link request, signed with the new device's key), and its nonce goes into the store
+staff and job assertions use. `tests/test_device_identity.py` runs every shared vector through
+those checks.
+
+`POST /api/mycarlos/link` links a device with a one-time code. The patient makes the code in the
+portal at `/portal/mycarlos`, and the device sends it, with its two new public keys
+and name, signed with the new key:
+
+- **The code:** a public 8-character `link_id` and a secret 10-character code (Crockford base32),
+  bound to the account and the signed-in session that made it, for 10 minutes and one use. Only an
+  HMAC-SHA256 of the code is stored, under its own key derived from
+  `PATIENT_PORTAL_SESSION_SECRET`; rotating that secret makes pending codes stop matching (they
+  expire within 10 minutes anyway, and the sessions that made them are signed out).
+- **Limits:** 5 wrong codes end a link; an account has at most 3 pending links (a fourth replaces
+  the oldest); 10 wrong codes within 24 hours pause linking until 24 hours after the last one. A
+  wrong code for a link that has ended counts nothing.
+- **Answers:** a failed assertion is the generic 404; a wrong, expired, used or paused code is 403
+  `{"code": "link_code_invalid"}`, the same for every reason; a key already linked is 409
+  `device_exists`; and while CARLOS has published no active clinic key, every link is 409
+  `clinic_keys_missing`, checked before the code, so the code stays pending and nothing is counted
+  (a device pins the key list it links with, and nothing refreshes it). On success: the recipient ID (made on the first link), the device key ID, the
+  clinic's ID and name, and its key list (`kid`, SubjectPublicKeyInfo, status).
+- **Per caller:** the route has the login limiter's budget in its own bucket, and the reference
+  nginx policy adds its own zone and a 4 KiB body limit (`/api/mycarlos/link` and its
+  `/patient/...` twin). Under a path prefix, the device signs the public path; the portal adds its
+  root path back before it checks the signature.
+
+`PATIENT_PORTAL_MYCARLOS_DELIVERY_ENABLED` (default `false`) turns the feature on. Leave it off:
+it is still being built, and while it is off none of its pages or routes exist.
+
+The patient browser controls use the same off switch:
+
+- `GET /portal/mycarlos` shows instructions without creating a code. `POST /portal/mycarlos/code`
+  requires CSRF and the current account's live session with proof of actual SMS MFA. Development
+  email MFA is accepted only in development; its proof is refused outside that mode. A
+  password-only session can complete the existing MFA flow through `POST /portal/mycarlos/mfa`.
+- A separate HKDF-derived key authenticates the HttpOnly, SameSite-Strict MFA proof cookie, bound
+  to the exact session token and factor. It is Secure outside development, respects the deployment
+  path prefix, and is cleared on logout or session replacement. It never authenticates device API
+  calls. No new browser cookie is issued while the feature is off.
+- Codes appear once in the no-store POST response, never in URLs or plaintext database fields.
+  Creating another retains the existing three-pending-code rule; it does not promise to revoke all
+  preceding codes immediately.
+- Account → Linked devices lists the account's active devices. Removal has a read-only confirmation
+  and a CSRF-protected POST, is account-scoped and idempotent, and preserves the device audit row.
+  Waiting-copy deletion belongs to the mailbox step; this browser checkpoint does not add it.
+
+The QR/lifecycle follow-up renders the frozen link-v1 payload locally as a regular PNG QR code
+with explicit UTF-8 ECI. Only the no-store code-creation response permits its local image data
+URI; the typed code remains available. Generating a PNG is not proof that the native scanner
+can decode it: exact ASCII, accented, CJK and decomposed-Unicode round trips remain required.
+The reviewed Segno dependency is pinned and hash-locked; it requires no external QR service.
+Key refresh and pending-only response recovery follow the additive
+[link lifecycle v1 contract](docs/architecture/mycarlos-link-lifecycle-v1.md).
+Other EMRs can implement a configured producer adapter under the
+[interoperability requirements](docs/architecture/producer-interoperability.md); a generic
+EMR adapter is not already implemented by this change.
+
+This remains a partial M2 checkpoint. Actual native QR decoding/scanning and content-free device
+notices remain completion gates. The QR producer adds Segno; this follow-up adds no database
+migration, document verification result or mailbox.
+
+The internal routes CARLOS calls (registered only while the switch is on):
+
+- `PUT /internal/carlos/mycarlos/clinic-keys`, by the `key-publish` job only. The body is the
+  clinic's whole key list, `{"keys": [{"kid", "spki", "status", "replaces_kid",
+  "replacement_signature"}]}`, 1 to 16 keys. `spki` is a P-256 SubjectPublicKeyInfo (DER, unpadded
+  base64url), `kid` must be b64url(SHA-256(spki)), and `status` is `active` or `revoked`. The same
+  list again changes nothing. A published key can never disappear (`409 key_missing`: list it as
+  revoked), a revoked key can never return (`409 key_revoked`), and a stored key's replacement
+  details can never change (`409 key_changed`). The keys are what a device receives when it links.
+- `GET /internal/carlos/patients/{demographic_no}/mycarlos/devices`, staff with
+  `portal.mycarlos.device.manage`. It returns the patient's `recipient_id` (null before the first
+  link) and every device, removed ones too, with its key ID, name, status, times, and the X25519
+  and Ed25519 public keys CARLOS seals to and checks receipts with.
+- `POST /internal/carlos/patients/{demographic_no}/mycarlos/devices/{device_key_id}/remove`, the
+  same permission. It removes one device for good. Removing it again changes nothing, and a device
+  of another patient is `404`. Each call is audited (`mycarlos.device_list`,
+  `mycarlos.device_remove`, `mycarlos.clinic_keys_publish`).
 
 ## Development Invite API
 

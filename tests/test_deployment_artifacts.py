@@ -2,6 +2,7 @@ from pathlib import Path
 
 from carlos_patient_portal import models
 from carlos_patient_portal.config import DEFAULT_SOURCE_CODE_URL, OutboxSettings, Settings
+from carlos_patient_portal.preflight import TABLES_WITHOUT_SEQUENCES
 
 PACKAGE_ROOT = Path(__file__).parents[1] / "carlos_patient_portal"
 REPOSITORY_ROOT = PACKAGE_ROOT.parent
@@ -99,8 +100,12 @@ def test_database_policy_explicitly_grants_every_application_table_and_sequence(
     ).read_text()
 
     for table in models.Base.metadata.tables.values():
-        assert f"public.{table.name}" in policy
-        if table.name != "patient_portal_staff_assertion_uses":
+        assert f"public.{table.name}," in policy or f"public.{table.name}\n" in policy
+        # A table keyed by something other than a serial id has no sequence to grant, and a
+        # GRANT naming a missing sequence would fail the whole policy script on PostgreSQL.
+        if table.name in TABLES_WITHOUT_SEQUENCES:
+            assert f"public.{table.name}_id_seq" not in policy
+        else:
             assert f"public.{table.name}_id_seq" in policy
     assert "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES" not in policy
     assert "GRANT USAGE, SELECT ON ALL SEQUENCES" not in policy
@@ -383,9 +388,10 @@ def test_reference_proxy_omits_raw_request_target_and_limits_expensive_routes() 
         "/auth/activate",
         "/auth/mfa/",
         "/auth/sign-up",
+        "/api/mycarlos/link",
     ):
         assert route in configuration
-    assert configuration.count("limit_req zone=") == 10
+    assert configuration.count("limit_req zone=") == 12
     # The sign-up page is limited on submission only, so reloading the form costs nothing.
     signup_key_map = configuration.split("map $request_method $portal_signup_limit_key {", 1)[1]
     signup_key_map = signup_key_map.split("}", 1)[0]
@@ -408,6 +414,17 @@ def test_reference_proxy_omits_raw_request_target_and_limits_expensive_routes() 
         )
         == 1
     )
+    # A CARLOS job's assertion: stripped from patient-facing locations, forwarded only to the
+    # CARLOS location, exactly like the staff one.
+    assert configuration.count('proxy_set_header X-CARLOS-Job-Assertion ""') == 1
+    assert (
+        configuration.count("proxy_set_header X-CARLOS-Job-Assertion $http_x_carlos_job_assertion")
+        == 1
+    )
+    internal_block = configuration.split("location ^~ /internal/carlos/ {", 1)[1]
+    internal_block = internal_block.split("\n  }", 1)[0]
+    assert "$http_x_carlos_job_assertion" in internal_block
+    assert 'X-CARLOS-Job-Assertion ""' not in internal_block
     assert configuration.count("proxy_set_header Host $host") == 2
     assert "location ^~ /patient/" in configuration
     assert "proxy_pass http://carlos_patient_portal/;" in configuration

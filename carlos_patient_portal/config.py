@@ -23,7 +23,7 @@ from typing import Literal
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
@@ -45,6 +45,7 @@ from carlos_patient_portal.database import (
 )
 from carlos_patient_portal.identity import is_hidden_character
 from carlos_patient_portal.models import MAX_BOOKING_LOCATION_CODE_LENGTH
+from carlos_patient_portal.system_jobs import JOB_NAME_PATTERN, SYSTEM_JOBS
 
 Environment = Literal["development", "staging", "test", "production"]
 TrustedClientIpHeader = Literal["x-forwarded-for", "x-real-ip"]
@@ -68,15 +69,14 @@ MAX_CLINIC_ID_LENGTH = 64
 MAX_CONFIG_CLINIC_ID_LENGTH = 20
 CLINIC_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 STAFF_ASSERTION_KEY_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+JOB_ASSERTION_KEYRING_VARIABLE = "PATIENT_PORTAL_INTERNAL_JOB_ASSERTION_PUBLIC_KEYRING"
 # At least seven digits with the usual separators, an optional leading +, and an optional extension.
 CLINIC_BOOKING_PHONE_PATTERN = re.compile(
     r"(?=(?:[^0-9]*[0-9]){7})\+?\(?[0-9][0-9 ().-]{2,24}(?:\s*(?:ext\.?|x)\s*[0-9]{1,6})?",
     re.IGNORECASE,
 )
 BOOKING_LOCATIONS_VARIABLE = "PATIENT_PORTAL_BOOKING_LOCATIONS"
-BOOKING_LOCATION_CODE_PATTERN = re.compile(
-    rf"[a-z0-9_-]{{1,{MAX_BOOKING_LOCATION_CODE_LENGTH}}}"
-)
+BOOKING_LOCATION_CODE_PATTERN = re.compile(rf"[a-z0-9_-]{{1,{MAX_BOOKING_LOCATION_CODE_LENGTH}}}")
 MAX_BOOKING_LOCATION_LABEL_LENGTH = 64
 DEFAULT_BOOKING_CHOICE_WAIT_MINUTES = 15
 # A conservative day count guarantees at least 25 complete calendar years,
@@ -249,6 +249,73 @@ def parse_staff_assertion_public_keyring(encoded_keyring: str) -> dict[str, str]
     return normalized_keyring
 
 
+def parse_job_assertion_public_keyring(encoded_keyring: str) -> dict[str, dict[str, str]]:
+    """Parse ``{"<job>": {"<kid>": "<public key>"}}`` for the jobs listed in `system_jobs`.
+
+    Key ids are unique across every job, and no public key serves two jobs, so the verifier can
+    find a key by its id alone and one job's key can never sign for another.
+    """
+    variable_name = JOB_ASSERTION_KEYRING_VARIABLE
+    try:
+        parsed_keyring = json.loads(
+            encoded_keyring,
+            object_pairs_hook=_reject_duplicate_keyring_members,
+        )
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{variable_name} must be a JSON object") from exc
+    if not isinstance(parsed_keyring, dict) or not parsed_keyring:
+        raise ValueError(
+            f"{variable_name} must be a non-empty JSON object of jobs; leave it unset to turn "
+            "every job off"
+        )
+
+    known_jobs = ", ".join(sorted(SYSTEM_JOBS))
+    normalized_keyring: dict[str, dict[str, str]] = {}
+    job_by_key_id: dict[str, str] = {}
+    job_by_public_key: dict[str, str] = {}
+    for job, job_keys in parsed_keyring.items():
+        if job not in SYSTEM_JOBS:
+            # Named only when it is shaped like a job name, so stray text is never echoed.
+            shown = f" {job}" if JOB_NAME_PATTERN.fullmatch(job) else ""
+            raise ValueError(
+                f"{variable_name} names an unknown job{shown}; known jobs: {known_jobs}"
+            )
+        if not isinstance(job_keys, dict) or not job_keys:
+            raise ValueError(
+                f"{variable_name}[{job}] must be a non-empty JSON object of key IDs; remove the "
+                "job to turn it off"
+            )
+        normalized_job_keys: dict[str, str] = {}
+        for key_id, public_key in job_keys.items():
+            if not STAFF_ASSERTION_KEY_ID_PATTERN.fullmatch(key_id):
+                raise ValueError(
+                    "job assertion key IDs must contain 1 to 64 ASCII letters, numbers, dots, "
+                    "underscores, or hyphens"
+                )
+            if key_id in job_by_key_id:
+                raise ValueError(
+                    f"{variable_name} lists key ID {key_id} under both {job_by_key_id[key_id]} "
+                    f"and {job}; every job key needs its own key ID"
+                )
+            if not isinstance(public_key, str):
+                raise ValueError(f"each {variable_name} key must be a string")
+            validated_key = validate_ed25519_public_key(
+                public_key,
+                variable_name=f"{variable_name}[{job}][{key_id}]",
+            )
+            other_job = job_by_public_key.get(validated_key)
+            if other_job is not None and other_job != job:
+                raise ValueError(
+                    f"{variable_name} lists the same public key under {other_job} and {job}; "
+                    "every job needs its own key pair"
+                )
+            job_by_key_id[key_id] = job
+            job_by_public_key[validated_key] = job
+            normalized_job_keys[key_id] = validated_key
+        normalized_keyring[job] = normalized_job_keys
+    return normalized_keyring
+
+
 class Settings(BaseSettings):
     """Runtime configuration for the patient portal service."""
 
@@ -273,6 +340,26 @@ class Settings(BaseSettings):
         ge=1,
         le=24 * 60,
     )
+    # Send to myCarlos (carlos-portal#41). Off by default; while off, none of its pages or routes
+    # exist. The schema is there either way, so turning it on needs no migration.
+    mycarlos_delivery_enabled: bool = False
+    # Private M4 source is separately gated while its migration/security holds remain.
+    # Enabling M2 linking alone never assumes these new tables already exist.
+    mycarlos_mailbox_enabled: bool = False
+    mycarlos_approval_enabled: bool = False
+    mycarlos_mailbox_device_bytes: int = Field(default=268435456, ge=20971520)
+    mycarlos_mailbox_account_bytes: int = Field(default=1073741824, ge=20971520)
+    mycarlos_mailbox_clinic_bytes: int = Field(default=21474836480, ge=20971520)
+    mycarlos_mailbox_device_copies: int = Field(default=100, ge=1)
+    mycarlos_mailbox_account_copies: int = Field(default=500, ge=1)
+    mycarlos_mailbox_clinic_copies: int = Field(default=20000, ge=1)
+    mycarlos_mailbox_ordinary_event_bytes: int = Field(default=536870912, ge=16384)
+    mycarlos_mailbox_clinic_uploads_per_minute: int = Field(default=60, ge=1)
+    mycarlos_mailbox_clinic_upload_bytes_per_minute: int = Field(default=268435456, ge=20971520)
+    mycarlos_mailbox_device_lists_per_minute: int = Field(default=60, ge=1)
+    mycarlos_mailbox_device_downloads_per_minute: int = Field(default=60, ge=1)
+    mycarlos_mailbox_device_receipts_per_minute: int = Field(default=120, ge=1)
+    mycarlos_mailbox_clinic_sync_pages_per_minute: int = Field(default=120, ge=1)
     public_base_url: str | None = Field(default=None, max_length=2048)
     # Linked from every page footer as the "Source code" offer AGPL-3.0 section 13 requires. Never
     # optional: the offer must be present on every page, so a blank value fails startup.
@@ -343,6 +430,9 @@ class Settings(BaseSettings):
     # the keyed JSON ring so callers can rotate signing keys without a lockstep restart.
     internal_staff_assertion_public_key: str | None = Field(default=None, max_length=64)
     internal_staff_assertion_public_keyring: str | None = Field(default=None, max_length=8192)
+    # Public keys for CARLOS jobs, the internal callers with no person behind them (see
+    # system_jobs.py). Unset, or a job left out, means that job's calls are refused.
+    internal_job_assertion_public_keyring: str | None = Field(default=None, max_length=8192)
     smtp_host: str | None = Field(default=None, max_length=253)
     smtp_port: int = Field(default=25, ge=1, le=65535)
     smtp_from_address: str | None = Field(default=None, max_length=254)
@@ -596,6 +686,7 @@ class Settings(BaseSettings):
         "trusted_proxy_cidrs",
         "internal_staff_assertion_public_key",
         "internal_staff_assertion_public_keyring",
+        "internal_job_assertion_public_keyring",
         "unlock_secret_active_key_id",
         "service_name",
         "clinic_name",
@@ -703,6 +794,15 @@ class Settings(BaseSettings):
                 )
         return value
 
+    @field_validator("public_base_url", mode="before")
+    @classmethod
+    def validate_raw_approval_public_base(cls, value: object, info: ValidationInfo) -> object:
+        if info.data.get("mycarlos_approval_enabled"):
+            from carlos_patient_portal.public_portal_base import normalize_portal
+
+            normalize_portal(value)
+        return value
+
     @field_validator("public_base_url")
     @classmethod
     def validate_public_base_url(cls, value: str | None) -> str | None:
@@ -796,9 +896,7 @@ class Settings(BaseSettings):
     def normalize_clinic_id(cls, value: str) -> str:
         clinic_id = value.strip()
         if not 1 <= len(clinic_id) <= MAX_CONFIG_CLINIC_ID_LENGTH:
-            raise ValueError(
-                "PATIENT_PORTAL_CLINIC_ID must contain 1 to 20 characters"
-            )
+            raise ValueError("PATIENT_PORTAL_CLINIC_ID must contain 1 to 20 characters")
         if CLINIC_ID_PATTERN.fullmatch(clinic_id) is None:
             raise ValueError(
                 "PATIENT_PORTAL_CLINIC_ID may contain only letters, numbers, dots, "
@@ -910,9 +1008,14 @@ class Settings(BaseSettings):
                 "configure either PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEY or "
                 "PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING, not both"
             )
-        return parse_staff_assertion_public_keyring(
-            self.internal_staff_assertion_public_keyring
-        )
+        return parse_staff_assertion_public_keyring(self.internal_staff_assertion_public_keyring)
+
+    @property
+    def resolved_internal_job_assertion_public_keys(self) -> dict[str, dict[str, str]]:
+        """Each configured job's `{kid: public key}`; a job that is not listed is off."""
+        if self.internal_job_assertion_public_keyring is None:
+            return {}
+        return parse_job_assertion_public_keyring(self.internal_job_assertion_public_keyring)
 
     def validate_secret_policy(self) -> None:
         secret_fields = {
@@ -1007,6 +1110,26 @@ class Settings(BaseSettings):
                 "PATIENT_PORTAL_INTERNAL_API_TOKEN_PREVIOUS must differ from "
                 "PATIENT_PORTAL_INTERNAL_API_TOKEN"
             )
+
+    def validate_job_assertion_keyring_policy(self) -> None:
+        """Keep job keys apart from staff keys, so the staff key can never sign as a job."""
+        job_keys = self.resolved_internal_job_assertion_public_keys
+        if not job_keys:
+            return
+        staff_keys = self.resolved_internal_staff_assertion_public_keys
+        staff_public_keys = set(staff_keys.values())
+        for job, keys in job_keys.items():
+            for key_id, public_key in keys.items():
+                if key_id in staff_keys:
+                    raise ValueError(
+                        f"{JOB_ASSERTION_KEYRING_VARIABLE}[{job}] key ID {key_id} is also a "
+                        "staff assertion key ID; job and staff keys need different key IDs"
+                    )
+                if public_key in staff_public_keys:
+                    raise ValueError(
+                        f"{JOB_ASSERTION_KEYRING_VARIABLE}[{job}][{key_id}] is a staff "
+                        "assertion public key; every job needs its own key pair"
+                    )
 
     def validate_admin_and_mfa_policy(self) -> None:
         if self.is_dev_admin_enabled and self.dev_admin_token is None:
@@ -1114,10 +1237,14 @@ class Settings(BaseSettings):
             self.database_url,
             environment_name="PATIENT_PORTAL_DATABASE_URL",
         )
-        if runtime_role in {
-            self.database_schema_owner_role,
-            self.database_maintenance_role,
-        } or self.database_schema_owner_role == self.database_maintenance_role:
+        if (
+            runtime_role
+            in {
+                self.database_schema_owner_role,
+                self.database_maintenance_role,
+            }
+            or self.database_schema_owner_role == self.database_maintenance_role
+        ):
             raise ValueError(
                 "production database runtime, schema-owner, and maintenance roles must differ"
             )
@@ -1151,8 +1278,7 @@ class Settings(BaseSettings):
         if parsed_url.scheme != "postgresql+psycopg":
             raise ValueError(f"production {environment_name} must use postgresql+psycopg")
         query_parameters = {
-            parameter.casefold()
-            for parameter in parse_qs(parsed_url.query, keep_blank_values=True)
+            parameter.casefold() for parameter in parse_qs(parsed_url.query, keep_blank_values=True)
         }
         restricted_overrides = sorted(
             query_parameters & PRODUCTION_DATABASE_RESTRICTED_QUERY_PARAMETERS
@@ -1248,10 +1374,17 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def reject_unsafe_runtime_policy(self) -> "Settings":
+        if self.mycarlos_approval_enabled:
+            if not self.mycarlos_delivery_enabled or not self.mycarlos_mailbox_enabled:
+                raise ValueError("myCarlos approval requires delivery and mailbox to be enabled")
+            from carlos_patient_portal.public_portal_base import normalize_portal
+
+            normalize_portal(self.public_base_url)
         self.validate_audit_retention_policy()
         self.validate_secret_policy()
         self.validate_required_production_services()
         self.validate_internal_api_rotation_policy()
+        self.validate_job_assertion_keyring_policy()
         self.validate_admin_and_mfa_policy()
         self.validate_smtp_policy()
         self.validate_sms_policy()
@@ -1278,12 +1411,8 @@ class OutboxSettings(Settings):
             "maintenance_database_url": "PATIENT_PORTAL_MAINTENANCE_DATABASE_URL",
             "identity_proof_secret": "PATIENT_PORTAL_IDENTITY_PROOF_SECRET",
             "audit_hash_secret": "PATIENT_PORTAL_AUDIT_HASH_SECRET",
-            "unlock_secret_encryption_secret": (
-                "PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_SECRET"
-            ),
-            "unlock_secret_encryption_keyring": (
-                "PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_KEYRING"
-            ),
+            "unlock_secret_encryption_secret": ("PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_SECRET"),
+            "unlock_secret_encryption_keyring": ("PATIENT_PORTAL_UNLOCK_SECRET_ENCRYPTION_KEYRING"),
             "internal_health_token": "PATIENT_PORTAL_INTERNAL_HEALTH_TOKEN",
             "internal_api_token": "PATIENT_PORTAL_INTERNAL_API_TOKEN",
             "internal_api_token_previous": "PATIENT_PORTAL_INTERNAL_API_TOKEN_PREVIOUS",

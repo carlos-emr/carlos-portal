@@ -65,6 +65,14 @@ class CarlosStaffPermissionError(Exception):
     """Raised when the authenticated CARLOS provider lacks a portal permission."""
 
 
+class AssertionExpiredError(CarlosServiceAuthenticationError):
+    """Raised when an assertion expired before its nonce could be recorded."""
+
+
+class AssertionReplayError(CarlosServiceAuthenticationError):
+    """Raised when an assertion's nonce was already used."""
+
+
 @dataclass(frozen=True)
 class StaffPrincipal:
     provider_id: str
@@ -187,6 +195,10 @@ def verify_staff_assertion(
         json.JSONDecodeError,
         ValueError,
         TypeError,
+        # Deeply nested JSON within the size limit exhausts the decoder's recursion depth (on
+        # Python 3.11 at about 1,000 levels). It is a malformed assertion like any other, so it
+        # gets the generic refusal, never a 500.
+        RecursionError,
     ) as exc:
         raise CarlosServiceAuthenticationError() from exc
     if not isinstance(payload, dict):
@@ -303,10 +315,30 @@ def consume_staff_assertion(
         or principal.assertion_expires_at is None
     ):
         return
-    now = utc_now()
-    expires_at = datetime.fromtimestamp(principal.assertion_expires_at, tz=UTC)
+    consume_assertion_id(
+        session_factory,
+        principal.assertion_id,
+        principal.assertion_expires_at,
+    )
+
+
+def consume_assertion_id(
+    session_factory: sessionmaker[Session],
+    assertion_id: str,
+    expires_at_epoch: int,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Record one assertion nonce, refusing it if any portal worker has recorded it already.
+
+    Staff, job and myCarlos device assertions share this one table, so a nonce used by one caller
+    type can never be used again by another. Both failures are authentication failures; the
+    subclasses let the job and device paths say which one it was. `now` is for fixed test vectors.
+    """
+    now = utc_now() if now is None else now
+    expires_at = datetime.fromtimestamp(expires_at_epoch, tz=UTC)
     if expires_at <= now:
-        raise CarlosServiceAuthenticationError()
+        raise AssertionExpiredError()
     try:
         with session_factory() as session:
             with session.begin():
@@ -317,11 +349,11 @@ def consume_staff_assertion(
                 )
                 session.add(
                     PatientPortalStaffAssertionUse(
-                        assertion_id=principal.assertion_id,
+                        assertion_id=assertion_id,
                         created_at=now,
                         expires_at=expires_at,
                     )
                 )
                 session.flush()
     except IntegrityError as exc:
-        raise CarlosServiceAuthenticationError() from exc
+        raise AssertionReplayError() from exc

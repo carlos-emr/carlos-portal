@@ -21,7 +21,15 @@ def development_settings(**overrides: object) -> Settings:
 
 def test_derived_keys_are_distinct_for_every_purpose() -> None:
     keys = PortalTokenKeys.derive(SESSION_SECRET)
-    derived_values = (keys.csrf, keys.session, keys.mfa, keys.password_reset)
+    derived_values = (
+        keys.csrf,
+        keys.session,
+        keys.mfa,
+        keys.password_reset,
+        keys.email_change,
+        keys.mycarlos_link,
+        keys.mycarlos_mfa_proof,
+    )
 
     assert len(set(derived_values)) == len(derived_values)
     # The configured secret must never be usable directly as a token key.

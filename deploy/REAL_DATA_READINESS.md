@@ -28,6 +28,9 @@ test result, ticket, or named approver is not evidence.
       request hash; confirm an exact replay and a changed body/path are rejected.
 - [ ] Exercise assertion-key rotation with old and new public keys overlapping, then remove the old
       key after its final assertion expires.
+- [ ] Verify each CARLOS job (booking sync) signs with its own key and key ID, never the staff key;
+      confirm a job call to a staff route and a staff call carrying the sync permission are
+      refused, and that refused job calls appear as `job.auth_refused` audit rows.
 - [ ] Complete password stage, send, publish, revoke, replay, resend, and reconciliation workflows.
 - [ ] Verify SMTP STARTTLS, authentication, SPF, DKIM, DMARC, bounce handling, and provider alerts.
 - [ ] Verify SMS authentication, delivery, retry behavior, invalid-number handling, and alerts.
