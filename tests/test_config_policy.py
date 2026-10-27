@@ -994,7 +994,9 @@ def test_staff_assertion_keyring_rejects_invalid_or_ambiguous_members() -> None:
         development_settings(
             internal_api_token="c" * 32,
             internal_staff_assertion_public_keyring=(
-                '{"same":"' + TEST_STAFF_ASSERTION_PUBLIC_KEY + '","same":"'
+                '{"same":"'
+                + TEST_STAFF_ASSERTION_PUBLIC_KEY
+                + '","same":"'
                 + TEST_STAFF_ASSERTION_PUBLIC_KEY
                 + '"}'
             ),
@@ -1047,7 +1049,8 @@ def test_an_unset_job_assertion_keyring_turns_every_job_off(value) -> None:
         ("{}", "must be a non-empty JSON object of jobs"),
         (
             {"nightly-export": {"export-1": BOOKING_SYNC_KEY}},
-            "names an unknown job nightly-export; known jobs: booking-sync, signup-poll",
+            "names an unknown job nightly-export; "
+            "known jobs: booking-sync, delivery-sync, key-publish, signup-poll",
         ),
         # Text that is not shaped like a job name is not echoed back.
         ({"Booking Sync!": {"k-1": BOOKING_SYNC_KEY}}, r"names an unknown job; known jobs"),
@@ -1071,8 +1074,11 @@ def test_an_unset_job_assertion_keyring_turns_every_job_off(value) -> None:
             "same public key under booking-sync and signup-poll",
         ),
         (
-            '{"booking-sync":{"k-1":"' + BOOKING_SYNC_KEY + '"},"booking-sync":{"k-2":"'
-            + BOOKING_SYNC_KEY + '"}}',
+            '{"booking-sync":{"k-1":"'
+            + BOOKING_SYNC_KEY
+            + '"},"booking-sync":{"k-2":"'
+            + BOOKING_SYNC_KEY
+            + '"}}',
             "duplicate JSON member",
         ),
         (
@@ -1239,8 +1245,7 @@ def test_production_maintenance_url_must_use_the_declared_role() -> None:
                 "?sslmode=verify-full"
             ),
             maintenance_database_url=(
-                "postgresql+psycopg://wrong_role@database.example.test/portal"
-                "?sslmode=verify-full"
+                "postgresql+psycopg://wrong_role@database.example.test/portal?sslmode=verify-full"
             ),
         )
 

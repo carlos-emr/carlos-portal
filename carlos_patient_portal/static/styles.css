@@ -1178,3 +1178,51 @@ a.module-tile:focus-visible {
     justify-content: space-between;
   }
 }
+
+
+/* Patient linking controls share the account page's text scaling and focus styles. */
+.mycarlos-code {
+  padding: 1rem;
+  border: 2px solid currentColor;
+  border-radius: 0.5rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.mycarlos-devices {
+  padding: 0;
+  list-style: none;
+}
+
+.mycarlos-devices li {
+  padding: 1rem 0;
+  border-top: 1px solid currentColor;
+}
+
+.mycarlos-device-name,
+.mycarlos-devices dd {
+  overflow-wrap: anywhere;
+}
+
+.mycarlos-devices dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: 0.25rem 1rem;
+}
+
+.mycarlos-devices dd {
+  margin: 0;
+}
+
+.mycarlos-portal-address {
+  overflow-wrap: anywhere;
+}
+
+.mycarlos-link-qr {
+  display: block;
+  max-inline-size: 100%;
+  block-size: auto;
+  background: white;
+  image-rendering: pixelated;
+}

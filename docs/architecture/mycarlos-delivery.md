@@ -14,6 +14,12 @@ made by [`tests/delivery_contract_reference.py`](../../tests/delivery_contract_r
 This document is the single source for the format. CARLOS and myCarlos link here and carry a
 byte-identical copy of the fixture. A change lands here first, then gets copied.
 
+The versioned protocol supports independently configured producer adapters. See
+[producer interoperability](producer-interoperability.md) for signing/encryption roles and
+requirements for other EMRs, and [link lifecycle v1](mycarlos-link-lifecycle-v1.md) for the additive
+key-refresh/recovery contract. Existing CARLOS-named wire identifiers remain exact compatibility
+constants; they do not impose an application-brand allowlist.
+
 ## What it does
 
 Staff press "Send to myCarlos" in CARLOS. CARLOS signs the document and a small manifest with the
