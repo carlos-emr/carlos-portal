@@ -2,11 +2,13 @@
 # Copyright (c) 2026 CARLOS Contributors. All Rights Reserved.
 """Populated historical branches converge without changing retained application data."""
 
+import json
 import os
 import re
 from base64 import urlsafe_b64decode
 from datetime import date, timedelta
 from hashlib import sha256
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -70,6 +72,10 @@ ENCRYPTION_KEY = "FAKE historical signup encryption " + "x" * 32
 def lineage_engine(request, tmp_path):
     if request.param == "sqlite":
         engine = sa.create_engine("sqlite+pysqlite:///" + str(tmp_path / "lineage.db"))
+
+        @sa.event.listens_for(engine, "connect")
+        def enforce_foreign_keys(connection, _record):
+            connection.execute("PRAGMA foreign_keys=ON")
     else:
         url = os.environ.get("SIGNUP_LINEAGE_PG_TEST_URL") or os.environ.get(
             "PORTAL_TEST_POSTGRES_URL"
@@ -265,14 +271,55 @@ def assert_schema_and_sequences(engine):
     )
     for name, table in expected.items():
         assert {c["name"] for c in inspector.get_columns(name)} == set(table.c.keys())
+        assert tuple(inspector.get_pk_constraint(name)["constrained_columns"]) == tuple(
+            column.name for column in table.primary_key.columns
+        )
         assert {tuple(c["column_names"]) for c in inspector.get_unique_constraints(name)} == {
             tuple(column.name for column in constraint.columns)
             for constraint in table.constraints
             if isinstance(constraint, sa.UniqueConstraint)
         }
-        assert {tuple(c["constrained_columns"]) for c in inspector.get_foreign_keys(name)} == {
-            tuple(column.name for column in constraint.columns)
+
+        def options(value):
+            return (
+                str(value.get("ondelete") or "NO ACTION").upper(),
+                str(value.get("onupdate") or "NO ACTION").upper(),
+                bool(value.get("deferrable")),
+                str(value.get("initially") or "IMMEDIATE").upper(),
+            )
+
+        assert {
+            (
+                tuple(c["constrained_columns"]),
+                c["referred_table"],
+                tuple(c["referred_columns"]),
+                options(c.get("options", {})),
+            )
+            for c in inspector.get_foreign_keys(name)
+        } == {
+            (
+                tuple(column.name for column in constraint.columns),
+                next(iter(constraint.elements)).column.table.name,
+                tuple(element.column.name for element in constraint.elements),
+                options(
+                    dict(
+                        ondelete=constraint.ondelete,
+                        onupdate=constraint.onupdate,
+                        deferrable=constraint.deferrable,
+                        initially=constraint.initially,
+                    )
+                ),
+            )
             for constraint in table.foreign_key_constraints
+        }
+        actual_indexes = [
+            index for index in inspector.get_indexes(name) if not index.get("duplicates_constraint")
+        ]
+        assert {
+            (i["name"], tuple(i["column_names"]), bool(i["unique"])) for i in actual_indexes
+        } == {
+            (i.name, tuple(column.name for column in i.columns), bool(i.unique))
+            for i in table.indexes
         }
     check = next(
         c
@@ -410,12 +457,28 @@ def test_should_refuse_unmerge_before_writes_even_when_no_data_is_retained(
         "missing_check",
         "unknown_event",
         "weakened_check",
+        "dropped_unique_index",
+        "altered_unique_index",
+        "index_predicate",
+        "fk_target",
+        "fk_action",
+        "weakened_nonce_check",
+        "missing_primary_key",
+        "default",
+        "identity",
+        "sequence_counter",
+        "sequence_ownership",
+        "not_valid_check",
     ],
 )
 def test_should_refuse_unknown_parent_schema_before_any_merge_write(lineage_engine, drift):
     engine = lineage_engine
     migrate(engine, APPROVAL)
     migrate(engine, SIGNUP)
+    if drift in {"sequence_ownership", "not_valid_check"} and engine.dialect.name != "postgresql":
+        pytest.skip("PostgreSQL-specific physical metadata")
+    if drift == "sequence_counter":
+        seed(engine, signup=True)
     with engine.begin() as connection:
         if drift == "missing_table":
             connection.execute(
@@ -445,16 +508,118 @@ def test_should_refuse_unknown_parent_schema_before_any_merge_write(lineage_engi
                     batch.drop_constraint(
                         "ck_patient_portal_audit_events_assertion_id_length", type_="check"
                     )
+        elif drift in {"dropped_unique_index", "altered_unique_index", "index_predicate"}:
+            operations = Operations(MigrationContext.configure(connection))
+            if drift == "index_predicate":
+                name = "ux_portal_contact_review_pending_account"
+                table = "patient_portal_contact_review_requests"
+                operations.drop_index(name, table_name=table)
+                operations.create_index(
+                    name,
+                    table,
+                    ["account_id"],
+                    unique=True,
+                    sqlite_where=sa.text("status='reviewed'"),
+                    postgresql_where=sa.text("status='reviewed'"),
+                )
+            else:
+                name = "ux_pp_mycarlos_devices_device_key_id"
+                operations.drop_index(name, table_name="patient_portal_mycarlos_devices")
+                if drift == "altered_unique_index":
+                    operations.create_index(
+                        name, "patient_portal_mycarlos_devices", ["device_key_id"], unique=False
+                    )
+        elif drift in {"fk_target", "fk_action"}:
+            operations = Operations(MigrationContext.configure(connection))
+            with operations.batch_alter_table("patient_portal_mycarlos_recipients") as batch:
+                batch.drop_constraint("fk_pp_mycarlos_recipients_account", type_="foreignkey")
+                batch.create_foreign_key(
+                    "fk_pp_mycarlos_recipients_account",
+                    "patient_portal_mfa_challenges"
+                    if drift == "fk_target"
+                    else "patient_portal_accounts",
+                    ["account_id"],
+                    ["id"],
+                    ondelete="CASCADE" if drift == "fk_action" else None,
+                )
+        elif drift == "weakened_nonce_check":
+            operations = Operations(MigrationContext.configure(connection))
+            with operations.batch_alter_table(
+                "patient_portal_signup_requests", table_kwargs={"sqlite_autoincrement": True}
+            ) as batch:
+                batch.drop_constraint("ck_pp_signup_requests_nonce_length", type_="check")
+                batch.create_check_constraint(
+                    "ck_pp_signup_requests_nonce_length", "length(encryption_nonce)>=0"
+                )
+        elif drift == "missing_primary_key":
+            operations = Operations(MigrationContext.configure(connection))
+            table = "patient_portal_mycarlos_mailbox_clinics"
+            name = sa.inspect(connection).get_pk_constraint(table)["name"] or "lineage_pk_" + table
+            with operations.batch_alter_table(
+                table, naming_convention={"pk": "lineage_pk_%(table_name)s"}
+            ) as batch:
+                batch.drop_constraint(name, type_="primary")
+        elif drift == "default":
+            operations = Operations(MigrationContext.configure(connection))
+            with operations.batch_alter_table("patient_portal_accounts") as batch:
+                batch.alter_column(
+                    "failed_mfa_count", existing_type=sa.Integer(), server_default=sa.text("1")
+                )
+        elif drift == "identity":
+            if engine.dialect.name == "sqlite":
+                operations = Operations(MigrationContext.configure(connection))
+                with operations.batch_alter_table(
+                    "patient_portal_signup_requests",
+                    recreate="always",
+                    table_kwargs={"sqlite_autoincrement": False},
+                ):
+                    pass
+            else:
+                connection.execute(
+                    sa.text(
+                        "ALTER TABLE patient_portal_signup_requests ALTER COLUMN id DROP DEFAULT"
+                    )
+                )
+                connection.execute(
+                    sa.text("ALTER SEQUENCE patient_portal_signup_requests_id_seq OWNED BY NONE")
+                )
+                connection.execute(
+                    sa.text(
+                        "ALTER TABLE patient_portal_signup_requests "
+                        "ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY"
+                    )
+                )
+        elif drift == "sequence_counter":
+            if engine.dialect.name == "sqlite":
+                connection.execute(
+                    sa.text(
+                        "UPDATE sqlite_sequence SET seq=0 "
+                        "WHERE name='patient_portal_signup_requests'"
+                    )
+                )
+            else:
+                connection.execute(
+                    sa.text("ALTER SEQUENCE patient_portal_signup_requests_id_seq RESTART WITH 1")
+                )
+        elif drift == "sequence_ownership":
+            connection.execute(
+                sa.text("ALTER SEQUENCE patient_portal_signup_requests_id_seq OWNED BY NONE")
+            )
         else:
             operations = Operations(MigrationContext.configure(connection))
             with operations.batch_alter_table("patient_portal_audit_events") as batch:
                 batch.drop_constraint("ck_patient_portal_audit_events_event_type", type_="check")
                 values = EVENTS | {"fake.unexpected"} if drift == "unknown_event" else EVENTS
                 sql = "event_type in (" + ", ".join(repr(v) for v in sorted(values)) + ")"
-                batch.create_check_constraint(
-                    "ck_patient_portal_audit_events_event_type",
-                    sql + (" OR 1=1" if drift == "weakened_check" else ""),
-                )
+                if drift == "not_valid_check":
+                    batch.create_check_constraint(
+                        "ck_patient_portal_audit_events_event_type", sql, postgresql_not_valid=True
+                    )
+                else:
+                    batch.create_check_constraint(
+                        "ck_patient_portal_audit_events_event_type",
+                        sql + (" OR 1=1" if drift == "weakened_check" else ""),
+                    )
     before = snapshot(engine, versions=True)
     writes = []
 
@@ -477,3 +642,16 @@ def test_should_refuse_unknown_parent_schema_before_any_merge_write(lineage_engi
         sa.event.remove(engine, "before_cursor_execute", record_write)
     assert writes == []
     assert snapshot(engine, versions=True) == before
+
+
+def test_frozen_physical_contract_hashes_match_readable_historical_catalogs():
+    from carlos_patient_portal.migrations._signup_history_schema_0019 import EXPECTED_TABLE_HASHES
+
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures/signup_history_schema_v19.json").read_text()
+    )
+    for backend, tables in fixture.items():
+        assert set(EXPECTED_TABLE_HASHES[backend]) == set(tables)
+        for table, value in tables.items():
+            raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+            assert sha256(raw).hexdigest() == EXPECTED_TABLE_HASHES[backend][table]

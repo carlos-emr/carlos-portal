@@ -1169,8 +1169,10 @@ job and myCarlos audit rows while the missing branch is applied. The result has 
 head; the historical branch point is retained. Existing encrypted requests and key references
 are preserved, and this migration does not enable signup or myCarlos delivery.
 
-This convergence requires an online connection to verify physical prerequisites. Unknown or
-partial schemas are refused instead of being stamped or silently repaired. Revision `0019`
+This convergence requires an online connection to verify frozen physical prerequisites,
+including primary/foreign keys, unique indexes and predicates, CHECK bodies, column defaults,
+and sequence ownership and high-water marks. Unknown or partial schemas are refused before
+the merge writes instead of being stamped or silently repaired. Revision `0019`
 is **forward-only**, including on an empty database: a downgrade fails before writes. Plan a
 compatible backup/restore for rollback; do not expect an older image to accept the new head.
 
