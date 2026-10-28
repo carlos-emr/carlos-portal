@@ -12,6 +12,27 @@ After preparation, that attempt retains its footer and logo despite later admin
 edits. The existing outbox queues message instructions rather than prepared MIME;
 each actual worker transport attempt is a new preparation.
 
+### Why an email wasn't sent
+
+A refused send logs one line, `Portal email not sent: clinic footer unavailable
+(reason=<reason>)`, and the outbox records `clinic_footer_<reason>` as the failure
+code, so it isn't mistaken for an SMTP outage. The reason is one fixed word; it never
+includes the footer, a token, an address or a message.
+
+| Reason | Check first |
+| --- | --- |
+| `config` | The footer URL, read credential and public keyring are set in this process |
+| `transport` | CARLOS is reachable over HTTPS from here (DNS, TLS, timeout) |
+| `http_status` | CARLOS answers 200 `application/json` (a wrong credential gets a refusal status) |
+| `response` | The reply is the signed-footer JSON and within size limits |
+| `unknown_key` | The portal's public keyring holds the key CARLOS signs with |
+| `signature` | The keyring entry matches that key |
+| `claims` | Issuer, audience and clinic ID match this portal |
+| `freshness` | Both clocks are right (the footer is valid for at most 60 seconds) |
+| `content` | The saved footer in CARLOS: its HTML, text and logo |
+| `audit` | The audit volume is mounted, private and writable |
+| `message` | The email couldn't be assembled around the footer |
+
 ## Configure web and worker
 
 Deploy the CARLOS footer provider before this portal version, then save the clinic
@@ -60,9 +81,12 @@ file/directory `fsync`. Symlink paths are rejected. Production preflight probes
 durable publication and removes its temporary probe.
 
 Each attempt has an immutable prepared artifact and a separate terminal outcome,
-partitioned by UTC date. Files are `0600`. Preparation is durable before any SMTP
-connection. Evidence includes clinic/revision, exact HTML/plaintext, selected logo,
-attempt ID, time and message kind. It contains no recipient, subject, body, live
+in one folder per UTC date and hour (`<date>/<hour>/`). Each footer revision (clinic,
+exact HTML/plaintext and selected logo) is stored once, as `footers/<revision>.json`.
+The revision is a hash of that content, and the file is never overwritten: a different
+file under the same name stops new email. An attempt's artifact names its revision,
+attempt ID, time and message kind. Files are `0600`. The footer and the attempt are
+durable before any SMTP connection. It contains no recipient, subject, body, live
 verification/reset/change credential, or transport/signing secret. This is **not**
 an outgoing MIME spool. Schema and hashes detect corruption under trusted private
 storage; they do not protect against its owner/root replacing files and hashes.
@@ -81,7 +105,8 @@ is unchanged; these artifacts do not claim exactly-once delivery.
 
 Back up and restore the volume with clinic audit evidence. Apply the existing
 retention floor (default 25 × 366 days). This change does not automatically prune
-files. Monitor capacity: full or non-durable storage refuses new email. Keep the
+files. Each email adds two small files (a few hundred bytes); each footer revision,
+with its logo (up to about 136 KB), is stored once however many emails use it. Monitor capacity: full or non-durable storage refuses new email. Keep the
 volume separate from patient attachments, and include it in deployment/rollback
 planning. Older portal images do not enforce this policy; a rollback must not
 silently restore footerless sends.
@@ -95,12 +120,13 @@ this permission only after server-side `_admin READ`. Instance, principal and
 artifact clinic must match. Patients and the worker read credential cannot use it.
 
 Use `date=YYYY-MM-DD` (UTC today by default), `limit=1..100`, and the exclusive
-`before` cursor returned as `next_before`. Results are newest first. A directory
-scan allows at most 10,000 entries, each artifact 256 KiB, and a page 512 KiB.
+`before` cursor returned as `next_before`. Results are newest first. Each hour folder
+allows at most 10,000 entries (about 5,000 attempts in one UTC hour), each artifact
+256 KiB, and a page 512 KiB. A full page stops without reading older hours.
 Invalid/corrupt evidence is reported unavailable. A page can end early at its byte
 limit with a cursor; eligible evidence is never silently dropped. The list exposes
 saved plaintext, kind, clinic, revision, status/times and logo hash; full HTML and
-logo bytes stay in the artifact.
+logo bytes stay in the stored footer file.
 
 The CARLOS read-only caller and admin display are a separate dependency. That
 display must escape saved plaintext and use native `<details>` without `open`,
