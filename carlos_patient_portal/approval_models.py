@@ -43,7 +43,10 @@ class ApprovalClinic(ApprovalBase):
     request_sequence: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     approval_sequence: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     challenge_sequence: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
-    code_sequence: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    # server_default as migration 0020 adds the column to existing rows.
+    code_sequence: Mapped[int] = mapped_column(
+        BigInteger, default=0, server_default="0", nullable=False
+    )
 
 
 class ApprovalRequest(ApprovalBase):
