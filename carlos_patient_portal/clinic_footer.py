@@ -52,12 +52,37 @@ _PAYLOAD_FIELDS = frozenset(
 )
 
 
+# Fixed, data-free reasons a footer could not be prepared. They go to the log and the outbox's
+# failure code, so a wrong token, keyring mismatch or clock skew can be told apart from an SMTP
+# outage without logging any footer, token or patient data.
+FOOTER_FAILURE_REASONS = frozenset(
+    {
+        "config",  # no https URL, read token or staff keyring
+        "transport",  # connect, TLS, timeout or read failure
+        "http_status",  # not 200 application/json with identity encoding
+        "response",  # too large or not the {"assertion": "<payload>.<signature>"} shape
+        "unknown_key",  # signed with a kid this portal's keyring doesn't hold
+        "signature",  # the signature doesn't verify
+        "claims",  # wrong issuer, audience, clinic, nonce or field set
+        "freshness",  # issued in the future, expired, or valid for over 60 s (clock skew)
+        "content",  # the footer itself (HTML, text, logo, revision) isn't acceptable
+    }
+)
+
+
 class ClinicFooterUnavailableError(Exception):
-    """The current mandatory clinic footer could not be safely prepared."""
+    """The current mandatory clinic footer could not be safely prepared.
+
+    `reason` is one of FOOTER_FAILURE_REASONS; it never carries footer or request data.
+    """
+
+    def __init__(self, reason: str = "content") -> None:
+        super().__init__("clinic email footer is unavailable")
+        self.reason = reason if reason in FOOTER_FAILURE_REASONS else "content"
 
 
-def _unavailable() -> ClinicFooterUnavailableError:
-    return ClinicFooterUnavailableError("clinic email footer is unavailable")
+def _unavailable(reason: str = "content") -> ClinicFooterUnavailableError:
+    return ClinicFooterUnavailableError(reason)
 
 
 def decode_base64url(value: str, *, maximum: int) -> bytes:
@@ -365,28 +390,28 @@ class HttpsClinicFooterProvider:
                 != "application/json"
                 or response.getheader("Content-Encoding", "identity") != "identity"
             ):
-                raise _unavailable()
+                raise _unavailable("http_status")
             declared = response.getheader("Content-Length")
             if declared is not None and (
                 not declared.isdecimal() or int(declared) > MAX_FOOTER_RESPONSE_BYTES
             ):
-                raise _unavailable()
+                raise _unavailable("response")
             chunks: list[bytes] = []
             size = 0
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise _unavailable()
+                    raise _unavailable("transport")
                 chunk = response.read1(min(8192, MAX_FOOTER_RESPONSE_BYTES - size + 1))
                 if not chunk:
                     break
                 size += len(chunk)
                 if size > MAX_FOOTER_RESPONSE_BYTES:
-                    raise _unavailable()
+                    raise _unavailable("response")
                 chunks.append(chunk)
             return b"".join(chunks)
         except (OSError, ValueError, http.client.HTTPException):
-            raise _unavailable() from None
+            raise _unavailable("transport") from None
         finally:
             try:
                 if response is not None:
@@ -396,26 +421,32 @@ class HttpsClinicFooterProvider:
 
     def snapshot(self) -> ClinicFooterSnapshot:
         if self._url.scheme != "https" or self._credential is None or not self._keys:
-            raise _unavailable()
+            raise _unavailable("config")
         nonce = encode_base64url(secrets.token_bytes(32))
-        response = bounded_json(self._fetch(nonce), maximum=MAX_FOOTER_RESPONSE_BYTES)
-        if set(response) != {"assertion"} or not isinstance(response["assertion"], str):
-            raise _unavailable()
-        parts = response["assertion"].split(".")
-        if len(parts) != 2:
-            raise _unavailable()
-        encoded = decode_base64url(parts[0], maximum=MAX_FOOTER_PAYLOAD_BYTES)
-        signature = decode_base64url(parts[1], maximum=64)
-        payload = bounded_json(encoded, maximum=MAX_FOOTER_PAYLOAD_BYTES)
+        raw = self._fetch(nonce)
+        try:
+            response = bounded_json(raw, maximum=MAX_FOOTER_RESPONSE_BYTES)
+            if set(response) != {"assertion"} or not isinstance(response["assertion"], str):
+                raise _unavailable()
+            parts = response["assertion"].split(".")
+            if len(parts) != 2:
+                raise _unavailable()
+            encoded = decode_base64url(parts[0], maximum=MAX_FOOTER_PAYLOAD_BYTES)
+            signature = decode_base64url(parts[1], maximum=64)
+            payload = bounded_json(encoded, maximum=MAX_FOOTER_PAYLOAD_BYTES)
+        except ClinicFooterUnavailableError:
+            raise _unavailable("response") from None
         if set(payload) != _PAYLOAD_FIELDS or not isinstance(payload["kid"], str):
-            raise _unavailable()
+            raise _unavailable("claims")
         key = self._keys.get(payload["kid"])
-        if key is None or len(signature) != 64:
-            raise _unavailable()
+        if key is None:
+            raise _unavailable("unknown_key")
+        if len(signature) != 64:
+            raise _unavailable("signature")
         try:
             key.verify(signature, encoded)
         except InvalidSignature:
-            raise _unavailable() from None
+            raise _unavailable("signature") from None
         now = self._clock()
         issued, expires = payload["iat"], payload["exp"]
         if (
@@ -425,11 +456,10 @@ class HttpsClinicFooterProvider:
             or payload["nonce"] != nonce
             or type(issued) is not int
             or type(expires) is not int
-            or not 0 < expires - issued <= 60
-            or issued > now + 5
-            or expires <= now
         ):
-            raise _unavailable()
+            raise _unavailable("claims")
+        if not 0 < expires - issued <= 60 or issued > now + 5 or expires <= now:
+            raise _unavailable("freshness")
         return ClinicFooterSnapshot.from_dict(
             {
                 k: payload[k]

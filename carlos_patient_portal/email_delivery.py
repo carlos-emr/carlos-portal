@@ -20,6 +20,7 @@ from html import escape
 from typing import Protocol
 
 from carlos_patient_portal.clinic_footer import (
+    FOOTER_FAILURE_REASONS,
     ClinicFooterProvider,
     ClinicFooterUnavailableError,
     HttpsClinicFooterProvider,
@@ -40,11 +41,33 @@ from carlos_patient_portal.outbound_messages import (
 # One deliberately generic message for every adapter failure path. Detailed SMTP/header failure
 # classification belongs in privacy-safe metrics/logs, never in text that can reach a patient.
 PORTAL_EMAIL_DELIVERY_ERROR_MESSAGE = "portal email delivery failed"
+# The footer's own reasons, plus: the audit record couldn't be written, or the MIME message
+# couldn't be built around the footer.
+EMAIL_FOOTER_FAILURE_REASONS = FOOTER_FAILURE_REASONS | {"audit", "message"}
 logger = logging.getLogger(__name__)
 
 
 class PortalEmailDeliveryError(Exception):
     """Raised when a portal authentication email cannot be delivered."""
+
+
+class PortalEmailFooterUnavailableError(PortalEmailDeliveryError):
+    """No email was sent: the mandatory clinic footer or its audit record wasn't ready.
+
+    `failure_code` is fixed and data-free ("clinic_footer_<reason>"), so the outbox and the log
+    can tell it apart from an SMTP outage.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(PORTAL_EMAIL_DELIVERY_ERROR_MESSAGE)
+        self.reason = reason if reason in EMAIL_FOOTER_FAILURE_REASONS else "content"
+        self.failure_code = "clinic_footer_" + self.reason
+
+
+def _footer_failure(reason: str) -> PortalEmailFooterUnavailableError:
+    failure = PortalEmailFooterUnavailableError(reason)
+    logger.warning("Portal email not sent: clinic footer unavailable (reason=%s)", failure.reason)
+    return failure
 
 
 class PortalEmailSender(Protocol):
@@ -270,10 +293,18 @@ class SmtpPortalEmailSender:
 
     def _send_message(self, draft: tuple[EmailMessage, str]) -> None:
         message, kind = draft
+        # This is the NEW-send preparation boundary. The same immutable value goes into both
+        # MIME alternatives, the inline attachment and durable audit. Each stage that can stop
+        # the email names itself in a fixed, data-free reason (see _footer_failure).
         try:
-            # This is the NEW-send preparation boundary. The same immutable value goes
-            # into both MIME alternatives, the inline attachment and durable audit.
             footer = self._footer_provider.snapshot()
+        except ClinicFooterUnavailableError as failure:
+            raise _footer_failure(failure.reason) from None
+        except OSError:
+            raise _footer_failure("transport") from None
+        except ValueError:
+            raise _footer_failure("content") from None
+        try:
             body = message.get_content().rstrip()
             message.set_content(body + "\n\n" + footer.plain)
             logo_html = ""
@@ -303,9 +334,12 @@ class SmtpPortalEmailSender:
                 )
             # Finalize MIME boundaries locally before persistence; no SMTP socket exists yet.
             message.as_bytes()
+        except (OSError, ValueError):
+            raise _footer_failure("message") from None
+        try:
             attempt = self._footer_audit.prepare(footer, kind)
-        except (ClinicFooterUnavailableError, FooterAuditUnavailableError, OSError, ValueError):
-            raise PortalEmailDeliveryError(PORTAL_EMAIL_DELIVERY_ERROR_MESSAGE) from None
+        except (FooterAuditUnavailableError, OSError, ValueError):
+            raise _footer_failure("audit") from None
         submission_started = False
         accepted = False
         outcome = "failed"

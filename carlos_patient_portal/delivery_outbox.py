@@ -1206,7 +1206,9 @@ def process_one_delivery(
             except _BookingPromptNoticeNotNeeded:
                 failure_code = OUTBOX_FAILURE_BOOKING_PROMPT_NOT_NEEDED
             except PortalEmailDeliveryError as exc:
-                failure_code = type(exc).__name__
+                # A footer failure carries its own fixed code (clinic_footer_<reason>), so it
+                # isn't recorded as the same failure as an SMTP outage.
+                failure_code = getattr(exc, "failure_code", None) or type(exc).__name__
             except OutboxPayloadError:
                 failure_code = "payload_invalid"
 

@@ -1,3 +1,4 @@
+import logging
 import smtplib
 from datetime import UTC, datetime
 from email import policy
@@ -6,9 +7,13 @@ from email.parser import BytesParser
 import pytest
 
 from carlos_patient_portal import footer_audit
-from carlos_patient_portal.clinic_footer import ClinicFooterUnavailableError
+from carlos_patient_portal.clinic_footer import FOOTER_FAILURE_REASONS, ClinicFooterUnavailableError
 from carlos_patient_portal.config import Settings
-from carlos_patient_portal.email_delivery import PortalEmailDeliveryError, SmtpPortalEmailSender
+from carlos_patient_portal.email_delivery import (
+    PortalEmailDeliveryError,
+    PortalEmailFooterUnavailableError,
+    SmtpPortalEmailSender,
+)
 from carlos_patient_portal.footer_audit import FooterAuditStore
 from tests.footer_support import FakeFooterProvider, fake_footer
 
@@ -293,3 +298,41 @@ def test_refused_recipient_records_failure(delivery):
     with pytest.raises(PortalEmailDeliveryError):
         sender.send_contact_change_notice(recipient="fake.patient@example.test")
     assert attempts(audit)[0]["status"] == "failed"
+
+
+@pytest.mark.parametrize("reason", sorted(FOOTER_FAILURE_REASONS))
+def test_footer_failure_logs_and_records_its_fixed_reason(delivery, monkeypatch, caplog, reason):
+    sender, provider, _ = delivery
+
+    def unavailable():
+        raise ClinicFooterUnavailableError(reason)
+
+    monkeypatch.setattr(provider, "snapshot", unavailable)
+    with caplog.at_level(logging.WARNING, logger="carlos_patient_portal.email_delivery"):
+        with pytest.raises(PortalEmailFooterUnavailableError) as failure:
+            sender.send_code(
+                recipient="fake.patient@example.test", code="FAKE-code", expires_in_seconds=600
+            )
+    assert isinstance(failure.value, PortalEmailDeliveryError)
+    assert str(failure.value) == "portal email delivery failed"
+    assert failure.value.failure_code == "clinic_footer_" + reason
+    assert [record.getMessage() for record in caplog.records] == [
+        f"Portal email not sent: clinic footer unavailable (reason={reason})"
+    ]
+    assert RecordingSmtp.instances == 0
+
+
+def test_audit_and_message_failures_have_their_own_reasons(delivery, monkeypatch, caplog):
+    sender, _, audit = delivery
+
+    def disk_full(*args):
+        raise OSError("FAKE disk unavailable at /secret/path")
+
+    monkeypatch.setattr(audit, "prepare", disk_full)
+    with caplog.at_level(logging.WARNING, logger="carlos_patient_portal.email_delivery"):
+        with pytest.raises(PortalEmailFooterUnavailableError) as failure:
+            sender.send_contact_change_notice(recipient="fake.patient@example.test")
+    assert failure.value.failure_code == "clinic_footer_audit"
+    assert "reason=audit" in caplog.text
+    assert "FAKE" not in caplog.text and "fake.patient" not in caplog.text
+    assert RecordingSmtp.instances == 0

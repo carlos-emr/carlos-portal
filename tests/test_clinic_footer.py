@@ -427,3 +427,82 @@ def test_valid_connection_close_responses_use_real_socket_file_lifetime(monkeypa
     finally:
         reader.close()
         writer.close()
+
+
+@pytest.mark.parametrize(
+    "change,reason",
+    [
+        ({"nonce": "wrong"}, "claims"),
+        ({"clinic_id": "clinic-b"}, "claims"),
+        ({"aud": "carlos-patient-portal-internal-api"}, "claims"),
+        ({"iss": "other"}, "claims"),
+        ({"iat": True}, "claims"),
+        ({"extra": "unexpected"}, "claims"),
+        ({"iat": 1700000010}, "freshness"),
+        ({"exp": 1700000000}, "freshness"),
+        ({"exp": 1700000100}, "freshness"),
+        ({"revision": "0" * 64}, "content"),
+        ({"footer_html": "<script>FAKE</script>"}, "content"),
+    ],
+)
+def test_each_refusal_names_one_fixed_data_free_reason(monkeypatch, change, reason):
+    client = provider(monkeypatch)
+    payload = {**vector()["payload"], **change}
+    monkeypatch.setattr(client, "_fetch", lambda nonce: signed_response(payload))
+    with pytest.raises(ClinicFooterUnavailableError) as failure:
+        client.snapshot()
+    assert failure.value.reason == reason
+    assert str(failure.value) == "clinic email footer is unavailable"
+
+
+def test_key_signature_shape_config_http_and_transport_reasons_differ(monkeypatch):
+    def reason_of(client):
+        with pytest.raises(ClinicFooterUnavailableError) as failure:
+            client.snapshot()
+        return failure.value.reason
+
+    data = vector()
+    client = provider(monkeypatch)
+    monkeypatch.setattr(
+        client, "_fetch", lambda nonce: json.dumps({"assertion": data["assertion"]}).encode()
+    )
+    assert reason_of(client) == "unknown_key"  # signed by a key this keyring doesn't hold
+    reply = json.loads(signed_response(data["payload"]))
+    reply["assertion"] = reply["assertion"].split(".")[0] + "." + encode_base64url(bytes(64))
+    monkeypatch.setattr(client, "_fetch", lambda nonce: json.dumps(reply).encode())
+    assert reason_of(client) == "signature"
+    for body in [b"not json", b'{"other": 1}', b'{"assertion": "one-part"}']:
+        monkeypatch.setattr(client, "_fetch", lambda nonce, body=body: body)
+        assert reason_of(client) == "response"
+    unconfigured = HttpsClinicFooterProvider(
+        Settings(
+            environment="development",
+            clinic_id="clinic-a",
+            email_footer_url="https://carlos.example.test/carlos/ws/portal/email-footer",
+            internal_staff_assertion_public_keyring=TEST_STAFF_ASSERTION_PUBLIC_KEYRING,
+        )
+    )
+    assert reason_of(unconfigured) == "config"
+    for response, reason in [
+        (FakeResponse(b"", status=503), "http_status"),
+        (FakeResponse(b"{}", **{"Content-Encoding": "gzip"}), "http_status"),
+        (FakeResponse(b"x" * (clinic_footer.MAX_FOOTER_RESPONSE_BYTES + 1)), "response"),
+    ]:
+        client = provider(monkeypatch)
+        transport = FakeHttps(response)
+        monkeypatch.setattr(
+            clinic_footer.http.client,
+            "HTTPSConnection",
+            lambda *a, transport=transport, **kw: transport,
+        )
+        assert reason_of(client) == reason
+
+    class Refused(FakeHttps):
+        def connect(self):
+            raise ConnectionRefusedError("FAKE refused")
+
+    client = provider(monkeypatch)
+    monkeypatch.setattr(
+        clinic_footer.http.client, "HTTPSConnection", lambda *a, **kw: Refused(None)
+    )
+    assert reason_of(client) == "transport"
