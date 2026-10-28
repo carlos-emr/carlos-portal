@@ -8,6 +8,7 @@ recorded, including a crash after SMTP accepted a message. Files are trusted pri
 storage; schema/hashes detect corruption, not replacement by their owner or root.
 """
 
+import heapq
 import json
 import os
 import re
@@ -15,6 +16,7 @@ import secrets
 import stat
 import time
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -44,8 +46,9 @@ FOOTER_MESSAGE_KINDS = frozenset(
 ATTEMPT_ID_PATTERN = re.compile(r"[0-9]{20}-[0-9a-f]{32}")
 HOUR_PATTERN = re.compile(r"(?:[01][0-9]|2[0-3])")
 REVISION_PATTERN = re.compile(r"[0-9a-f]{64}")
-# Per folder. Attempts live in one folder per UTC hour (2 files each), so one hour can hold
-# about 5,000 attempts before its listing refuses; a busy day spreads over 24 folders.
+# For the day folder, which holds only its (at most 24) hour folders. An hour folder has no limit:
+# writing never stops for the audit's sake, and a page keeps only the newest few names it needs
+# while it passes once over the folder, so any hour stays readable at any size.
 MAX_AUDIT_DIRECTORY_ENTRIES = 10_000
 # Each footer revision is stored once, named by its revision (a hash of its content), and every
 # attempt names the revision it used. A logo (up to ~136 KB encoded) is no longer copied per email.
@@ -430,6 +433,19 @@ class FooterAuditStore:
             item["footer_skipped"] = value["footer_skipped"]
         return item
 
+    @staticmethod
+    def _hour_candidates(
+        entries: Iterator[os.DirEntry[str]], hour: str, before: str | None
+    ) -> Iterator[str]:
+        """Attempt ids in one hour folder older than `before`; every record name is checked."""
+        for entry in entries:
+            if entry.name.endswith(".prepared.json"):
+                candidate = entry.name.removesuffix(".prepared.json")
+                if _hour(candidate) != hour:
+                    raise _failure()
+                if before is None or candidate < before:
+                    yield candidate
+
     def list_attempts(
         self, *, day: str, limit: int = 50, before: str | None = None
     ) -> dict[str, object]:
@@ -468,18 +484,14 @@ class FooterAuditStore:
             for index, hour in enumerate(hours):
                 fd = self._open_child(day_fd, hour, create=False)
                 try:
-                    candidates: list[str] = []
+                    # One pass over the folder, keeping only the newest names this page can
+                    # still use (+1 to know whether more follow): memory stays bounded however
+                    # many attempts the hour holds.
+                    wanted = limit - len(attempts) + 1
                     with os.scandir(fd) as entries:
-                        for count, entry in enumerate(entries, start=1):
-                            if count > MAX_AUDIT_DIRECTORY_ENTRIES:
-                                raise _failure()
-                            if entry.name.endswith(".prepared.json"):
-                                candidate = entry.name.removesuffix(".prepared.json")
-                                if _hour(candidate) != hour:
-                                    raise _failure()
-                                if before is None or candidate < before:
-                                    candidates.append(candidate)
-                    candidates.sort(reverse=True)
+                        candidates = heapq.nlargest(
+                            wanted, self._hour_candidates(entries, hour, before)
+                        )
                     for position, candidate in enumerate(candidates):
                         item = self._display(fd, candidate, day, footers)
                         proposed = {

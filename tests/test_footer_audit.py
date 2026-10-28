@@ -250,13 +250,22 @@ def test_a_busy_day_is_listed_hour_by_hour_past_one_folder_limit(store, monkeypa
         if before is None:
             break
     assert pages == [newest_first[:4], newest_first[4:]]
-    # Only an over-full hour is refused, and only when the scan reaches it.
+    # An hour folder over that size (6 entries in 08) stays readable too, page by page: writing
+    # never stops for the audit, so listing must not refuse a busy hour (or its whole day).
     _clock(monkeypatch, *[(8, m) for m in (1, 2, 3) for _ in range(2)])
-    for _ in range(3):  # 6 entries in the 08 folder, over its limit of 4
-        store.record_outcome(store.prepare(fake_footer(), "booking_prompt"), "failed")
-    assert len(store.list_attempts(day="2026-10-28", limit=6)["attempts"]) == 6
-    with pytest.raises(FooterAuditUnavailableError):
-        store.list_attempts(day="2026-10-28", limit=7)
+    for _ in range(3):
+        attempt = store.prepare(fake_footer(), "booking_prompt")
+        store.record_outcome(attempt, "failed")
+        attempts.append(attempt)
+    everything = sorted((a.attempt_id for a in attempts), reverse=True)
+    listed, before = [], None
+    while True:
+        page = store.list_attempts(day="2026-10-28", limit=2, before=before)
+        listed += [i["attempt_id"] for i in page["attempts"]]
+        before = page["next_before"]
+        if before is None:
+            break
+    assert listed == everything
 
 
 def test_cursor_from_another_day_and_a_misplaced_record_are_refused(store, tmp_path, monkeypatch):
