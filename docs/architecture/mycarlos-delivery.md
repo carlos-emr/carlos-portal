@@ -512,7 +512,7 @@ The portal logs the code in its audit trail, never content. On the wire:
 | `receipt_mismatch` | 409 | The receipt doesn't match the route or the stored copy |
 | `link_code_invalid` | 403 | Wrong, expired, used or locked code, or one whose session has ended |
 | `device_exists` | 409 | That device key is already linked (keys are per link) |
-| `clinic_keys_missing` | 409 | Linking refused: the clinic hasn't published an active signing key yet. The link code stays usable. |
+| `clinic_keys_missing` | 409 | Linking refused: the clinic hasn't published an active signing key yet. The link code stays usable. Link recovery answers the same while no key is active, and key refresh when the clinic has published no keys at all (see [the link lifecycle](mycarlos-link-lifecycle-v1.md)). |
 | `device_removed` | 403 on device requests, 409 on uploads | The link was removed; its copies are gone |
 
 **Clock problems:** the portal sends a `Date` header, so myCarlos can tell the patient when its
