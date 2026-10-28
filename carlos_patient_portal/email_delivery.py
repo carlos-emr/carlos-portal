@@ -22,11 +22,16 @@ from typing import Protocol
 from carlos_patient_portal.clinic_footer import (
     FOOTER_FAILURE_REASONS,
     ClinicFooterProvider,
+    ClinicFooterSnapshot,
     ClinicFooterUnavailableError,
     HttpsClinicFooterProvider,
 )
 from carlos_patient_portal.config import Settings
-from carlos_patient_portal.footer_audit import FooterAuditStore, FooterAuditUnavailableError
+from carlos_patient_portal.footer_audit import (
+    FOOTER_SKIPPABLE_KINDS,
+    FooterAuditStore,
+    FooterAuditUnavailableError,
+)
 from carlos_patient_portal.outbound_messages import (
     OutboundMessage,
     booking_prompt_email_message,
@@ -68,6 +73,13 @@ def _footer_failure(reason: str) -> PortalEmailFooterUnavailableError:
     failure = PortalEmailFooterUnavailableError(reason)
     logger.warning("Portal email not sent: clinic footer unavailable (reason=%s)", failure.reason)
     return failure
+
+
+def _footer_skipped(reason: str) -> None:
+    # The same line as a refusal, flagged: this one goes out without the footer.
+    logger.warning(
+        "Portal email sent without footer: clinic footer unavailable (reason=%s)", reason
+    )
 
 
 class PortalEmailSender(Protocol):
@@ -168,7 +180,9 @@ class SmtpPortalEmailSender:
                     expires_in_seconds=expires_in_seconds,
                 ),
                 kind="mfa",
-            )
+            ),
+            # Sign-in must keep working during a footer outage (D138).
+            footer_optional=True,
         )
 
     def send_password_reset(
@@ -190,7 +204,9 @@ class SmtpPortalEmailSender:
                 ),
                 message_id=message_id,
                 kind="password_reset",
-            )
+            ),
+            # A password reset must keep working during a footer outage (D138).
+            footer_optional=True,
         )
 
     def send_contact_change_notice(self, *, recipient: str, message_id: str | None = None) -> None:
@@ -291,55 +307,77 @@ class SmtpPortalEmailSender:
         except (TypeError, ValueError):
             raise PortalEmailDeliveryError(PORTAL_EMAIL_DELIVERY_ERROR_MESSAGE) from None
 
-    def _send_message(self, draft: tuple[EmailMessage, str]) -> None:
+    def _send_message(
+        self, draft: tuple[EmailMessage, str], *, footer_optional: bool = False
+    ) -> None:
+        """Send one prepared message with the current clinic footer.
+
+        `footer_optional` is passed only by send_code and send_password_reset (D138): while the
+        footer is unavailable, those two go out without it and the audit records why. Every other
+        email fails closed. An unavailable audit store fails closed for all of them.
+        """
         message, kind = draft
+        if footer_optional and kind not in FOOTER_SKIPPABLE_KINDS:
+            raise ValueError("only sign-in codes and password resets may go without the footer")
         # This is the NEW-send preparation boundary. The same immutable value goes into both
         # MIME alternatives, the inline attachment and durable audit. Each stage that can stop
         # the email names itself in a fixed, data-free reason (see _footer_failure).
+        footer: ClinicFooterSnapshot | None = None
+        skipped: str | None = None
         try:
             footer = self._footer_provider.snapshot()
-        except ClinicFooterUnavailableError as failure:
-            raise _footer_failure(failure.reason) from None
-        except OSError:
-            raise _footer_failure("transport") from None
-        except ValueError:
-            raise _footer_failure("content") from None
+        except (ClinicFooterUnavailableError, OSError, ValueError) as failure:
+            if isinstance(failure, ClinicFooterUnavailableError):
+                skipped = failure.reason
+            else:
+                skipped = "transport" if isinstance(failure, OSError) else "content"
+            if not footer_optional:
+                raise _footer_failure(skipped) from None
         try:
-            body = message.get_content().rstrip()
-            message.set_content(body + "\n\n" + footer.plain)
-            logo_html = ""
-            if footer.logo is not None:
-                logo_html = (
-                    '<img src="cid:' + footer.logo.content_id + '" alt="" style="max-width:600px;">'
+            if footer is not None:
+                body = message.get_content().rstrip()
+                message.set_content(body + "\n\n" + footer.plain)
+                logo_html = ""
+                if footer.logo is not None:
+                    logo_html = (
+                        '<img src="cid:'
+                        + footer.logo.content_id
+                        + '" alt="" style="max-width:600px;">'
+                    )
+                message.add_alternative(
+                    '<!doctype html><html><body><div style="white-space:pre-wrap;">'
+                    + escape(body, quote=False).replace("\n", "<br>")
+                    + "</div><br>"
+                    + logo_html
+                    + "<div>"
+                    + footer.html
+                    + "</div></body></html>",
+                    subtype="html",
                 )
-            message.add_alternative(
-                '<!doctype html><html><body><div style="white-space:pre-wrap;">'
-                + escape(body, quote=False).replace("\n", "<br>")
-                + "</div><br>"
-                + logo_html
-                + "<div>"
-                + footer.html
-                + "</div></body></html>",
-                subtype="html",
-            )
-            if footer.logo is not None:
-                message.get_payload()[-1].add_related(
-                    footer.logo.data,
-                    maintype="image",
-                    subtype=footer.logo.content_type.split("/")[1],
-                    cid="<" + footer.logo.content_id + ">",
-                    filename=footer.logo.content_id.split("@")[0]
-                    + (".png" if footer.logo.content_type == "image/png" else ".jpg"),
-                    disposition="inline",
-                )
+                if footer.logo is not None:
+                    message.get_payload()[-1].add_related(
+                        footer.logo.data,
+                        maintype="image",
+                        subtype=footer.logo.content_type.split("/")[1],
+                        cid="<" + footer.logo.content_id + ">",
+                        filename=footer.logo.content_id.split("@")[0]
+                        + (".png" if footer.logo.content_type == "image/png" else ".jpg"),
+                        disposition="inline",
+                    )
             # Finalize MIME boundaries locally before persistence; no SMTP socket exists yet.
             message.as_bytes()
         except (OSError, ValueError):
             raise _footer_failure("message") from None
         try:
-            attempt = self._footer_audit.prepare(footer, kind)
+            if footer is not None:
+                attempt = self._footer_audit.prepare(footer, kind)
+            else:
+                # Only reached with footer_optional; `skipped` holds the fixed reason.
+                attempt = self._footer_audit.prepare_skipped(kind, str(skipped))
         except (FooterAuditUnavailableError, OSError, ValueError):
             raise _footer_failure("audit") from None
+        if skipped is not None:
+            _footer_skipped(skipped)
         submission_started = False
         accepted = False
         outcome = "failed"

@@ -28,9 +28,12 @@ class FooterAttemptView(BaseModel):
     status: Literal["prepared", "accepted", "failed", "unknown"]
     status_at: str | None
     clinic_id: str
-    revision: str
-    footer_text: str
+    # All three are null when the footer was skipped (a sign-in code or password reset sent
+    # during a footer outage); footer_skipped then holds the fixed reason.
+    revision: str | None
+    footer_text: str | None
     logo_sha256: str | None
+    footer_skipped: str | None
 
 
 class FooterAuditListView(BaseModel):

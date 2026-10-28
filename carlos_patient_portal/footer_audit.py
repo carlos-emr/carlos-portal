@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Literal
 
 from carlos_patient_portal.clinic_footer import (
+    FOOTER_FAILURE_REASONS,
     MAX_FOOTER_PAYLOAD_BYTES,
     MAX_FOOTER_RESPONSE_BYTES,
     ClinicFooterSnapshot,
@@ -49,7 +50,12 @@ MAX_AUDIT_DIRECTORY_ENTRIES = 10_000
 # Each footer revision is stored once, named by its revision (a hash of its content), and every
 # attempt names the revision it used. A logo (up to ~136 KB encoded) is no longer copied per email.
 FOOTERS_DIRECTORY = "footers"
-_SNAPSHOT_FIELDS = frozenset({"schema", "attempt_id", "prepared_at", "kind", "footer_revision"})
+_SNAPSHOT_FIELDS = frozenset(
+    {"schema", "attempt_id", "prepared_at", "kind", "footer_revision", "footer_skipped"}
+)
+# The only kinds that may go out without the footer while it is unavailable (Ben's D138 on #27):
+# sign-in/MFA verification codes and password resets. Every other email fails closed.
+FOOTER_SKIPPABLE_KINDS = frozenset({"mfa", "password_reset"})
 _FOOTER_FIELDS = frozenset({"schema", "footer"})
 _OUTCOME_FIELDS = frozenset({"schema", "attempt_id", "status", "status_at"})
 
@@ -263,6 +269,35 @@ class FooterAuditStore:
                     "prepared_at": prepared_at,
                     "kind": kind,
                     "footer_revision": snapshot.revision,
+                    "footer_skipped": None,
+                },
+            )
+        finally:
+            os.close(fd)
+        return attempt
+
+    def prepare_skipped(self, kind: str, reason: str) -> FooterAuditAttempt:
+        """Record an attempt that goes out WITHOUT the footer, and the fixed reason it was skipped.
+
+        Only a sign-in code or a password reset may (FOOTER_SKIPPABLE_KINDS).
+        """
+        if kind not in FOOTER_SKIPPABLE_KINDS or reason not in FOOTER_FAILURE_REASONS:
+            raise _failure()
+        epoch_ns = time.time_ns()
+        prepared_at = _timestamp(epoch_ns)
+        attempt = FooterAuditAttempt(prepared_at[:10], f"{epoch_ns:020d}-" + uuid.uuid4().hex)
+        fd = self._open_hour(attempt.date, attempt.hour, create=True)
+        try:
+            self._publish(
+                fd,
+                attempt.attempt_id + ".prepared.json",
+                {
+                    "schema": 2,
+                    "attempt_id": attempt.attempt_id,
+                    "prepared_at": prepared_at,
+                    "kind": kind,
+                    "footer_revision": None,
+                    "footer_skipped": reason,
                 },
             )
         finally:
@@ -314,8 +349,8 @@ class FooterAuditStore:
         attempt_id: str,
         day: str,
         footers: dict[object, ClinicFooterSnapshot] | None = None,
-    ) -> tuple[dict[str, object], ClinicFooterSnapshot]:
-        """One attempt and its footer. `footers` lets one listing read each revision once."""
+    ) -> tuple[dict[str, object], ClinicFooterSnapshot | None]:
+        """One attempt and its footer (None when skipped). `footers` reads each revision once."""
         if ATTEMPT_ID_PATTERN.fullmatch(attempt_id) is None:
             raise _failure()
         value = self._read(fd, attempt_id + ".prepared.json")
@@ -331,6 +366,16 @@ class FooterAuditStore:
             or value["prepared_at"][:10] != day
         ):
             raise _failure()
+        skipped = value["footer_skipped"]
+        if skipped is not None:
+            if (
+                value["footer_revision"] is not None
+                or not isinstance(skipped, str)
+                or skipped not in FOOTER_FAILURE_REASONS
+                or value["kind"] not in FOOTER_SKIPPABLE_KINDS
+            ):
+                raise _failure()
+            return value, None
         footers = {} if footers is None else footers
         revision = value["footer_revision"]
         if revision not in footers:
@@ -374,10 +419,11 @@ class FooterAuditStore:
             "prepared_at": value["prepared_at"],
             "status": status,
             "status_at": status_at,
-            "clinic_id": snapshot.clinic_id,
-            "revision": snapshot.revision,
-            "footer_text": snapshot.plain,
-            "logo_sha256": snapshot.logo.sha256 if snapshot.logo else None,
+            "clinic_id": snapshot.clinic_id if snapshot else self._clinic_id,
+            "revision": snapshot.revision if snapshot else None,
+            "footer_text": snapshot.plain if snapshot else None,
+            "logo_sha256": snapshot.logo.sha256 if snapshot and snapshot.logo else None,
+            "footer_skipped": value["footer_skipped"],
         }
 
     def list_attempts(

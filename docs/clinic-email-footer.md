@@ -7,7 +7,10 @@ These system messages have no personal footer.
 
 Each new SMTP preparation reads the current trusted footer. Missing configuration,
 an unreachable provider, an invalid response, or unavailable durable audit storage
-stops the send before SMTP connects. There is no cached or footerless fallback.
+stops the send before SMTP connects. The one exception: sign-in/MFA verification codes
+and password-reset emails go out **without** the footer while it is unavailable, so
+patients can still sign in and reset a password. There is no cached footer, and
+unavailable audit storage stops every send, those two included.
 After preparation, that attempt retains its footer and logo despite later admin
 edits. The existing outbox queues message instructions rather than prepared MIME;
 each actual worker transport attempt is a new preparation.
@@ -18,6 +21,10 @@ A refused send logs one line, `Portal email not sent: clinic footer unavailable
 (reason=<reason>)`, and the outbox records `clinic_footer_<reason>` as the failure
 code, so it isn't mistaken for an SMTP outage. The reason is one fixed word; it never
 includes the footer, a token, an address or a message.
+
+A sign-in code or a password reset isn't refused: it goes out without the footer, and the log
+line reads `Portal email sent without footer: clinic footer unavailable (reason=<reason>)`.
+Its audit record names the skipped footer's reason (`footer_skipped`).
 
 | Reason | Check first |
 | --- | --- |
@@ -30,8 +37,9 @@ includes the footer, a token, an address or a message.
 | `claims` | Issuer, audience and clinic ID match this portal |
 | `freshness` | Both clocks are right (the footer is valid for at most 60 seconds) |
 | `content` | The saved footer in CARLOS: its HTML, text and logo |
-| `audit` | The audit volume is mounted, private and writable |
+| `audit` | The audit volume is mounted, private and writable (this stops sign-in codes and resets too) |
 | `message` | The email couldn't be assembled around the footer |
+| Any of the above, for a sign-in code or password reset | Not refused: it went out without the footer (`sent without footer` in the log, `footer_skipped` in the audit) |
 
 ## Configure web and worker
 
@@ -85,7 +93,8 @@ in one folder per UTC date and hour (`<date>/<hour>/`). Each footer revision (cl
 exact HTML/plaintext and selected logo) is stored once, as `footers/<revision>.json`.
 The revision is a hash of that content, and the file is never overwritten: a different
 file under the same name stops new email. An attempt's artifact names its revision,
-attempt ID, time and message kind. Files are `0600`. The footer and the attempt are
+attempt ID, time and message kind. A sign-in code or password reset sent during a footer
+outage names no revision; its `footer_skipped` gives the fixed reason instead. Files are `0600`. The footer and the attempt are
 durable before any SMTP connection. It contains no recipient, subject, body, live
 verification/reset/change credential, or transport/signing secret. This is **not**
 an outgoing MIME spool. Schema and hashes detect corruption under trusted private
@@ -125,8 +134,10 @@ allows at most 10,000 entries (about 5,000 attempts in one UTC hour), each artif
 256 KiB, and a page 512 KiB. A full page stops without reading older hours.
 Invalid/corrupt evidence is reported unavailable. A page can end early at its byte
 limit with a cursor; eligible evidence is never silently dropped. The list exposes
-saved plaintext, kind, clinic, revision, status/times and logo hash; full HTML and
-logo bytes stay in the stored footer file.
+saved plaintext, kind, clinic, revision, status/times, logo hash and `footer_skipped`
+(null, or the reason a sign-in code or reset went out without the footer, when the
+plaintext, revision and logo hash are null); full HTML and logo bytes stay in the stored
+footer file.
 
 The CARLOS read-only caller and admin display are a separate dependency. That
 display must escape saved plaintext and use native `<details>` without `open`,

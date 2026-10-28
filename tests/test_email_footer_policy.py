@@ -15,6 +15,7 @@ from carlos_patient_portal.email_delivery import (
     SmtpPortalEmailSender,
 )
 from carlos_patient_portal.footer_audit import FooterAuditStore
+from carlos_patient_portal.outbound_messages import contact_change_email_message
 from tests.footer_support import FakeFooterProvider, fake_footer
 
 
@@ -134,6 +135,7 @@ def test_all_seven_real_smtp_methods_send_frozen_clinic_plain_html_and_inline_lo
     assert evidence["kind"] == kind
     assert evidence["status"] == "accepted"
     assert evidence["footer_text"] == provider.current.plain
+    assert evidence["footer_skipped"] is None
     saved = b"".join(p.read_bytes() for p in tmp_path.rglob("*.json"))
     assert b"fake.patient@example.test" not in saved
     assert b"FAKE-code" not in saved
@@ -148,10 +150,9 @@ def test_footer_unavailable_refuses_before_audit_or_smtp(delivery, monkeypatch, 
         raise ClinicFooterUnavailableError("clinic email footer is unavailable")
 
     monkeypatch.setattr(provider, "snapshot", unavailable)
+    # Not a sign-in code or reset: those go out without the footer instead (D138).
     with pytest.raises(PortalEmailDeliveryError, match="^portal email delivery failed$"):
-        sender.send_code(
-            recipient="fake.patient@example.test", code="FAKE-code", expires_in_seconds=600
-        )
+        sender.send_contact_change_notice(recipient="fake.patient@example.test")
     assert RecordingSmtp.instances == 0
     assert list(tmp_path.iterdir()) == []
 
@@ -310,9 +311,7 @@ def test_footer_failure_logs_and_records_its_fixed_reason(delivery, monkeypatch,
     monkeypatch.setattr(provider, "snapshot", unavailable)
     with caplog.at_level(logging.WARNING, logger="carlos_patient_portal.email_delivery"):
         with pytest.raises(PortalEmailFooterUnavailableError) as failure:
-            sender.send_code(
-                recipient="fake.patient@example.test", code="FAKE-code", expires_in_seconds=600
-            )
+            sender.send_contact_change_notice(recipient="fake.patient@example.test")
     assert isinstance(failure.value, PortalEmailDeliveryError)
     assert str(failure.value) == "portal email delivery failed"
     assert failure.value.failure_code == "clinic_footer_" + reason
@@ -335,4 +334,86 @@ def test_audit_and_message_failures_have_their_own_reasons(delivery, monkeypatch
     assert failure.value.failure_code == "clinic_footer_audit"
     assert "reason=audit" in caplog.text
     assert "FAKE" not in caplog.text and "fake.patient" not in caplog.text
+    assert RecordingSmtp.instances == 0
+
+
+# Ben's D138 on #27: while the clinic footer is unavailable, ONLY sign-in/MFA codes and password
+# resets go out, without the footer. Every other email still fails closed.
+FOOTER_OPTIONAL = OPERATIONS[:2]
+FOOTER_REQUIRED = OPERATIONS[2:]
+
+
+@pytest.mark.parametrize("reason", sorted(FOOTER_FAILURE_REASONS))
+def test_sign_in_codes_and_resets_go_out_without_footer_during_an_outage(
+    delivery, monkeypatch, caplog, reason
+):
+    sender, provider, audit = delivery
+
+    def unavailable():
+        raise ClinicFooterUnavailableError(reason)
+
+    monkeypatch.setattr(provider, "snapshot", unavailable)
+    with caplog.at_level(logging.WARNING, logger="carlos_patient_portal.email_delivery"):
+        for method, _, arguments in FOOTER_OPTIONAL:
+            getattr(sender, method)(recipient="fake.patient@example.test", **arguments)
+    assert RecordingSmtp.instances == 2
+    for message in RecordingSmtp.messages:
+        assert not message.is_multipart()  # plain text only: no HTML part, no logo
+        assert fake_footer().plain not in message.get_content()
+    assert "FAKE-code" in RecordingSmtp.messages[0].get_content()
+    assert "FAKE-reset-token" in RecordingSmtp.messages[1].get_content()
+    evidence = {item["kind"]: item for item in attempts(audit)}
+    assert set(evidence) == {"mfa", "password_reset"}
+    for item in evidence.values():
+        assert item["status"] == "accepted"
+        assert item["footer_skipped"] == reason
+        assert (item["revision"], item["footer_text"], item["logo_sha256"]) == (None, None, None)
+    assert [record.getMessage() for record in caplog.records] == [
+        f"Portal email sent without footer: clinic footer unavailable (reason={reason})"
+    ] * 2
+
+
+@pytest.mark.parametrize("method,kind,arguments", FOOTER_REQUIRED)
+def test_every_other_email_still_fails_closed_during_an_outage(
+    delivery, monkeypatch, method, kind, arguments
+):
+    sender, provider, audit = delivery
+
+    def unavailable():
+        raise ClinicFooterUnavailableError("signature")
+
+    monkeypatch.setattr(provider, "snapshot", unavailable)
+    with pytest.raises(PortalEmailFooterUnavailableError) as failure:
+        getattr(sender, method)(recipient="fake.patient@example.test", **arguments)
+    assert failure.value.failure_code == "clinic_footer_signature"
+    assert RecordingSmtp.instances == 0
+    assert attempts(audit) == []
+
+
+@pytest.mark.parametrize("method,kind,arguments", FOOTER_OPTIONAL)
+def test_codes_and_resets_still_need_the_audit_record(
+    delivery, monkeypatch, method, kind, arguments
+):
+    sender, provider, audit = delivery
+
+    def unavailable():
+        raise ClinicFooterUnavailableError("transport")
+
+    def disk_full(*args):
+        raise OSError("FAKE disk unavailable")
+
+    monkeypatch.setattr(provider, "snapshot", unavailable)
+    monkeypatch.setattr(audit, "prepare_skipped", disk_full)
+    with pytest.raises(PortalEmailFooterUnavailableError) as failure:
+        getattr(sender, method)(recipient="fake.patient@example.test", **arguments)
+    assert failure.value.failure_code == "clinic_footer_audit"
+    assert RecordingSmtp.instances == 0
+
+
+def test_only_the_two_named_senders_may_skip_the_footer(delivery):
+    sender, _, _ = delivery
+    content = contact_change_email_message(service_name="FAKE Portal", clinic_name="FAKE Clinic")
+    draft = sender._build_message("fake.patient@example.test", content, kind="contact_change")
+    with pytest.raises(ValueError, match="only sign-in codes and password resets"):
+        sender._send_message(draft, footer_optional=True)
     assert RecordingSmtp.instances == 0

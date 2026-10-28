@@ -70,6 +70,7 @@ def test_authorized_administrator_reads_saved_footer_metadata_without_html_or_lo
         "revision",
         "footer_text",
         "logo_sha256",
+        "footer_skipped",
     }
     assert "footer_html" not in response.text
     assert "bytes_base64" not in response.text
@@ -164,3 +165,15 @@ def test_mixed_clinic_corrupt_evidence_yields_no_partial_disclosure(audit_app, t
     assert response.status_code == 503
     assert "FAKE Foreign Clinic" not in response.text
     assert "FAKE Own Clinic" not in response.text
+
+
+def test_a_skipped_footer_attempt_is_listed_with_its_reason(audit_app):
+    app, store = audit_app
+    attempt = store.prepare_skipped("password_reset", "unknown_key")
+    with TestClient(app) as client:
+        response = client.get(ROUTE, headers=headers())
+    assert response.status_code == 200, response.text
+    item = response.json()["attempts"][0]
+    assert item["attempt_id"] == attempt.attempt_id
+    assert item["footer_skipped"] == "unknown_key"
+    assert (item["revision"], item["footer_text"], item["logo_sha256"]) == (None, None, None)

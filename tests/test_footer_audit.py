@@ -39,6 +39,7 @@ def test_durable_snapshot_and_separate_outcome_exclude_message_content(store, tm
         "prepared_at": json.loads(original)["prepared_at"],
         "kind": "password_reset",
         "footer_revision": fake_footer().revision,
+        "footer_skipped": None,
     }
     stored = footer_file(tmp_path, fake_footer().revision)
     assert stored.stat().st_mode & 0o777 == 0o600
@@ -267,3 +268,26 @@ def test_cursor_from_another_day_and_a_misplaced_record_are_refused(store, tmp_p
     record(tmp_path, second).rename(moved)
     with pytest.raises(FooterAuditUnavailableError):
         store.list_attempts(day="2026-10-28")
+
+
+def test_a_skipped_footer_is_recorded_only_for_codes_and_resets(store, tmp_path):
+    attempt = store.prepare_skipped("mfa", "freshness")
+    value = json.loads(record(tmp_path, attempt).read_text())
+    assert (value["footer_revision"], value["footer_skipped"]) == (None, "freshness")
+    assert not (tmp_path / footer_audit.FOOTERS_DIRECTORY).exists()
+    store.record_outcome(attempt, "accepted")
+    item = store.list_attempts(day=attempt.date)["attempts"][0]
+    assert item["footer_skipped"] == "freshness" and item["status"] == "accepted"
+    assert (item["revision"], item["footer_text"], item["logo_sha256"]) == (None, None, None)
+    for kind, reason in [
+        ("contact_change", "freshness"),
+        ("booking_prompt", "config"),
+        ("mfa", "x"),
+    ]:
+        with pytest.raises(FooterAuditUnavailableError):
+            store.prepare_skipped(kind, reason)
+    # A stored skip for a kind that may not skip is refused when read.
+    value["kind"] = "contact_change"
+    record(tmp_path, attempt).write_text(json.dumps(value))
+    with pytest.raises(FooterAuditUnavailableError):
+        store.list_attempts(day=attempt.date)

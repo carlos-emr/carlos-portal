@@ -357,7 +357,8 @@ def test_absolute_deadline_covers_real_http_framing_before_audit_and_smtp(
         footer_audit=FooterAuditStore(str(tmp_path), "clinic-a"),
     )
     with pytest.raises(PortalEmailDeliveryError, match="^portal email delivery failed$"):
-        sender.send_code(recipient="fake.patient@example.test", code="FAKE", expires_in_seconds=60)
+        # A message that needs the footer (sign-in codes go out without it, D138).
+        sender.send_contact_change_notice(recipient="fake.patient@example.test")
     assert clock[0] <= 5.0
     assert min(sock.timeouts) < max(sock.timeouts)
     assert sock.closed and sock.raw.closed
