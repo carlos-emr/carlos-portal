@@ -18,7 +18,8 @@ def assert_every_password_box_has_a_toggle(page: str) -> int:
     for toggle in toggles:
         assert 'type="button"' in toggle, toggle
         assert " name=" not in toggle, "the control must never be submitted"
-        assert 'aria-pressed="false"' in toggle, toggle
+        # The changing words carry the state; no aria-pressed (D133, as GOV.UK does it).
+        assert "aria-pressed" not in toggle, toggle
         # Shown only by the script: without JavaScript there is no control.
         assert re.search(r"\shidden\s*>", toggle), toggle
         controls = re.search(r'aria-controls="([^"]+)"', toggle)

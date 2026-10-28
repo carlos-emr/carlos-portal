@@ -420,6 +420,11 @@ function screenshotPath(name) {
     assert(await signInPassword.getAttribute('type') === 'password', 'password starts visible');
     await page.getByRole('button', { name: 'Show password' }).click();
     assert(await signInPassword.getAttribute('type') === 'text', 'show-password control failed');
+    // The words change and carry the state; there is no aria-pressed (D133).
+    assert(
+      await page.getByRole('button', { name: 'Hide password' }).getAttribute('aria-pressed') === null,
+      'the show-password control must not use aria-pressed'
+    );
     await page.getByRole('button', { name: 'Hide password' }).click();
     assert(await signInPassword.getAttribute('type') === 'password', 'hide-password control failed');
     // A page restored from the back/forward cache must not come back with the password showing.
@@ -427,7 +432,7 @@ function screenshotPath(name) {
     await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
     assert(
       await signInPassword.getAttribute('type') === 'password'
-        && await page.getByRole('button', { name: 'Show password' }).getAttribute('aria-pressed') === 'false',
+        && await page.getByRole('button', { name: 'Show password' }).count() === 1,
       'a page restored from the back/forward cache kept the password showing'
     );
 

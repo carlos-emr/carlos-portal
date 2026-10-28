@@ -93,6 +93,10 @@ const passwordToggleInputs = (toggle) => (toggle.getAttribute("aria-controls") |
   .split(/\s+/)
   .map((id) => document.getElementById(id))
   .filter((input) => input instanceof HTMLInputElement);
+// The boxes themselves say whether they are shown; the button's words say what it does next
+// ("Show password" / "Hide password"), with no aria-pressed (D133, as GOV.UK does it).
+const passwordsShown = (toggle) =>
+  passwordToggleInputs(toggle).some((input) => input.type === "text");
 const setPasswordsShown = (toggle, shown) => {
   for (const input of passwordToggleInputs(toggle)) {
     input.type = shown ? "text" : "password";
@@ -100,7 +104,6 @@ const setPasswordsShown = (toggle, shown) => {
   toggle.textContent = shown
     ? toggle.dataset.hideLabel || "Hide password"
     : toggle.dataset.showLabel || "Show password";
-  toggle.setAttribute("aria-pressed", shown ? "true" : "false");
 };
 for (const toggle of passwordToggles) {
   toggle.hidden = false;
@@ -113,7 +116,7 @@ document.addEventListener("click", (event) => {
   if (!(toggle instanceof HTMLButtonElement)) {
     return;
   }
-  setPasswordsShown(toggle, toggle.getAttribute("aria-pressed") !== "true");
+  setPasswordsShown(toggle, !passwordsShown(toggle));
 });
 // Hide the boxes again when their form is sent and when the page comes back from the
 // back/forward cache, so a password is not left showing on a shared screen.
