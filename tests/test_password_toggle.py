@@ -31,6 +31,9 @@ def assert_every_password_box_has_a_toggle(page: str) -> int:
         assert box_id and box_id.group(1) in controlled, f"no Show password control for {box}"
         # Password managers keep working: autocomplete is still set on every box.
         assert "autocomplete=" in box, box
+        # Shown as text, a password must not be capitalised, corrected or spell-checked.
+        for attribute in ('spellcheck="false"', 'autocapitalize="none"', 'autocorrect="off"'):
+            assert attribute in box, f"{attribute} missing on {box}"
     return len(boxes)
 
 

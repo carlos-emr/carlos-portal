@@ -33,6 +33,12 @@ document.addEventListener("click", (event) => {
     current_password: passwordInput.value,
   });
   passwordInput.value = "";
+  // This box has no form, so nothing else hides it again once it is sent.
+  for (const toggle of passwordToggles) {
+    if (passwordToggleInputs(toggle).includes(passwordInput)) {
+      setPasswordsShown(toggle, false);
+    }
+  }
   void fetch(revealUrl, {
     method: "POST",
     credentials: "same-origin",
