@@ -145,7 +145,7 @@ def payload_of(assertion: str) -> dict[str, object]:
 
 
 def test_registered_jobs_have_well_formed_names_display_names_and_permissions() -> None:
-    assert set(SYSTEM_JOBS) == {"booking-sync", "signup-poll"}
+    assert set(SYSTEM_JOBS) == {"booking-sync", "delivery-sync", "key-publish", "signup-poll"}
     for name, job in SYSTEM_JOBS.items():
         assert job.name == name
         assert JOB_NAME_PATTERN.fullmatch(name)
@@ -155,7 +155,21 @@ def test_registered_jobs_have_well_formed_names_display_names_and_permissions() 
     assert SYSTEM_JOBS["booking-sync"].permissions == {SYNC}
     assert SYSTEM_JOBS["signup-poll"].display_name == "Patient self sign-up"
     assert SYSTEM_JOBS["signup-poll"].permissions == {SIGNUP, INVITE}
-    assert JOB_ONLY_PERMISSIONS == {SYNC}
+    assert SYSTEM_JOBS["key-publish"].display_name == "Clinic signing keys"
+    assert SYSTEM_JOBS["key-publish"].permissions == {"portal.mycarlos.clinic_keys.publish"}
+    assert SYSTEM_JOBS["delivery-sync"].display_name == "Clinic document delivery"
+    assert SYSTEM_JOBS["delivery-sync"].permissions == {
+        "portal.mycarlos.delivery.upload",
+        "portal.mycarlos.delivery.events.read",
+        "portal.mycarlos.delivery.events.ack",
+    }
+    assert JOB_ONLY_PERMISSIONS == {
+        SYNC,
+        "portal.mycarlos.clinic_keys.publish",
+        "portal.mycarlos.delivery.upload",
+        "portal.mycarlos.delivery.events.read",
+        "portal.mycarlos.delivery.events.ack",
+    }
 
 
 def test_no_route_is_open_to_the_signup_job_yet() -> None:
@@ -208,18 +222,22 @@ def test_a_valid_job_assertion_is_accepted() -> None:
 
 
 def test_the_signed_payload_carries_exactly_the_job_claims() -> None:
-    assert set(payload_of(signed())) == JOB_ASSERTION_FIELDS == {
-        "aud",
-        "clinic_id",
-        "exp",
-        "iat",
-        "iss",
-        "jti",
-        "job",
-        "kid",
-        "permission",
-        "request_hash",
-    }
+    assert (
+        set(payload_of(signed()))
+        == JOB_ASSERTION_FIELDS
+        == {
+            "aud",
+            "clinic_id",
+            "exp",
+            "iat",
+            "iss",
+            "jti",
+            "job",
+            "kid",
+            "permission",
+            "request_hash",
+        }
+    )
 
 
 @pytest.mark.parametrize("claim", sorted(JOB_ASSERTION_FIELDS - {"kid"}))
@@ -257,9 +275,7 @@ def test_a_duplicated_claim_is_refused_before_the_signature_is_checked() -> None
 
     with pytest.raises(CarlosServiceAuthenticationError):
         verify(
-            encode_assertion(
-                duplicated.encode(), TEST_JOB_ASSERTION_PRIVATE_KEYS["booking-sync"]
-            )
+            encode_assertion(duplicated.encode(), TEST_JOB_ASSERTION_PRIVATE_KEYS["booking-sync"])
         )
 
 
@@ -629,9 +645,7 @@ def test_a_job_replay_is_refused_and_recorded() -> None:
 def test_a_job_call_needs_the_service_token() -> None:
     app = internal_app()
     client = TestClient(app)
-    missing = {
-        name: value for name, value in job_headers().items() if name != "Authorization"
-    }
+    missing = {name: value for name, value in job_headers().items() if name != "Authorization"}
 
     responses = [
         client.get(CHOICES_URI, headers=missing),
@@ -724,7 +738,15 @@ def test_refusals_after_the_signature_verified_name_the_key_owner_and_the_route(
     responses = [client.get(CHOICES_URI, headers=headers) for _, headers in cases]
 
     assert [response.status_code for response in responses] == [
-        404, 404, 404, 404, 404, 404, 404, 403, 404,
+        404,
+        404,
+        404,
+        404,
+        404,
+        404,
+        404,
+        403,
+        404,
     ]
     assert [response.json()["detail"] for response in responses][-2:] == [
         "permission denied",
@@ -1035,8 +1057,7 @@ def test_job_audit_migration_adds_the_columns_and_downgrades_only_without_job_ro
     )
     try:
         columns = {
-            column["name"]
-            for column in inspect(engine).get_columns("patient_portal_audit_events")
+            column["name"] for column in inspect(engine).get_columns("patient_portal_audit_events")
         }
         assert {"assertion_key_id", "assertion_id"} <= columns
         with engine.begin() as connection:
@@ -1081,8 +1102,7 @@ def test_job_audit_migration_adds_the_columns_and_downgrades_only_without_job_ro
 
         command.downgrade(config, "0015_booking_offered_slots")
         assert not {"assertion_key_id", "assertion_id"} & {
-            column["name"]
-            for column in inspect(engine).get_columns("patient_portal_audit_events")
+            column["name"] for column in inspect(engine).get_columns("patient_portal_audit_events")
         }
         with pytest.raises(Exception, match="(?i)check"):
             with engine.begin() as connection:
@@ -1096,8 +1116,7 @@ def test_job_audit_migration_adds_the_columns_and_downgrades_only_without_job_ro
                 )
         command.upgrade(config, "head")
         assert "assertion_id" in {
-            column["name"]
-            for column in inspect(engine).get_columns("patient_portal_audit_events")
+            column["name"] for column in inspect(engine).get_columns("patient_portal_audit_events")
         }
     finally:
         engine.dispose()

@@ -305,11 +305,15 @@ def test_secret_bearing_dataclasses_keep_their_material_out_of_repr() -> None:
 
     keys = PortalTokenKeys(
         csrf="CSRF-KEY", session="SESSION-KEY", mfa="MFA-KEY",
-        password_reset="RESET-KEY", email_change="CHANGE-KEY",
+        password_reset="RESET-KEY", email_change="CHANGE-KEY", mycarlos_link="LINK-KEY",
+        mycarlos_mfa_proof="MYCARLOS-MFA-PROOF-KEY",
     )
     assert not any(
         key in repr(keys)
-        for key in ("CSRF-KEY", "SESSION-KEY", "MFA-KEY", "RESET-KEY", "CHANGE-KEY")
+        for key in (
+            "CSRF-KEY", "SESSION-KEY", "MFA-KEY", "RESET-KEY", "CHANGE-KEY", "LINK-KEY",
+            "MYCARLOS-MFA-PROOF-KEY",
+        )
     )
 
     assert "RESET-TOKEN-SECRET" not in repr(

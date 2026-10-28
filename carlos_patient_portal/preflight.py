@@ -40,10 +40,15 @@ EXPECTED_TABLE_PRIVILEGES = {
     "patient_portal_booking_choices": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_booking_offered_slots": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_booking_prompts": ORDINARY_TABLE_PRIVILEGES,
+    "patient_portal_clinic_keys": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_contact_review_requests": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_email_change_requests": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_invites": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_mfa_challenges": ORDINARY_TABLE_PRIVILEGES,
+    "patient_portal_mycarlos_devices": ORDINARY_TABLE_PRIVILEGES,
+    "patient_portal_mycarlos_link_codes": ORDINARY_TABLE_PRIVILEGES,
+    "patient_portal_mycarlos_link_failures": ORDINARY_TABLE_PRIVILEGES,
+    "patient_portal_mycarlos_recipients": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_outbound_deliveries": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_password_reset_tokens": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_sessions": ORDINARY_TABLE_PRIVILEGES,
@@ -51,7 +56,12 @@ EXPECTED_TABLE_PRIVILEGES = {
     "patient_portal_unlock_secrets": ORDINARY_TABLE_PRIVILEGES,
 }
 TABLES_WITHOUT_SEQUENCES = frozenset(
-    {"alembic_version", "patient_portal_staff_assertion_uses"}
+    {
+        "alembic_version",
+        "patient_portal_clinic_keys",
+        "patient_portal_mycarlos_recipients",
+        "patient_portal_staff_assertion_uses",
+    }
 )
 EXPECTED_SEQUENCE_PRIVILEGES = {
     f"{table_name}_id_seq": frozenset({"usage", "select"})

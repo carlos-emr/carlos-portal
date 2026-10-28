@@ -67,6 +67,12 @@ AUDIT_EVENT_INVITE_REVOKE = "invite.revoke"
 # A CARLOS job's signed call that verified but was refused (system_jobs.py, job_identity.py).
 AUDIT_EVENT_JOB_AUTH_REFUSED = "job.auth_refused"
 AUDIT_EVENT_LOGIN = "login"
+# myCarlos linking (carlos-portal#41, M2). Refusals are the same type with outcome failure.
+AUDIT_EVENT_MYCARLOS_CLINIC_KEYS_PUBLISH = "mycarlos.clinic_keys_publish"
+AUDIT_EVENT_MYCARLOS_DEVICE_LIST = "mycarlos.device_list"
+AUDIT_EVENT_MYCARLOS_DEVICE_REMOVE = "mycarlos.device_remove"
+AUDIT_EVENT_MYCARLOS_LINK = "mycarlos.link"
+AUDIT_EVENT_MYCARLOS_LINK_CODE_CREATE = "mycarlos.link_code_create"
 AUDIT_EVENT_MFA_CHALLENGE = "mfa.challenge"
 AUDIT_EVENT_MFA_DELIVERY = "mfa.delivery"
 AUDIT_EVENT_MFA_RESEND = "mfa.resend"
@@ -191,6 +197,29 @@ MAX_INVITE_DELIVERY_REFERENCE_LENGTH = 128
 MAX_BOOKING_PROMPT_OPERATION_ID_LENGTH = 64
 MAX_BOOKING_PROMPT_ACTOR_LENGTH = 128
 ACCOUNT_FOREIGN_KEY_TARGET = "patient_portal_accounts.id"
+# myCarlos linking (carlos-portal#41, M2; format in docs/architecture/mycarlos-delivery.md).
+MAX_MYCARLOS_RECIPIENT_ID_LENGTH = 64
+MYCARLOS_DEVICE_KEY_ID_LENGTH = 43
+MYCARLOS_PUBLIC_KEY_LENGTH = 32
+MAX_MYCARLOS_DEVICE_NAME_LENGTH = 64
+MYCARLOS_VAULT_HEAD_LINK_LENGTH = 64
+MYCARLOS_DEVICE_STATUS_ACTIVE = "active"
+MYCARLOS_DEVICE_STATUS_REMOVED = "removed"
+MYCARLOS_REMOVED_BY_PATIENT = "patient"
+MYCARLOS_REMOVED_BY_STAFF = "staff"
+MYCARLOS_LINK_ID_LENGTH = 8
+MYCARLOS_LINK_CODE_LENGTH = 10
+MYCARLOS_MAX_WRONG_CODES_PER_LINK = 5
+# Not stored: a pending link past its expiry, with 5 wrong codes, or whose session ended is over.
+MYCARLOS_LINK_STATUS_PENDING = "pending"
+MYCARLOS_LINK_STATUS_USED = "used"
+MYCARLOS_LINK_STATUS_REPLACED = "replaced"
+CLINIC_KEY_ID_LENGTH = 43
+MAX_CLINIC_KEY_SPKI_LENGTH = 512
+MAX_CLINIC_KEY_REPLACEMENT_SIGNATURE_LENGTH = 512
+# Only these two in v1: myCarlos refuses every key that is not active (mycarlos#55).
+CLINIC_KEY_STATUS_ACTIVE = "active"
+CLINIC_KEY_STATUS_REVOKED = "revoked"
 DEMOGRAPHIC_NO_POSITIVE_SQL = "demographic_no > 0"
 EXPIRY_AFTER_CREATION_SQL = "expires_at > created_at"
 PENDING_STATUS_SQL = "status = 'pending'"
@@ -1607,6 +1636,8 @@ class PatientPortalAuditEvent(Base):
                 "'account.mfa_update', 'account.password_change', 'account.unlock', "
                 "'invite.create', 'invite.list', 'invite.resend', 'invite.revoke', "
                 "'job.auth_refused', "
+                "'mycarlos.clinic_keys_publish', 'mycarlos.device_list', "
+                "'mycarlos.device_remove', 'mycarlos.link', 'mycarlos.link_code_create', "
                 "'login', 'mfa.challenge', 'mfa.delivery', 'mfa.resend', 'mfa.verify', "
                 "'password_reset.complete', 'password_reset.delivery', "
                 "'password_reset.request', 'retention.policy_override', 'session.logout', "
@@ -1739,4 +1770,300 @@ class PatientPortalAuditEvent(Base):
         DateTime(timezone=True),
         default=utc_now,
         nullable=False,
+    )
+
+
+MYCARLOS_DEVICE_FOREIGN_KEY_TARGET = "patient_portal_mycarlos_devices.id"
+
+
+class PatientPortalMyCarlosRecipient(Base):
+    """The opaque recipient ID of one patient account, for Send to myCarlos.
+
+    Shared by all of that patient's linked devices; CARLOS seals every copy for this ID. It is
+    128 random bits as b64url, made on first use and never derived from the health card number,
+    so the portal's mailbox and CARLOS's sends can't be joined to a person by the ID alone.
+    """
+
+    __tablename__ = "patient_portal_mycarlos_recipients"
+    __table_args__ = (
+        CheckConstraint(
+            f"length(recipient_id) between 1 and {MAX_MYCARLOS_RECIPIENT_ID_LENGTH}",
+            name="ck_pp_mycarlos_recipients_recipient_id_length",
+        ),
+        Index("ux_pp_mycarlos_recipients_recipient_id", "recipient_id", unique=True),
+    )
+
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey(ACCOUNT_FOREIGN_KEY_TARGET, name="fk_pp_mycarlos_recipients_account"),
+        primary_key=True,
+        autoincrement=False,
+    )
+    recipient_id: Mapped[str] = mapped_column(
+        String(MAX_MYCARLOS_RECIPIENT_ID_LENGTH),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+
+
+class PatientPortalMyCarlosDevice(Base):
+    """One linked myCarlos device: really one link, since myCarlos makes fresh keys per link.
+
+    `device_key_id` is computed from the two public keys and is unique across every account, so
+    one key pair can only ever be linked once. A removed device never comes back: linking again
+    brings new keys and a new row. CARLOS still decides whether to send to a linked device.
+    """
+
+    __tablename__ = "patient_portal_mycarlos_devices"
+    __table_args__ = (
+        CheckConstraint(
+            f"length(device_key_id) = {MYCARLOS_DEVICE_KEY_ID_LENGTH}",
+            name="ck_pp_mycarlos_devices_device_key_id_length",
+        ),
+        CheckConstraint(
+            f"length(x25519_public_key) = {MYCARLOS_PUBLIC_KEY_LENGTH}",
+            name="ck_pp_mycarlos_devices_x25519_length",
+        ),
+        CheckConstraint(
+            f"length(ed25519_public_key) = {MYCARLOS_PUBLIC_KEY_LENGTH}",
+            name="ck_pp_mycarlos_devices_ed25519_length",
+        ),
+        CheckConstraint(
+            f"length(device_name) between 1 and {MAX_MYCARLOS_DEVICE_NAME_LENGTH}",
+            name="ck_pp_mycarlos_devices_device_name_length",
+        ),
+        CheckConstraint(
+            "status in ('active', 'removed')",
+            name="ck_pp_mycarlos_devices_status",
+        ),
+        CheckConstraint(
+            "removed_by is null or removed_by in ('patient', 'staff')",
+            name="ck_pp_mycarlos_devices_removed_by",
+        ),
+        # Who removed a device and when are recorded together, and only on a removed device.
+        CheckConstraint(
+            "(status = 'active' and removed_at is null and removed_by is null) or "
+            "(status = 'removed' and removed_at is not null and removed_by is not null)",
+            name="ck_pp_mycarlos_devices_removal_complete",
+        ),
+        CheckConstraint(
+            "vault_head_link is null or "
+            f"length(vault_head_link) = {MYCARLOS_VAULT_HEAD_LINK_LENGTH}",
+            name="ck_pp_mycarlos_devices_vault_head_link_length",
+        ),
+        CheckConstraint(
+            "(vault_head_link is null) = (vault_head_link_at is null)",
+            name="ck_pp_mycarlos_devices_vault_head_link_at",
+        ),
+        Index("ux_pp_mycarlos_devices_device_key_id", "device_key_id", unique=True),
+        Index("ix_pp_mycarlos_devices_account_status", "account_id", "status"),
+        # A browser's Remove button names a row ID; a deleted ID must never point at a new device.
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey(ACCOUNT_FOREIGN_KEY_TARGET, name="fk_pp_mycarlos_devices_account"),
+        nullable=False,
+    )
+    device_key_id: Mapped[str] = mapped_column(
+        String(MYCARLOS_DEVICE_KEY_ID_LENGTH),
+        nullable=False,
+    )
+    x25519_public_key: Mapped[bytes] = mapped_column(
+        LargeBinary(MYCARLOS_PUBLIC_KEY_LENGTH),
+        nullable=False,
+    )
+    ed25519_public_key: Mapped[bytes] = mapped_column(
+        LargeBinary(MYCARLOS_PUBLIC_KEY_LENGTH),
+        nullable=False,
+    )
+    device_name: Mapped[str] = mapped_column(
+        String(MAX_MYCARLOS_DEVICE_NAME_LENGTH),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    linked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    removed_by: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # The device's latest anchor of its vault history head (decision L). Stored, never checked.
+    vault_head_link: Mapped[str | None] = mapped_column(
+        String(MYCARLOS_VAULT_HEAD_LINK_LENGTH),
+        nullable=True,
+    )
+    vault_head_link_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+
+class PatientPortalMyCarlosLinkCode(Base):
+    """A pending "Link myCarlos" code, made by a signed-in patient for one session.
+
+    `link_id` is public and names the link; the 10-character code is the secret and is stored only
+    as a keyed hash. A link is over once it is used or replaced, and also, without a status change,
+    once it expires, reaches 5 wrong codes, or its session ends. Deleting the session deletes its
+    links; an unknown `link_id` gets the same answer as an ended one.
+    """
+
+    __tablename__ = "patient_portal_mycarlos_link_codes"
+    __table_args__ = (
+        CheckConstraint(
+            f"length(link_id) = {MYCARLOS_LINK_ID_LENGTH}",
+            name="ck_pp_mycarlos_link_codes_link_id_length",
+        ),
+        CheckConstraint(
+            f"length(code_hash) = {HASH_LENGTH}",
+            name="ck_pp_mycarlos_link_codes_code_hash_length",
+        ),
+        CheckConstraint(
+            "status in ('pending', 'used', 'replaced')",
+            name="ck_pp_mycarlos_link_codes_status",
+        ),
+        CheckConstraint(
+            f"wrong_codes between 0 and {MYCARLOS_MAX_WRONG_CODES_PER_LINK}",
+            name="ck_pp_mycarlos_link_codes_wrong_codes",
+        ),
+        CheckConstraint(
+            EXPIRY_AFTER_CREATION_SQL,
+            name="ck_pp_mycarlos_link_codes_expiry_after_creation",
+        ),
+        # A used link names the device it linked, and only a used link does.
+        CheckConstraint(
+            "(status = 'used' and device_id is not null and used_at is not null) or "
+            "(status != 'used' and device_id is null and used_at is null)",
+            name="ck_pp_mycarlos_link_codes_used_complete",
+        ),
+        # Unique over every row, not just pending ones, so a link_id always names one link.
+        Index("ux_pp_mycarlos_link_codes_link_id", "link_id", unique=True),
+        Index(
+            "ix_pp_mycarlos_link_codes_account_status_created",
+            "account_id",
+            "status",
+            "created_at",
+        ),
+        Index("ix_pp_mycarlos_link_codes_expires", "expires_at"),
+        # Deleting a session cascades here; PostgreSQL does not index a foreign key by itself.
+        Index("ix_pp_mycarlos_link_codes_session", "session_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey(ACCOUNT_FOREIGN_KEY_TARGET, name="fk_pp_mycarlos_link_codes_account"),
+        nullable=False,
+    )
+    session_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "patient_portal_sessions.id",
+            ondelete="CASCADE",
+            name="fk_pp_mycarlos_link_codes_session",
+        ),
+        nullable=False,
+    )
+    link_id: Mapped[str] = mapped_column(String(MYCARLOS_LINK_ID_LENGTH), nullable=False)
+    code_hash: Mapped[str] = mapped_column(String(HASH_LENGTH), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    wrong_codes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    device_id: Mapped[int | None] = mapped_column(
+        ForeignKey(MYCARLOS_DEVICE_FOREIGN_KEY_TARGET, name="fk_pp_mycarlos_link_codes_device"),
+        nullable=True,
+    )
+
+
+class PatientPortalMyCarlosLinkFailure(Base):
+    """One wrong link code on a pending link, for the per-account limit.
+
+    10 within 24 hours stop linking for that account until 24 hours after the last one. Kept apart
+    from the link rows, which may be deleted sooner, so pruning a link never resets the count.
+    """
+
+    __tablename__ = "patient_portal_mycarlos_link_failures"
+    __table_args__ = (
+        CheckConstraint(
+            f"length(link_id) = {MYCARLOS_LINK_ID_LENGTH}",
+            name="ck_pp_mycarlos_link_failures_link_id_length",
+        ),
+        Index("ix_pp_mycarlos_link_failures_account_failed", "account_id", "failed_at"),
+        Index("ix_pp_mycarlos_link_failures_failed", "failed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey(ACCOUNT_FOREIGN_KEY_TARGET, name="fk_pp_mycarlos_link_failures_account"),
+        nullable=False,
+    )
+    link_id: Mapped[str] = mapped_column(String(MYCARLOS_LINK_ID_LENGTH), nullable=False)
+    failed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PatientPortalClinicKey(Base):
+    """A CARLOS clinic signing public key, as CARLOS published it to the portal.
+
+    The portal hands this list to myCarlos when a device links, and never signs or verifies with
+    it. `kid` is b64url(SHA-256(SubjectPublicKeyInfo DER)). A replacement key carries the old key's
+    signature over it, stored opaque for myCarlos to check (mycarlos#55).
+    """
+
+    __tablename__ = "patient_portal_clinic_keys"
+    __table_args__ = (
+        CheckConstraint(
+            f"length(kid) = {CLINIC_KEY_ID_LENGTH}",
+            name="ck_pp_clinic_keys_kid_length",
+        ),
+        CheckConstraint(
+            f"length(clinic_id) between 1 and {MAX_CLINIC_ID_LENGTH}",
+            name="ck_pp_clinic_keys_clinic_id_length",
+        ),
+        CheckConstraint(
+            f"length(spki) between 1 and {MAX_CLINIC_KEY_SPKI_LENGTH}",
+            name="ck_pp_clinic_keys_spki_length",
+        ),
+        CheckConstraint(
+            "status in ('active', 'revoked')",
+            name="ck_pp_clinic_keys_status",
+        ),
+        CheckConstraint(
+            "(status = 'revoked') = (revoked_at is not null)",
+            name="ck_pp_clinic_keys_revoked_at",
+        ),
+        CheckConstraint(
+            f"replaces_kid is null or length(replaces_kid) = {CLINIC_KEY_ID_LENGTH}",
+            name="ck_pp_clinic_keys_replaces_kid_length",
+        ),
+        CheckConstraint(
+            "replacement_signature is null or length(replacement_signature) between 1 and "
+            f"{MAX_CLINIC_KEY_REPLACEMENT_SIGNATURE_LENGTH}",
+            name="ck_pp_clinic_keys_replacement_signature_length",
+        ),
+        CheckConstraint(
+            "(replaces_kid is null) = (replacement_signature is null)",
+            name="ck_pp_clinic_keys_replacement_complete",
+        ),
+        Index("ix_pp_clinic_keys_clinic_status", "clinic_id", "status"),
+    )
+
+    kid: Mapped[str] = mapped_column(String(CLINIC_KEY_ID_LENGTH), primary_key=True)
+    clinic_id: Mapped[str] = mapped_column(String(MAX_CLINIC_ID_LENGTH), nullable=False)
+    spki: Mapped[bytes] = mapped_column(LargeBinary(MAX_CLINIC_KEY_SPKI_LENGTH), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    replaces_kid: Mapped[str | None] = mapped_column(
+        String(CLINIC_KEY_ID_LENGTH),
+        nullable=True,
+    )
+    replacement_signature: Mapped[bytes | None] = mapped_column(
+        LargeBinary(MAX_CLINIC_KEY_REPLACEMENT_SIGNATURE_LENGTH),
+        nullable=True,
     )
