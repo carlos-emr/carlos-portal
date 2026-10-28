@@ -413,7 +413,7 @@ class FooterAuditStore:
             except ValueError:
                 raise _failure() from None
             status, status_at = outcome["status"], outcome["status_at"]
-        return {
+        item: dict[str, object] = {
             "attempt_id": attempt_id,
             "kind": value["kind"],
             "prepared_at": value["prepared_at"],
@@ -423,8 +423,12 @@ class FooterAuditStore:
             "revision": snapshot.revision if snapshot else None,
             "footer_text": snapshot.plain if snapshot else None,
             "logo_sha256": snapshot.logo.sha256 if snapshot and snapshot.logo else None,
-            "footer_skipped": value["footer_skipped"],
         }
+        # Only a skipped attempt carries footer_skipped, so every other item keeps the exact
+        # field set CARLOS's reader checks (PortalEmailFooterAuditPage).
+        if value["footer_skipped"] is not None:
+            item["footer_skipped"] = value["footer_skipped"]
+        return item
 
     def list_attempts(
         self, *, day: str, limit: int = 50, before: str | None = None

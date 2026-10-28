@@ -134,10 +134,11 @@ allows at most 10,000 entries (about 5,000 attempts in one UTC hour), each artif
 256 KiB, and a page 512 KiB. A full page stops without reading older hours.
 Invalid/corrupt evidence is reported unavailable. A page can end early at its byte
 limit with a cursor; eligible evidence is never silently dropped. The list exposes
-saved plaintext, kind, clinic, revision, status/times, logo hash and `footer_skipped`
-(null, or the reason a sign-in code or reset went out without the footer, when the
-plaintext, revision and logo hash are null); full HTML and logo bytes stay in the stored
-footer file.
+saved plaintext, kind, clinic, revision, status/times and logo hash; full HTML and logo
+bytes stay in the stored footer file. Only an attempt that went out without the footer also
+has `footer_skipped` (the reason), with null plaintext, revision and logo hash. Other attempts
+keep exactly the fields above, which CARLOS's reader checks; until CARLOS accepts
+`footer_skipped`, it shows a day holding such an attempt as unavailable.
 
 The CARLOS read-only caller and admin display are a separate dependency. That
 display must escape saved plaintext and use native `<details>` without `open`,

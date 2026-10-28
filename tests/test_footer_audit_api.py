@@ -70,8 +70,7 @@ def test_authorized_administrator_reads_saved_footer_metadata_without_html_or_lo
         "revision",
         "footer_text",
         "logo_sha256",
-        "footer_skipped",
-    }
+    }  # exactly what CARLOS's PortalEmailFooterAuditPage accepts; no footer_skipped here
     assert "footer_html" not in response.text
     assert "bytes_base64" not in response.text
 

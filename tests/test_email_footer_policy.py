@@ -135,7 +135,7 @@ def test_all_seven_real_smtp_methods_send_frozen_clinic_plain_html_and_inline_lo
     assert evidence["kind"] == kind
     assert evidence["status"] == "accepted"
     assert evidence["footer_text"] == provider.current.plain
-    assert evidence["footer_skipped"] is None
+    assert "footer_skipped" not in evidence
     saved = b"".join(p.read_bytes() for p in tmp_path.rglob("*.json"))
     assert b"fake.patient@example.test" not in saved
     assert b"FAKE-code" not in saved

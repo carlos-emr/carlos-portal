@@ -33,7 +33,9 @@ class FooterAttemptView(BaseModel):
     revision: str | None
     footer_text: str | None
     logo_sha256: str | None
-    footer_skipped: str | None
+    # Present only on a skipped attempt (the response omits unset fields), so the other items
+    # keep the exact field set CARLOS's reader checks.
+    footer_skipped: str | None = None
 
 
 class FooterAuditListView(BaseModel):
@@ -49,7 +51,11 @@ def register_footer_audit_routes(
     runtime: "InternalRuntime",
     deps: "InternalRouteDependencies",
 ) -> None:
-    @app.get("/internal/carlos/email-footer-attempts", response_model=FooterAuditListView)
+    @app.get(
+        "/internal/carlos/email-footer-attempts",
+        response_model=FooterAuditListView,
+        response_model_exclude_unset=True,
+    )
     def list_email_footer_attempts(
         principal: Annotated[
             StaffPrincipal, Depends(deps.staff_principal_requiring(PERMISSION_EMAIL_AUDIT_READ))
