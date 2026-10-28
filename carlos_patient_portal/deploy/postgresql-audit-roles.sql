@@ -209,6 +209,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.patient_portal_invites,
   public.patient_portal_mfa_challenges,
   public.patient_portal_mycarlos_approval_clinics,
+  public.patient_portal_mycarlos_approval_codes,
   public.patient_portal_mycarlos_approval_requests,
   public.patient_portal_mycarlos_mailbox_accounts,
   public.patient_portal_mycarlos_mailbox_anchors,

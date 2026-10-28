@@ -14,12 +14,14 @@
 
 """Transactional M3 request/proof storage under the existing account/device/clinic order."""
 
+import re
 from hashlib import sha256
 
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select, update
 from sqlalchemy.orm import Session
 
 from carlos_patient_portal.approval_codec import (
+    CODE_APPROVAL_KIND,
     compact_hash,
     compact_parts,
     device_keys,
@@ -27,7 +29,7 @@ from carlos_patient_portal.approval_codec import (
     verify_clinic,
     verify_intent,
 )
-from carlos_patient_portal.approval_models import ApprovalClinic, ApprovalRequest
+from carlos_patient_portal.approval_models import ApprovalClinic, ApprovalCode, ApprovalRequest
 from carlos_patient_portal.mailbox import LockedMailbox, locked, next_sequence
 from carlos_patient_portal.mailbox_codec import MailboxRefusal
 from carlos_patient_portal.models import PatientPortalClinicKey
@@ -44,8 +46,12 @@ REFUSALS = frozenset(
         "challenge_cancelled",
         "staff_required",
         "no_accepted_approver",
+        "code_attempts",
     }
 )
+# Clinic code v1 (mycarlos#141): at most this many stored submissions per request.
+MAX_CODE_ATTEMPTS = 5
+CODE_R = re.compile(r"[0-9]{6}")
 
 
 def approval_clinic(session: Session, clinic: str) -> ApprovalClinic:
@@ -269,3 +275,96 @@ def publish_decision(
         reason,
         digest,
     )
+    # A decided request needs no submitted code; keep only the attempt rows.
+    session.execute(
+        update(ApprovalCode)
+        .where(
+            ApprovalCode.clinic_id == row.clinic_id,
+            ApprovalCode.request_id == row.request_id,
+            ApprovalCode.code_r.is_not(None),
+        )
+        .values(code_r=None)
+    )
+
+
+def valid_code_r(value: object) -> bool:
+    return isinstance(value, str) and value.isascii() and CODE_R.fullmatch(value) is not None
+
+
+def challenge_kind(row: ApprovalRequest) -> str | None:
+    if row.challenge is None:
+        return None
+    return compact_parts(row.challenge)[0].get("approval_kind")
+
+
+def submit_code(
+    session: Session, m: LockedMailbox, row: ApprovalRequest, *, code_r: str, now: int
+) -> None:
+    """Store one device code submission. The portal never compares it; CARLOS does."""
+    # The caller holds this request row FOR UPDATE, so the attempt count can't race.
+    if row.device_id != m.device.id:
+        raise invalid("approval_not_found", 404)
+    if challenge_kind(row) != CODE_APPROVAL_KIND:
+        raise invalid("approval_not_code", 409)
+    if row.status != "challenge_ready":
+        raise invalid("approval_not_pending", 409)
+    if row.expires_at <= now:
+        raise invalid("approval_expired", 410)
+    used = session.scalar(
+        select(func.count())
+        .select_from(ApprovalCode)
+        .where(
+            ApprovalCode.clinic_id == row.clinic_id,
+            ApprovalCode.request_id == row.request_id,
+        )
+    )
+    if used is None or used >= MAX_CODE_ATTEMPTS:
+        raise invalid("code_attempts", 429)
+    session.add(
+        ApprovalCode(
+            clinic_id=row.clinic_id,
+            request_id=row.request_id,
+            attempt=used + 1,
+            code_sequence=next_sequence(approval_clinic(session, row.clinic_id), "code_sequence"),
+            code_r=code_r,
+            submitted_at=now,
+        )
+    )
+    session.flush()
+
+
+def erase_stale_codes(session: Session, clinic: str, now: int) -> None:
+    """Erase submitted codes whose request is no longer open (decided rows are erased already)."""
+    open_request = exists().where(
+        ApprovalRequest.clinic_id == ApprovalCode.clinic_id,
+        ApprovalRequest.request_id == ApprovalCode.request_id,
+        ApprovalRequest.status == "challenge_ready",
+        ApprovalRequest.expires_at > now,
+    )
+    session.execute(
+        update(ApprovalCode)
+        .where(
+            ApprovalCode.clinic_id == clinic,
+            ApprovalCode.code_r.is_not(None),
+            ~open_request,
+        )
+        .values(code_r=None)
+        .execution_options(synchronize_session=False)
+    )
+
+
+def consume_code(session: Session, clinic: str, request_id: str, attempt: int, now: int) -> None:
+    row = session.scalar(
+        select(ApprovalCode)
+        .where(
+            ApprovalCode.clinic_id == clinic,
+            ApprovalCode.request_id == request_id,
+            ApprovalCode.attempt == attempt,
+        )
+        .with_for_update()
+    )
+    if row is None:
+        raise invalid("approval_not_found", 404)
+    if row.consumed_at is None:
+        row.consumed_at = now
+    row.code_r = None

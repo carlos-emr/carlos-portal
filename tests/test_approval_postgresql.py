@@ -88,7 +88,7 @@ def test_actual_pg_empty_downgrade_reupgrade_and_retained_row_refusal(owned_appr
         )
         assert (
             connection.scalar(text("SELECT version_num FROM alembic_version"))
-            == "0018_mycarlos_mailbox_approval"
+            == "0020_mycarlos_approval_codes"
         )
 
 
