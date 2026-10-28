@@ -541,6 +541,21 @@ Migration `0012_atomic_invite_delivery` refuses to downgrade while an invite is 
 downgrading would discard the only encrypted copy of a token CARLOS may still be retrying into its
 durable email queue.
 
+### Rolling out 0018 (myCarlos mailbox and device approval)
+
+Every deploy that brings in `0018_mycarlos_mailbox_approval` needs two steps, even with all the
+myCarlos switches off:
+
+1. **Migrate:** `alembic -c alembic.ini upgrade head` (or `carlos-patient-portal-migrate`). This
+   creates the mailbox and approval tables. They stay empty while the switches are off.
+2. **Grant:** run [`deploy/postgresql-audit-roles.sql`](carlos_patient_portal/deploy/postgresql-audit-roles.sql)
+   again after migrating. It gives the runtime role its rights on the new tables and sequences.
+   Without it, preflight fails closed and the deploy stops.
+
+**Going back:** 0018 can be downgraded only while all its tables are empty. Once a device has
+used the mailbox or asked for approval (even one counter row), the downgrade refuses. Take a
+backup before turning the switches on if you might need to roll back.
+
 Keep every revision id to 32 characters or fewer. Alembic creates `alembic_version.version_num` as
 `VARCHAR(32)`; SQLite ignores the declared width but PostgreSQL enforces it, so a longer id passes
 the test suite and the SQLite round trip while leaving every PostgreSQL database unable to reach
@@ -1001,7 +1016,8 @@ and name, signed with the new key:
   `{"code": "link_code_invalid"}`, the same for every reason; a key already linked is 409
   `device_exists`; and while CARLOS has published no active clinic key, every link is 409
   `clinic_keys_missing`, checked before the code, so the code stays pending and nothing is counted
-  (a device pins the key list it links with, and nothing refreshes it). On success: the recipient ID (made on the first link), the device key ID, the
+  (a first link has no earlier pins, so its trust starts with the key list it links with; see
+  [the link lifecycle](docs/architecture/mycarlos-link-lifecycle-v1.md)). On success: the recipient ID (made on the first link), the device key ID, the
   clinic's ID and name, and its key list (`kid`, SubjectPublicKeyInfo, status).
 - **Per caller:** the route has the login limiter's budget in its own bucket, and the reference
   nginx policy adds its own zone and a 4 KiB body limit (`/api/mycarlos/link` and its
@@ -1010,6 +1026,16 @@ and name, signed with the new key:
 
 `PATIENT_PORTAL_MYCARLOS_DELIVERY_ENABLED` (default `false`) turns the feature on. Leave it off:
 it is still being built, and while it is off none of its pages or routes exist.
+
+Two more switches, also default `false`, turn on later parts:
+
+- `PATIENT_PORTAL_MYCARLOS_MAILBOX_ENABLED`: the device mailbox (pickup of sealed copies).
+- `PATIENT_PORTAL_MYCARLOS_APPROVAL_ENABLED`: device approval (a clinic or an existing device
+  approving a new one). It needs delivery and the mailbox on, and a valid
+  `PATIENT_PORTAL_PUBLIC_BASE_URL`; otherwise the portal refuses to start.
+
+The tables behind both exist from migration 0018 whatever the switches say (see *Rolling out
+0018* under Migrations).
 
 The patient browser controls use the same off switch:
 

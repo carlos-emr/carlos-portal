@@ -9,7 +9,6 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -31,9 +30,7 @@ from tests.test_mycarlos_mailbox_http import SplitIngressProxy
 F = json.loads((Path(__file__).parent / "fixtures/device-approval-contract-v1.json").read_bytes())
 FLOW = F["flows"]["first"]
 KEY = F["keys"]["first"]
-PRIVATE = serialization.load_der_private_key(
-    strict_b64url_decode(KEY["FAKE_ed25519_private_pkcs8_b64url"]), None
-)
+PRIVATE = ref.private_key_from_seed_text(KEY["ed25519_seed_text"], "ed25519")
 JOB = Ed25519PrivateKey.generate()
 JOB_KID = "FAKE-approval-job"
 PREFIX = "/patient"
@@ -249,8 +246,8 @@ def test_late_challenge_publication_remains_visible_after_approver_cursor(approv
     from carlos_patient_portal.approval_codec import compact_hash
 
     predecessor = F["keys"]["predecessor"]
-    predecessor_private = serialization.load_der_private_key(
-        strict_b64url_decode(predecessor["FAKE_ed25519_private_pkcs8_b64url"]), None
+    predecessor_private = ref.private_key_from_seed_text(
+        predecessor["ed25519_seed_text"], "ed25519"
     )
     other = ref.DeviceKeys("FAKE second candidate committed challenge cursor")
     other_key = {
@@ -272,9 +269,7 @@ def test_late_challenge_publication_remains_visible_after_approver_cursor(approv
                     linked_at=datetime.fromtimestamp(F["now"], UTC),
                 )
             )
-    clinic_private = serialization.load_der_private_key(
-        strict_b64url_decode(F["keys"]["clinic"]["FAKE_private_pkcs8_b64url"]), None
-    )
+    clinic_private = ref.private_key_from_seed_text(F["keys"]["clinic"]["seed_text"], "p256")
     candidates = []
     for key, private in [(KEY, PRIVATE), (other_key, other.ed25519)]:
         request_id = str(uuid4())
@@ -421,11 +416,9 @@ def later_approval_http(approval_http):
                     linked_at=datetime.fromtimestamp(F["now"], UTC),
                 )
             )
-    candidate_private = serialization.load_der_private_key(
-        strict_b64url_decode(candidate["FAKE_ed25519_private_pkcs8_b64url"]), None
-    )
-    predecessor_private = serialization.load_der_private_key(
-        strict_b64url_decode(predecessor["FAKE_ed25519_private_pkcs8_b64url"]), None
+    candidate_private = ref.private_key_from_seed_text(candidate["ed25519_seed_text"], "ed25519")
+    predecessor_private = ref.private_key_from_seed_text(
+        predecessor["ed25519_seed_text"], "ed25519"
     )
     raw = body({"intent": later["intent"]["compact"]})
     assert (
@@ -556,3 +549,25 @@ def test_later_changed_saved_proof_conflicts_without_overwriting_original(later_
     with app.state.session_factory() as s:
         row = s.get(ApprovalRequest, (F["clinic_id"], later["intent"]["claims"]["request_id"]))
         assert row.approval == later["approval"]["compact"] and row.approval_sequence == 1
+
+
+def test_reused_challenge_id_is_a_409_conflict_not_a_server_error(later_approval_http):
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+
+    app, client, later, *_ = later_approval_http
+    assert post_intent(client).status_code == 201
+    clinic = ref.private_key_from_seed_text(F["keys"]["clinic"]["seed_text"], "p256")
+    claims = dict(
+        FLOW["challenge"]["claims"], challenge_id=later["challenge"]["claims"]["challenge_id"]
+    )
+    payload = json.dumps(claims, sort_keys=True, separators=(",", ":")).encode()
+    r, s = decode_dss_signature(clinic.sign(payload, ec.ECDSA(hashes.SHA256())))
+    reused = ref.b64url(payload) + "." + ref.b64url(r.to_bytes(32, "big") + s.to_bytes(32, "big"))
+    result = put_challenge(client, reused)
+    assert result.status_code == 409, result.text
+    assert result.json() == {"code": "approval_conflict"}
+    with app.state.session_factory() as session:
+        row = session.get(ApprovalRequest, (F["clinic_id"], REQUEST))
+        assert row.status == "pending" and row.challenge is None
