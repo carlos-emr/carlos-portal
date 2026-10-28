@@ -106,6 +106,9 @@ from carlos_patient_portal.models import (
     AUDIT_ACTOR_TYPE_SYSTEM,
     AUDIT_EVENT_INVITE_LIST,
     AUDIT_EVENT_JOB_AUTH_REFUSED,
+    AUDIT_EVENT_MYCARLOS_CLINIC_KEYS_PUBLISH,
+    AUDIT_EVENT_MYCARLOS_DEVICE_LIST,
+    AUDIT_EVENT_MYCARLOS_DEVICE_REMOVE,
     AUDIT_EVENT_STAFF_ACTION,
     AUDIT_OUTCOME_FAILURE,
     AUDIT_OUTCOME_SUCCESS,
@@ -119,12 +122,27 @@ from carlos_patient_portal.models import (
     MAX_INVITE_DELIVERY_REFERENCE_LENGTH,
     MAX_OFFERED_SLOTS,
     MIN_BOOKING_SLOT_DURATION_MINUTES,
+    MYCARLOS_REMOVED_BY_STAFF,
     UNLOCK_SECRET_STATUS_PENDING,
     UNLOCK_SECRET_STATUS_REVOKED,
     PatientPortalAccount,
     PatientPortalBookingPrompt,
+    PatientPortalClinicKey,
     PatientPortalInvite,
+    PatientPortalMyCarlosDevice,
     PatientPortalUnlockSecret,
+)
+from carlos_patient_portal.mycarlos_devices import (
+    MAX_PUBLISHED_CLINIC_KEYS,
+    ClinicKeyPublishError,
+    ClinicKeySpec,
+    as_utc,
+    b64url,
+    devices_for_account,
+    publish_clinic_keys,
+    recipient_id_for_account,
+    remove_device,
+    strict_b64url_decode,
 )
 from carlos_patient_portal.runtime import MAX_DATABASE_ID
 from carlos_patient_portal.schemas import InviteCreateRequest
@@ -138,8 +156,10 @@ from carlos_patient_portal.staff_identity import (
 )
 from carlos_patient_portal.system_jobs import (
     JOB_BOOKING_SYNC,
+    JOB_KEY_PUBLISH,
     JOB_ONLY_PERMISSIONS,
     PERMISSION_BOOKING_PROMPT_SYNC,
+    PERMISSION_CLINIC_KEYS_PUBLISH,
     SYSTEM_JOBS,
 )
 from carlos_patient_portal.unlock_secrets import (
@@ -162,6 +182,8 @@ PERMISSION_ACCOUNT_MANAGE = "portal.account.manage"
 PERMISSION_SECRET_MANAGE = "portal.secret.manage"
 PERMISSION_CONTACT_REVIEW = "portal.contact.review"
 PERMISSION_BOOKING_PROMPT_MANAGE = "portal.booking_prompt.manage"
+# Read a patient's linked myCarlos devices (with the public keys CARLOS seals to) and remove one.
+PERMISSION_MYCARLOS_DEVICE_MANAGE = "portal.mycarlos.device.manage"
 # `PERMISSION_BOOKING_PROMPT_SYNC` (from system_jobs) belongs to the `booking-sync` job alone. It
 # lists patients' pending picks and reports results; it cannot create prompts, read accounts, or
 # manage invites, no other route accepts it, and a staff assertion carrying it is refused
@@ -356,6 +378,74 @@ class InternalAccountAccessResponse(BaseModel):
     id: int
     status: str
     force_password_reset: bool
+
+
+MYCARLOS_KEY_ID_PATTERN = r"^[A-Za-z0-9_-]{43}$"
+# Base64url of at most 512 bytes, the stored limit for a clinic key and a replacement signature.
+MAX_CLINIC_KEY_TEXT_LENGTH = 683
+
+
+class InternalClinicKeyEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kid: Annotated[str, Field(pattern=MYCARLOS_KEY_ID_PATTERN)]
+    spki: Annotated[str, Field(min_length=1, max_length=MAX_CLINIC_KEY_TEXT_LENGTH)]
+    status: Literal["active", "revoked"]
+    replaces_kid: Annotated[str | None, Field(default=None, pattern=MYCARLOS_KEY_ID_PATTERN)]
+    replacement_signature: Annotated[
+        str | None,
+        Field(default=None, min_length=1, max_length=MAX_CLINIC_KEY_TEXT_LENGTH),
+    ]
+
+
+class InternalClinicKeysPublishRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    keys: Annotated[
+        list[InternalClinicKeyEntry],
+        Field(min_length=1, max_length=MAX_PUBLISHED_CLINIC_KEYS),
+    ]
+
+
+class InternalClinicKeyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kid: str
+    status: str
+    published_at: datetime
+    revoked_at: datetime | None
+    replaces_kid: str | None
+
+
+class InternalClinicKeysPublishResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    clinic_id: str
+    changed: bool
+    keys: list[InternalClinicKeyResponse]
+
+
+class InternalMyCarlosDeviceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    device_key_id: str
+    device_name: str
+    status: str
+    x25519_public_key: str
+    ed25519_public_key: str
+    linked_at: datetime
+    last_seen_at: datetime | None
+    removed_at: datetime | None
+    removed_by: str | None
+    vault_head_link: str | None
+    vault_head_link_at: datetime | None
+
+
+class InternalMyCarlosDevicesResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    recipient_id: str | None
+    devices: list[InternalMyCarlosDeviceResponse]
 
 
 class InternalUnlockSecretCreateResponse(BaseModel):
@@ -873,8 +963,10 @@ def register_internal_failure_audit(app: FastAPI, runtime: InternalRuntime) -> N
             )
         return response
 
+
 def build_internal_dependencies(runtime: InternalRuntime) -> InternalRouteDependencies:
     """Construct the authentication, transaction, and disclosure dependencies once."""
+
     def get_database_session() -> Generator[Session, None, None]:
         with runtime.session_factory() as session:
             with session.begin():
@@ -1250,10 +1342,7 @@ def register_internal_invite_routes(
             clinic_id=principal.clinic_id,
             demographic_no=demographic_no,
         )
-        return [
-            invite_payload(invite)
-            for invite in invites
-        ]
+        return [invite_payload(invite) for invite in invites]
 
     @app.post(
         "/internal/carlos/invites/{invite_id}/resend",
@@ -1323,6 +1412,7 @@ def register_internal_account_routes(
     deps: InternalRouteDependencies,
 ) -> None:
     """Portal account state: unlock, status, and access."""
+
     @app.post(
         "/internal/carlos/patients/{demographic_no}/unlock",
         response_model=InternalAccountUnlockResponse,
@@ -1461,6 +1551,7 @@ def register_internal_unlock_secret_routes(
     deps: InternalRouteDependencies,
 ) -> None:
     """Unlock secrets: create, publish, and revoke."""
+
     @app.post(
         "/internal/carlos/patients/{demographic_no}/unlock-secrets",
         status_code=status.HTTP_201_CREATED,
@@ -1630,6 +1721,7 @@ def register_internal_contact_review_routes(
     deps: InternalRouteDependencies,
 ) -> None:
     """CARLOS-chart contact reviews: list and decide."""
+
     @app.get(
         "/internal/carlos/contact-reviews",
         response_model=InternalContactReviewListResponse,
@@ -1897,9 +1989,7 @@ def register_internal_booking_sync_routes(
         request: Request,
         principal: Annotated[
             JobPrincipal,
-            Depends(
-                deps.job_principal_requiring(JOB_BOOKING_SYNC, PERMISSION_BOOKING_PROMPT_SYNC)
-            ),
+            Depends(deps.job_principal_requiring(JOB_BOOKING_SYNC, PERMISSION_BOOKING_PROMPT_SYNC)),
         ],
         session: Annotated[Session, deps.session_dependency],
         state: Annotated[Literal["pending"], Query()],
@@ -1958,9 +2048,7 @@ def register_internal_booking_sync_routes(
         payload: InternalBookingChoiceResultRequest,
         principal: Annotated[
             JobPrincipal,
-            Depends(
-                deps.job_principal_requiring(JOB_BOOKING_SYNC, PERMISSION_BOOKING_PROMPT_SYNC)
-            ),
+            Depends(deps.job_principal_requiring(JOB_BOOKING_SYNC, PERMISSION_BOOKING_PROMPT_SYNC)),
         ],
         session: Annotated[Session, deps.session_dependency],
     ) -> dict[str, object]:
@@ -2021,6 +2109,195 @@ def register_internal_booking_sync_routes(
         }
 
 
+def clinic_key_payload(key: PatientPortalClinicKey) -> dict[str, object]:
+    return {
+        "kid": key.kid,
+        "status": key.status,
+        "published_at": as_utc(key.published_at),
+        "revoked_at": as_utc(key.revoked_at),
+        "replaces_kid": key.replaces_kid,
+    }
+
+
+def mycarlos_device_payload(device: PatientPortalMyCarlosDevice) -> dict[str, object]:
+    return {
+        "device_key_id": device.device_key_id,
+        "device_name": device.device_name,
+        "status": device.status,
+        "x25519_public_key": b64url(device.x25519_public_key),
+        "ed25519_public_key": b64url(device.ed25519_public_key),
+        "linked_at": as_utc(device.linked_at),
+        "last_seen_at": as_utc(device.last_seen_at),
+        "removed_at": as_utc(device.removed_at),
+        "removed_by": device.removed_by,
+        "vault_head_link": device.vault_head_link,
+        "vault_head_link_at": as_utc(device.vault_head_link_at),
+    }
+
+
+def decode_clinic_key_entry(entry: InternalClinicKeyEntry) -> ClinicKeySpec:
+    try:
+        spki = strict_b64url_decode(entry.spki)
+        signature = (
+            None
+            if entry.replacement_signature is None
+            else strict_b64url_decode(entry.replacement_signature)
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="invalid_key") from exc
+    return ClinicKeySpec(
+        kid=entry.kid,
+        spki=spki,
+        status=entry.status,
+        replaces_kid=entry.replaces_kid,
+        replacement_signature=signature,
+    )
+
+
+# A refused key list: malformed is 422; a list that would undo what is published is 409.
+CLINIC_KEY_CONFLICTS = frozenset({"key_missing", "key_revoked", "key_changed"})
+
+
+def register_internal_mycarlos_routes(
+    app: FastAPI,
+    deps: InternalRouteDependencies,
+    *,
+    mailbox_enabled: bool = False,
+) -> None:
+    """Send to myCarlos (carlos-portal#41): clinic keys from CARLOS, and a patient's devices.
+
+    Registered only while PATIENT_PORTAL_MYCARLOS_DELIVERY_ENABLED is on; otherwise every path
+    here is a plain 404.
+    """
+
+    @app.put(
+        "/internal/carlos/mycarlos/clinic-keys",
+        response_model=InternalClinicKeysPublishResponse,
+        responses=COMMON_INTERNAL_RESPONSES,
+    )
+    def internal_publish_clinic_keys(
+        payload: InternalClinicKeysPublishRequest,
+        principal: Annotated[
+            JobPrincipal,
+            Depends(deps.job_principal_requiring(JOB_KEY_PUBLISH, PERMISSION_CLINIC_KEYS_PUBLISH)),
+        ],
+        session: Annotated[Session, deps.session_dependency],
+    ) -> dict[str, object]:
+        """Replace the clinic's published key list. Only CARLOS's key-publish job may call it."""
+        specs = [decode_clinic_key_entry(entry) for entry in payload.keys]
+        try:
+            result = publish_clinic_keys(session, clinic_id=principal.clinic_id, specs=specs)
+        except ClinicKeyPublishError as exc:
+            status_code = 409 if exc.code in CLINIC_KEY_CONFLICTS else 422
+            raise HTTPException(status_code=status_code, detail=exc.code) from exc
+        record_audit_event(
+            session,
+            event_type=AUDIT_EVENT_MYCARLOS_CLINIC_KEYS_PUBLISH,
+            outcome=AUDIT_OUTCOME_SUCCESS,
+            actor_type=AUDIT_ACTOR_TYPE_SYSTEM,
+            actor=principal.display_name,
+            actor_id=principal.actor_id,
+            clinic_id=principal.clinic_id,
+            resource_type="clinic_keys",
+            reason="changed" if result.changed else "unchanged",
+            assertion_key_id=principal.key_id,
+            assertion_id=principal.assertion_id,
+        )
+        return {
+            "clinic_id": principal.clinic_id,
+            "changed": result.changed,
+            "keys": [clinic_key_payload(key) for key in result.keys],
+        }
+
+    @app.get(
+        "/internal/carlos/patients/{demographic_no}/mycarlos/devices",
+        response_model=InternalMyCarlosDevicesResponse,
+        responses=COMMON_INTERNAL_RESPONSES,
+    )
+    def internal_list_mycarlos_devices(
+        demographic_no: Annotated[int, Path(gt=0, le=MAX_DEMOGRAPHIC_NO)],
+        principal: Annotated[
+            StaffPrincipal,
+            Depends(deps.staff_principal_requiring(PERMISSION_MYCARLOS_DEVICE_MANAGE)),
+        ],
+        session: Annotated[Session, deps.session_dependency],
+    ) -> dict[str, object]:
+        """The patient's recipient ID (None before a first link) and every device, removed too."""
+        account_id = find_account_id_for_patient(
+            session,
+            clinic_id=principal.clinic_id,
+            demographic_no=demographic_no,
+        )
+        if account_id is None:
+            raise HTTPException(status_code=404, detail=INTERNAL_ACCOUNT_NOT_FOUND_DETAIL)
+        devices = devices_for_account(session, account_id)
+        record_audit_event(
+            session,
+            event_type=AUDIT_EVENT_MYCARLOS_DEVICE_LIST,
+            outcome=AUDIT_OUTCOME_SUCCESS,
+            actor_type=AUDIT_ACTOR_TYPE_STAFF,
+            actor=principal.display_name,
+            actor_id=principal.provider_id,
+            clinic_id=principal.clinic_id,
+            demographic_no=demographic_no,
+            account_id=account_id,
+            resource_type="mycarlos_devices",
+            resource_id=str(account_id),
+        )
+        return {
+            "recipient_id": recipient_id_for_account(session, account_id),
+            "devices": [mycarlos_device_payload(device) for device in devices],
+        }
+
+    @app.post(
+        "/internal/carlos/patients/{demographic_no}/mycarlos/devices/{device_key_id}/remove",
+        response_model=InternalMyCarlosDeviceResponse,
+        responses=COMMON_INTERNAL_RESPONSES,
+    )
+    def internal_remove_mycarlos_device(
+        demographic_no: Annotated[int, Path(gt=0, le=MAX_DEMOGRAPHIC_NO)],
+        device_key_id: Annotated[str, Path(pattern=MYCARLOS_KEY_ID_PATTERN)],
+        principal: Annotated[
+            StaffPrincipal,
+            Depends(deps.staff_principal_requiring(PERMISSION_MYCARLOS_DEVICE_MANAGE)),
+        ],
+        session: Annotated[Session, deps.session_dependency],
+    ) -> dict[str, object]:
+        """Remove one of the patient's devices. Removing a removed device changes nothing."""
+        account_id = find_account_id_for_patient(
+            session,
+            clinic_id=principal.clinic_id,
+            demographic_no=demographic_no,
+        )
+        if account_id is None:
+            raise HTTPException(status_code=404, detail=INTERNAL_ACCOUNT_NOT_FOUND_DETAIL)
+        removal = remove_device(
+            session,
+            account_id=account_id,
+            device_key_id=device_key_id,
+            removed_by=MYCARLOS_REMOVED_BY_STAFF,
+            mailbox_enabled=mailbox_enabled,
+        )
+        if removal is None:
+            raise HTTPException(status_code=404, detail="device not found")
+        device, removed_now = removal
+        record_audit_event(
+            session,
+            event_type=AUDIT_EVENT_MYCARLOS_DEVICE_REMOVE,
+            outcome=AUDIT_OUTCOME_SUCCESS,
+            actor_type=AUDIT_ACTOR_TYPE_STAFF,
+            actor=principal.display_name,
+            actor_id=principal.provider_id,
+            clinic_id=principal.clinic_id,
+            demographic_no=demographic_no,
+            account_id=account_id,
+            resource_type="mycarlos_device",
+            resource_id=str(device.id),
+            reason="removed" if removed_now else "already_removed",
+        )
+        return mycarlos_device_payload(device)
+
+
 def register_carlos_internal_routes(app: FastAPI, runtime: InternalRuntime) -> None:
     """Register the CARLOS-facing internal API, one registrar per permission domain."""
     if not runtime.settings.is_internal_api_enabled:
@@ -2033,3 +2310,16 @@ def register_carlos_internal_routes(app: FastAPI, runtime: InternalRuntime) -> N
     register_internal_contact_review_routes(app, deps)
     register_internal_booking_prompt_routes(app, runtime, deps)
     register_internal_booking_sync_routes(app, runtime, deps)
+    if runtime.settings.mycarlos_delivery_enabled:
+        register_internal_mycarlos_routes(
+            app, deps, mailbox_enabled=runtime.settings.mycarlos_mailbox_enabled
+        )
+        if runtime.settings.mycarlos_mailbox_enabled:
+            from carlos_patient_portal.routes.mycarlos_mailbox import (
+                register_internal_mailbox_routes,
+            )
+
+            # The independently configured internal service is origin-root in the
+            # current CARLOS adapter. Its actual raw target never borrows the public
+            # patient-page prefix; reuse the existing internal authentication policy.
+            register_internal_mailbox_routes(app, runtime, deps)

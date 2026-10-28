@@ -29,6 +29,7 @@ from secrets import token_urlsafe
 from time import monotonic
 from typing import Annotated
 
+import anyio
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -73,11 +74,17 @@ from carlos_patient_portal.models import (
     AUDIT_OUTCOME_SUCCESS,
     PatientPortalBookingPrompt,
 )
-from carlos_patient_portal.presenters import assemble_email_password_dashboard, assemble_messages
+from carlos_patient_portal.presenters import (
+    assemble_email_password_dashboard,
+    assemble_messages,
+    assemble_mycarlos_devices,
+)
 from carlos_patient_portal.routes.activation import register_activation_routes
 from carlos_patient_portal.routes.auth import register_auth_routes, register_logout_route
 from carlos_patient_portal.routes.dev_admin import register_dev_admin_routes
 from carlos_patient_portal.routes.fhir import register_fhir_routes
+from carlos_patient_portal.routes.mycarlos import register_mycarlos_device_routes
+from carlos_patient_portal.routes.mycarlos_portal import register_mycarlos_portal_routes
 from carlos_patient_portal.routes.portal import (
     register_patient_email_password_routes,
     register_portal_routes,
@@ -94,7 +101,11 @@ from carlos_patient_portal.runtime import (
 from carlos_patient_portal.sms_delivery import PortalSmsSender, build_portal_sms_sender
 from carlos_patient_portal.token_keys import PortalTokenKeys
 from carlos_patient_portal.unlock_secrets import load_unlock_secret_words
-from carlos_patient_portal.view_models import EmailPasswordDashboardViewModel, MessagesViewModel
+from carlos_patient_portal.view_models import (
+    EmailPasswordDashboardViewModel,
+    MessagesViewModel,
+    MyCarlosViewModel,
+)
 from carlos_patient_portal.web_support import (
     AUTHENTICATION_REQUIRED_DETAIL,
     CONTENT_SECURITY_POLICY,
@@ -105,6 +116,8 @@ from carlos_patient_portal.web_support import (
     FHIR_PATH_PREFIX,
     MAX_FORM_BODY_BYTES,
     MAX_FORM_FIELD_COUNT,
+    MYCARLOS_API_PREFIX,
+    MYCARLOS_LINK_PATH,
     NO_STORE_PATHS,
     NOT_FOUND_DETAIL,
     PACKAGE_DIR,
@@ -274,7 +287,21 @@ def build_lifespan(
         if runtime is not None:
             record_audit_retention_override(runtime)
         try:
-            yield
+            if (
+                runtime is not None
+                and runtime.settings.mycarlos_delivery_enabled
+                and runtime.settings.mycarlos_mailbox_enabled
+            ):
+                from carlos_patient_portal.mailbox_worker import run_worker
+
+                async with anyio.create_task_group() as workers:
+                    workers.start_soon(run_worker, runtime)
+                    try:
+                        yield
+                    finally:
+                        workers.cancel_scope.cancel()
+            else:
+                yield
         finally:
             database_engine.dispose()
 
@@ -369,11 +396,7 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
         # accepts a JSON body. A caller that declared JSON gets JSON back; a browser form post
         # or a navigation gets the page.
         declared_json = "application/json" in (request.headers.get("content-type") or "").lower()
-        if (
-            wants_html_response(request.url.path)
-            and not declared_json
-            and request.method != "HEAD"
-        ):
+        if wants_html_response(request.url.path) and not declared_json and request.method != "HEAD":
             return service_notice_response(
                 request,
                 settings=runtime.settings,
@@ -507,11 +530,20 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
             response.headers["Retry-After"] = str(settings.maintenance_retry_after_seconds)
         elif is_rate_limited_path(request.url.path):
             is_login = request.url.path == "/auth/login"
-            limiter = runtime.auth_rate_limiter if is_login else runtime.rate_limiter
-            client_reference = get_request_client_reference(request, settings)
-            retry_after_seconds = limiter.consume(
-                f"login:{client_reference}" if is_login else client_reference
+            # Linking a device checks a one-time code, so it gets the login limiter's stricter
+            # budget, in its own bucket.
+            is_mycarlos_link = request.url.path == MYCARLOS_LINK_PATH
+            limiter = (
+                runtime.auth_rate_limiter if is_login or is_mycarlos_link else runtime.rate_limiter
             )
+            client_reference = get_request_client_reference(request, settings)
+            if is_login:
+                bucket = f"login:{client_reference}"
+            elif is_mycarlos_link:
+                bucket = f"mycarlos-link:{client_reference}"
+            else:
+                bucket = client_reference
+            retry_after_seconds = limiter.consume(bucket)
             if retry_after_seconds is None:
                 response = await call_next(request)
             elif request.url.path.startswith(FHIR_PATH_PREFIX):
@@ -547,6 +579,7 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
             request.url.path in NO_STORE_PATHS
             or request.url.path.startswith("/auth/")
             or request.url.path.startswith("/api/patient/")
+            or request.url.path.startswith(MYCARLOS_API_PREFIX)
             or request.url.path.startswith(FHIR_PATH_PREFIX)
             or is_portal_path(request.url.path)
             or request.url.path.startswith("/internal/")
@@ -776,6 +809,7 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
         message_not_found: bool = False,
         message_error: str | None = None,
         authenticated_session: AuthenticatedPortalSession | None = None,
+        mycarlos: MyCarlosViewModel | None = None,
     ) -> Response:
         if authenticated_session is None:
             try:
@@ -788,6 +822,19 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
                 clear_portal_session_cookie(response, settings=settings)
                 return response
 
+        if (
+            settings.mycarlos_delivery_enabled
+            and active_module in {"account", "mycarlos"}
+            and mycarlos is None
+        ):
+            mycarlos = assemble_mycarlos_devices(
+                session,
+                authenticated_session.account,
+                account_path=request.url_for("portal_account").path,
+                locale=request_locale(request),
+                timezone_name=settings.clinic_timezone,
+                portal_address=settings.public_base_url,
+            )
         email_passwords: EmailPasswordDashboardViewModel | None = None
         if active_module == "email-passwords":
             email_passwords = assemble_email_password_dashboard(
@@ -840,6 +887,7 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
                 email_passwords=email_passwords,
                 messages=messages,
                 new_message_count=new_message_count,
+                mycarlos=mycarlos,
             ),
             status_code=status_code,
         )
@@ -978,3 +1026,10 @@ def register_app_routes(app: FastAPI, runtime: PortalRuntime) -> None:
     register_activation_routes(app, runtime, route_dependencies)
     register_dev_admin_routes(app, runtime, route_dependencies)
     register_carlos_internal_routes(app, runtime)
+    if runtime.settings.mycarlos_delivery_enabled:
+        register_mycarlos_device_routes(app, runtime)
+        register_mycarlos_portal_routes(app, runtime, route_dependencies)
+        if runtime.settings.mycarlos_mailbox_enabled:
+            from carlos_patient_portal.routes.mycarlos_mailbox import register_device_mailbox_routes
+
+            register_device_mailbox_routes(app, runtime)

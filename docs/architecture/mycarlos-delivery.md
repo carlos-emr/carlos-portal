@@ -14,6 +14,12 @@ made by [`tests/delivery_contract_reference.py`](../../tests/delivery_contract_r
 This document is the single source for the format. CARLOS and myCarlos link here and carry a
 byte-identical copy of the fixture. A change lands here first, then gets copied.
 
+The versioned protocol supports independently configured producer adapters. See
+[producer interoperability](producer-interoperability.md) for signing/encryption roles and
+requirements for other EMRs, and [link lifecycle v1](mycarlos-link-lifecycle-v1.md) for the additive
+key-refresh/recovery contract. Existing CARLOS-named wire identifiers remain exact compatibility
+constants; they do not impose an application-brand allowlist.
+
 ## What it does
 
 Staff press "Send to myCarlos" in CARLOS. CARLOS signs the document and a small manifest with the
@@ -117,6 +123,22 @@ issuing clinic and the patient, and gives the document a stable ID and version, 
 says what it is once it leaves the vault. A receiver reads it only after the PDF signature checks
 out. Its field names match this manifest's where the two overlap. Its format is set in CARLOS
 (`DocumentManifest`, carlos#4691), not here.
+
+The PAdES signature also binds the embedded manifest directly, so the binding holds even in a
+password-protected email copy, where the embedded file is encrypted and can't be found as is in the
+signed bytes:
+- **The attribute:** one CMS signed attribute, `id-aa-carlos-documentManifestSha256`, OID
+  `2.25.132515939282652475535231260060469025505` (under the UUID arc of ITU-T X.667, which needs
+  no registration).
+- **Its value:** exactly one OCTET STRING of exactly 32 bytes, the SHA-256 of the embedded file's
+  exact bytes, after its stream filters and the PDF's own encryption are removed. These are the
+  bytes CARLOS wrote.
+- **The receiver:** compares the SHA-256 of the manifest it read with that value. More than one
+  such attribute or value, or a value that isn't 32 bytes long, is refused. So is a PDF that has
+  an embedded manifest but no such attribute: every CARLOS signature over a manifest carries one,
+  so its absence means the manifest isn't bound, and the document isn't Verified.
+- **Uncompressed:** in a copy without a password, CARLOS also stores the embedded file
+  uncompressed, so it appears verbatim, exactly once, inside the signed byte ranges.
 
 ### 2. The sealed plaintext
 
@@ -347,7 +369,15 @@ The Ed25519 signature is 64 bytes, and the assertion is at most 4096 bytes.
       `invalid_assertion`.
    3. **Signature:** it verifies with the body's Ed25519 key. Else `invalid_assertion`.
    4. **Time, request hash and replay:** as for device requests.
-   5. **The code:**
+   5. **Clinic keys:** the clinic must have published at least one active signing key. Else
+      `clinic_keys_missing`. A first link has no earlier pins: the device's trust in the
+      clinic's keys starts with the key list it links with (see
+      [the link lifecycle](mycarlos-link-lifecycle-v1.md)), so a device linked while no key is
+      active would have nothing to verify a document with.
+      This check is for the whole clinic and comes before the code, so it says nothing about the
+      link the request names, the code stays usable once a key is published, and nothing is
+      counted.
+   6. **The code:**
       - it is checked only against the pending link that `link_id` names, so a code never works
         with another account's link;
       - the link must still be pending: unused, unexpired, its session still signed in, and
@@ -362,7 +392,7 @@ The Ed25519 signature is 64 bytes, and the assertion is at most 4096 bytes.
 
       Every failure here gives the same `link_code_invalid`, so the code can't be used to probe
       which links exist.
-   6. **Device key:** a key that is already linked, to any account, gets `device_exists`. Keys
+   7. **Device key:** a key that is already linked, to any account, gets `device_exists`. Keys
       are per link, so a second link always brings a fresh pair.
 4. **On success:** the portal records the device as linked to the code's account, never to an
    account named in the request. It marks the code used and returns:
@@ -482,6 +512,7 @@ The portal logs the code in its audit trail, never content. On the wire:
 | `receipt_mismatch` | 409 | The receipt doesn't match the route or the stored copy |
 | `link_code_invalid` | 403 | Wrong, expired, used or locked code, or one whose session has ended |
 | `device_exists` | 409 | That device key is already linked (keys are per link) |
+| `clinic_keys_missing` | 409 | Linking refused: the clinic hasn't published an active signing key yet. The link code stays usable. Link recovery answers the same while no key is active, and key refresh when the clinic has published no keys at all (see [the link lifecycle](mycarlos-link-lifecycle-v1.md)). |
 | `device_removed` | 403 on device requests, 409 on uploads | The link was removed; its copies are gone |
 
 **Clock problems:** the portal sends a `Date` header, so myCarlos can tell the patient when its

@@ -89,8 +89,7 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
             "remains active until it is confirmed."
         ),
         "account_status_phone_confirmation_invalid": (
-            "The phone confirmation code is invalid or expired. Request another code and try "
-            "again."
+            "The phone confirmation code is invalid or expired. Request another code and try again."
         ),
         "account_status_phone_confirmation_notice_failed": (
             "A confirmation code could not be sent to the new phone number. Your contact details "
@@ -604,8 +603,7 @@ TEXT_CATALOG["pt-BR"] = {
     "date_of_birth_month_11": "Novembro",
     "date_of_birth_month_12": "Dezembro",
     "activation_date_of_birth_invalid": (
-        "Verifique a data de nascimento: informe uma data real, por exemplo, 15 de junho de "
-        "1985."
+        "Verifique a data de nascimento: informe uma data real, por exemplo, 15 de junho de 1985."
     ),
     "date_of_birth": "Data de nascimento",
     "date_of_birth_day": "Dia",
@@ -626,6 +624,7 @@ TEXT_CATALOG["pt-BR"] = {
 # which is what makes a half-finished translation render instead of raising KeyError.
 for _locale in SUPPORTED_LOCALES:
     TEXT_CATALOG.setdefault(_locale.code, {})
+
 
 def normalize_locale(value: str | None) -> str | None:
     """Match a requested locale to a supported one, case- and separator-insensitively.
@@ -698,10 +697,258 @@ def resolve_locale(
 ) -> str:
     """Resolve the locale to render in: explicit choice first, then the browser's, then English."""
     return (
-        normalize_locale(cookie_value)
-        or parse_accept_language(accept_language)
-        or DEFAULT_LOCALE
+        normalize_locale(cookie_value) or parse_accept_language(accept_language) or DEFAULT_LOCALE
     )
+
+
+MYCARLOS_TEXT_CATALOG: dict[str, dict[str, str]] = {
+    "en": {
+        "mycarlos_mfa_rate_limited": (
+            "A sign-in code was sent recently. Please wait before requesting another."
+        ),
+        "mycarlos_link": "Link myCarlos",
+        "mycarlos_devices": "Linked devices",
+        "mycarlos_instruction": (
+            "In myCarlos, choose the option to link to your clinic’s portal, then enter this code."
+        ),
+        "mycarlos_code_label": "One-time code",
+        "mycarlos_lifetime": "This code works once, for 10 minutes. Stay signed in to this portal.",
+        "mycarlos_approval": "The device must also be approved before it can receive documents.",
+        "mycarlos_create": "Create a code",
+        "mycarlos_another": "Create another code",
+        "mycarlos_linked": "Linked",
+        "mycarlos_last_seen": "Last seen",
+        "mycarlos_empty": "No linked devices. Choose Link myCarlos to add one.",
+        "mycarlos_remove_question": "Remove this device?",
+        "mycarlos_remove_effect": (
+            "This device will stop receiving new documents. To use it again, link it "
+            "again. Documents already saved in myCarlos stay there."
+        ),
+        "mycarlos_remove": "Remove device",
+        "mycarlos_keep": "Keep device",
+        "mycarlos_paused": (
+            "Linking is paused because of too many incorrect codes. Try again later."
+        ),
+        "mycarlos_unavailable": "Linking is unavailable. Contact your clinic.",
+        "mycarlos_removed": "Device removed.",
+        "mycarlos_not_seen": "Not yet seen",
+        "mycarlos_mfa_required": "Verify your sign-in before linking or removing a device.",
+        "mycarlos_verify": "Verify sign-in",
+        "mycarlos_portal_address": "Portal address",
+        "mycarlos_qr_label": "Scan in myCarlos",
+        "mycarlos_qr_alt": "QR code for linking myCarlos to this portal.",
+        "mycarlos_qr_unavailable": (
+            "QR code unavailable. Contact your clinic if you cannot use this portal address."
+        ),
+    },
+    "fr": {
+        "mycarlos_mfa_rate_limited": (
+            "Un code de connexion vient d’être envoyé. Veuillez patienter avant d’en "
+            "demander un autre."
+        ),
+        "mycarlos_link": "Associer myCarlos",
+        "mycarlos_devices": "Appareils associés",
+        "mycarlos_instruction": (
+            "Dans myCarlos, choisissez l’option permettant d’associer le portail de "
+            "votre clinique, puis saisissez ce code."
+        ),
+        "mycarlos_code_label": "Code à usage unique",
+        "mycarlos_lifetime": (
+            "Ce code est valable une seule fois, pendant 10 minutes. Restez connecté à ce portail."
+        ),
+        "mycarlos_approval": (
+            "L’appareil doit aussi être approuvé avant de pouvoir recevoir des documents."
+        ),
+        "mycarlos_create": "Créer un code",
+        "mycarlos_another": "Créer un autre code",
+        "mycarlos_linked": "Associé le",
+        "mycarlos_last_seen": "Dernière activité",
+        "mycarlos_empty": (
+            "Aucun appareil associé. Choisissez Associer myCarlos pour en ajouter un."
+        ),
+        "mycarlos_remove_question": "Retirer cet appareil ?",
+        "mycarlos_remove_effect": (
+            "Cet appareil ne recevra plus de nouveaux documents. Pour le réutiliser, "
+            "associez-le à nouveau. Les documents déjà enregistrés dans myCarlos y "
+            "restent."
+        ),
+        "mycarlos_remove": "Retirer l’appareil",
+        "mycarlos_keep": "Garder l’appareil",
+        "mycarlos_paused": (
+            "L’association est suspendue en raison d’un trop grand nombre de codes "
+            "incorrects. Réessayez plus tard."
+        ),
+        "mycarlos_unavailable": "L’association est indisponible. Contactez votre clinique.",
+        "mycarlos_removed": "Appareil retiré.",
+        "mycarlos_not_seen": "Aucune activité",
+        "mycarlos_mfa_required": (
+            "Vérifiez votre connexion avant d’associer ou de retirer un appareil."
+        ),
+        "mycarlos_verify": "Vérifier la connexion",
+        "mycarlos_portal_address": "Adresse du portail",
+        "mycarlos_qr_label": "Scanner dans myCarlos",
+        "mycarlos_qr_alt": "Code QR pour lier myCarlos à ce portail.",
+        "mycarlos_qr_unavailable": (
+            "Code QR indisponible. Contactez votre clinique si vous ne pouvez pas utiliser "
+            "cette adresse du portail."
+        ),
+    },
+    "es": {
+        "mycarlos_mfa_rate_limited": (
+            "Se ha enviado un código de acceso hace poco. Espere antes de pedir otro."
+        ),
+        "mycarlos_link": "Vincular myCarlos",
+        "mycarlos_devices": "Dispositivos vinculados",
+        "mycarlos_instruction": (
+            "En myCarlos, elija la opción para vincular el portal de su clínica y luego"
+            " introduzca este código."
+        ),
+        "mycarlos_code_label": "Código de un solo uso",
+        "mycarlos_lifetime": (
+            "Este código sirve una sola vez, durante 10 minutos. Mantenga la sesión "
+            "iniciada en este portal."
+        ),
+        "mycarlos_approval": (
+            "El dispositivo también debe ser aprobado antes de poder recibir documentos."
+        ),
+        "mycarlos_create": "Crear un código",
+        "mycarlos_another": "Crear otro código",
+        "mycarlos_linked": "Vinculado",
+        "mycarlos_last_seen": "Última actividad",
+        "mycarlos_empty": (
+            "No hay dispositivos vinculados. Elija Vincular myCarlos para añadir uno."
+        ),
+        "mycarlos_remove_question": "¿Quitar este dispositivo?",
+        "mycarlos_remove_effect": (
+            "Este dispositivo dejará de recibir documentos nuevos. Para volver a "
+            "usarlo, vincúlelo de nuevo. Los documentos ya guardados en myCarlos "
+            "permanecen allí."
+        ),
+        "mycarlos_remove": "Quitar dispositivo",
+        "mycarlos_keep": "Conservar dispositivo",
+        "mycarlos_paused": (
+            "La vinculación está pausada porque se introdujeron demasiados códigos "
+            "incorrectos. Inténtelo más tarde."
+        ),
+        "mycarlos_unavailable": "La vinculación no está disponible. Contacte con su clínica.",
+        "mycarlos_removed": "Dispositivo eliminado de la lista.",
+        "mycarlos_not_seen": "Aún sin actividad",
+        "mycarlos_mfa_required": (
+            "Verifique su inicio de sesión antes de vincular o quitar un dispositivo."
+        ),
+        "mycarlos_verify": "Verificar inicio de sesión",
+        "mycarlos_portal_address": "Dirección del portal",
+        "mycarlos_qr_label": "Escanear en myCarlos",
+        "mycarlos_qr_alt": "Código QR para vincular myCarlos con este portal.",
+        "mycarlos_qr_unavailable": (
+            "Código QR no disponible. Contacte con su clínica si no puede usar esta dirección "
+            "del portal."
+        ),
+    },
+    "pl": {
+        "mycarlos_mfa_rate_limited": (
+            "Kod logowania został niedawno wysłany. Poczekaj, zanim poprosisz o kolejny."
+        ),
+        "mycarlos_link": "Połącz myCarlos",
+        "mycarlos_devices": "Połączone urządzenia",
+        "mycarlos_instruction": (
+            "W myCarlos wybierz opcję połączenia z portalem swojej przychodni, a "
+            "następnie wpisz ten kod."
+        ),
+        "mycarlos_code_label": "Kod jednorazowy",
+        "mycarlos_lifetime": (
+            "Kod jest jednorazowy i ważny przez 10 minut. Nie wylogowuj się z tego portalu."
+        ),
+        "mycarlos_approval": (
+            "Urządzenie musi też zostać zatwierdzone, zanim będzie mogło odbierać dokumenty."
+        ),
+        "mycarlos_create": "Utwórz kod",
+        "mycarlos_another": "Utwórz kolejny kod",
+        "mycarlos_linked": "Połączono",
+        "mycarlos_last_seen": "Ostatnia aktywność",
+        "mycarlos_empty": (
+            "Brak połączonych urządzeń. Wybierz Połącz myCarlos, aby dodać urządzenie."
+        ),
+        "mycarlos_remove_question": "Usunąć to urządzenie?",
+        "mycarlos_remove_effect": (
+            "To urządzenie przestanie otrzymywać nowe dokumenty. Aby użyć go ponownie, "
+            "połącz je jeszcze raz. Dokumenty już zapisane w myCarlos pozostaną w "
+            "aplikacji."
+        ),
+        "mycarlos_remove": "Usuń urządzenie",
+        "mycarlos_keep": "Zachowaj urządzenie",
+        "mycarlos_paused": (
+            "Łączenie zostało wstrzymane z powodu zbyt wielu nieprawidłowych kodów. "
+            "Spróbuj ponownie później."
+        ),
+        "mycarlos_unavailable": "Łączenie jest niedostępne. Skontaktuj się z przychodnią.",
+        "mycarlos_removed": "Urządzenie usunięte z listy.",
+        "mycarlos_not_seen": "Brak aktywności",
+        "mycarlos_mfa_required": "Potwierdź logowanie przed połączeniem lub usunięciem urządzenia.",
+        "mycarlos_verify": "Potwierdź logowanie",
+        "mycarlos_portal_address": "Adres portalu",
+        "mycarlos_qr_label": "Zeskanuj w myCarlos",
+        "mycarlos_qr_alt": "Kod QR do połączenia myCarlos z tym portalem.",
+        "mycarlos_qr_unavailable": (
+            "Kod QR jest niedostępny. Skontaktuj się ze swoją przychodnią, jeśli nie możesz "
+            "użyć tego adresu portalu."
+        ),
+    },
+    "pt-BR": {
+        "mycarlos_mfa_rate_limited": (
+            "Um código de acesso foi enviado há pouco. Aguarde antes de solicitar outro."
+        ),
+        "mycarlos_link": "Vincular o myCarlos",
+        "mycarlos_devices": "Dispositivos vinculados",
+        "mycarlos_instruction": (
+            "No myCarlos, escolha a opção de vincular o portal da sua clínica e digite este código."
+        ),
+        "mycarlos_code_label": "Código de uso único",
+        "mycarlos_lifetime": (
+            "Este código funciona uma única vez, por 10 minutos. Mantenha a sessão "
+            "iniciada neste portal."
+        ),
+        "mycarlos_approval": (
+            "O dispositivo também precisa ser aprovado antes de poder receber documentos."
+        ),
+        "mycarlos_create": "Criar um código",
+        "mycarlos_another": "Criar outro código",
+        "mycarlos_linked": "Vinculado em",
+        "mycarlos_last_seen": "Última atividade",
+        "mycarlos_empty": (
+            "Nenhum dispositivo vinculado. Escolha Vincular o myCarlos para adicionar um."
+        ),
+        "mycarlos_remove_question": "Remover este dispositivo?",
+        "mycarlos_remove_effect": (
+            "Este dispositivo deixará de receber novos documentos. Para usá-lo "
+            "novamente, vincule-o de novo. Os documentos já salvos no myCarlos "
+            "permanecem lá."
+        ),
+        "mycarlos_remove": "Remover dispositivo",
+        "mycarlos_keep": "Manter dispositivo",
+        "mycarlos_paused": (
+            "A vinculação está pausada devido ao excesso de códigos incorretos. Tente "
+            "novamente mais tarde."
+        ),
+        "mycarlos_unavailable": "A vinculação está indisponível. Entre em contato com sua clínica.",
+        "mycarlos_removed": "Dispositivo removido.",
+        "mycarlos_not_seen": "Ainda sem atividade",
+        "mycarlos_mfa_required": (
+            "Verifique seu acesso antes de vincular ou remover um dispositivo."
+        ),
+        "mycarlos_verify": "Verificar acesso",
+        "mycarlos_portal_address": "Endereço do portal",
+        "mycarlos_qr_label": "Escanear no myCarlos",
+        "mycarlos_qr_alt": "Código QR para vincular o myCarlos a este portal.",
+        "mycarlos_qr_unavailable": (
+            "Código QR indisponível. Entre em contato com sua clínica se não conseguir usar "
+            "este endereço do portal."
+        ),
+    },
+}
+
+for _mycarlos_locale, _mycarlos_strings in MYCARLOS_TEXT_CATALOG.items():
+    TEXT_CATALOG.setdefault(_mycarlos_locale, {}).update(_mycarlos_strings)
 
 
 def portal_text(locale: str = DEFAULT_LOCALE) -> dict[str, str]:

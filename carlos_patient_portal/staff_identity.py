@@ -326,14 +326,16 @@ def consume_assertion_id(
     session_factory: sessionmaker[Session],
     assertion_id: str,
     expires_at_epoch: int,
+    *,
+    now: datetime | None = None,
 ) -> None:
     """Record one assertion nonce, refusing it if any portal worker has recorded it already.
 
-    Staff and job assertions share this one table, so a nonce used by either caller type can
-    never be used again by the other. Both failures are authentication failures; the subclasses
-    let the job path say which one it was.
+    Staff, job and myCarlos device assertions share this one table, so a nonce used by one caller
+    type can never be used again by another. Both failures are authentication failures; the
+    subclasses let the job and device paths say which one it was. `now` is for fixed test vectors.
     """
-    now = utc_now()
+    now = utc_now() if now is None else now
     expires_at = datetime.fromtimestamp(expires_at_epoch, tz=UTC)
     if expires_at <= now:
         raise AssertionExpiredError()

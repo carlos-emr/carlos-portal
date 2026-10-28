@@ -51,6 +51,7 @@ from carlos_patient_portal.auth import (
     LoginResult,
     MfaChallengeDelivery,
     PortalSessionInvalidError,
+    hash_auth_token,
     logout_patient_session,
 )
 from carlos_patient_portal.config import Settings
@@ -78,7 +79,11 @@ from carlos_patient_portal.schemas import (
     PasswordResetCompleteRequest,
     PasswordResetRequest,
 )
-from carlos_patient_portal.view_models import EmailPasswordDashboardViewModel, MessagesViewModel
+from carlos_patient_portal.view_models import (
+    EmailPasswordDashboardViewModel,
+    MessagesViewModel,
+    MyCarlosViewModel,
+)
 
 PACKAGE_DIR = FilePath(__file__).resolve().parent
 
@@ -206,6 +211,7 @@ CSRF_FUTURE_SKEW_SECONDS = 60
 
 
 PORTAL_SESSION_COOKIE_NAME = "carlos_portal_session"
+PORTAL_MFA_PROOF_COOKIE_NAME = "carlos_portal_mfa_proof"
 
 
 PORTAL_SESSION_COOKIE_PATH = PORTAL_ROOT_PATH
@@ -225,6 +231,7 @@ PORTAL_MODULES = (
 
 
 ACCOUNT_NOTICE_MESSAGE_KEYS = {
+    "mycarlos-device-removed": "mycarlos_removed",
     "contact-confirmation-required": "account_status_contact_confirmation_required",
     "contact-updated": "account_status_contact_updated",
     "contact-updated-notice-failed": "account_status_contact_notice_failed",
@@ -449,6 +456,64 @@ def set_portal_session_cookie(
         samesite="strict",
         secure=not settings.is_development,
     )
+    if settings.mycarlos_delivery_enabled:
+        clear_portal_mfa_proof_cookie(response, settings=settings)
+
+
+def set_portal_mfa_proof_cookie(
+    response: Response,
+    session_token: str,
+    *,
+    delivery_method: str,
+    proof_secret: str,
+    settings: Settings,
+) -> None:
+    """Called only after the browser's actual MFA verification succeeded."""
+    if delivery_method not in {MFA_DELIVERY_METHOD_SMS, MFA_DELIVERY_METHOD_EMAIL}:
+        raise ValueError("unsupported MFA proof factor")
+    if delivery_method == MFA_DELIVERY_METHOD_EMAIL and not settings.is_development:
+        raise ValueError("email is not an independent production MFA factor")
+    if re.fullmatch(r"[A-Za-z0-9_-]{43}", session_token) is None:
+        raise ValueError("invalid session token for MFA proof")
+    tag = hash_auth_token(proof_secret, f"mycarlos-mfa-session-v1:{delivery_method}", session_token)
+    response.set_cookie(
+        PORTAL_MFA_PROOF_COOKIE_NAME,
+        f"{delivery_method}.{tag}",
+        httponly=True,
+        max_age=settings.session_ttl_seconds,
+        path=deployment_cookie_path(settings, PORTAL_SESSION_COOKIE_PATH),
+        samesite="strict",
+        secure=not settings.is_development,
+    )
+
+
+def is_valid_portal_mfa_proof(
+    proof: str | None,
+    session_token: str | None,
+    *,
+    proof_secret: str,
+    allow_email: bool,
+) -> bool:
+    """A proof alone never authenticates: the caller must also check the live session."""
+    if session_token is None or re.fullmatch(r"[A-Za-z0-9_-]{43}", session_token) is None:
+        return False
+    if proof is None or len(proof) > 70:
+        return False
+    match = re.fullmatch(r"(sms|email)\.([0-9a-f]{64})", proof)
+    if match is None or (match[1] == MFA_DELIVERY_METHOD_EMAIL and not allow_email):
+        return False
+    expected = hash_auth_token(proof_secret, f"mycarlos-mfa-session-v1:{match[1]}", session_token)
+    return compare_digest(match[2], expected)
+
+
+def clear_portal_mfa_proof_cookie(response: Response, *, settings: Settings) -> None:
+    response.delete_cookie(
+        PORTAL_MFA_PROOF_COOKIE_NAME,
+        path=deployment_cookie_path(settings, PORTAL_SESSION_COOKIE_PATH),
+        secure=not settings.is_development,
+        httponly=True,
+        samesite="strict",
+    )
 
 
 def clear_portal_session_cookie(response: Response, *, settings: Settings) -> None:
@@ -459,6 +524,8 @@ def clear_portal_session_cookie(response: Response, *, settings: Settings) -> No
         httponly=True,
         samesite="strict",
     )
+    if settings.mycarlos_delivery_enabled:
+        clear_portal_mfa_proof_cookie(response, settings=settings)
 
 
 def deployment_cookie_path(settings: Settings, application_path: str) -> str:
@@ -491,6 +558,10 @@ def is_portal_path(path: str) -> bool:
     return path == PORTAL_SESSION_COOKIE_PATH or path.startswith(f"{PORTAL_SESSION_COOKIE_PATH}/")
 
 
+MYCARLOS_API_PREFIX = "/api/mycarlos/"
+MYCARLOS_LINK_PATH = "/api/mycarlos/link"
+
+
 def is_patient_runtime_path(path: str) -> bool:
     return (
         path == "/"
@@ -511,7 +582,14 @@ def is_rate_limited_path(path: str) -> bool:
     # The probe endpoints (/internal/health/db, /internal/readiness, /internal/metrics) are
     # deliberately excluded: they are polled on a fixed interval by orchestrators and throttling
     # them would turn a healthy service into a failing liveness check.
-    return is_patient_runtime_path(path) or path.startswith("/internal/carlos/")
+    #
+    # /api/mycarlos/** is the myCarlos device API (carlos-portal#41). It answers callers with no
+    # browser session, and its link route takes a guessable one-time code.
+    return (
+        is_patient_runtime_path(path)
+        or path.startswith("/internal/carlos/")
+        or path.startswith(MYCARLOS_API_PREFIX)
+    )
 
 
 def is_maintenance_exempt_path(path: str) -> bool:
@@ -849,7 +927,14 @@ def portal_modules(
     request: Request,
     active_module: str,
     text: dict[str, str],
+    *,
+    mycarlos_enabled: bool = False,
 ) -> tuple[dict[str, object], ...]:
+    modules = PORTAL_MODULES
+    if mycarlos_enabled:
+        modules += (
+            {"slug": "mycarlos", "label_key": "mycarlos_link", "route_name": "portal_mycarlos"},
+        )
     return tuple(
         {
             **module,
@@ -857,7 +942,7 @@ def portal_modules(
             "label": text[module["label_key"]],
             "is_active": module["slug"] == active_module,
         }
-        for module in PORTAL_MODULES
+        for module in modules
     )
 
 
@@ -874,6 +959,7 @@ def portal_template_context(
     email_passwords: EmailPasswordDashboardViewModel | None = None,
     messages: MessagesViewModel | None = None,
     new_message_count: int = 0,
+    mycarlos: MyCarlosViewModel | None = None,
 ) -> dict[str, object]:
     account = authenticated_session.account
     locale = request_locale(request)
@@ -887,7 +973,9 @@ def portal_template_context(
         "account": account,
         "password_updated_date": account.password_updated_at.date().isoformat(),
         "active_module": active_module,
-        "modules": portal_modules(request, active_module, text),
+        "modules": portal_modules(
+            request, active_module, text, mycarlos_enabled=settings.mycarlos_delivery_enabled
+        ),
         "csrf_token": csrf_token,
         "account_notice": account_notice,
         "account_error": account_error,
@@ -899,6 +987,8 @@ def portal_template_context(
     context["email_passwords"] = email_passwords
     context["messages"] = messages
     context["new_message_count"] = new_message_count
+    context["mycarlos_enabled"] = settings.mycarlos_delivery_enabled
+    context["mycarlos"] = mycarlos
     return context
 
 
@@ -997,7 +1087,10 @@ async def get_activation_request(request: Request) -> ActivationRequest:
         raw_payload = json.loads(body)
         if isinstance(raw_payload, dict) and isinstance(raw_payload.get("invite_code"), str):
             invite_code = raw_payload["invite_code"]
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    # Malformed input like any other, refused below, never a 500. ValueError covers decode errors
+    # (JSONDecodeError, UnicodeDecodeError) and a number past Python's int-conversion digit limit;
+    # RecursionError is JSON nested deeply enough, inside the size cap, to exhaust the decoder.
+    except (ValueError, RecursionError):
         pass
     try:
         return ActivationRequest.model_validate_json(body)
@@ -1030,9 +1123,7 @@ async def get_activation_request_from_request(
             "password confirmation does not match",
             # Only the invite code is read from this (to charge the rate limit); the entries the
             # page shows again come from request.state.
-            safe_form_values={
-                "invite_code": first_form_value_or_empty(form_values, "invite_code")
-            },
+            safe_form_values={"invite_code": first_form_value_or_empty(form_values, "invite_code")},
         )
     try:
         return ActivationRequest.model_validate(

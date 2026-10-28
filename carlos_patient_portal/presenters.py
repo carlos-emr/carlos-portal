@@ -23,7 +23,7 @@ to a page render belongs in the route that owns the request, not here.
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from datetime import time as datetime_time
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
@@ -47,6 +47,7 @@ from carlos_patient_portal.models import (
     BOOKING_PROMPT_STATUS_CHOICE_PENDING,
     BOOKING_PROMPT_STATUS_READ,
     BOOKING_PROMPT_STATUS_SENT,
+    MYCARLOS_DEVICE_STATUS_ACTIVE,
     UNLOCK_SECRET_STATUS_ACTIVE,
     UNLOCK_SECRET_TYPE_EMAIL,
     PatientPortalAccount,
@@ -56,6 +57,7 @@ from carlos_patient_portal.models import (
     PatientPortalUnlockSecret,
     utc_now,
 )
+from carlos_patient_portal.mycarlos_devices import devices_for_account
 from carlos_patient_portal.unlock_secrets import (
     DEFAULT_UNLOCK_SECRET_LIST_LIMIT,
     MAX_UNLOCK_SECRET_SEARCH_LENGTH,
@@ -75,6 +77,8 @@ from carlos_patient_portal.view_models import (
     EmailPasswordDashboardViewModel,
     EmailPasswordRowViewModel,
     MessagesViewModel,
+    MyCarlosDeviceRowViewModel,
+    MyCarlosViewModel,
     ProviderFilterOptionViewModel,
 )
 
@@ -540,4 +544,36 @@ def assemble_messages(
         not_found=not_found,
         no_online_booking=text["booking_prompt_no_online_booking"],
         error=error,
+    )
+
+
+def assemble_mycarlos_devices(
+    session: Session,
+    account: PatientPortalAccount,
+    *,
+    account_path: str,
+    locale: str,
+    timezone_name: str,
+    portal_address: str | None = None,
+) -> MyCarlosViewModel:
+    text = portal_text(locale)
+    return MyCarlosViewModel(
+        portal_address=portal_address,
+        devices=tuple(
+            MyCarlosDeviceRowViewModel(
+                device_key_id=device.device_key_id,
+                name=device.device_name,
+                linked_at=format_portal_datetime(device.linked_at, locale, timezone_name),
+                last_seen_at=(
+                    format_portal_datetime(device.last_seen_at, locale, timezone_name)
+                    if device.last_seen_at is not None
+                    else text["mycarlos_not_seen"]
+                ),
+                remove_href=(
+                    f"{account_path}/mycarlos/devices/{quote(device.device_key_id, safe='')}/remove"
+                ),
+            )
+            for device in devices_for_account(session, account.id)
+            if device.status == MYCARLOS_DEVICE_STATUS_ACTIVE
+        ),
     )
