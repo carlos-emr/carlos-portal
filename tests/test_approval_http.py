@@ -549,3 +549,25 @@ def test_later_changed_saved_proof_conflicts_without_overwriting_original(later_
     with app.state.session_factory() as s:
         row = s.get(ApprovalRequest, (F["clinic_id"], later["intent"]["claims"]["request_id"]))
         assert row.approval == later["approval"]["compact"] and row.approval_sequence == 1
+
+
+def test_reused_challenge_id_is_a_409_conflict_not_a_server_error(later_approval_http):
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+
+    app, client, later, *_ = later_approval_http
+    assert post_intent(client).status_code == 201
+    clinic = ref.private_key_from_seed_text(F["keys"]["clinic"]["seed_text"], "p256")
+    claims = dict(
+        FLOW["challenge"]["claims"], challenge_id=later["challenge"]["claims"]["challenge_id"]
+    )
+    payload = json.dumps(claims, sort_keys=True, separators=(",", ":")).encode()
+    r, s = decode_dss_signature(clinic.sign(payload, ec.ECDSA(hashes.SHA256())))
+    reused = ref.b64url(payload) + "." + ref.b64url(r.to_bytes(32, "big") + s.to_bytes(32, "big"))
+    result = put_challenge(client, reused)
+    assert result.status_code == 409, result.text
+    assert result.json() == {"code": "approval_conflict"}
+    with app.state.session_factory() as session:
+        row = session.get(ApprovalRequest, (F["clinic_id"], REQUEST))
+        assert row.status == "pending" and row.challenge is None

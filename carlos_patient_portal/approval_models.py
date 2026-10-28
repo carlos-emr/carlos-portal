@@ -14,7 +14,8 @@
 
 """M3 durable opaque proofs, isolated from primary document ciphertext.
 
-Deployment migration/grants remain a reviewed proposal. Tests create only owned tables.
+Migration 0018 creates these tables, and deploy/postgresql-audit-roles.sql grants them to the
+runtime role (see "Rolling out 0018" in the README).
 """
 
 from sqlalchemy import BigInteger, ForeignKey, Integer, String, Text, UniqueConstraint

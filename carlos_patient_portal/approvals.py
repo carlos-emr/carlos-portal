@@ -205,6 +205,16 @@ def publish_challenge(
         raise invalid("approval_conflict", 409)
     if row.status != "pending" or value["issued_at"] > now + 30 or value["expires_at"] <= now:
         raise invalid("approval_expired", 410)
+    # A challenge ID names one request per clinic. The caller holds the clinic mutex, so this
+    # check can't race; without it a reused ID reached the unique constraint as a 500.
+    taken = session.scalar(
+        select(ApprovalRequest.request_id).where(
+            ApprovalRequest.clinic_id == m.account.clinic_id,
+            ApprovalRequest.challenge_id == value["challenge_id"],
+        )
+    )
+    if taken is not None:
+        raise invalid("approval_conflict", 409)
     row.challenge_id, row.challenge = value["challenge_id"], challenge
     row.challenge_sequence = next_sequence(
         approval_clinic(session, m.account.clinic_id), "challenge_sequence"
