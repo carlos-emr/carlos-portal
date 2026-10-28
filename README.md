@@ -1006,7 +1006,8 @@ and name, signed with the new key:
   `{"code": "link_code_invalid"}`, the same for every reason; a key already linked is 409
   `device_exists`; and while CARLOS has published no active clinic key, every link is 409
   `clinic_keys_missing`, checked before the code, so the code stays pending and nothing is counted
-  (a device pins the key list it links with, and nothing refreshes it). On success: the recipient ID (made on the first link), the device key ID, the
+  (a first link has no earlier pins, so its trust starts with the key list it links with; see
+  [the link lifecycle](docs/architecture/mycarlos-link-lifecycle-v1.md)). On success: the recipient ID (made on the first link), the device key ID, the
   clinic's ID and name, and its key list (`kid`, SubjectPublicKeyInfo, status).
 - **Per caller:** the route has the login limiter's budget in its own bucket, and the reference
   nginx policy adds its own zone and a 4 KiB body limit (`/api/mycarlos/link` and its
