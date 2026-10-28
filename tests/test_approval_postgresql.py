@@ -177,8 +177,6 @@ def test_actual_pg_m3_first_use_serializes_committed_request_cursor(
     from datetime import UTC, datetime
     from pathlib import Path
 
-    from cryptography.hazmat.primitives import serialization
-
     from carlos_patient_portal.approvals import candidate_request
     from carlos_patient_portal.mailbox import mailbox_lock
     from carlos_patient_portal.models import (
@@ -223,9 +221,7 @@ def test_actual_pg_m3_first_use_serializes_committed_request_cursor(
                     linked_at=datetime.fromtimestamp(fixture["now"], UTC),
                 )
             )
-        private = serialization.load_der_private_key(
-            strict_b64url_decode(key["FAKE_ed25519_private_pkcs8_b64url"]), None
-        )
+        private = ref.private_key_from_seed_text(key["ed25519_seed_text"], "ed25519")
         claims = dict(
             fixture["flows"]["first"]["intent"]["claims"],
             request_id=str(uuid4()),

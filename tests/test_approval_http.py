@@ -9,7 +9,6 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -31,9 +30,7 @@ from tests.test_mycarlos_mailbox_http import SplitIngressProxy
 F = json.loads((Path(__file__).parent / "fixtures/device-approval-contract-v1.json").read_bytes())
 FLOW = F["flows"]["first"]
 KEY = F["keys"]["first"]
-PRIVATE = serialization.load_der_private_key(
-    strict_b64url_decode(KEY["FAKE_ed25519_private_pkcs8_b64url"]), None
-)
+PRIVATE = ref.private_key_from_seed_text(KEY["ed25519_seed_text"], "ed25519")
 JOB = Ed25519PrivateKey.generate()
 JOB_KID = "FAKE-approval-job"
 PREFIX = "/patient"
@@ -249,8 +246,8 @@ def test_late_challenge_publication_remains_visible_after_approver_cursor(approv
     from carlos_patient_portal.approval_codec import compact_hash
 
     predecessor = F["keys"]["predecessor"]
-    predecessor_private = serialization.load_der_private_key(
-        strict_b64url_decode(predecessor["FAKE_ed25519_private_pkcs8_b64url"]), None
+    predecessor_private = ref.private_key_from_seed_text(
+        predecessor["ed25519_seed_text"], "ed25519"
     )
     other = ref.DeviceKeys("FAKE second candidate committed challenge cursor")
     other_key = {
@@ -272,9 +269,7 @@ def test_late_challenge_publication_remains_visible_after_approver_cursor(approv
                     linked_at=datetime.fromtimestamp(F["now"], UTC),
                 )
             )
-    clinic_private = serialization.load_der_private_key(
-        strict_b64url_decode(F["keys"]["clinic"]["FAKE_private_pkcs8_b64url"]), None
-    )
+    clinic_private = ref.private_key_from_seed_text(F["keys"]["clinic"]["seed_text"], "p256")
     candidates = []
     for key, private in [(KEY, PRIVATE), (other_key, other.ed25519)]:
         request_id = str(uuid4())
@@ -421,11 +416,9 @@ def later_approval_http(approval_http):
                     linked_at=datetime.fromtimestamp(F["now"], UTC),
                 )
             )
-    candidate_private = serialization.load_der_private_key(
-        strict_b64url_decode(candidate["FAKE_ed25519_private_pkcs8_b64url"]), None
-    )
-    predecessor_private = serialization.load_der_private_key(
-        strict_b64url_decode(predecessor["FAKE_ed25519_private_pkcs8_b64url"]), None
+    candidate_private = ref.private_key_from_seed_text(candidate["ed25519_seed_text"], "ed25519")
+    predecessor_private = ref.private_key_from_seed_text(
+        predecessor["ed25519_seed_text"], "ed25519"
     )
     raw = body({"intent": later["intent"]["compact"]})
     assert (
