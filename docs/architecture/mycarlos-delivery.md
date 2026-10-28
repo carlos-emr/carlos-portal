@@ -370,8 +370,10 @@ The Ed25519 signature is 64 bytes, and the assertion is at most 4096 bytes.
    3. **Signature:** it verifies with the body's Ed25519 key. Else `invalid_assertion`.
    4. **Time, request hash and replay:** as for device requests.
    5. **Clinic keys:** the clinic must have published at least one active signing key. Else
-      `clinic_keys_missing`. The device pins the key list it links with, and nothing refreshes
-      a pinned list, so a device linked before any key existed could never verify a document.
+      `clinic_keys_missing`. A first link has no earlier pins: the device's trust in the
+      clinic's keys starts with the key list it links with (see
+      [the link lifecycle](mycarlos-link-lifecycle-v1.md)), so a device linked while no key is
+      active would have nothing to verify a document with.
       This check is for the whole clinic and comes before the code, so it says nothing about the
       link the request names, the code stays usable once a key is published, and nothing is
       counted.
