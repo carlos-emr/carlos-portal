@@ -23,7 +23,8 @@ code, so it isn't mistaken for an SMTP outage. The reason is one fixed word; it 
 includes the footer, a token, an address or a message.
 
 A sign-in code or a password reset isn't refused: it goes out without the footer, and the log
-line reads `Portal email sent without footer: clinic footer unavailable (reason=<reason>)`.
+line, written once SMTP has accepted it, reads `Portal email sent without footer: clinic
+footer unavailable (reason=<reason>)`.
 Its audit record names the skipped footer's reason (`footer_skipped`).
 
 | Reason | Check first |
@@ -129,9 +130,11 @@ this permission only after server-side `_admin READ`. Instance, principal and
 artifact clinic must match. Patients and the worker read credential cannot use it.
 
 Use `date=YYYY-MM-DD` (UTC today by default), `limit=1..100`, and the exclusive
-`before` cursor returned as `next_before`. Results are newest first. Each hour folder
-allows at most 10,000 entries (about 5,000 attempts in one UTC hour), each artifact
-256 KiB, and a page 512 KiB. A full page stops without reading older hours.
+`before` cursor returned as `next_before`. Results are newest first. Each artifact may be
+256 KiB and a page 512 KiB. A page passes once over each hour folder it needs, keeping only
+the newest records it can use, so any hour or day stays readable however many attempts it
+holds; recording never stops for the audit's sake. A full page stops without reading older
+hours.
 Invalid/corrupt evidence is reported unavailable. A page can end early at its byte
 limit with a cursor; eligible evidence is never silently dropped. The list exposes
 saved plaintext, kind, clinic, revision, status/times and logo hash; full HTML and logo
