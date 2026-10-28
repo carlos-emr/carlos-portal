@@ -556,6 +556,11 @@ myCarlos switches off:
 used the mailbox or asked for approval (even one counter row), the downgrade refuses. Take a
 backup before turning the switches on if you might need to roll back.
 
+**0020 (clinic code v1):** the same two steps apply. Migrate, then run
+`deploy/postgresql-audit-roles.sql` again: it grants the runtime role the new
+`patient_portal_mycarlos_approval_codes` table, and without it preflight fails closed. 0020's
+downgrade also refuses once any code attempt row exists.
+
 Keep every revision id to 32 characters or fewer. Alembic creates `alembic_version.version_num` as
 `VARCHAR(32)`; SQLite ignores the declared width but PostgreSQL enforces it, so a longer id passes
 the test suite and the SQLite round trip while leaving every PostgreSQL database unable to reach
