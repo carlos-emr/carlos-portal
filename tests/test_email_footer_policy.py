@@ -417,3 +417,20 @@ def test_only_the_two_named_senders_may_skip_the_footer(delivery):
     with pytest.raises(ValueError, match="only sign-in codes and password resets"):
         sender._send_message(draft, footer_optional=True)
     assert RecordingSmtp.instances == 0
+
+
+def test_no_sent_without_footer_line_unless_smtp_accepted(delivery, monkeypatch, caplog):
+    sender, provider, audit = delivery
+
+    def unavailable():
+        raise ClinicFooterUnavailableError("transport")
+
+    monkeypatch.setattr(provider, "snapshot", unavailable)
+    RecordingSmtp.failure = smtplib.SMTPDataError(554, b"FAKE refused")
+    with caplog.at_level(logging.WARNING, logger="carlos_patient_portal.email_delivery"):
+        with pytest.raises(PortalEmailDeliveryError):
+            sender.send_code(
+                recipient="fake.patient@example.test", code="FAKE-code", expires_in_seconds=600
+            )
+    assert "sent without footer" not in caplog.text
+    assert attempts(audit)[0]["status"] == "failed"

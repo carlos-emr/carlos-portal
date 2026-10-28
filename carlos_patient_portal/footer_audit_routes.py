@@ -8,7 +8,13 @@ from datetime import date as calendar_date
 from typing import TYPE_CHECKING, Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+)
 
 from carlos_patient_portal.footer_audit import FooterAuditStore, FooterAuditUnavailableError
 from carlos_patient_portal.staff_identity import StaffPrincipal
@@ -33,9 +39,17 @@ class FooterAttemptView(BaseModel):
     revision: str | None
     footer_text: str | None
     logo_sha256: str | None
-    # Present only on a skipped attempt (the response omits unset fields), so the other items
-    # keep the exact field set CARLOS's reader checks.
+    # Present only on a skipped attempt, so the other items keep the exact field set CARLOS's
+    # reader checks.
     footer_skipped: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_footer_skipped_when_absent(self, handler: SerializerFunctionWrapHandler) -> dict:
+        # Only this one field is dropped when empty; every other field is always written.
+        data = handler(self)
+        if self.footer_skipped is None:
+            data.pop("footer_skipped", None)
+        return data
 
 
 class FooterAuditListView(BaseModel):
@@ -51,11 +65,7 @@ def register_footer_audit_routes(
     runtime: "InternalRuntime",
     deps: "InternalRouteDependencies",
 ) -> None:
-    @app.get(
-        "/internal/carlos/email-footer-attempts",
-        response_model=FooterAuditListView,
-        response_model_exclude_unset=True,
-    )
+    @app.get("/internal/carlos/email-footer-attempts", response_model=FooterAuditListView)
     def list_email_footer_attempts(
         principal: Annotated[
             StaffPrincipal, Depends(deps.staff_principal_requiring(PERMISSION_EMAIL_AUDIT_READ))

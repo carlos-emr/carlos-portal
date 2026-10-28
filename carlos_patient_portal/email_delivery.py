@@ -376,8 +376,6 @@ class SmtpPortalEmailSender:
                 attempt = self._footer_audit.prepare_skipped(kind, str(skipped))
         except (FooterAuditUnavailableError, OSError, ValueError):
             raise _footer_failure("audit") from None
-        if skipped is not None:
-            _footer_skipped(skipped)
         submission_started = False
         accepted = False
         outcome = "failed"
@@ -424,6 +422,10 @@ class SmtpPortalEmailSender:
                 # Acceptance cannot be undone. The immutable prepared artifact remains an
                 # honest "acceptance not recorded" if this bookkeeping write is unavailable.
                 logger.warning("Portal email footer outcome was not recorded")
+        # Reached only once SMTP accepted the email (every other path raised above), so this line
+        # never reports an email without the footer that wasn't actually sent.
+        if skipped is not None:
+            _footer_skipped(skipped)
 
 
 def build_portal_email_sender(settings: Settings) -> PortalEmailSender | None:

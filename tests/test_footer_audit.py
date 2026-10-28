@@ -300,3 +300,24 @@ def test_a_skipped_footer_is_recorded_only_for_codes_and_resets(store, tmp_path)
     record(tmp_path, attempt).write_text(json.dumps(value))
     with pytest.raises(FooterAuditUnavailableError):
         store.list_attempts(day=attempt.date)
+
+
+def test_old_day_level_schema_1_records_are_ignored(store, tmp_path):
+    attempt = store.prepare(fake_footer(), "mfa")
+    # The layout before hour folders kept schema-1 records, footer included, in the day folder.
+    old_id = attempt.attempt_id[:20] + "-" + "0" * 32
+    old = tmp_path / attempt.date / (old_id + ".prepared.json")
+    old.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "attempt_id": old_id,
+                "prepared_at": "FAKE",
+                "kind": "mfa",
+                "footer": fake_footer().to_dict(),
+            }
+        )
+    )
+    old.chmod(0o600)
+    listed = store.list_attempts(day=attempt.date)["attempts"]
+    assert [item["attempt_id"] for item in listed] == [attempt.attempt_id]
