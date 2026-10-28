@@ -41,8 +41,16 @@ FOOTER_MESSAGE_KINDS = frozenset(
     }
 )
 ATTEMPT_ID_PATTERN = re.compile(r"[0-9]{20}-[0-9a-f]{32}")
+HOUR_PATTERN = re.compile(r"(?:[01][0-9]|2[0-3])")
+REVISION_PATTERN = re.compile(r"[0-9a-f]{64}")
+# Per folder. Attempts live in one folder per UTC hour (2 files each), so one hour can hold
+# about 5,000 attempts before its listing refuses; a busy day spreads over 24 folders.
 MAX_AUDIT_DIRECTORY_ENTRIES = 10_000
-_SNAPSHOT_FIELDS = frozenset({"schema", "attempt_id", "prepared_at", "kind", "footer"})
+# Each footer revision is stored once, named by its revision (a hash of its content), and every
+# attempt names the revision it used. A logo (up to ~136 KB encoded) is no longer copied per email.
+FOOTERS_DIRECTORY = "footers"
+_SNAPSHOT_FIELDS = frozenset({"schema", "attempt_id", "prepared_at", "kind", "footer_revision"})
+_FOOTER_FIELDS = frozenset({"schema", "footer"})
 _OUTCOME_FIELDS = frozenset({"schema", "attempt_id", "status", "status_at"})
 
 
@@ -78,6 +86,17 @@ def _date(value: str) -> str:
 class FooterAuditAttempt:
     date: str
     attempt_id: str
+
+    @property
+    def hour(self) -> str:
+        """The UTC hour folder the attempt lives in, from its own timestamp."""
+        return _hour(self.attempt_id)
+
+
+def _hour(attempt_id: str) -> str:
+    if ATTEMPT_ID_PATTERN.fullmatch(attempt_id) is None:
+        raise _failure()
+    return _timestamp(int(attempt_id[:20]))[11:13]
 
 
 class FooterAuditStore:
@@ -119,25 +138,87 @@ class FooterAuditStore:
         finally:
             os.close(fd)
 
+    def _open_child(self, parent: int, name: str, *, create: bool) -> int:
+        if create:
+            try:
+                os.mkdir(name, mode=0o700, dir_fd=parent)
+                os.fsync(parent)
+            except FileExistsError:
+                pass
+        fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+        try:
+            self._private(fd, directory=True)
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd
+
     def _open_date(self, day: str, *, create: bool) -> int:
         day = _date(day)
         root = self._open_root()
         try:
-            if create:
-                try:
-                    os.mkdir(day, mode=0o700, dir_fd=root)
-                    os.fsync(root)
-                except FileExistsError:
-                    pass
-            fd = os.open(day, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root)
-            try:
-                self._private(fd, directory=True)
-            except BaseException:
-                os.close(fd)
-                raise
-            return fd
+            return self._open_child(root, day, create=create)
         finally:
             os.close(root)
+
+    def _open_hour(self, day: str, hour: str, *, create: bool) -> int:
+        if HOUR_PATTERN.fullmatch(hour) is None:
+            raise _failure()
+        day_fd = self._open_date(day, create=create)
+        try:
+            return self._open_child(day_fd, hour, create=create)
+        finally:
+            os.close(day_fd)
+
+    def _open_footers(self, *, create: bool) -> int:
+        root = self._open_root()
+        try:
+            return self._open_child(root, FOOTERS_DIRECTORY, create=create)
+        finally:
+            os.close(root)
+
+    def _store_footer(self, snapshot: ClinicFooterSnapshot) -> None:
+        """Publish this footer revision once; an existing copy must be byte-for-byte the same."""
+        record = {"schema": 1, "footer": snapshot.to_dict()}
+        name = snapshot.revision + ".json"
+        fd = self._open_footers(create=True)
+        try:
+            try:
+                existing = self._read(fd, name)
+            except FileNotFoundError:
+                try:
+                    self._publish(fd, name, record)
+                    return
+                except FileExistsError:
+                    # Another process published the same revision first; check its copy.
+                    existing = self._read(fd, name)
+            if existing != record:
+                raise _failure()
+        finally:
+            os.close(fd)
+
+    def _load_footer(self, revision: object) -> ClinicFooterSnapshot:
+        if not isinstance(revision, str) or REVISION_PATTERN.fullmatch(revision) is None:
+            raise _failure()
+        fd = self._open_footers(create=False)
+        try:
+            value = self._read(fd, revision + ".json")
+        finally:
+            os.close(fd)
+        if (
+            set(value) != _FOOTER_FIELDS
+            or type(value["schema"]) is not int
+            or value["schema"] != 1
+            or not isinstance(value["footer"], dict)
+        ):
+            raise _failure()
+        try:
+            snapshot = ClinicFooterSnapshot.from_dict(value["footer"])
+        except ClinicFooterUnavailableError:
+            raise _failure() from None
+        if snapshot.revision != revision or snapshot.clinic_id != self._clinic_id:
+            raise _failure()
+        return snapshot
 
     @staticmethod
     def _publish(fd: int, name: str, value: dict[str, object]) -> None:
@@ -169,17 +250,19 @@ class FooterAuditStore:
         epoch_ns = time.time_ns()
         prepared_at = _timestamp(epoch_ns)
         attempt = FooterAuditAttempt(prepared_at[:10], f"{epoch_ns:020d}-" + uuid.uuid4().hex)
-        fd = self._open_date(attempt.date, create=True)
+        # The footer first: an attempt record never names a revision that isn't stored.
+        self._store_footer(snapshot)
+        fd = self._open_hour(attempt.date, attempt.hour, create=True)
         try:
             self._publish(
                 fd,
                 attempt.attempt_id + ".prepared.json",
                 {
-                    "schema": 1,
+                    "schema": 2,
                     "attempt_id": attempt.attempt_id,
                     "prepared_at": prepared_at,
                     "kind": kind,
-                    "footer": snapshot.to_dict(),
+                    "footer_revision": snapshot.revision,
                 },
             )
         finally:
@@ -193,7 +276,7 @@ class FooterAuditStore:
             "unknown",
         }:
             raise _failure()
-        fd = self._open_date(attempt.date, create=False)
+        fd = self._open_hour(attempt.date, attempt.hour, create=False)
         try:
             # Never create a terminal outcome without its immutable preparation record.
             self._read_snapshot(fd, attempt.attempt_id, attempt.date)
@@ -226,34 +309,42 @@ class FooterAuditStore:
             os.close(file_fd)
 
     def _read_snapshot(
-        self, fd: int, attempt_id: str, day: str
+        self,
+        fd: int,
+        attempt_id: str,
+        day: str,
+        footers: dict[object, ClinicFooterSnapshot] | None = None,
     ) -> tuple[dict[str, object], ClinicFooterSnapshot]:
+        """One attempt and its footer. `footers` lets one listing read each revision once."""
         if ATTEMPT_ID_PATTERN.fullmatch(attempt_id) is None:
             raise _failure()
         value = self._read(fd, attempt_id + ".prepared.json")
         if (
             set(value) != _SNAPSHOT_FIELDS
             or type(value["schema"]) is not int
-            or value["schema"] != 1
+            or value["schema"] != 2
             or value["attempt_id"] != attempt_id
             or not isinstance(value["kind"], str)
             or value["kind"] not in FOOTER_MESSAGE_KINDS
             or value["prepared_at"] != _timestamp(int(attempt_id[:20]))
             or not isinstance(value["prepared_at"], str)
             or value["prepared_at"][:10] != day
-            or not isinstance(value["footer"], dict)
         ):
             raise _failure()
-        try:
-            snapshot = ClinicFooterSnapshot.from_dict(value["footer"])
-        except ClinicFooterUnavailableError:
-            raise _failure() from None
-        if snapshot.clinic_id != self._clinic_id:
-            raise _failure()
-        return value, snapshot
+        footers = {} if footers is None else footers
+        revision = value["footer_revision"]
+        if revision not in footers:
+            footers[revision] = self._load_footer(revision)
+        return value, footers[revision]
 
-    def _display(self, fd: int, attempt_id: str, day: str) -> dict[str, object]:
-        value, snapshot = self._read_snapshot(fd, attempt_id, day)
+    def _display(
+        self,
+        fd: int,
+        attempt_id: str,
+        day: str,
+        footers: dict[object, ClinicFooterSnapshot] | None = None,
+    ) -> dict[str, object]:
+        value, snapshot = self._read_snapshot(fd, attempt_id, day, footers)
         status, status_at = "prepared", None
         try:
             outcome = self._read(fd, attempt_id + ".outcome.json")
@@ -299,41 +390,72 @@ class FooterAuditStore:
             or (before is not None and ATTEMPT_ID_PATTERN.fullmatch(before) is None)
         ):
             raise _failure()
+        first_hour = "23"
+        if before is not None:
+            # A cursor names an attempt of this day; listing resumes in its hour folder.
+            if _timestamp(int(before[:20]))[:10] != day:
+                raise _failure()
+            first_hour = _hour(before)
         # Validate the root even for an empty day: wrong permissions/missing volume must
         # not be misrepresented as an empty audit history.
         root = self._open_root()
         os.close(root)
         try:
-            fd = self._open_date(day, create=False)
+            day_fd = self._open_date(day, create=False)
         except FileNotFoundError:
             return {"date": day, "attempts": [], "next_before": None}
         try:
-            candidates: list[str] = []
-            with os.scandir(fd) as entries:
+            hours: list[str] = []
+            with os.scandir(day_fd) as entries:
                 for count, entry in enumerate(entries, start=1):
                     if count > MAX_AUDIT_DIRECTORY_ENTRIES:
                         raise _failure()
-                    if entry.name.endswith(".prepared.json"):
-                        candidate = entry.name.removesuffix(".prepared.json")
-                        if ATTEMPT_ID_PATTERN.fullmatch(candidate) is None:
-                            raise _failure()
-                        if before is None or candidate < before:
-                            candidates.append(candidate)
-            candidates.sort(reverse=True)
+                    if HOUR_PATTERN.fullmatch(entry.name) and entry.name <= first_hour:
+                        hours.append(entry.name)
+            hours.sort(reverse=True)
             attempts: list[dict[str, object]] = []
-            next_before = None
-            for candidate in candidates:
-                item = self._display(fd, candidate, day)
-                proposed = {"date": day, "attempts": [*attempts, item], "next_before": candidate}
-                size = len(
-                    json.dumps(proposed, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
-                )
-                if len(attempts) >= limit or size > MAX_FOOTER_RESPONSE_BYTES:
-                    if not attempts:
-                        raise _failure()
-                    next_before = attempts[-1]["attempt_id"]
-                    break
-                attempts.append(item)
-            return {"date": day, "attempts": attempts, "next_before": next_before}
+            footers: dict[object, ClinicFooterSnapshot] = {}
+            for index, hour in enumerate(hours):
+                fd = self._open_child(day_fd, hour, create=False)
+                try:
+                    candidates: list[str] = []
+                    with os.scandir(fd) as entries:
+                        for count, entry in enumerate(entries, start=1):
+                            if count > MAX_AUDIT_DIRECTORY_ENTRIES:
+                                raise _failure()
+                            if entry.name.endswith(".prepared.json"):
+                                candidate = entry.name.removesuffix(".prepared.json")
+                                if _hour(candidate) != hour:
+                                    raise _failure()
+                                if before is None or candidate < before:
+                                    candidates.append(candidate)
+                    candidates.sort(reverse=True)
+                    for position, candidate in enumerate(candidates):
+                        item = self._display(fd, candidate, day, footers)
+                        proposed = {
+                            "date": day,
+                            "attempts": [*attempts, item],
+                            "next_before": candidate,
+                        }
+                        size = len(
+                            json.dumps(proposed, ensure_ascii=True, separators=(",", ":")).encode(
+                                "utf-8"
+                            )
+                        )
+                        if size > MAX_FOOTER_RESPONSE_BYTES:
+                            if not attempts:
+                                raise _failure()
+                            next_before = attempts[-1]["attempt_id"]
+                            return {"date": day, "attempts": attempts, "next_before": next_before}
+                        attempts.append(item)
+                        if len(attempts) == limit:
+                            # A full page stops here, without reading the next hour folder. An
+                            # hour folder only exists once an attempt was written in it.
+                            more = position + 1 < len(candidates) or index + 1 < len(hours)
+                            next_before = candidate if more else None
+                            return {"date": day, "attempts": attempts, "next_before": next_before}
+                finally:
+                    os.close(fd)
+            return {"date": day, "attempts": attempts, "next_before": None}
         finally:
-            os.close(fd)
+            os.close(day_fd)
