@@ -107,6 +107,9 @@ def register_device_approval_routes(app: FastAPI, runtime: PortalRuntime) -> Non
     public_base = normalize_portal(settings.public_base_url)
     if public_base is None:
         raise ValueError("myCarlos approval requires a configured public base URL")
+    accepted_versions = (
+        CONTRACT_VERSIONS if settings.mycarlos_approval_contract_v2_enabled else (1,)
+    )
 
     def execute(request: Request, body: bytes, operation: Callable) -> Response:
         assertion = request.headers.get(DEVICE_ASSERTION_HEADER)
@@ -183,6 +186,7 @@ def register_device_approval_routes(app: FastAPI, runtime: PortalRuntime) -> Non
                 body=raw,
                 public_base=public_base,
                 now=int(time()),
+                versions=accepted_versions,
             )
             return response(content, status)
 
@@ -207,7 +211,7 @@ def register_device_approval_routes(app: FastAPI, runtime: PortalRuntime) -> Non
         def operation(session: Session, m: LockedMailbox, raw: bytes) -> Response:
             if request.scope.get("query_string", b""):
                 raise invalid()
-            return response({"versions": list(CONTRACT_VERSIONS)})
+            return response({"versions": list(accepted_versions)})
 
         return await call(request, 0, operation)
 

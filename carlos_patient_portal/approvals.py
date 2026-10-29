@@ -89,9 +89,19 @@ def request_row(session: Session, m: LockedMailbox, request_id: str) -> Approval
 
 
 def candidate_request(
-    session: Session, m: LockedMailbox, *, intent: str, body: bytes, public_base: str, now: int
+    session: Session,
+    m: LockedMailbox,
+    *,
+    intent: str,
+    body: bytes,
+    public_base: str,
+    now: int,
+    versions: tuple[int, ...] = (1,),
 ) -> tuple[dict, int]:
     value = verify_intent(intent, **scope(m, public_base))
+    # Only the versions this portal lists (v2 needs the clinic's CARLOS to take it).
+    if value["v"] not in versions:
+        raise invalid()
     if device_keys(value) != (
         m.device.device_key_id,
         m.device.x25519_public_key,

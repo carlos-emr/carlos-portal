@@ -638,7 +638,7 @@ Both take the `device-approval-sync` job, with the permission named below in the
 Migration 0020 adds `patient_portal_mycarlos_approval_codes` (clinic, request, attempt 1–5,
 `code_r`, submitted and consumed times, and a per-clinic `code_sequence`) and a `code_sequence`
 counter on the approval clinic row. A plain `code_r` is kept at most until it is consumed, the
-request is decided or the request expires (a request lives about 10 minutes). The attempt rows
+request is decided or the request expires (a code request lives about 10 minutes). The attempt rows
 stay, so the limit of 5 holds. A downgrade is refused while any attempt row exists.
 
 **What the portal can and can't do with a code:** it sees the codes devices send, briefly. It
@@ -670,6 +670,12 @@ later in the day. Fields, signatures, hash links and checks are those of v1
   when 2 is listed. An older portal answers 404, and the app signs v1. Existing replies gain no
   field, because older apps parse them strictly.
 - v1 apps keep v1 rules everywhere, including 10-minute staff requests.
+- **Deploy order:** the portal lists v2 only when
+  `PATIENT_PORTAL_MYCARLOS_APPROVAL_CONTRACT_V2_ENABLED` is on (off by default); while off it also
+  refuses v2 intents. Turn it on only after the clinic's CARLOS takes v2: an app signs v2 when the
+  portal lists it, and an older CARLOS can't approve a v2 request.
+- The limit of 50 open requests per account counts a `staff_first` request for its whole 24
+  hours, so many unapproved staff requests on one account hold new ones back for longer.
 - Shared fixture: `tests/fixtures/device-approval-contract-v2.json`. It holds the three v2 flows,
   signed vectors for the limits, expiry-rule cases and open-request cases. Its FAKE keys are
   v1's, by reference; it records the hash of v1's public keys.
