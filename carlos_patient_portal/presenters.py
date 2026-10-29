@@ -36,6 +36,7 @@ from carlos_patient_portal.i18n import (
     DEFAULT_LOCALE,
     format_booking_time,
     format_portal_datetime,
+    plural_text,
     portal_text,
 )
 from carlos_patient_portal.models import (
@@ -328,7 +329,9 @@ def _booking_slot_text(
         raise ValueError("the time is no longer stored")
     date_text, time_text = format_booking_time(slot.starts_at, locale, timezone_name)
     details = [
-        text["booking_slot_duration"].format(minutes=slot.duration_minutes),
+        plural_text(text, "booking_slot_duration", slot.duration_minutes, locale).format(
+            minutes=slot.duration_minutes
+        ),
         text[f"booking_visit_mode_{slot.visit_mode}"],
     ]
     # A code removed from the configuration since the time was offered is simply not shown.

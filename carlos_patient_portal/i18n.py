@@ -14,16 +14,16 @@
 
 """Locale resolution and the portal's user-facing text.
 
-Translations are not written yet. Rather than advertise four languages that do nothing, the
-machinery is real and every locale resolves through `TEXT_CATALOG` with a per-key fallback to
-English: selecting French switches the locale, persists it, and renders the English string for any
-key French has not defined. The strings live one file per locale in
-`carlos_patient_portal/locales/`; adding a translation is then only a matter of adding keys to
-`locales/fr.py` — no route, template, or context change is needed, and a partial translation
-renders rather than raising KeyError.
+Every locale resolves through `TEXT_CATALOG` with a per-key fallback to English: selecting a
+language switches the locale, persists it, and renders the English string for any key that
+language has not translated yet. The strings themselves live one file per locale in
+`carlos_patient_portal/locales/`; translating is only a matter of adding keys there, and a partial
+translation renders rather than raising KeyError. `tests/test_i18n_catalog.py` keeps every locale's
+placeholders in line with English and, once a locale is listed there as complete, every key too.
 """
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
@@ -33,21 +33,27 @@ from carlos_patient_portal.locales import es as locale_es
 from carlos_patient_portal.locales import fr as locale_fr
 from carlos_patient_portal.locales import pl as locale_pl
 from carlos_patient_portal.locales import pt_BR as locale_pt_br
+from carlos_patient_portal.locales import zh_CN as locale_zh_cn
+from carlos_patient_portal.locales import zh_TW as locale_zh_tw
 
 DEFAULT_LOCALE = "en"
 # Display preference only — it selects strings and a date format, and carries no authorization or
 # identity meaning, which is why the switch route can accept a GET without a CSRF token.
 LOCALE_COOKIE_NAME = "portal_locale"
 LOCALE_COOKIE_MAX_AGE_SECONDS = 365 * 24 * 60 * 60
-DEFAULT_DATETIME_FORMAT = "%Y-%m-%d %H:%M %Z"
-DATETIME_FORMATS = {
-    DEFAULT_LOCALE: DEFAULT_DATETIME_FORMAT,
-    # Placeholders alongside the English catalog: ISO-style ordering is unambiguous in every one of
-    # these locales, so it is a safe default until a translator sets the real convention.
-    "fr": DEFAULT_DATETIME_FORMAT,
-    "es": DEFAULT_DATETIME_FORMAT,
-    "pl": DEFAULT_DATETIME_FORMAT,
-    "pt-BR": DEFAULT_DATETIME_FORMAT,
+# How a date and time reads in each language, in ONE place: changing a language's convention is a
+# one-line change here. Fields: {year} {month} {day} {hour} {minute} as numbers, {zone} the clinic's
+# time zone written out (e.g. "America/Toronto"), and {zone_abbreviation} ("EST"), which only
+# English readers know. English keeps its ISO order and abbreviation; the others use their local
+# date order with the zone written out (D196's suggested defaults, pending Ben's answer).
+DATETIME_FORMATS: dict[str, str] = {
+    DEFAULT_LOCALE: "{year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d} {zone_abbreviation}",
+    "fr": "{day:02d}/{month:02d}/{year:04d} {hour:02d}:{minute:02d} ({zone})",
+    "es": "{day:02d}/{month:02d}/{year:04d} {hour:02d}:{minute:02d} ({zone})",
+    "pl": "{day:02d}.{month:02d}.{year:04d} {hour:02d}:{minute:02d} ({zone})",
+    "pt-BR": "{day:02d}/{month:02d}/{year:04d} {hour:02d}:{minute:02d} ({zone})",
+    "zh-CN": "{year}年{month}月{day}日 {hour:02d}:{minute:02d}（{zone}）",
+    "zh-TW": "{year}年{month}月{day}日 {hour:02d}:{minute:02d}（{zone}）",
 }
 
 
@@ -58,12 +64,17 @@ class LocaleOption:
     label: str
 
 
+# Each language is named in its own language: the switcher marks every link with that language's
+# `lang`, so a screen reader reads "Français" in French, and a patient looking for their language
+# recognizes it. The Chinese short labels are the script names (D196's suggestion).
 SUPPORTED_LOCALES: tuple[LocaleOption, ...] = (
     LocaleOption(code="en", short_label="EN", label="English"),
-    LocaleOption(code="fr", short_label="FR", label="French"),
-    LocaleOption(code="es", short_label="ES", label="Spanish"),
-    LocaleOption(code="pl", short_label="PL", label="Polish"),
-    LocaleOption(code="pt-BR", short_label="PT-BR", label="Portuguese (Brazil)"),
+    LocaleOption(code="fr", short_label="FR", label="Français"),
+    LocaleOption(code="es", short_label="ES", label="Español"),
+    LocaleOption(code="pl", short_label="PL", label="Polski"),
+    LocaleOption(code="pt-BR", short_label="PT-BR", label="Português (Brasil)"),
+    LocaleOption(code="zh-CN", short_label="简体", label="简体中文"),
+    LocaleOption(code="zh-TW", short_label="繁體", label="繁體中文"),
 )
 
 # The catalogs live one file per locale in `carlos_patient_portal/locales/`, so a translator works
@@ -74,25 +85,46 @@ _LOCALE_MODULES = {
     "es": locale_es,
     "pl": locale_pl,
     "pt-BR": locale_pt_br,
+    "zh-CN": locale_zh_cn,
+    "zh-TW": locale_zh_tw,
 }
 TEXT_CATALOG: dict[str, dict[str, str]] = {
     code: dict(module.TEXT) for code, module in _LOCALE_MODULES.items()
 }
 
-# Every supported locale gets an entry so `portal_text` never falls back wholesale to English and
-# a translator can start filling one in without touching anything else. Nearly empty today: the
+# Every supported locale gets an entry so `portal_text` never falls back wholesale to English: the
 # per-key merge in `portal_text` supplies the English string for anything a locale has not defined,
 # which is what makes a half-finished translation render instead of raising KeyError.
 for _locale in SUPPORTED_LOCALES:
     TEXT_CATALOG.setdefault(_locale.code, {})
 
 
+# Chinese is chosen by script, not by the first locale in the language: Traditional for a Hant
+# script or a region that writes Traditional characters, Simplified for everything else.
+_TRADITIONAL_CHINESE_REGIONS = frozenset({"tw", "hk", "mo"})
+
+
+def _chinese_locale(subtags: list[str]) -> str:
+    """zh-TW or zh-CN for the subtags after `zh` (already casefolded).
+
+    An explicit script wins over the region, so `zh-Hans-HK` is Simplified and `zh-Hant-SG`
+    Traditional; without one, Taiwan, Hong Kong and Macau mean Traditional. Bare `zh`, `zh-CN`,
+    `zh-SG` and `zh-MY` are Simplified.
+    """
+    if "hans" in subtags:
+        return "zh-CN"
+    if "hant" in subtags or _TRADITIONAL_CHINESE_REGIONS.intersection(subtags):
+        return "zh-TW"
+    return "zh-CN"
+
+
 def normalize_locale(value: str | None) -> str | None:
     """Match a requested locale to a supported one, case- and separator-insensitively.
 
     Accepts the shapes a browser actually sends: `PT-br`, `pt_BR`, and a bare `pt` all resolve to
-    `pt-BR`. Returns None when nothing matches, so callers can distinguish "not supported" from
-    "supported and happens to be the default".
+    `pt-BR`; Chinese tags resolve by script and region (`zh-Hant-TW`, `zh-HK` → zh-TW;
+    `zh-Hans-CN`, `zh-SG`, `zh` → zh-CN). Returns None when nothing matches, so callers can
+    distinguish "not supported" from "supported and happens to be the default".
     """
     if not value:
         return None
@@ -102,6 +134,9 @@ def normalize_locale(value: str | None) -> str | None:
     for locale in SUPPORTED_LOCALES:
         if locale.code.casefold() == candidate:
             return locale.code
+    subtags = candidate.split("-")
+    if subtags[0] == "zh":
+        return _chinese_locale(subtags[1:])
     # A bare language subtag matches the first supported locale in that language, so `pt` finds
     # `pt-BR` without the caller having to know the region.
     language = candidate.split("-", 1)[0]
@@ -220,6 +255,61 @@ def format_portal_datetime(
     locale: str = DEFAULT_LOCALE,
     timezone_name: str = "UTC",
 ) -> str:
+    """A date and time in the clinic's time zone, written the way `locale` writes them.
+
+    The pattern comes from `DATETIME_FORMATS`, not the process locale (which is the server's, not
+    the patient's): numbers only, so no month name ever depends on the server's language.
+    """
     date_format = DATETIME_FORMATS.get(locale, DATETIME_FORMATS[DEFAULT_LOCALE])
     utc_value = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
-    return utc_value.astimezone(ZoneInfo(timezone_name)).strftime(date_format)
+    local_value = utc_value.astimezone(ZoneInfo(timezone_name))
+    return date_format.format(
+        year=local_value.year,
+        month=local_value.month,
+        day=local_value.day,
+        hour=local_value.hour,
+        minute=local_value.minute,
+        zone=timezone_name,
+        zone_abbreviation=local_value.tzname() or timezone_name,
+    )
+
+
+# The plural forms each language writes for a whole number (Unicode CLDR plural rules). English
+# and Spanish use the singular for 1 only; French and Brazilian Portuguese also for 0 ("0 minute");
+# Polish has three forms ("1 minuta, 2 minuty, 5 minut"); Chinese has one.
+PLURAL_CATEGORIES: dict[str, tuple[str, ...]] = {
+    "en": ("one", "other"),
+    "fr": ("one", "other"),
+    "es": ("one", "other"),
+    "pl": ("one", "few", "many"),
+    "pt-BR": ("one", "other"),
+    "zh-CN": ("other",),
+    "zh-TW": ("other",),
+}
+
+
+def plural_category(locale: str, count: int) -> str:
+    """The CLDR plural category of the whole number `count` in `locale`."""
+    n = abs(count)
+    language = locale.split("-", 1)[0]
+    if language == "zh":
+        return "other"
+    if language == "pl":
+        if n == 1:
+            return "one"
+        if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+            return "few"
+        return "many"
+    if language in ("fr", "pt"):
+        return "one" if n in (0, 1) else "other"
+    return "one" if n == 1 else "other"
+
+
+def plural_text(text: Mapping[str, str], key: str, count: int, locale: str) -> str:
+    """The `key` text for `count`: `<key>_<category>`, else `<key>_other`.
+
+    A counted message is one catalog key per plural form, never a word glued to a number. The
+    `_other` fallback is what keeps a half-translated locale rendering: a Polish "few" form not
+    written yet shows the English plural instead of raising KeyError.
+    """
+    return text.get(f"{key}_{plural_category(locale, count)}", text[f"{key}_other"])

@@ -14,7 +14,9 @@
 
 """English text for the patient portal: the source every other locale translates.
 
-A key a locale has not translated yet falls back to this English text (`i18n.portal_text`).
+Every key here must exist, with the same `{placeholders}`, in each translated locale once
+that locale is listed as complete in tests/test_i18n_catalog.py. A key a locale has not
+translated yet falls back to this English text (`i18n.portal_text`).
 """
 
 # The sign-in heading, button and form name say the same thing.
@@ -128,7 +130,8 @@ TEXT: dict[str, str] = {
     ),
     "booking_slot_date": "{weekday} {day} {month}",
     "booking_slot_detail_separator": " · ",
-    "booking_slot_duration": "{minutes} minutes",
+    "booking_slot_duration_one": "{minutes} minute",
+    "booking_slot_duration_other": "{minutes} minutes",
     "booking_slot_taken": "That time was just taken. Please pick another.",
     "booking_slot_taken_contact": "That time was just taken. Please contact the clinic.",
     "booking_slot_time": "{hour:02d}:{minute:02d}",
@@ -229,10 +232,10 @@ TEXT: dict[str, str] = {
     "email": "Email",
     "email_codes_rate": "Email codes can be resent once per minute.",
     "email_password": "Email password",
+    "email_password_page_indicator": "Page {page} of {total_pages}",
     "email_password_pages": "Email password pages",
     "email_passwords": "Email passwords",
     "email_passwords_region": "Email passwords",
-    "filters": "Filters",
     "forgot_username_password": "Forgot username or password?",
     "forgot_username_help": "If you do not know your username, contact the clinic.",
     "future": "Future",
@@ -251,18 +254,24 @@ TEXT: dict[str, str] = {
     "message_sent_at": "Sent {sent_at}",
     "messages": "Messages",
     "messages_empty": "You have no messages from your clinic.",
-    "messages_new_count": "{count} new",
+    "messages_new_count_one": "{count} new",
+    "messages_new_count_other": "{count} new",
     "mfa": "MFA",
     "mfa_code": "Code",
-    "mfa_code_sent": "Code sent to {destination} by {method}.",
+    "mfa_code_sent_email": "Code sent to {destination} by email.",
+    "mfa_code_sent_email_unmasked": "Code sent to your email address.",
+    "mfa_code_sent_sms": "Code sent to {destination} by SMS.",
+    "mfa_code_sent_sms_unmasked": "Code sent to your mobile number.",
     "mfa_delivery_unavailable": "That delivery method is unavailable.",
     "mfa_email": "Email",
     "mfa_heading": "Verification code",
     "mfa_help_message": (
         "Contact {clinic_name} if you cannot receive or use your verification code."
     ),
-    "mfa_new_code_sent": "A new code was sent by {method}.",
-    "mfa_rate_limited": "A code was sent recently. Try again in {seconds} seconds.",
+    "mfa_new_code_sent_email": "A new code was sent by email.",
+    "mfa_new_code_sent_sms": "A new code was sent by SMS.",
+    "mfa_rate_limited_one": "A code was sent recently. Try again in {seconds} second.",
+    "mfa_rate_limited_other": "A code was sent recently. Try again in {seconds} seconds.",
     "mfa_resend": "Resend code",
     "mfa_sign_in_again": "Sign in again to request a new verification code.",
     "mfa_send_by": "Send code by",
@@ -279,9 +288,7 @@ TEXT: dict[str, str] = {
     "next": "Next",
     "no_email_passwords": "No email passwords",
     "no_matching_email_passwords": "No matching email passwords",
-    "of": "of",
     "open_reset_page": "Open reset page",
-    "page": "Page",
     "password_label": "Password",
     "password_hidden": "Hidden",  # NOSONAR - translation label, not a credential
     "password_for": "Password for {subject}",
@@ -347,6 +354,15 @@ TEXT: dict[str, str] = {
         "The portal is temporarily unavailable for maintenance. Try again shortly, or contact "
         "the clinic if you need help now."
     ),
+    # The product's name, shown when a deployment keeps the default name (a clinic's own name is
+    # shown as configured).
+    "service_name_default": "CARLOS Patient Portal",
+    # A fault that is not maintenance: the database or a stored credential cannot be reached.
+    "service_unavailable_heading": "Portal temporarily unavailable",
+    "service_unavailable_details": (
+        "The portal cannot be reached right now. Try again in a few minutes, or contact the "
+        "clinic if you need help now."
+    ),
     "session_locked_heading": "Account locked",
     "sign_in_aria_label": SIGN_IN_LABEL,
     "sign_in_button": SIGN_IN_LABEL,
@@ -390,6 +406,7 @@ MYCARLOS_TEXT: dict[str, str] = {
         "again. Documents already saved in myCarlos stay there."
     ),
     "mycarlos_remove": "Remove device",
+    "mycarlos_remove_named": "Remove device: {name}",
     "mycarlos_keep": "Keep device",
     "mycarlos_paused": "Linking is paused because of too many incorrect codes. Try again later.",
     "mycarlos_unavailable": "Linking is unavailable. Contact your clinic.",

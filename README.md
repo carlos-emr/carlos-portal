@@ -228,12 +228,25 @@ first, then the best supported match from `Accept-Language`, then English. `GET 
 records the choice and redirects back to a validated local path; it takes no CSRF token because the
 cookie selects strings and a date format only, and carries no identity or authorization.
 
-`SUPPORTED_LOCALES` advertises EN, FR, ES, PL, and PT-BR, and every one of them is selectable and
-persists. **No translations are written yet**: `TEXT_CATALOG` holds an entry per locale, and
-`portal_text()` merges the selected locale over English key by key, so an untranslated locale
-renders English rather than failing. Adding a language therefore means adding keys to
-`TEXT_CATALOG["<code>"]` and a date format to `DATETIME_FORMATS` — no route, template, or context
-change — and a partially translated catalog renders correctly for the keys it does define.
+`SUPPORTED_LOCALES` advertises EN, FR, ES, PL, PT-BR, 简体中文 (zh-CN), and 繁體中文 (zh-TW), each
+named in its own language, and every one of them is selectable and persists. Chinese tags resolve
+by script, then region: `Hant`, `TW`, `HK`, and `MO` mean zh-TW; `Hans`, `CN`, `SG`, and a bare `zh`
+mean zh-CN.
+
+**Translations are partial.** The strings live one file per locale in
+`carlos_patient_portal/locales/` (`en.py` is the source), and `portal_text()` merges the selected
+locale over English key by key, so an untranslated key renders English rather than failing.
+Translating is therefore only a matter of adding keys to that locale's file; a partially translated
+catalog renders correctly for the keys it does define. A counted message is one key per plural form
+(`<key>_one`/`<key>_other`; Polish `_one`/`_few`/`_many`; Chinese `_other` only), read through
+`plural_text()`. Each language's date and time pattern is one line in `DATETIME_FORMATS`.
+`tests/test_i18n_catalog.py` checks every locale's placeholders against English, and every key for
+the locales listed in its `COMPLETE_LOCALES`; a translation that completes a language adds it there.
+
+The MFA page is only ever rendered in answer to a POST, so its language buttons post the challenge
+to `POST /auth/mfa/language` (CSRF-checked), which renders the same page in the chosen language
+without sending a code. Other pages rendered in answer to a POST link back to a page that serves
+GET.
 
 `PATIENT_PORTAL_PUBLIC_BASE_URL` is used to build password-reset email links and is required when
 SMTP is configured outside development. It must use HTTPS outside development.

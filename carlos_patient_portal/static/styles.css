@@ -26,6 +26,22 @@ body {
   letter-spacing: 0;
 }
 
+/* Chinese pages, and the Chinese buttons in every language switcher: Latin text stays in Arial,
+   and Han characters use a font made for that script. Left to itself a browser may draw them
+   from a Japanese font, whose glyph shapes differ; Simplified and Traditional readers each expect
+   their own. */
+html:lang(zh-CN) body,
+.text-tab:lang(zh-CN) {
+  font-family: Arial, Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", sans-serif;
+}
+
+html:lang(zh-TW) body,
+.text-tab:lang(zh-TW) {
+  font-family: Arial, Helvetica, "PingFang TC", "Microsoft JhengHei", "Noto Sans CJK TC",
+    "Noto Sans TC", "Source Han Sans TC", sans-serif;
+}
+
 button,
 input,
 select {
@@ -62,6 +78,7 @@ a {
 
 .patient-topbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -98,7 +115,14 @@ a {
 
 .language-switch {
   display: flex;
+  flex-wrap: wrap;
   gap: 3px;
+}
+
+/* The MFA page's switcher is one POST form of buttons; the form itself takes no space, so its
+   buttons line up exactly like the other pages' links. */
+.language-switch-form {
+  display: contents;
 }
 
 .text-tab {
@@ -120,14 +144,20 @@ a {
   background: var(--carlos-blue);
 }
 
-/* The switcher renders the inactive locales as links and the active one as a span, so the shared
-   sizing above has to hold for both element types. */
+/* The switcher renders the inactive locales as links (buttons on the MFA page) and the active one
+   as a span, so the shared sizing above has to hold for every element type. */
 a.text-tab {
   text-decoration: none;
 }
 
+button.text-tab {
+  cursor: pointer;
+}
+
 a.text-tab:hover,
-a.text-tab:focus-visible {
+a.text-tab:focus-visible,
+button.text-tab:hover,
+button.text-tab:focus-visible {
   border-color: var(--carlos-blue);
 }
 
@@ -1045,6 +1075,13 @@ a.module-tile:focus-visible {
   .portal-topbar {
     align-items: center;
     flex-direction: row;
+  }
+
+  /* On a phone the signed-in and MFA top bars keep the name and the help or sign-out button on
+     the first line; the language buttons take their own full-width line underneath. */
+  .mfa-topbar .language-switch,
+  .portal-topbar .language-switch {
+    order: 1;
   }
 
   .portal-user-actions {

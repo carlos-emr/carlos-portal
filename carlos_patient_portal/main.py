@@ -144,6 +144,7 @@ from carlos_patient_portal.web_support import (
     service_notice_response,
     set_csrf_cookie,
     templates,
+    wants_html_error_page,
     wants_html_response,
 )
 
@@ -342,6 +343,15 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
                 path=CSRF_COOKIE_PATH,
             )
             return response
+        if wants_html_error_page(request):
+            return service_notice_response(
+                request,
+                settings=runtime.settings,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                heading_key="request_failed_heading",
+                message_key="request_failed_details",
+                retry_after_seconds=None,
+            )
         return JSONResponse(
             status_code=422,
             content={"detail": sanitized_validation_errors(exc)},
@@ -362,12 +372,21 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
     async def password_hash_unusable_handler(
         request: Request,
         exc: PasswordHashUnusableError,
-    ) -> JSONResponse:
+    ) -> Response:
         # A stored hash that cannot be evaluated is a server-side data fault, not a bad password.
         # Returning 401/403 here would tell the patient they mistyped and, on the settings screen,
         # would charge the attempt to a lockout budget they cannot recover from.
         request.app.state.operational_metrics.record_failure("password_hash_unusable")
         logger.error("Stored password hash is unusable; credential check cannot be completed")
+        if wants_html_error_page(request):
+            return service_notice_response(
+                request,
+                settings=runtime.settings,
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                heading_key="service_unavailable_heading",
+                message_key="service_unavailable_details",
+                retry_after_seconds=1,
+            )
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={"detail": SERVICE_UNAVAILABLE_DETAIL},
@@ -392,11 +411,7 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
                 code="processing",
                 diagnostics=str(exc.detail),
             )
-        # Path alone is the wrong discriminator: /auth/activate serves a browser form *and*
-        # accepts a JSON body. A caller that declared JSON gets JSON back; a browser form post
-        # or a navigation gets the page.
-        declared_json = "application/json" in (request.headers.get("content-type") or "").lower()
-        if wants_html_response(request.url.path) and not declared_json and request.method != "HEAD":
+        if wants_html_error_page(request):
             return service_notice_response(
                 request,
                 settings=runtime.settings,
@@ -434,6 +449,27 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
                 code="exception",
                 diagnostics="the request could not be completed",
             )
+        if wants_html_error_page(request):
+            try:
+                response = service_notice_response(
+                    request,
+                    settings=runtime.settings,
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    heading_key="service_unavailable_heading",
+                    message_key="service_unavailable_details",
+                    retry_after_seconds=None,
+                )
+            except Exception:
+                # A fault while drawing the page must not lose the 500 itself.
+                logger.error("Portal error page could not be rendered")
+            else:
+                # This handler runs outside the middleware that adds these to every other
+                # response, so the page gets them here.
+                for header, value in SECURITY_HEADERS.items():
+                    response.headers.setdefault(header, value)
+                response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+                response.headers.setdefault("Cache-Control", "no-store")
+                return response
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "the request could not be completed"},
@@ -443,7 +479,7 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
     async def database_operational_error_handler(
         request: Request,
         exc: OperationalError,
-    ) -> JSONResponse:
+    ) -> Response:
         request.app.state.operational_metrics.record_failure("database")
         logger.warning("Portal database operation unavailable: %s", type(exc.orig).__name__)
         if request.url.path.startswith(FHIR_PATH_PREFIX):
@@ -451,6 +487,15 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 code="transient",
                 diagnostics=SERVICE_UNAVAILABLE_DETAIL,
+            )
+        if wants_html_error_page(request):
+            return service_notice_response(
+                request,
+                settings=runtime.settings,
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                heading_key="service_unavailable_heading",
+                message_key="service_unavailable_details",
+                retry_after_seconds=1,
             )
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

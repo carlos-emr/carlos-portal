@@ -545,7 +545,7 @@ def test_form_mfa_resend_sends_new_email_after_cooldown() -> None:
     assert challenge_token_match is not None
     assert original_code_match is not None
     assert resend_csrf_match is not None
-    assert "Code sent to ex***@example.com by EMAIL." in login_response.text
+    assert "Code sent to ex***@example.com by email." in login_response.text
     assert "Resend code" in login_response.text
     with app.state.session_factory() as session:
         challenge = session.scalar(select(PatientPortalMfaChallenge))
@@ -569,7 +569,7 @@ def test_form_mfa_resend_sends_new_email_after_cooldown() -> None:
 
     resent_code_match = DEVELOPMENT_MFA_CODE_PATTERN.search(response.text)
     assert response.status_code == 200
-    assert "A new code was sent by EMAIL." in response.text
+    assert "A new code was sent by email." in response.text
     assert resent_code_match is not None
     assert resent_code_match.group(1) != original_code_match.group(1)
     assert len(sender.messages) == 2

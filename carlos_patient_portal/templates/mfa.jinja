@@ -19,6 +19,30 @@
             <span>{{ clinic_name }}</span>
           </div>
         </div>
+        {# Not the shared GET links: this page only exists in answer to a POST, and its challenge
+           token lives in the form. Each button posts the token to /auth/mfa/language, which
+           re-renders this same page in the chosen language without sending a new code. #}
+        <nav class="language-switch" aria-label="{{ text.language_aria_label }}">
+          <form class="language-switch-form" method="post" action="{{ url_for('select_mfa_language').path }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="mfa_challenge_token" value="{{ mfa_challenge_token }}">
+            {% for language in supported_locales %}
+              {% if language.is_selected %}
+                <span class="text-tab selected" aria-current="true" lang="{{ language.code }}"
+                >{{ language.short_label }}</span>
+              {% else %}
+                <button
+                  class="text-tab"
+                  type="submit"
+                  name="locale"
+                  value="{{ language.code }}"
+                  lang="{{ language.code }}"
+                  title="{{ language.label }}"
+                >{{ language.short_label }}</button>
+              {% endif %}
+            {% endfor %}
+          </form>
+        </nav>
         <button
           class="link-action modal-trigger topbar-help"
           type="button"
@@ -37,7 +61,7 @@
             <p class="form-notice" role="status">{{ notice_message }}</p>
           {% endif %}
           <p class="mfa-destination" aria-live="polite">
-            {{ text.mfa_code_sent.format(destination=masked_mfa_destination, method=mfa_delivery_method|upper) }}
+            {{ mfa_code_sent_message }}
           </p>
           <form class="form-stack" method="post" action="{{ url_for('verify_mfa') }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
