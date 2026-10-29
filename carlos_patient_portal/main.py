@@ -145,7 +145,6 @@ from carlos_patient_portal.web_support import (
     set_csrf_cookie,
     templates,
     wants_html_error_page,
-    wants_html_response,
 )
 
 logger = logging.getLogger(__name__)
@@ -446,13 +445,14 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
         # bound patient values. Keep the application log useful without copying that material into
         # a sink whose redaction policy is outside this process.
         logger.error("Unhandled portal error: %s", type(exc).__name__)
+        response: Response | None = None
         if request.url.path.startswith(FHIR_PATH_PREFIX):
-            return fhir_operation_outcome_response(
+            response = fhir_operation_outcome_response(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 code="exception",
                 diagnostics="the request could not be completed",
             )
-        if wants_html_error_page(request):
+        elif wants_html_error_page(request):
             try:
                 response = service_notice_response(
                     request,
@@ -467,16 +467,16 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
                 logger.error(
                     "Portal error page could not be rendered: %s", type(render_error).__name__
                 )
-            else:
-                # This handler runs outside the middleware that adds these to every other
-                # response, so the page gets them here. An error page is never cached.
-                apply_standard_response_headers(request, response, runtime.settings)
-                response.headers.setdefault("Cache-Control", "no-store")
-                return response
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"detail": "the request could not be completed"},
-        )
+        if response is None:
+            response = JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content={"detail": "the request could not be completed"},
+            )
+        # This handler runs outside the middleware that adds these to every other response, so
+        # its answer gets them here. An error answer is never cached.
+        apply_standard_response_headers(request, response, runtime.settings)
+        response.headers.setdefault("Cache-Control", "no-store")
+        return response
 
     @app.exception_handler(OperationalError)
     async def database_operational_error_handler(
@@ -596,7 +596,7 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
                     code="transient",
                     diagnostics=SERVICE_UNAVAILABLE_DETAIL,
                 )
-            elif wants_html_response(request.url.path):
+            elif wants_html_error_page(request):
                 # A patient who navigated here in a browser gets a page, not a raw JSON body.
                 response = service_notice_response(
                     request,
@@ -637,7 +637,7 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
                     diagnostics="too many requests",
                 )
                 response.headers["Retry-After"] = str(retry_after_seconds)
-            elif wants_html_response(request.url.path):
+            elif wants_html_error_page(request):
                 response = service_notice_response(
                     request,
                     settings=settings,

@@ -738,6 +738,22 @@ function screenshotPath(name) {
     );
     assert(!page.url().includes('#'), 'password-reset token remained in browser history');
 
+    // A language switch reloads this page through a redirect. The token rides along in the
+    // fragment, so it never reaches the server, and lands in the form again; then it is stripped.
+    for (const languageCode of ['fr', 'en']) {
+      await page.locator(
+        `.language-switch a[href^="${portalPathname(`/locale/${languageCode}`)}"]`
+      ).click();
+      await page.locator(`.language-switch .text-tab.selected[lang="${languageCode}"]`).waitFor();
+      await page.waitForFunction(() => window.location.hash === '');
+      assert(
+        await page.locator('input[name="reset_token"]').inputValue()
+          === passwordResetFixture.token,
+        `switching to ${languageCode} lost the password-reset token`
+      );
+      assert(!page.url().includes('#'), 'password-reset token remained in browser history');
+    }
+
     await page.locator('input[name="new_password"]').fill(passwordResetFixture.newPassword);
     await page.locator('input[name="new_password_confirmation"]').fill(
       `${passwordResetFixture.newPassword}-mismatch`

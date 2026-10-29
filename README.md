@@ -231,7 +231,7 @@ cookie selects strings and a date format only, and carries no identity or author
 `SUPPORTED_LOCALES` advertises EN, FR, ES, PL, PT-BR, 简体中文 (zh-CN), and 繁體中文 (zh-TW), each
 named in its own language, and every one of them is selectable and persists. Chinese tags resolve
 by script, then region: `Hant`, `TW`, `HK`, and `MO` mean zh-TW; `Hans`, `CN`, `SG`, and a bare `zh`
-mean zh-CN.
+mean zh-CN. Mandarin (`cmn`) defaults to zh-CN and Cantonese (`yue`) to zh-TW.
 
 **Translations are partial.** The strings live one file per locale in
 `carlos_patient_portal/locales/` (`en.py` is the source), and `portal_text()` merges the selected
@@ -239,14 +239,18 @@ locale over English key by key, so an untranslated key renders English rather th
 Translating is therefore only a matter of adding keys to that locale's file; a partially translated
 catalog renders correctly for the keys it does define. A counted message is one key per plural form
 (`<key>_one`/`<key>_other`; Polish `_one`/`_few`/`_many`; Chinese `_other` only), read through
-`plural_text()`. Each language's date and time pattern is one line in `DATETIME_FORMATS`.
+`plural_text()`. Each language's date-and-time stamp is one line in `DATETIME_FORMATS`; appointment
+times are catalog strings (`booking_slot_date`, `booking_slot_time`) that a translator sets.
 `tests/test_i18n_catalog.py` checks every locale's placeholders against English, and every key for
 the locales listed in its `COMPLETE_LOCALES`; a translation that completes a language adds it there.
 
 The MFA page is only ever rendered in answer to a POST, so its language buttons post the challenge
 to `POST /auth/mfa/language` (CSRF-checked), which renders the same page in the chosen language
 without sending a code. Other pages link back to a page that serves GET: their own path when it
-does, else the signed-in module's page or the front page.
+does, else the signed-in module's page or the front page. A 404 or 405 page links to the front
+page, and so does a page answering the form of an emailed-link page (password reset, email change),
+whose token only that link carries. On the emailed-link pages themselves, `portal.js` adds the token
+to the language links as a fragment, which the browser keeps across the redirect and never sends.
 
 Errors are answered in the medium the caller uses. A browser gets a page in its language for a
 failed request, a throttled or unavailable portal, or an unexpected fault. A caller gets the JSON

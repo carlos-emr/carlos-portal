@@ -45,11 +45,11 @@ LOCALE_COOKIE_MAX_AGE_SECONDS = 365 * 24 * 60 * 60
 # one-line change here. Fields: {year} {month} {day} {hour} {minute} as numbers, {zone} the clinic's
 # time zone written out (e.g. "America/Toronto"), and {zone_abbreviation} ("EST"), which only
 # English readers know. English keeps its ISO order and abbreviation; the others use their own
-# date order with the zone written out. French is Canadian French (2026-01-15 00 h 30), the French
-# a Canadian clinic's patients read.
+# date order with the zone written out. French is Canadian French (2026-01-15 00 h 30, with
+# no-break spaces so the time never wraps), the French a Canadian clinic's patients read.
 DATETIME_FORMATS: dict[str, str] = {
     DEFAULT_LOCALE: "{year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d} {zone_abbreviation}",
-    "fr": "{year:04d}-{month:02d}-{day:02d} {hour:02d} h {minute:02d} ({zone})",
+    "fr": "{year:04d}-{month:02d}-{day:02d} {hour:02d}\u00a0h\u00a0{minute:02d} ({zone})",
     "es": "{day:02d}/{month:02d}/{year:04d} {hour:02d}:{minute:02d} ({zone})",
     "pl": "{day:02d}.{month:02d}.{year:04d} {hour:02d}:{minute:02d} ({zone})",
     "pt-BR": "{day:02d}/{month:02d}/{year:04d} {hour:02d}:{minute:02d} ({zone})",
@@ -107,9 +107,9 @@ for _locale in SUPPORTED_LOCALES:
 # written `zh-yue`) to Traditional, as Hong Kong writes it. `chs`/`cht` are the legacy Windows
 # script tags.
 _CHINESE_LANGUAGE_DEFAULTS = {"zh": "zh-CN", "cmn": "zh-CN", "yue": "zh-TW"}
-_SIMPLIFIED_CHINESE_SUBTAGS = frozenset({"hans", "chs", "cn", "sg", "my"})
-_TRADITIONAL_CHINESE_SUBTAGS = frozenset({"hant", "cht", "tw", "hk", "mo"})
 _CHINESE_SCRIPT_SUBTAGS = {"hans": "zh-CN", "chs": "zh-CN", "hant": "zh-TW", "cht": "zh-TW"}
+_SIMPLIFIED_CHINESE_REGIONS = frozenset({"cn", "sg", "my"})
+_TRADITIONAL_CHINESE_REGIONS = frozenset({"tw", "hk", "mo"})
 
 
 def _chinese_locale(language: str, subtags: list[str]) -> str:
@@ -117,18 +117,21 @@ def _chinese_locale(language: str, subtags: list[str]) -> str:
 
     An explicit script wins over the region, so `zh-Hans-HK` is Simplified and `zh-Hant-SG`
     Traditional; without one, the region decides, and without that the language's default.
-    Private-use subtags (after `x`) are not read: `zh-CN-x-hant` is Simplified.
+    Extension and private-use subtags (after a one-letter subtag such as `u`, `t` or `x`) are not
+    read: `zh-CN-x-hant` and `zh-CN-u-sd-hk` are Simplified.
     """
-    if "x" in subtags:
-        subtags = subtags[: subtags.index("x")]
+    for position, subtag in enumerate(subtags):
+        if len(subtag) == 1:
+            subtags = subtags[:position]
+            break
     if subtags and subtags[0] == "yue":
         language, subtags = "yue", subtags[1:]
     for subtag in subtags:
         if subtag in _CHINESE_SCRIPT_SUBTAGS:
             return _CHINESE_SCRIPT_SUBTAGS[subtag]
-    if _TRADITIONAL_CHINESE_SUBTAGS.intersection(subtags):
+    if _TRADITIONAL_CHINESE_REGIONS.intersection(subtags):
         return "zh-TW"
-    if _SIMPLIFIED_CHINESE_SUBTAGS.intersection(subtags):
+    if _SIMPLIFIED_CHINESE_REGIONS.intersection(subtags):
         return "zh-CN"
     return _CHINESE_LANGUAGE_DEFAULTS[language]
 

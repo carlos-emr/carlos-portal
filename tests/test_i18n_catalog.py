@@ -20,16 +20,19 @@ locales in `COMPLETE_LOCALES`: until a translator fills a catalog the locale fal
 English per key, and the translation PR that completes a locale adds it to that list.
 """
 
+import logging
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from string import Formatter
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 from markupsafe import escape
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
+from starlette.responses import Response
 
 from carlos_patient_portal import i18n, main, web_support
 from carlos_patient_portal.auth import MfaChallengeDelivery, PasswordHashUnusableError
@@ -59,6 +62,7 @@ from tests.support import (
     development_settings,
     get_csrf_token,
     migrated_development_app,
+    production_settings,
 )
 
 # Locales whose catalogs must define every key. English is the source. A translation PR that
@@ -272,6 +276,10 @@ def test_service_name_follows_the_language_only_when_it_is_the_default(
         ("zh-CHT", "zh-TW"),
         ("zh-CHS", "zh-CN"),
         ("zh-CN-x-hant", "zh-CN"),
+        # Extension subtags are not a script or a region either.
+        ("zh-CN-u-sd-hk", "zh-CN"),
+        ("zh-CN-t-zh-hk", "zh-CN"),
+        ("zh-TW-u-nu-hanidec", "zh-TW"),
     ],
 )
 def test_chinese_tags_resolve_by_script_then_region(requested: str, expected: str) -> None:
@@ -386,7 +394,8 @@ def test_plural_text_picks_the_form_and_falls_back_to_other() -> None:
     ("locale", "expected"),
     [
         ("en", "2026-01-15 00:30 EST"),
-        ("fr", "2026-01-15 00 h 30 (America/Toronto)"),
+        # No-break spaces around "h", so the time never wraps.
+        ("fr", "2026-01-15 00\u00a0h\u00a030 (America/Toronto)"),
         ("es", "15/01/2026 00:30 (America/Toronto)"),
         ("pl", "15.01.2026 00:30 (America/Toronto)"),
         ("pt-BR", "15/01/2026 00:30 (America/Toronto)"),
@@ -707,20 +716,34 @@ def test_a_page_at_a_path_without_a_get_page_links_to_the_front_page() -> None:
     assert 'href="/locale/fr?next=/"' in not_found.text
 
 
-def test_a_page_answering_an_emailed_link_form_does_not_link_back_to_that_form() -> None:
-    """GET /auth/password-reset/complete only works with the emailed token, so not back there."""
+@pytest.mark.parametrize("path", ["/auth/password-reset/complete", "/auth/email-change/confirm"])
+def test_a_page_answering_an_emailed_link_form_does_not_link_back_to_that_form(
+    path: str,
+) -> None:
+    """These GET pages only work with the emailed token, so a page answering them goes home."""
     client = TestClient(migrated_development_app())
 
-    response = client.post("/auth/password-reset/complete", data={"new_password": "x"})
+    response = client.post(path, data={"new_password": "x"})
 
-    assert response.status_code == 403
+    assert response.status_code >= 400
+    assert response.headers["content-type"].startswith("text/html")
     assert 'href="/locale/fr?next=/"' in response.text
-    assert "next=/auth/password-reset/complete" not in response.text
+    assert f"next={path}" not in response.text
+
+
+def test_the_emailed_link_page_itself_links_back_to_itself() -> None:
+    """portal.js adds the token to these links as a fragment, which never reaches the server."""
+    page = TestClient(migrated_development_app()).get("/auth/password-reset/complete").text
+
+    assert 'href="/locale/fr?next=/auth/password-reset/complete"' in page
 
 
 def test_switch_targets_keep_the_deployment_prefix() -> None:
     app = migrated_development_app(public_base_url="https://portal.example.test/patient")
     client = TestClient(app, base_url="https://portal.example.test")
+
+    # Inside the static mount, the mount's own prefix is not part of the front page's path.
+    assert 'href="/patient/locale/fr?next=/patient/"' in client.get("/static/no-such-file").text
 
     assert 'href="/patient/locale/fr?next=/patient/"' in client.get("/auth/login").text
     assert 'href="/patient/locale/fr?next=/patient/auth/activate"' in (
@@ -851,6 +874,18 @@ def test_bearer_and_json_accepting_callers_get_json_on_a_browser_path(
         assert response.status_code == status_code
         assert response.headers["content-type"].startswith("application/json"), path
 
+    # The same holds for a portal in maintenance and for a throttled caller.
+    maintenance = TestClient(main.create_app(development_settings(maintenance_mode=True)))
+    throttled = TestClient(main.create_app(development_settings(global_rate_limit_max_requests=1)))
+    throttled.get("/auth/session", headers=headers)
+    for response, status_code in (
+        (maintenance.get("/auth/session", headers=headers), 503),
+        (throttled.get("/auth/session", headers=headers), 429),
+    ):
+        assert response.status_code == status_code
+        assert response.headers["content-type"].startswith("application/json")
+        assert "Retry-After" in response.headers
+
 
 def test_a_browser_that_also_accepts_json_still_gets_the_page() -> None:
     response = TestClient(_app_with_failing_routes()).get(
@@ -863,12 +898,13 @@ def test_a_browser_that_also_accepts_json_still_gets_the_page() -> None:
 
 
 def test_the_500_handler_answers_json_if_its_page_cannot_be_drawn(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     def broken_page(*_: object, **__: object) -> None:
-        raise RuntimeError("template fault")
+        raise RuntimeError("template fault with patient.secret@example.test")
 
     monkeypatch.setattr(main, "service_notice_response", broken_page)
+    caplog.set_level(logging.ERROR, logger="carlos_patient_portal.main")
 
     response = TestClient(_app_with_failing_routes(), raise_server_exceptions=False).get(
         "/test/crash"
@@ -876,3 +912,51 @@ def test_the_500_handler_answers_json_if_its_page_cannot_be_drawn(
 
     assert response.status_code == 500
     assert response.json() == {"detail": "the request could not be completed"}
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    messages = [record.getMessage() for record in caplog.records]
+    assert "Portal error page could not be rendered: RuntimeError" in messages
+    assert not any("patient.secret" in message for message in messages)
+
+
+@pytest.mark.parametrize("path", ["/test/crash", "/api/test/crash", "/fhir/test-crash"])
+def test_every_500_answer_gets_the_shared_response_headers(
+    path: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The 500 handler runs outside the middleware, so it must apply them to page and JSON alike."""
+    app = _app_with_failing_routes()
+
+    @app.get("/fhir/test-crash")
+    async def fhir_crash() -> None:
+        raise RuntimeError("fhir fault")
+
+    headed_paths: list[str] = []
+    shared_helper = main.apply_standard_response_headers
+
+    def recording_helper(request: object, response: Response, settings: object) -> None:
+        headed_paths.append(request.url.path)  # type: ignore[attr-defined]
+        shared_helper(request, response, settings)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(main, "apply_standard_response_headers", recording_helper)
+
+    response = TestClient(app, raise_server_exceptions=False).get(path)
+
+    assert response.status_code == 500
+    assert headed_paths == [path]
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_the_shared_response_headers_add_hsts_only_in_production() -> None:
+    def headers_for(settings: object) -> dict[str, str]:
+        response = Response()
+        request = SimpleNamespace(url=SimpleNamespace(path="/portal"))
+        main.apply_standard_response_headers(request, response, settings)  # type: ignore[arg-type]
+        return dict(response.headers)
+
+    production = headers_for(production_settings())
+    development = headers_for(development_settings())
+
+    assert production["strict-transport-security"] == "max-age=31536000; includeSubDomains"
+    assert "strict-transport-security" not in development
+    assert production["content-security-policy"] == web_support.CONTENT_SECURITY_POLICY
+    assert production["cache-control"] == "no-store"

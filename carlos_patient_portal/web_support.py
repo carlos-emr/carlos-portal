@@ -44,7 +44,7 @@ from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 from starlette.responses import Response
-from starlette.routing import Match
+from starlette.routing import Match, Mount
 
 from carlos_patient_portal.audit import UNKNOWN_CLIENT_REFERENCE
 from carlos_patient_portal.auth import (
@@ -418,13 +418,19 @@ LINK_TOKEN_PAGE_ROUTE_NAMES = frozenset(
 
 
 def _get_route_name_for_path(request: Request) -> str | None:
-    """The name of the route that answers a GET at this request's path, or None if none does."""
+    """The name of the page route that answers a GET at this request's path, or None.
+
+    A mount (the static files) matches every path under its prefix, but a missing file there is
+    a 404, not a page to come back to, so mounts do not count.
+    """
     scope = getattr(request, "scope", None) or {}
     app = scope.get("app")
     if app is None:
         return None
     get_scope = {**scope, "method": "GET"}
     for route in app.router.routes:
+        if isinstance(route, Mount):
+            continue
         if route.matches(get_scope)[0] is Match.FULL:
             return getattr(route, "name", None) or ""
     return None
@@ -444,7 +450,8 @@ def locale_switch_targets(request: Request, *, get_fallback: str | None = None) 
     The MFA page has its own POST form instead; see /auth/mfa/language.
     """
     scope = getattr(request, "scope", {})
-    root_path = scope.get("root_path", "").rstrip("/")
+    # Inside a mount (a 404 under /static/) root_path includes the mount; app_root_path does not.
+    root_path = scope.get("app_root_path", scope.get("root_path", "")).rstrip("/")
     is_get = getattr(request, "method", "GET") in ("GET", "HEAD")
     get_route_name = _get_route_name_for_path(request)
     if get_route_name is None or (not is_get and get_route_name in LINK_TOKEN_PAGE_ROUTE_NAMES):

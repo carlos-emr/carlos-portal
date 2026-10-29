@@ -209,6 +209,22 @@ if (
   if (!resetToken && resetTokenError instanceof HTMLElement) {
     resetTokenError.hidden = false;
   }
+  // A language link reloads this page through a redirect, and the token must not reach the
+  // server. So it rides in the link's fragment, which the browser keeps across a redirect whose
+  // Location has none, and the code above moves it into the form again. Only links that come back
+  // to this same page get it, so it never lands in another page's address bar.
+  if (resetToken) {
+    document.querySelectorAll(".language-switch a[href]").forEach((link) => {
+      if (!(link instanceof HTMLAnchorElement)) {
+        return;
+      }
+      const target = new URL(link.href, window.location.href);
+      if (target.searchParams.get("next") === window.location.pathname) {
+        target.hash = new URLSearchParams({ token: resetToken }).toString();
+        link.href = target.toString();
+      }
+    });
+  }
   resetTokenForm.addEventListener("submit", (event) => {
     if (!resetTokenInput.value) {
       event.preventDefault();
