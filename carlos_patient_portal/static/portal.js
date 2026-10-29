@@ -210,21 +210,37 @@ if (
     resetTokenError.hidden = false;
   }
   // A language link reloads this page through a redirect, and the token must not reach the
-  // server. So it rides in the link's fragment, which the browser keeps across a redirect whose
-  // Location has none, and the code above moves it into the form again. Only links that come back
-  // to this same page get it, so it never lands in another page's address bar.
-  if (resetToken) {
-    document.querySelectorAll(".language-switch a[href]").forEach((link) => {
-      if (!(link instanceof HTMLAnchorElement)) {
+  // server. So on the click it rides in the fragment, which the browser keeps across a redirect
+  // whose Location has none, and the code above moves it into the form again. Only a plain click
+  // on a link that comes back to this same page carries it, and the links themselves never hold
+  // it, so it is not shown on hover, copied with the link, or sent anywhere else.
+  document.querySelectorAll(".language-switch a[href]").forEach((link) => {
+    if (!(link instanceof HTMLAnchorElement)) {
+      return;
+    }
+    link.addEventListener("click", (event) => {
+      const currentToken = resetTokenInput.value;
+      if (
+        !currentToken
+        || event.defaultPrevented
+        || event.button !== 0
+        || event.metaKey
+        || event.ctrlKey
+        || event.shiftKey
+        || event.altKey
+      ) {
         return;
       }
       const target = new URL(link.href, window.location.href);
-      if (target.searchParams.get("next") === window.location.pathname) {
-        target.hash = new URLSearchParams({ token: resetToken }).toString();
-        link.href = target.toString();
+      const thisPage = `${window.location.pathname}${window.location.search}`;
+      if (target.origin !== window.location.origin || target.searchParams.get("next") !== thisPage) {
+        return;
       }
+      event.preventDefault();
+      target.hash = new URLSearchParams({ token: currentToken }).toString();
+      window.location.assign(target.toString());
     });
-  }
+  });
   resetTokenForm.addEventListener("submit", (event) => {
     if (!resetTokenInput.value) {
       event.preventDefault();
@@ -234,6 +250,10 @@ if (
       }
     }
   });
+} else if (new URLSearchParams(window.location.hash.slice(1)).has("token")) {
+  // A token that lands on any other page (say, a maintenance page answering a language switch)
+  // is not left in the address bar or the history.
+  window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
 }
 
 const portalMessageModal = document.getElementById("portal-message-modal");

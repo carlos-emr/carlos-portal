@@ -273,11 +273,11 @@ class BrowserFormValidationError(Exception):
 
 
 def wants_html_response(path: str) -> bool:
-    """Whether a patient reached `path` from a browser and should get a page, not a JSON body.
+    """Whether `path` is a patient-facing path, whose errors may be a page rather than JSON.
 
-    Rate limiting and maintenance mode are the two states a real patient hits on an ordinary
-    browser navigation, so they are the two that most need a readable page. Machine surfaces keep
-    their JSON/FHIR shapes: an API client parsing `{"detail": ...}` must not start receiving HTML.
+    The path half of `wants_html_error_page`, which also looks at what the caller sent and asked
+    for. Machine surfaces keep their JSON/FHIR shapes: an API client parsing `{"detail": ...}`
+    must not start receiving HTML.
     """
     return not (
         path.startswith("/api/")
@@ -427,7 +427,10 @@ def _get_route_name_for_path(request: Request) -> str | None:
     app = scope.get("app")
     if app is None:
         return None
-    get_scope = {**scope, "method": "GET"}
+    # Matched as the application sees the path: inside the static mount, root_path has grown by
+    # the mount's own prefix, which would let another route match the rest of the path.
+    app_root_path = scope.get("app_root_path", scope.get("root_path", ""))
+    get_scope = {**scope, "method": "GET", "root_path": app_root_path}
     for route in app.router.routes:
         if isinstance(route, Mount):
             continue

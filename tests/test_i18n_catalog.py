@@ -714,6 +714,10 @@ def test_a_page_at_a_path_without_a_get_page_links_to_the_front_page() -> None:
     assert "next=/auth/login" not in method_not_allowed.text
     assert not_found.status_code == 404
     assert 'href="/locale/fr?next=/"' in not_found.text
+    # Under the static mount too, where the rest of the path looks like another route's.
+    static_not_found = client.get("/static/health")
+    assert static_not_found.status_code == 404
+    assert 'href="/locale/fr?next=/"' in static_not_found.text
 
 
 @pytest.mark.parametrize("path", ["/auth/password-reset/complete", "/auth/email-change/confirm"])
@@ -725,7 +729,8 @@ def test_a_page_answering_an_emailed_link_form_does_not_link_back_to_that_form(
 
     response = client.post(path, data={"new_password": "x"})
 
-    assert response.status_code >= 400
+    # Refused for its missing CSRF token: the page answering the form, not the form itself.
+    assert response.status_code == 403
     assert response.headers["content-type"].startswith("text/html")
     assert 'href="/locale/fr?next=/"' in response.text
     assert f"next={path}" not in response.text
