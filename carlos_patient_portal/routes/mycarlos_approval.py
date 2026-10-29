@@ -24,7 +24,12 @@ from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
-from carlos_patient_portal.approval_codec import compact_hash, invalid, verify_approval
+from carlos_patient_portal.approval_codec import (
+    CONTRACT_VERSIONS,
+    compact_hash,
+    invalid,
+    verify_approval,
+)
 from carlos_patient_portal.approval_models import ApprovalCode, ApprovalRequest
 from carlos_patient_portal.approvals import (
     MAX_CODE_ATTEMPTS,
@@ -195,6 +200,17 @@ def register_device_approval_routes(app: FastAPI, runtime: PortalRuntime) -> Non
 
         return await call(request, 0, operation)
 
+    # The device approval contract versions this portal takes (myCarlos #144). An app that
+    # finds no such route (an older portal answers 404) signs v1.
+    @app.get("/api/mycarlos/device-approval-versions")
+    async def versions(request: Request) -> Response:
+        def operation(session: Session, m: LockedMailbox, raw: bytes) -> Response:
+            if request.scope.get("query_string", b""):
+                raise invalid()
+            return response({"versions": list(CONTRACT_VERSIONS)})
+
+        return await call(request, 0, operation)
+
     @app.get("/api/mycarlos/device-approvals")
     async def approver_list(request: Request) -> Response:
         def operation(session: Session, m: LockedMailbox, raw: bytes) -> Response:
@@ -269,6 +285,7 @@ def register_device_approval_routes(app: FastAPI, runtime: PortalRuntime) -> Non
             )
             challenge, _, _ = compact_parts(row.challenge)
             for field in (
+                "v",
                 "challenge_id",
                 "candidate_intent_sha256",
                 "candidate_device_key_id",

@@ -22,10 +22,12 @@ from sqlalchemy.orm import Session
 
 from carlos_patient_portal.approval_codec import (
     CODE_APPROVAL_KIND,
+    challenge_expiry,
     compact_hash,
     compact_parts,
     device_keys,
     invalid,
+    unanswered_until,
     verify_clinic,
     verify_intent,
 )
@@ -106,7 +108,10 @@ def candidate_request(
         ):
             raise invalid("approval_conflict", 409)
         return status_payload(prior), 200
-    if value["iat"] > now + 30 or value["exp"] <= now:
+    # Until the clinic answers with a challenge, a request is open at most 10 minutes (v1: its
+    # whole intent, which is at most 10 minutes); after that the device may start a new one.
+    open_until = unanswered_until(value["iat"], value["exp"])
+    if value["iat"] > now + 30 or open_until <= now:
         raise invalid("approval_expired", 410)
     count = session.scalar(
         select(func.count())
@@ -140,7 +145,7 @@ def candidate_request(
         request_sequence=next_sequence(clinic, "request_sequence"),
         intent=intent,
         intent_body_hash=digest,
-        expires_at=value["exp"],
+        expires_at=open_until,
         status="pending",
     )
     session.add(row)
@@ -197,6 +202,7 @@ def publish_challenge(
     value = clinic_object(session, m, "challenge", challenge, public_base)
     original = verify_intent(intent, **scope(m, public_base))
     for field in (
+        "v",
         "request_id",
         "candidate_device_key_id",
         "candidate_x25519_public_key",
@@ -205,11 +211,20 @@ def publish_challenge(
     ):
         if value[field] != original[field]:
             raise invalid("approval_conflict", 409)
-    if value["candidate_intent_sha256"] != compact_hash(intent) or value["expires_at"] != min(
-        value["issued_at"] + 600, original["exp"]
-    ):
+    expiry = challenge_expiry(
+        value["v"], value["approval_kind"], value["issued_at"], original["exp"]
+    )
+    if value["candidate_intent_sha256"] != compact_hash(intent) or value["expires_at"] != expiry:
         raise invalid("approval_conflict", 409)
-    if row.status != "pending" or value["issued_at"] > now + 30 or value["expires_at"] <= now:
+    # A request with no challenge stops being open after 10 minutes (v2), even though its
+    # intent may allow a longer staff challenge; a later challenge would revive a request
+    # the device may already have replaced.
+    if (
+        row.status != "pending"
+        or row.expires_at <= now
+        or value["issued_at"] > now + 30
+        or value["expires_at"] <= now
+    ):
         raise invalid("approval_expired", 410)
     # A challenge ID names one request per clinic. The caller holds the clinic mutex, so this
     # check can't race; without it a reused ID reached the unique constraint as a 500.
@@ -256,6 +271,7 @@ def publish_decision(
         receipt = clinic_object(session, m, "acceptance", acceptance, public_base)
         challenge = clinic_object(session, m, "challenge", row.challenge, public_base)
         for field in (
+            "v",
             "request_id",
             "challenge_id",
             "candidate_device_key_id",

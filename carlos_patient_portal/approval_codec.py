@@ -119,6 +119,31 @@ FIELDS = {
 # enters the code CARLOS emailed. Like "staff_first" it has no predecessor; "accepted_device" always
 # has one.
 CODE_APPROVAL_KIND = "code"
+# Contract versions (myCarlos #144). v2 changes only lifetimes: a staff_first request may stay
+# open 24 hours; code and accepted_device keep 10 minutes, and so does a request with no
+# challenge yet. v1 keeps 10 minutes everywhere, for apps that only know v1.
+CONTRACT_VERSIONS = (1, 2)
+TEN_MINUTES, DAY = 600, 86_400
+
+
+def intent_life(version: int) -> int:
+    return DAY if version == 2 else TEN_MINUTES
+
+
+def challenge_life(version: int, approval_kind: str) -> int:
+    return DAY if version == 2 and approval_kind == "staff_first" else TEN_MINUTES
+
+
+def challenge_expiry(version: int, approval_kind: str, issued_at: int, intent_exp: int) -> int:
+    """When a challenge must end: its kind's life, and never after its intent."""
+    return min(issued_at + challenge_life(version, approval_kind), intent_exp)
+
+
+def unanswered_until(iat: int, exp: int) -> int:
+    """How long a request with no challenge yet counts as open (v1 intents end sooner anyway)."""
+    return min(exp, iat + TEN_MINUTES)
+
+
 FIRST_DEVICE_KINDS = frozenset({"staff_first", CODE_APPROVAL_KIND})
 APPROVAL_KINDS = FIRST_DEVICE_KINDS | {"accepted_device"}
 TYPES = {
@@ -175,7 +200,7 @@ def object_claims(
     if (
         set(value) != FIELDS[kind]
         or type(value.get("v")) is not int
-        or value["v"] != 1
+        or value["v"] not in CONTRACT_VERSIONS
         or (value.get("typ"), value.get("aud")) != TYPES[kind]
         or value.get("clinic_id") != clinic
         or value.get("recipient_id") != recipient
@@ -201,7 +226,7 @@ def object_claims(
     predecessor = value.get("predecessor_device_key_id")
     if predecessor is not None and not canonical_key(predecessor):
         raise invalid()
-    if kind == "intent" and not 0 < value["exp"] - value["iat"] <= 600:
+    if kind == "intent" and not 0 < value["exp"] - value["iat"] <= intent_life(value["v"]):
         raise invalid()
     if kind in {"challenge", "acceptance"}:
         approval_kind = value["approval_kind"]
@@ -223,7 +248,11 @@ def object_claims(
                 raise invalid() from exc
     if kind == "approval" and predecessor is None:
         raise invalid()
-    if kind == "challenge" and not 0 < value["expires_at"] - value["issued_at"] <= 600:
+    if kind == "challenge" and not (
+        0
+        < value["expires_at"] - value["issued_at"]
+        <= challenge_life(value["v"], value["approval_kind"])
+    ):
         raise invalid()
     if kind == "acceptance":
         if value["accepted_version"] != "0":
