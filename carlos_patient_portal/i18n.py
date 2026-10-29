@@ -44,11 +44,12 @@ LOCALE_COOKIE_MAX_AGE_SECONDS = 365 * 24 * 60 * 60
 # How a date and time reads in each language, in ONE place: changing a language's convention is a
 # one-line change here. Fields: {year} {month} {day} {hour} {minute} as numbers, {zone} the clinic's
 # time zone written out (e.g. "America/Toronto"), and {zone_abbreviation} ("EST"), which only
-# English readers know. English keeps its ISO order and abbreviation; the others use their local
-# date order with the zone written out (D196's suggested defaults, pending Ben's answer).
+# English readers know. English keeps its ISO order and abbreviation; the others use their own
+# date order with the zone written out. French is Canadian French (2026-01-15 00 h 30), the French
+# a Canadian clinic's patients read.
 DATETIME_FORMATS: dict[str, str] = {
     DEFAULT_LOCALE: "{year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d} {zone_abbreviation}",
-    "fr": "{day:02d}/{month:02d}/{year:04d} {hour:02d}:{minute:02d} ({zone})",
+    "fr": "{year:04d}-{month:02d}-{day:02d} {hour:02d} h {minute:02d} ({zone})",
     "es": "{day:02d}/{month:02d}/{year:04d} {hour:02d}:{minute:02d} ({zone})",
     "pl": "{day:02d}.{month:02d}.{year:04d} {hour:02d}:{minute:02d} ({zone})",
     "pt-BR": "{day:02d}/{month:02d}/{year:04d} {hour:02d}:{minute:02d} ({zone})",
@@ -66,7 +67,8 @@ class LocaleOption:
 
 # Each language is named in its own language: the switcher marks every link with that language's
 # `lang`, so a screen reader reads "Français" in French, and a patient looking for their language
-# recognizes it. The Chinese short labels are the script names (D196's suggestion).
+# recognizes it. The Chinese short labels are the script names (简体 Simplified, 繁體 Traditional),
+# which is how a Chinese reader tells the two apart.
 SUPPORTED_LOCALES: tuple[LocaleOption, ...] = (
     LocaleOption(code="en", short_label="EN", label="English"),
     LocaleOption(code="fr", short_label="FR", label="Français"),
@@ -100,22 +102,35 @@ for _locale in SUPPORTED_LOCALES:
 
 
 # Chinese is chosen by script, not by the first locale in the language: Traditional for a Hant
-# script or a region that writes Traditional characters, Simplified for everything else.
-_TRADITIONAL_CHINESE_REGIONS = frozenset({"tw", "hk", "mo"})
+# script or a region that writes Traditional characters, Simplified for a Hans script or a region
+# that writes Simplified. `zh` and Mandarin (`cmn`) default to Simplified, Cantonese (`yue`, also
+# written `zh-yue`) to Traditional, as Hong Kong writes it. `chs`/`cht` are the legacy Windows
+# script tags.
+_CHINESE_LANGUAGE_DEFAULTS = {"zh": "zh-CN", "cmn": "zh-CN", "yue": "zh-TW"}
+_SIMPLIFIED_CHINESE_SUBTAGS = frozenset({"hans", "chs", "cn", "sg", "my"})
+_TRADITIONAL_CHINESE_SUBTAGS = frozenset({"hant", "cht", "tw", "hk", "mo"})
+_CHINESE_SCRIPT_SUBTAGS = {"hans": "zh-CN", "chs": "zh-CN", "hant": "zh-TW", "cht": "zh-TW"}
 
 
-def _chinese_locale(subtags: list[str]) -> str:
-    """zh-TW or zh-CN for the subtags after `zh` (already casefolded).
+def _chinese_locale(language: str, subtags: list[str]) -> str:
+    """zh-TW or zh-CN for a Chinese `language` and the subtags after it (already casefolded).
 
     An explicit script wins over the region, so `zh-Hans-HK` is Simplified and `zh-Hant-SG`
-    Traditional; without one, Taiwan, Hong Kong and Macau mean Traditional. Bare `zh`, `zh-CN`,
-    `zh-SG` and `zh-MY` are Simplified.
+    Traditional; without one, the region decides, and without that the language's default.
+    Private-use subtags (after `x`) are not read: `zh-CN-x-hant` is Simplified.
     """
-    if "hans" in subtags:
-        return "zh-CN"
-    if "hant" in subtags or _TRADITIONAL_CHINESE_REGIONS.intersection(subtags):
+    if "x" in subtags:
+        subtags = subtags[: subtags.index("x")]
+    if subtags and subtags[0] == "yue":
+        language, subtags = "yue", subtags[1:]
+    for subtag in subtags:
+        if subtag in _CHINESE_SCRIPT_SUBTAGS:
+            return _CHINESE_SCRIPT_SUBTAGS[subtag]
+    if _TRADITIONAL_CHINESE_SUBTAGS.intersection(subtags):
         return "zh-TW"
-    return "zh-CN"
+    if _SIMPLIFIED_CHINESE_SUBTAGS.intersection(subtags):
+        return "zh-CN"
+    return _CHINESE_LANGUAGE_DEFAULTS[language]
 
 
 def normalize_locale(value: str | None) -> str | None:
@@ -135,8 +150,8 @@ def normalize_locale(value: str | None) -> str | None:
         if locale.code.casefold() == candidate:
             return locale.code
     subtags = candidate.split("-")
-    if subtags[0] == "zh":
-        return _chinese_locale(subtags[1:])
+    if subtags[0] in _CHINESE_LANGUAGE_DEFAULTS:
+        return _chinese_locale(subtags[0], subtags[1:])
     # A bare language subtag matches the first supported locale in that language, so `pt` finds
     # `pt-BR` without the caller having to know the region.
     language = candidate.split("-", 1)[0]
@@ -312,4 +327,5 @@ def plural_text(text: Mapping[str, str], key: str, count: int, locale: str) -> s
     `_other` fallback is what keeps a half-translated locale rendering: a Polish "few" form not
     written yet shows the English plural instead of raising KeyError.
     """
-    return text.get(f"{key}_{plural_category(locale, count)}", text[f"{key}_other"])
+    form_key = f"{key}_{plural_category(locale, count)}"
+    return text[form_key] if form_key in text else text[f"{key}_other"]

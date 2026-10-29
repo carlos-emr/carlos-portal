@@ -412,14 +412,17 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
                 diagnostics=str(exc.detail),
             )
         if wants_html_error_page(request):
-            return service_notice_response(
+            response = service_notice_response(
                 request,
                 settings=runtime.settings,
                 status_code=exc.status_code,
                 heading_key="request_failed_heading",
                 message_key="request_failed_details",
-                retry_after_seconds=0,
+                retry_after_seconds=None,
             )
+            # Keep the headers the exception set (a 405's Allow, a Retry-After).
+            response.headers.update(getattr(exc, "headers", None) or {})
+            return response
         return JSONResponse(
             status_code=exc.status_code,
             content={"detail": exc.detail},
@@ -459,15 +462,15 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
                     message_key="service_unavailable_details",
                     retry_after_seconds=None,
                 )
-            except Exception:
+            except Exception as render_error:
                 # A fault while drawing the page must not lose the 500 itself.
-                logger.error("Portal error page could not be rendered")
+                logger.error(
+                    "Portal error page could not be rendered: %s", type(render_error).__name__
+                )
             else:
                 # This handler runs outside the middleware that adds these to every other
-                # response, so the page gets them here.
-                for header, value in SECURITY_HEADERS.items():
-                    response.headers.setdefault(header, value)
-                response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+                # response, so the page gets them here. An error page is never cached.
+                apply_standard_response_headers(request, response, runtime.settings)
                 response.headers.setdefault("Cache-Control", "no-store")
                 return response
         return JSONResponse(
@@ -501,6 +504,42 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={"detail": SERVICE_UNAVAILABLE_DETAIL},
             headers={"Retry-After": "1"},
+        )
+
+
+def apply_standard_response_headers(
+    request: Request,
+    response: Response,
+    settings: Settings,
+) -> None:
+    """The security and caching headers every portal response carries.
+
+    The middleware applies them to every response. The 500 handler runs outside the middleware,
+    so it applies them to its error page itself.
+    """
+    path = request.url.path
+    for header, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(header, value)
+    if not path.startswith("/api/"):
+        response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+
+    if (
+        path in NO_STORE_PATHS
+        or path.startswith("/auth/")
+        or path.startswith("/api/patient/")
+        or path.startswith(MYCARLOS_API_PREFIX)
+        or path.startswith(FHIR_PATH_PREFIX)
+        or is_portal_path(path)
+        or path.startswith("/internal/")
+        or path.startswith("/dev/admin/")
+    ):
+        response.headers.setdefault("Cache-Control", "no-store")
+        response.headers.setdefault("Pragma", "no-cache")
+
+    if settings.is_production:
+        response.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains",
         )
 
 
@@ -615,29 +654,7 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
                 )
         else:
             response = await call_next(request)
-        for header, value in SECURITY_HEADERS.items():
-            response.headers.setdefault(header, value)
-        if not request.url.path.startswith("/api/"):
-            response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
-
-        if (
-            request.url.path in NO_STORE_PATHS
-            or request.url.path.startswith("/auth/")
-            or request.url.path.startswith("/api/patient/")
-            or request.url.path.startswith(MYCARLOS_API_PREFIX)
-            or request.url.path.startswith(FHIR_PATH_PREFIX)
-            or is_portal_path(request.url.path)
-            or request.url.path.startswith("/internal/")
-            or request.url.path.startswith("/dev/admin/")
-        ):
-            response.headers.setdefault("Cache-Control", "no-store")
-            response.headers.setdefault("Pragma", "no-cache")
-
-        if settings.is_production:
-            response.headers.setdefault(
-                "Strict-Transport-Security",
-                "max-age=31536000; includeSubDomains",
-            )
+        apply_standard_response_headers(request, response, settings)
         return response
 
     # Registration order is nesting order, and it is inverted: add_middleware inserts at

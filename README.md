@@ -245,8 +245,14 @@ the locales listed in its `COMPLETE_LOCALES`; a translation that completes a lan
 
 The MFA page is only ever rendered in answer to a POST, so its language buttons post the challenge
 to `POST /auth/mfa/language` (CSRF-checked), which renders the same page in the chosen language
-without sending a code. Other pages rendered in answer to a POST link back to a page that serves
-GET.
+without sending a code. Other pages link back to a page that serves GET: their own path when it
+does, else the signed-in module's page or the front page.
+
+Errors are answered in the medium the caller uses. A browser gets a page in its language for a
+failed request, a throttled or unavailable portal, or an unexpected fault. A caller gets the JSON
+`{"detail": ...}` body (FHIR: an OperationOutcome) when it is on `/api/`, `/fhir/`, `/internal/`
+or `/dev/admin/`, sent a JSON body, asked only for JSON in `Accept`, or authenticated with a bearer
+token.
 
 `PATIENT_PORTAL_PUBLIC_BASE_URL` is used to build password-reset email links and is required when
 SMTP is configured outside development. It must use HTTPS outside development.

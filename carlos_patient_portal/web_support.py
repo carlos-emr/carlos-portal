@@ -291,11 +291,20 @@ def wants_html_error_page(request: Request) -> bool:
     """Whether an error answering this request should be a page rather than a JSON body.
 
     Path alone is the wrong discriminator: /auth/activate serves a browser form *and* accepts a
-    JSON body. A caller that declared JSON gets JSON back; a browser form post or a navigation
-    gets the page. HEAD has no body to read either way.
+    JSON body, and /auth/session and /auth/logout serve bearer clients. A caller that sent JSON,
+    asked only for JSON, or authenticated with a bearer token gets JSON back; a browser form post
+    or a navigation gets the page. HEAD has no body to read either way.
     """
-    declared_json = "application/json" in (request.headers.get("content-type") or "").lower()
-    return wants_html_response(request.url.path) and not declared_json and request.method != "HEAD"
+    headers = request.headers
+    declared_json = JSON_MEDIA_TYPE in (headers.get("content-type") or "").lower()
+    accept = (headers.get("accept") or "").lower()
+    asked_for_json = JSON_MEDIA_TYPE in accept and "text/html" not in accept
+    bearer_client = (headers.get("authorization") or "").lower().startswith("bearer ")
+    return (
+        wants_html_response(request.url.path)
+        and not (declared_json or asked_for_json or bearer_client)
+        and request.method != "HEAD"
+    )
 
 
 def service_notice_response(
@@ -400,14 +409,25 @@ def displayed_service_name(settings: Settings, text: Mapping[str, str]) -> str:
     return settings.service_name
 
 
-def _path_serves_get(request: Request) -> bool:
-    """Whether the application answers a GET at this request's path."""
+# GET pages that only work with the token from an emailed link, which rides in the URL fragment and
+# never reaches the server. A page answering the form they post must not send the patient back to
+# them: without the token they are an empty form that cannot succeed.
+LINK_TOKEN_PAGE_ROUTE_NAMES = frozenset(
+    {"password_reset_complete_page", "email_change_confirm_page"}
+)
+
+
+def _get_route_name_for_path(request: Request) -> str | None:
+    """The name of the route that answers a GET at this request's path, or None if none does."""
     scope = getattr(request, "scope", None) or {}
     app = scope.get("app")
     if app is None:
-        return False
+        return None
     get_scope = {**scope, "method": "GET"}
-    return any(route.matches(get_scope)[0] is Match.FULL for route in app.router.routes)
+    for route in app.router.routes:
+        if route.matches(get_scope)[0] is Match.FULL:
+            return getattr(route, "name", None) or ""
+    return None
 
 
 def locale_switch_targets(request: Request, *, get_fallback: str | None = None) -> str:
@@ -416,20 +436,22 @@ def locale_switch_targets(request: Request, *, get_fallback: str | None = None) 
     Query string included so a filtered dashboard survives a language change, but never the
     fragment — reset tokens live there and must not travel in a redirect target.
 
-    A page that answers a form POST is not always reachable by GET at the same path (a failed
-    sign-in is rendered at POST /auth/login, a password change at POST /portal/account/password),
-    and the language link redirects with a GET. Such a page returns the patient to the same path
-    when a GET serves it, else to `get_fallback` (a signed-in page passes its module's own page),
-    else to the front page. The MFA page has its own POST form instead; see /auth/mfa/language.
+    The language link redirects with a GET, and not every page is reachable that way at its own
+    path: a failed sign-in is rendered at POST /auth/login, a password change at POST
+    /portal/account/password, and a 404 or 405 page at a path with no GET page. Those return the
+    patient to `get_fallback` (a signed-in page passes its module's own page), else to the front
+    page. So does a page answering the form of an emailed-link page (LINK_TOKEN_PAGE_ROUTE_NAMES).
+    The MFA page has its own POST form instead; see /auth/mfa/language.
     """
     scope = getattr(request, "scope", {})
     root_path = scope.get("root_path", "").rstrip("/")
-    method = getattr(request, "method", "GET")
-    if method not in ("GET", "HEAD") and not _path_serves_get(request):
+    is_get = getattr(request, "method", "GET") in ("GET", "HEAD")
+    get_route_name = _get_route_name_for_path(request)
+    if get_route_name is None or (not is_get and get_route_name in LINK_TOKEN_PAGE_ROUTE_NAMES):
         destination = get_fallback or f"{root_path}/"
     else:
         destination = f"{root_path}{request.url.path}"
-        if request.url.query and method in ("GET", "HEAD"):
+        if request.url.query and is_get:
             destination = f"{destination}?{request.url.query}"
     return destination if is_safe_local_redirect(destination) else "/"
 
@@ -976,7 +998,6 @@ def mfa_template_context(
         "notice_message": notice_message,
         "mfa_code_sent_message": mfa_code_sent_message(delivery, text),
         "mfa_challenge_token": delivery.challenge_token,
-        "mfa_delivery_method": delivery.delivery_method,
         "mfa_email_available": (MFA_DELIVERY_METHOD_EMAIL in delivery.available_delivery_methods),
         "mfa_email_selected": is_email,
         "mfa_rate_limit_message": (text["email_codes_rate"] if is_email else text["mfa_sms_rate"]),

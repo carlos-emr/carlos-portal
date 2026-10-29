@@ -188,7 +188,11 @@ def test_english_plural_keys_have_both_english_forms() -> None:
 
 
 def test_every_literal_key_a_template_or_route_reads_exists_in_english() -> None:
-    """A retired or misspelled key renders blank (templates) or raises KeyError (routes)."""
+    """A retired or misspelled key renders blank (templates) or raises KeyError (routes).
+
+    Literal keys only: a key built at run time (an f-string, or one chosen by a conditional) is
+    not seen here, and is covered by the page tests that render it instead.
+    """
     used: set[str] = set()
     for template in (PACKAGE_DIR / "templates").glob("*.jinja"):
         used |= set(re.findall(r"\btext\.([A-Za-z_][A-Za-z0-9_]*)", template.read_text()))
@@ -204,6 +208,11 @@ def test_every_literal_key_a_template_or_route_reads_exists_in_english() -> None
             re.findall(r'\b(?:heading_key|message_key|error_key)=\s*"([a-z0-9_]+)"', source)
         )
         used |= set(re.findall(r'"label_key":\s*"([a-z0-9_]+)"', source))
+        # A plural_text() base needs at least its `_other` form.
+        plural_bases = re.findall(
+            r'plural_text\(\s*[^,()]+(?:\([^()]*\))?,\s*"([a-z0-9_]+)"', source
+        )
+        used |= {f"{base}_other" for base in plural_bases}
 
     assert used, "the key scan found nothing; the patterns above have drifted"
     missing = sorted(used - set(ENGLISH))
@@ -253,6 +262,16 @@ def test_service_name_follows_the_language_only_when_it_is_the_default(
         ("zh-Hant-TW", "zh-TW"),
         ("zh-Hant-HK", "zh-TW"),
         ("zh-Hant-SG", "zh-TW"),
+        # Mandarin and Cantonese tags, legacy Windows script tags, and private use.
+        ("cmn", "zh-CN"),
+        ("cmn-Hant-TW", "zh-TW"),
+        ("yue", "zh-TW"),
+        ("zh-yue", "zh-TW"),
+        ("yue-Hant-HK", "zh-TW"),
+        ("yue-Hans-CN", "zh-CN"),
+        ("zh-CHT", "zh-TW"),
+        ("zh-CHS", "zh-CN"),
+        ("zh-CN-x-hant", "zh-CN"),
     ],
 )
 def test_chinese_tags_resolve_by_script_then_region(requested: str, expected: str) -> None:
@@ -354,6 +373,8 @@ def test_plural_text_picks_the_form_and_falls_back_to_other() -> None:
     polish = {**english, "booking_slot_duration_one": "{minutes} minuta"}
     assert plural_text(polish, "booking_slot_duration", 3, "pl").format(minutes=3) == ("3 minutes")
     assert plural_text(polish, "booking_slot_duration", 1, "pl").format(minutes=1) == ("1 minuta")
+    # The `_other` fallback is only read when the form itself is missing.
+    assert plural_text({"count_one": "one"}, "count", 1, "en") == "one"
 
 
 # --------------------------------------------------------------------------------------------
@@ -365,7 +386,7 @@ def test_plural_text_picks_the_form_and_falls_back_to_other() -> None:
     ("locale", "expected"),
     [
         ("en", "2026-01-15 00:30 EST"),
-        ("fr", "15/01/2026 00:30 (America/Toronto)"),
+        ("fr", "2026-01-15 00 h 30 (America/Toronto)"),
         ("es", "15/01/2026 00:30 (America/Toronto)"),
         ("pl", "15.01.2026 00:30 (America/Toronto)"),
         ("pt-BR", "15/01/2026 00:30 (America/Toronto)"),
@@ -441,7 +462,11 @@ def test_mfa_page_posts_its_language_buttons_with_the_challenge() -> None:
     assert "/locale/" not in switcher
 
 
-def test_mfa_language_switch_rerenders_the_same_sign_in_without_sending_a_code() -> None:
+def test_mfa_language_switch_rerenders_the_same_sign_in_without_sending_a_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # French does not translate this key yet; a marker proves the page really is in French.
+    monkeypatch.setitem(i18n.TEXT_CATALOG["fr"], "mfa_heading", "Code de vérification (test)")
     sender = RecordingPortalEmailSender()
     app = migrated_development_app(email_sender=sender)
     client = TestClient(app)
@@ -461,7 +486,7 @@ def test_mfa_language_switch_rerenders_the_same_sign_in_without_sending_a_code()
     assert response.status_code == 200
     assert '<html lang="fr">' in response.text
     assert 'class="text-tab selected" aria-current="true" lang="fr"' in response.text
-    assert _escaped(portal_text("fr")["mfa_heading"]) in response.text
+    assert _escaped("Code de vérification (test)") in response.text
     # The same challenge, in every form on the page: the language form, verify and resend.
     assert set(MFA_CHALLENGE_TOKEN_PATTERN.findall(response.text)) == {challenge_token}
     assert len(MFA_CHALLENGE_TOKEN_PATTERN.findall(response.text)) == 3
@@ -516,8 +541,9 @@ def test_mfa_language_switch_rejects_an_unsupported_language() -> None:
 
 @pytest.mark.parametrize("challenge_state", ["unknown", "expired"])
 def test_mfa_language_switch_without_a_live_challenge_returns_to_sign_in(
-    challenge_state: str,
+    challenge_state: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setitem(i18n.TEXT_CATALOG["fr"], "mfa_sign_in_again", "Reconnectez-vous (test).")
     app = migrated_development_app()
     client = TestClient(app)
     csrf_token, challenge_token, _ = _start_browser_sign_in(app, client)
@@ -539,7 +565,7 @@ def test_mfa_language_switch_without_a_live_challenge_returns_to_sign_in(
     assert response.status_code == 400
     assert '<html lang="fr">' in response.text
     assert 'name="username"' in response.text
-    assert _escaped(portal_text("fr")["mfa_sign_in_again"]) in response.text
+    assert "Reconnectez-vous (test)." in response.text
     assert "mfa_challenge_token" not in response.text
     assert response.cookies.get(LOCALE_COOKIE_NAME) == "fr"
 
@@ -663,6 +689,43 @@ def test_a_post_whose_path_also_serves_get_keeps_its_path() -> None:
     assert response.status_code == 403
     assert response.headers["content-type"].startswith("text/html")
     assert 'href="/locale/fr?next=/auth/activate"' in response.text
+    assert "Retry-After" not in response.headers
+
+
+def test_a_page_at_a_path_without_a_get_page_links_to_the_front_page() -> None:
+    """A 405 (GET /auth/login, e.g. reloading a failed sign-in) or 404 page must not loop."""
+    client = TestClient(migrated_development_app())
+
+    method_not_allowed = client.get("/auth/login")
+    not_found = client.get("/no-such-page")
+
+    assert method_not_allowed.status_code == 405
+    assert method_not_allowed.headers["allow"] == "POST"
+    assert 'href="/locale/fr?next=/"' in method_not_allowed.text
+    assert "next=/auth/login" not in method_not_allowed.text
+    assert not_found.status_code == 404
+    assert 'href="/locale/fr?next=/"' in not_found.text
+
+
+def test_a_page_answering_an_emailed_link_form_does_not_link_back_to_that_form() -> None:
+    """GET /auth/password-reset/complete only works with the emailed token, so not back there."""
+    client = TestClient(migrated_development_app())
+
+    response = client.post("/auth/password-reset/complete", data={"new_password": "x"})
+
+    assert response.status_code == 403
+    assert 'href="/locale/fr?next=/"' in response.text
+    assert "next=/auth/password-reset/complete" not in response.text
+
+
+def test_switch_targets_keep_the_deployment_prefix() -> None:
+    app = migrated_development_app(public_base_url="https://portal.example.test/patient")
+    client = TestClient(app, base_url="https://portal.example.test")
+
+    assert 'href="/patient/locale/fr?next=/patient/"' in client.get("/auth/login").text
+    assert 'href="/patient/locale/fr?next=/patient/auth/activate"' in (
+        client.post("/auth/activate", data={"invite_code": "x"}).text
+    )
 
 
 # --------------------------------------------------------------------------------------------
@@ -704,8 +767,14 @@ def _app_with_failing_routes() -> main.FastAPI:
     ],
 )
 def test_browser_errors_are_pages_in_the_patients_language(
-    path: str, status_code: int, heading_key: str, retry_after: str | None
+    path: str,
+    status_code: int,
+    heading_key: str,
+    retry_after: str | None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Polish does not translate these yet; a marker proves the page really is in Polish.
+    monkeypatch.setitem(i18n.TEXT_CATALOG["pl"], heading_key, "Nagłówek (test)")
     client = TestClient(_app_with_failing_routes(), raise_server_exceptions=False)
     client.cookies.set(LOCALE_COOKIE_NAME, "pl")
 
@@ -714,7 +783,7 @@ def test_browser_errors_are_pages_in_the_patients_language(
     assert response.status_code == status_code
     assert response.headers["content-type"].startswith("text/html")
     assert '<html lang="pl">' in response.text
-    assert _escaped(portal_text("pl")[heading_key]) in response.text
+    assert "Nagłówek (test)" in response.text
     assert response.headers.get("Retry-After") == retry_after
     assert "patient.secret@example.test" not in response.text
     assert '"detail"' not in response.text
@@ -757,3 +826,53 @@ def test_a_caller_that_declared_json_gets_json_on_a_browser_path() -> None:
 
     assert response.status_code == 422
     assert response.headers["content-type"].startswith("application/json")
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Authorization": "Bearer not-a-real-session"},
+        {"Accept": "application/json"},
+    ],
+)
+def test_bearer_and_json_accepting_callers_get_json_on_a_browser_path(
+    headers: dict[str, str],
+) -> None:
+    """/auth/session and /auth/logout serve bearer clients, which send no JSON body."""
+    client = TestClient(_app_with_failing_routes(), raise_server_exceptions=False)
+
+    for path, status_code in (
+        ("/test/validated?count=many", 422),
+        ("/test/crash", 500),
+        ("/test/database-down", 503),
+        ("/no-such-page", 404),
+    ):
+        response = client.get(path, headers=headers)
+        assert response.status_code == status_code
+        assert response.headers["content-type"].startswith("application/json"), path
+
+
+def test_a_browser_that_also_accepts_json_still_gets_the_page() -> None:
+    response = TestClient(_app_with_failing_routes()).get(
+        "/test/validated?count=many",
+        headers={"Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8"},
+    )
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("text/html")
+
+
+def test_the_500_handler_answers_json_if_its_page_cannot_be_drawn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken_page(*_: object, **__: object) -> None:
+        raise RuntimeError("template fault")
+
+    monkeypatch.setattr(main, "service_notice_response", broken_page)
+
+    response = TestClient(_app_with_failing_routes(), raise_server_exceptions=False).get(
+        "/test/crash"
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "the request could not be completed"}
