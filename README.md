@@ -249,8 +249,9 @@ to `POST /auth/mfa/language` (CSRF-checked), which renders the same page in the 
 without sending a code. Other pages link back to a page that serves GET: their own path when it
 does, else the signed-in module's page or the front page. A 404 or 405 page links to the front
 page, and so does a page answering the form of an emailed-link page (password reset, email change),
-whose token only that link carries. On the emailed-link pages themselves, `portal.js` adds the token
-to the language links as a fragment, which the browser keeps across the redirect and never sends.
+whose token only that link carries. On the emailed-link pages themselves, a click on a language
+link makes `portal.js` add the token as a fragment, which the browser keeps across the redirect and
+never sends; the links themselves never hold it.
 
 Errors are answered in the medium the caller uses. A browser gets a page in its language for a
 failed request, a throttled or unavailable portal, or an unexpected fault. A caller gets the JSON

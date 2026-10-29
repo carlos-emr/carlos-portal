@@ -740,10 +740,23 @@ function screenshotPath(name) {
 
     // A language switch reloads this page through a redirect. The token rides along in the
     // fragment, so it never reaches the server, and lands in the form again; then it is stripped.
+    const requestsCarryingResetToken = [];
+    // Only the part before "#" is sent; Playwright may report a navigation's fragment too.
+    const recordResetTokenRequest = (request) => {
+      if (request.url().split('#')[0].includes(passwordResetFixture.token)) {
+        requestsCarryingResetToken.push(request.url());
+      }
+    };
+    page.on('request', recordResetTokenRequest);
     for (const languageCode of ['fr', 'en']) {
-      await page.locator(
+      const languageLink = page.locator(
         `.language-switch a[href^="${portalPathname(`/locale/${languageCode}`)}"]`
-      ).click();
+      );
+      assert(
+        !(await languageLink.getAttribute('href')).includes('#'),
+        'a language link holds the password-reset token before it is clicked'
+      );
+      await languageLink.click();
       await page.locator(`.language-switch .text-tab.selected[lang="${languageCode}"]`).waitFor();
       await page.waitForFunction(() => window.location.hash === '');
       assert(
@@ -753,6 +766,11 @@ function screenshotPath(name) {
       );
       assert(!page.url().includes('#'), 'password-reset token remained in browser history');
     }
+    page.off('request', recordResetTokenRequest);
+    assert(
+      requestsCarryingResetToken.length === 0,
+      `the password-reset token reached the server: ${requestsCarryingResetToken.length} requests`
+    );
 
     await page.locator('input[name="new_password"]').fill(passwordResetFixture.newPassword);
     await page.locator('input[name="new_password_confirmation"]').fill(

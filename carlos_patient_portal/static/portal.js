@@ -238,7 +238,9 @@ if (
       }
       event.preventDefault();
       target.hash = new URLSearchParams({ token: currentToken }).toString();
-      window.location.assign(target.toString());
+      // Replace, not assign: Back should not return to this page, whose URL no longer holds the
+      // token, as an empty form.
+      window.location.replace(target.toString());
     });
   });
   resetTokenForm.addEventListener("submit", (event) => {
@@ -250,10 +252,6 @@ if (
       }
     }
   });
-} else if (new URLSearchParams(window.location.hash.slice(1)).has("token")) {
-  // A token that lands on any other page (say, a maintenance page answering a language switch)
-  // is not left in the address bar or the history.
-  window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
 }
 
 const portalMessageModal = document.getElementById("portal-message-modal");

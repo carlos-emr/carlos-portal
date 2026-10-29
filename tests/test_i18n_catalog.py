@@ -737,7 +737,7 @@ def test_a_page_answering_an_emailed_link_form_does_not_link_back_to_that_form(
 
 
 def test_the_emailed_link_page_itself_links_back_to_itself() -> None:
-    """portal.js adds the token to these links as a fragment, which never reaches the server."""
+    """On a click, portal.js adds the token as a fragment, which never reaches the server."""
     page = TestClient(migrated_development_app()).get("/auth/password-reset/complete").text
 
     assert 'href="/locale/fr?next=/auth/password-reset/complete"' in page
