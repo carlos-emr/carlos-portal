@@ -420,8 +420,21 @@ function screenshotPath(name) {
     assert(await signInPassword.getAttribute('type') === 'password', 'password starts visible');
     await page.getByRole('button', { name: 'Show password' }).click();
     assert(await signInPassword.getAttribute('type') === 'text', 'show-password control failed');
+    // The words change and carry the state; there is no aria-pressed (D133).
+    assert(
+      await page.getByRole('button', { name: 'Hide password' }).getAttribute('aria-pressed') === null,
+      'the show-password control must not use aria-pressed'
+    );
     await page.getByRole('button', { name: 'Hide password' }).click();
     assert(await signInPassword.getAttribute('type') === 'password', 'hide-password control failed');
+    // A page restored from the back/forward cache must not come back with the password showing.
+    await page.getByRole('button', { name: 'Show password' }).click();
+    await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
+    assert(
+      await signInPassword.getAttribute('type') === 'password'
+        && await page.getByRole('button', { name: 'Show password' }).count() === 1,
+      'a page restored from the back/forward cache kept the password showing'
+    );
 
     // The language tabs used to be this page's modal trigger. They navigate now, so the modal's
     // focus trap and focus restoration are exercised through Clinic help instead -- the assertions
@@ -522,6 +535,30 @@ function screenshotPath(name) {
     // 31 February: every box is filled correctly, but there is no such date. The page must say
     // to check the date of birth, and the invite must stay usable.
     await fillActivationForm({ day: '31', month: '2', year: birthYear });
+    // Show password (#29): one control shows and hides both boxes, and sending the form hides them.
+    const activationPasswordTypes = () => page
+      .locator('#activation-password, #activation-password-confirmation')
+      .evaluateAll((inputs) => inputs.map((input) => input.type).join(','));
+    assert(await activationPasswordTypes() === 'password,password', 'activation passwords start visible');
+    await page.getByRole('button', { name: 'Show password' }).click();
+    assert(
+      await activationPasswordTypes() === 'text,text',
+      'Show password did not show both activation password boxes'
+    );
+    await page.screenshot({
+      path: screenshotPath('patient-portal-activation-password-shown'),
+      fullPage: true,
+    });
+    // Recorded by a listener on the form, after the page's own capture-phase handler has run; it
+    // survives the navigation in sessionStorage.
+    await page.evaluate(() => {
+      const form = document.querySelector('form[action$="/auth/activate"]');
+      form.addEventListener('submit', () => {
+        sessionStorage.setItem('activationPasswordTypesAtSubmit', [
+          ...document.querySelectorAll('#activation-password, #activation-password-confirmation'),
+        ].map((input) => input.type).join(','));
+      });
+    });
     expectedActivationFailures += 1;
     expectedActivationConsoleErrors += 1;
     const impossibleDateResponsePromise = page.waitForResponse(
@@ -533,6 +570,10 @@ function screenshotPath(name) {
     assert(
       impossibleDateResponse.status() === 400,
       `an impossible date of birth returned ${impossibleDateResponse.status()}`
+    );
+    assert(
+      await page.evaluate(() => sessionStorage.getItem('activationPasswordTypesAtSubmit')) === 'password,password',
+      'the activation passwords were still showing when the form was sent'
     );
     const impossibleDateAlert = (await page.getByRole('alert').innerText()).trim();
     assert(

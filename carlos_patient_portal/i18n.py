@@ -412,6 +412,8 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
 
 # The first translated strings. Every key a locale does not define still falls back to English.
 TEXT_CATALOG["fr"] = {
+    "hide_password": "Masquer le mot de passe",
+    "show_password": "Afficher le mot de passe",
     "booking_month_1": "janvier",
     "booking_month_2": "février",
     "booking_month_3": "mars",
@@ -463,6 +465,8 @@ TEXT_CATALOG["fr"] = {
     ),
 }
 TEXT_CATALOG["es"] = {
+    "hide_password": "Ocultar contraseña",
+    "show_password": "Mostrar contraseña",
     "booking_month_1": "enero",
     "booking_month_2": "febrero",
     "booking_month_3": "marzo",
@@ -513,6 +517,8 @@ TEXT_CATALOG["es"] = {
     "activation_reenter_password": "Sus demás datos se conservan: vuelva a escribir su contraseña.",
 }
 TEXT_CATALOG["pl"] = {
+    "hide_password": "Ukryj hasło",
+    "show_password": "Pokaż hasło",
     "booking_month_1": "stycznia",
     "booking_month_2": "lutego",
     "booking_month_3": "marca",
@@ -562,6 +568,8 @@ TEXT_CATALOG["pl"] = {
     "activation_reenter_password": "Pozostałe dane zostały zachowane: wpisz ponownie hasło.",
 }
 TEXT_CATALOG["pt-BR"] = {
+    "hide_password": "Ocultar senha",
+    "show_password": "Mostrar senha",
     "booking_month_1": "janeiro",
     "booking_month_2": "fevereiro",
     "booking_month_3": "março",
