@@ -348,6 +348,10 @@ class Settings(BaseSettings):
     # the mailbox on (checked in reject_unsafe_runtime_policy).
     mycarlos_mailbox_enabled: bool = False
     mycarlos_approval_enabled: bool = False
+    # Device approval contract v2 (myCarlos #144): staff requests may wait 24 hours. Off, the
+    # portal lists and takes only v1. Turn it on only once this clinic's CARLOS takes v2: an app
+    # signs v2 when the portal lists it, and an older CARLOS can't approve a v2 request.
+    mycarlos_approval_contract_v2_enabled: bool = False
     mycarlos_mailbox_device_bytes: int = Field(default=268435456, ge=20971520)
     mycarlos_mailbox_account_bytes: int = Field(default=1073741824, ge=20971520)
     mycarlos_mailbox_clinic_bytes: int = Field(default=21474836480, ge=20971520)

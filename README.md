@@ -1038,6 +1038,9 @@ Two more switches, also default `false`, turn on later parts:
 - `PATIENT_PORTAL_MYCARLOS_APPROVAL_ENABLED`: device approval (a clinic or an existing device
   approving a new one). It needs delivery and the mailbox on, and a valid
   `PATIENT_PORTAL_PUBLIC_BASE_URL`; otherwise the portal refuses to start.
+- `PATIENT_PORTAL_MYCARLOS_APPROVAL_CONTRACT_V2_ENABLED` (off by default): device approval
+  contract v2, where a request staff approve may wait 24 hours (myCarlos #144). Off, the portal
+  lists and takes only v1. Turn it on only after this clinic's CARLOS takes v2.
 
 The tables behind both exist from migration 0018 whatever the switches say (see *Rolling out
 0018* under Migrations).

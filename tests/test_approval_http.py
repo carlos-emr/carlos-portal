@@ -78,8 +78,8 @@ def job_headers(path, permission, method="GET", raw=b""):
     ) | {"Content-Type": "application/json"}
 
 
-@pytest.fixture
-def approval_http(monkeypatch):
+def make_approval_http(monkeypatch, **settings):
+    """The approval app with one FAKE account and device; `settings` adds portal settings."""
     monkeypatch.setattr(mycarlos_approval, "time", lambda: F["now"])
     app = internal_app(
         clinic_id=F["clinic_id"],
@@ -96,6 +96,7 @@ def approval_http(monkeypatch):
                 }
             }
         ),
+        **settings,
     )
     with app.state.session_factory() as s, s.begin():
         account = PatientPortalAccount(
@@ -131,6 +132,11 @@ def approval_http(monkeypatch):
         )
     proxy = SplitIngressProxy(app, PREFIX, PREFIX)
     return app, TestClient(proxy, base_url="https://portal.example.invalid")
+
+
+@pytest.fixture
+def approval_http(monkeypatch):
+    return make_approval_http(monkeypatch)
 
 
 def post_intent(client):

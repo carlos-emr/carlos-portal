@@ -1,0 +1,636 @@
+{
+  "challenge_expiry_cases": [
+    {
+      "approval_kind": "staff_first",
+      "expires_at": 1792540790,
+      "id": "v2_staff_first_rule",
+      "intent_exp": 1792540790,
+      "intent_iat": 1792454390,
+      "issued_at": 1792454400,
+      "note": "expires_at = min(issued_at + 86400, intent.exp)",
+      "valid": true,
+      "version": 2
+    },
+    {
+      "approval_kind": "staff_first",
+      "expires_at": 1792455000,
+      "id": "v2_staff_first_short",
+      "intent_exp": 1792540790,
+      "intent_iat": 1792454390,
+      "issued_at": 1792454400,
+      "note": "a v2 staff_first challenge must take the full rule, not 600 s",
+      "valid": false,
+      "version": 2
+    },
+    {
+      "approval_kind": "code",
+      "expires_at": 1792455000,
+      "id": "v2_code_rule",
+      "intent_exp": 1792540790,
+      "intent_iat": 1792454390,
+      "issued_at": 1792454400,
+      "note": "code: min(issued_at + 600, intent.exp)",
+      "valid": true,
+      "version": 2
+    },
+    {
+      "approval_kind": "code",
+      "expires_at": 1792540800,
+      "id": "v2_code_long",
+      "intent_exp": 1792540790,
+      "intent_iat": 1792454390,
+      "issued_at": 1792454400,
+      "note": "code never gets 24 h",
+      "valid": false,
+      "version": 2
+    },
+    {
+      "approval_kind": "accepted_device",
+      "expires_at": 1792455000,
+      "id": "v2_accepted_device_rule",
+      "intent_exp": 1792540790,
+      "intent_iat": 1792454390,
+      "issued_at": 1792454400,
+      "note": "accepted_device: min(issued_at + 600, intent.exp)",
+      "valid": true,
+      "version": 2
+    },
+    {
+      "approval_kind": "staff_first",
+      "expires_at": 1792454990,
+      "id": "v1_staff_first_rule",
+      "intent_exp": 1792454990,
+      "intent_iat": 1792454390,
+      "issued_at": 1792454400,
+      "note": "v1 unchanged: min(issued_at + 600, intent.exp)",
+      "valid": true,
+      "version": 1
+    },
+    {
+      "approval_kind": "staff_first",
+      "expires_at": 1792540800,
+      "id": "v1_staff_first_long",
+      "intent_exp": 1792454990,
+      "intent_iat": 1792454390,
+      "issued_at": 1792454400,
+      "note": "v1 never gets 24 h",
+      "valid": false,
+      "version": 1
+    },
+    {
+      "approval_kind": "staff_first",
+      "expires_at": 1792454990,
+      "id": "version_mismatch",
+      "intent_exp": 1792454990,
+      "intent_iat": 1792454390,
+      "intent_version": 1,
+      "issued_at": 1792454400,
+      "note": "a challenge's v must equal its intent's v",
+      "valid": false,
+      "version": 2
+    }
+  ],
+  "clinic_id": "FAKE-m3-clinic",
+  "description": "ONE shared FAKE fixture for device approval contract v2 (myCarlos #144). FAKE keys are the v1 fixture's, by reference; nothing here is real.",
+  "flows": {
+    "accepted_device": {
+      "acceptance": {
+        "claims": {
+          "accepted_at": 1792454401,
+          "accepted_version": "0",
+          "approval_kind": "accepted_device",
+          "approval_sha256": "36a8159775a7af44c0a0436a52bdec0d3ff26e72433017de4e1e5ba99c70a23e",
+          "aud": "carlos-mycarlos-device-approval",
+          "candidate_device_key_id": "NILvIeOXh-hlzSjZ53EuVMhDp_FdO_niBb_aLIbUbX8",
+          "candidate_ed25519_public_key": "mrZ0XSTWNKiNtndpxBOz9-sGc6sHp8sOtJcUc01r9cA",
+          "candidate_x25519_public_key": "eAKAwVqCaeC6cBLrLmn0FzswbMgbOHTjuCSo2nefhTc",
+          "challenge_id": "hJ9CedAEPjGmO5VouAc_5LQ5aO1V0qn-BdFpnV97hxs",
+          "challenge_sha256": "82846dbc6beb8cc613f43e75b3b27cc1d497581f4a8e5db5dca1d8aa3a343d3a",
+          "clinic_id": "FAKE-m3-clinic",
+          "kid": "DWjrgoPSuMUtfOOxEVlL1vvyupTtqyYFAO0wyzREY-I",
+          "predecessor_device_key_id": "afOIevuMuSEuC1sh-4CwrX3Qs54iPS9KUgG15R1N_l4",
+          "public_portal_base_url": "https://portal.example.invalid/patient",
+          "recipient_id": "FAKE-m3-recipient-0001",
+          "request_id": "3d97bda2-9d92-4c57-9e74-ed43806f9f4e",
+          "typ": "mycarlos-device-acceptance",
+          "v": 2
+        },
+        "compact": "eyJhY2NlcHRlZF9hdCI6MTc5MjQ1NDQwMSwiYWNjZXB0ZWRfdmVyc2lvbiI6IjAiLCJhcHByb3ZhbF9raW5kIjoiYWNjZXB0ZWRfZGV2aWNlIiwiYXBwcm92YWxfc2hhMjU2IjoiMzZhODE1OTc3NWE3YWY0NGMwYTA0MzZhNTJiZGVjMGQzZmYyNmU3MjQzMzAxN2RlNGUxZTViYTk5YzcwYTIzZSIsImF1ZCI6ImNhcmxvcy1teWNhcmxvcy1kZXZpY2UtYXBwcm92YWwiLCJjYW5kaWRhdGVfZGV2aWNlX2tleV9pZCI6Ik5JTHZJZU9YaC1obHpTalo1M0V1Vk1oRHBfRmRPX25pQmJfYUxJYlViWDgiLCJjYW5kaWRhdGVfZWQyNTUxOV9wdWJsaWNfa2V5IjoibXJaMFhTVFdOS2lOdG5kcHhCT3o5LXNHYzZzSHA4c090SmNVYzAxcjljQSIsImNhbmRpZGF0ZV94MjU1MTlfcHVibGljX2tleSI6ImVBS0F3VnFDYWVDNmNCTHJMbW4wRnpzd2JNZ2JPSFRqdUNTbzJuZWZoVGMiLCJjaGFsbGVuZ2VfaWQiOiJoSjlDZWRBRVBqR21PNVZvdUFjXzVMUTVhTzFWMHFuLUJkRnBuVjk3aHhzIiwiY2hhbGxlbmdlX3NoYTI1NiI6IjgyODQ2ZGJjNmJlYjhjYzYxM2Y0M2U3NWIzYjI3Y2MxZDQ5NzU4MWY0YThlNWRiNWRjYTFkOGFhM2EzNDNkM2EiLCJjbGluaWNfaWQiOiJGQUtFLW0zLWNsaW5pYyIsImtpZCI6IkRXanJnb1BTdU1VdGZPT3hFVmxMMXZ2eXVwVHRxeVlGQU8wd3l6UkVZLUkiLCJwcmVkZWNlc3Nvcl9kZXZpY2Vfa2V5X2lkIjoiYWZPSWV2dU11U0V1QzFzaC00Q3dyWDNRczU0aVBTOUtVZ0cxNVIxTl9sNCIsInB1YmxpY19wb3J0YWxfYmFzZV91cmwiOiJodHRwczovL3BvcnRhbC5leGFtcGxlLmludmFsaWQvcGF0aWVudCIsInJlY2lwaWVudF9pZCI6IkZBS0UtbTMtcmVjaXBpZW50LTAwMDEiLCJyZXF1ZXN0X2lkIjoiM2Q5N2JkYTItOWQ5Mi00YzU3LTllNzQtZWQ0MzgwNmY5ZjRlIiwidHlwIjoibXljYXJsb3MtZGV2aWNlLWFjY2VwdGFuY2UiLCJ2IjoyfQ.ckZVKK53UwQqG9E7KY95uOga_tUGW-J9B7KQ4zTnl3ELbUAxIma-ufc_VtctAYMa1rY0nAgFbpsGnwDc9dY_Tg",
+        "compact_sha256": "aa12485cb3ca6844c7844db0fc6aa51c649bc2a8d1b29d8626ae90804b792780"
+      },
+      "approval": {
+        "claims": {
+          "aud": "carlos-mycarlos-device-approval",
+          "candidate_device_key_id": "NILvIeOXh-hlzSjZ53EuVMhDp_FdO_niBb_aLIbUbX8",
+          "candidate_ed25519_public_key": "mrZ0XSTWNKiNtndpxBOz9-sGc6sHp8sOtJcUc01r9cA",
+          "candidate_intent_sha256": "74e9f4cce2537d03cfeac57374104137b40b33e9aa8054912489e252bc1e6c73",
+          "candidate_x25519_public_key": "eAKAwVqCaeC6cBLrLmn0FzswbMgbOHTjuCSo2nefhTc",
+          "challenge_id": "hJ9CedAEPjGmO5VouAc_5LQ5aO1V0qn-BdFpnV97hxs",
+          "challenge_sha256": "82846dbc6beb8cc613f43e75b3b27cc1d497581f4a8e5db5dca1d8aa3a343d3a",
+          "clinic_id": "FAKE-m3-clinic",
+          "iss": "mycarlos",
+          "jti": "befc3bc5-0cba-481f-acaa-4f7cd2e0fb92",
+          "predecessor_device_key_id": "afOIevuMuSEuC1sh-4CwrX3Qs54iPS9KUgG15R1N_l4",
+          "predecessor_version": "0",
+          "recipient_id": "FAKE-m3-recipient-0001",
+          "typ": "mycarlos-device-approval",
+          "v": 2
+        },
+        "compact": "eyJhdWQiOiJjYXJsb3MtbXljYXJsb3MtZGV2aWNlLWFwcHJvdmFsIiwiY2FuZGlkYXRlX2RldmljZV9rZXlfaWQiOiJOSUx2SWVPWGgtaGx6U2paNTNFdVZNaERwX0ZkT19uaUJiX2FMSWJVYlg4IiwiY2FuZGlkYXRlX2VkMjU1MTlfcHVibGljX2tleSI6Im1yWjBYU1RXTktpTnRuZHB4Qk96OS1zR2M2c0hwOHNPdEpjVWMwMXI5Y0EiLCJjYW5kaWRhdGVfaW50ZW50X3NoYTI1NiI6Ijc0ZTlmNGNjZTI1MzdkMDNjZmVhYzU3Mzc0MTA0MTM3YjQwYjMzZTlhYTgwNTQ5MTI0ODllMjUyYmMxZTZjNzMiLCJjYW5kaWRhdGVfeDI1NTE5X3B1YmxpY19rZXkiOiJlQUtBd1ZxQ2FlQzZjQkxyTG1uMEZ6c3diTWdiT0hUanVDU28ybmVmaFRjIiwiY2hhbGxlbmdlX2lkIjoiaEo5Q2VkQUVQakdtTzVWb3VBY181TFE1YU8xVjBxbi1CZEZwblY5N2h4cyIsImNoYWxsZW5nZV9zaGEyNTYiOiI4Mjg0NmRiYzZiZWI4Y2M2MTNmNDNlNzViM2IyN2NjMWQ0OTc1ODFmNGE4ZTVkYjVkY2ExZDhhYTNhMzQzZDNhIiwiY2xpbmljX2lkIjoiRkFLRS1tMy1jbGluaWMiLCJpc3MiOiJteWNhcmxvcyIsImp0aSI6ImJlZmMzYmM1LTBjYmEtNDgxZi1hY2FhLTRmN2NkMmUwZmI5MiIsInByZWRlY2Vzc29yX2RldmljZV9rZXlfaWQiOiJhZk9JZXZ1TXVTRXVDMXNoLTRDd3JYM1FzNTRpUFM5S1VnRzE1UjFOX2w0IiwicHJlZGVjZXNzb3JfdmVyc2lvbiI6IjAiLCJyZWNpcGllbnRfaWQiOiJGQUtFLW0zLXJlY2lwaWVudC0wMDAxIiwidHlwIjoibXljYXJsb3MtZGV2aWNlLWFwcHJvdmFsIiwidiI6Mn0.T7KPAWX-SXuO2139n_zIFIqxm1uQIgozBMRyo1LghksPTZ5NIEDJj93qMTiroMlM3VzkFYfSsL1I_8PJlX-7Cw",
+        "compact_sha256": "36a8159775a7af44c0a0436a52bdec0d3ff26e72433017de4e1e5ba99c70a23e"
+      },
+      "challenge": {
+        "claims": {
+          "approval_kind": "accepted_device",
+          "aud": "carlos-mycarlos-device-approval",
+          "candidate_device_key_id": "NILvIeOXh-hlzSjZ53EuVMhDp_FdO_niBb_aLIbUbX8",
+          "candidate_ed25519_public_key": "mrZ0XSTWNKiNtndpxBOz9-sGc6sHp8sOtJcUc01r9cA",
+          "candidate_intent_sha256": "74e9f4cce2537d03cfeac57374104137b40b33e9aa8054912489e252bc1e6c73",
+          "candidate_x25519_public_key": "eAKAwVqCaeC6cBLrLmn0FzswbMgbOHTjuCSo2nefhTc",
+          "challenge_id": "hJ9CedAEPjGmO5VouAc_5LQ5aO1V0qn-BdFpnV97hxs",
+          "clinic_id": "FAKE-m3-clinic",
+          "expires_at": 1792455000,
+          "issued_at": 1792454400,
+          "kid": "DWjrgoPSuMUtfOOxEVlL1vvyupTtqyYFAO0wyzREY-I",
+          "predecessor_device_key_id": "afOIevuMuSEuC1sh-4CwrX3Qs54iPS9KUgG15R1N_l4",
+          "predecessor_version": "0",
+          "public_portal_base_url": "https://portal.example.invalid/patient",
+          "recipient_id": "FAKE-m3-recipient-0001",
+          "request_id": "3d97bda2-9d92-4c57-9e74-ed43806f9f4e",
+          "typ": "mycarlos-device-approval-challenge",
+          "v": 2
+        },
+        "compact": "eyJhcHByb3ZhbF9raW5kIjoiYWNjZXB0ZWRfZGV2aWNlIiwiYXVkIjoiY2FybG9zLW15Y2FybG9zLWRldmljZS1hcHByb3ZhbCIsImNhbmRpZGF0ZV9kZXZpY2Vfa2V5X2lkIjoiTklMdkllT1hoLWhselNqWjUzRXVWTWhEcF9GZE9fbmlCYl9hTEliVWJYOCIsImNhbmRpZGF0ZV9lZDI1NTE5X3B1YmxpY19rZXkiOiJtclowWFNUV05LaU50bmRweEJPejktc0djNnNIcDhzT3RKY1VjMDFyOWNBIiwiY2FuZGlkYXRlX2ludGVudF9zaGEyNTYiOiI3NGU5ZjRjY2UyNTM3ZDAzY2ZlYWM1NzM3NDEwNDEzN2I0MGIzM2U5YWE4MDU0OTEyNDg5ZTI1MmJjMWU2YzczIiwiY2FuZGlkYXRlX3gyNTUxOV9wdWJsaWNfa2V5IjoiZUFLQXdWcUNhZUM2Y0JMckxtbjBGenN3Yk1nYk9IVGp1Q1NvMm5lZmhUYyIsImNoYWxsZW5nZV9pZCI6ImhKOUNlZEFFUGpHbU81Vm91QWNfNUxRNWFPMVYwcW4tQmRGcG5WOTdoeHMiLCJjbGluaWNfaWQiOiJGQUtFLW0zLWNsaW5pYyIsImV4cGlyZXNfYXQiOjE3OTI0NTUwMDAsImlzc3VlZF9hdCI6MTc5MjQ1NDQwMCwia2lkIjoiRFdqcmdvUFN1TVV0Zk9PeEVWbEwxdnZ5dXBUdHF5WUZBTzB3eXpSRVktSSIsInByZWRlY2Vzc29yX2RldmljZV9rZXlfaWQiOiJhZk9JZXZ1TXVTRXVDMXNoLTRDd3JYM1FzNTRpUFM5S1VnRzE1UjFOX2w0IiwicHJlZGVjZXNzb3JfdmVyc2lvbiI6IjAiLCJwdWJsaWNfcG9ydGFsX2Jhc2VfdXJsIjoiaHR0cHM6Ly9wb3J0YWwuZXhhbXBsZS5pbnZhbGlkL3BhdGllbnQiLCJyZWNpcGllbnRfaWQiOiJGQUtFLW0zLXJlY2lwaWVudC0wMDAxIiwicmVxdWVzdF9pZCI6IjNkOTdiZGEyLTlkOTItNGM1Ny05ZTc0LWVkNDM4MDZmOWY0ZSIsInR5cCI6Im15Y2FybG9zLWRldmljZS1hcHByb3ZhbC1jaGFsbGVuZ2UiLCJ2IjoyfQ.AHpeicOiwrzRWe03n_vhHXmIQnJwDqqDlqlNeP7b1JAJVpMJU94_-mjiLZsW4GYFWGDw72rey6ry6d1MjrNhRg",
+        "compact_sha256": "82846dbc6beb8cc613f43e75b3b27cc1d497581f4a8e5db5dca1d8aa3a343d3a"
+      },
+      "intent": {
+        "claims": {
+          "aud": "carlos-mycarlos-device-approval-intent",
+          "candidate_device_key_id": "NILvIeOXh-hlzSjZ53EuVMhDp_FdO_niBb_aLIbUbX8",
+          "candidate_ed25519_public_key": "mrZ0XSTWNKiNtndpxBOz9-sGc6sHp8sOtJcUc01r9cA",
+          "candidate_x25519_public_key": "eAKAwVqCaeC6cBLrLmn0FzswbMgbOHTjuCSo2nefhTc",
+          "clinic_id": "FAKE-m3-clinic",
+          "exp": 1792540790,
+          "iat": 1792454390,
+          "iss": "mycarlos",
+          "predecessor_device_key_id": "afOIevuMuSEuC1sh-4CwrX3Qs54iPS9KUgG15R1N_l4",
+          "public_portal_base_url": "https://portal.example.invalid/patient",
+          "recipient_id": "FAKE-m3-recipient-0001",
+          "request_id": "3d97bda2-9d92-4c57-9e74-ed43806f9f4e",
+          "typ": "mycarlos-device-approval-intent",
+          "v": 2
+        },
+        "compact": "eyJhdWQiOiJjYXJsb3MtbXljYXJsb3MtZGV2aWNlLWFwcHJvdmFsLWludGVudCIsImNhbmRpZGF0ZV9kZXZpY2Vfa2V5X2lkIjoiTklMdkllT1hoLWhselNqWjUzRXVWTWhEcF9GZE9fbmlCYl9hTEliVWJYOCIsImNhbmRpZGF0ZV9lZDI1NTE5X3B1YmxpY19rZXkiOiJtclowWFNUV05LaU50bmRweEJPejktc0djNnNIcDhzT3RKY1VjMDFyOWNBIiwiY2FuZGlkYXRlX3gyNTUxOV9wdWJsaWNfa2V5IjoiZUFLQXdWcUNhZUM2Y0JMckxtbjBGenN3Yk1nYk9IVGp1Q1NvMm5lZmhUYyIsImNsaW5pY19pZCI6IkZBS0UtbTMtY2xpbmljIiwiZXhwIjoxNzkyNTQwNzkwLCJpYXQiOjE3OTI0NTQzOTAsImlzcyI6Im15Y2FybG9zIiwicHJlZGVjZXNzb3JfZGV2aWNlX2tleV9pZCI6ImFmT0lldnVNdVNFdUMxc2gtNEN3clgzUXM1NGlQUzlLVWdHMTVSMU5fbDQiLCJwdWJsaWNfcG9ydGFsX2Jhc2VfdXJsIjoiaHR0cHM6Ly9wb3J0YWwuZXhhbXBsZS5pbnZhbGlkL3BhdGllbnQiLCJyZWNpcGllbnRfaWQiOiJGQUtFLW0zLXJlY2lwaWVudC0wMDAxIiwicmVxdWVzdF9pZCI6IjNkOTdiZGEyLTlkOTItNGM1Ny05ZTc0LWVkNDM4MDZmOWY0ZSIsInR5cCI6Im15Y2FybG9zLWRldmljZS1hcHByb3ZhbC1pbnRlbnQiLCJ2IjoyfQ.dfoLP6ZrTk4gXFf8xzErNwSAhNRjGuGF9s7gwB09LA0bs1B72LOBFrqH9pRfVGyE5g_uek8_JSzpKJy-mXV1AQ",
+        "compact_sha256": "74e9f4cce2537d03cfeac57374104137b40b33e9aa8054912489e252bc1e6c73"
+      }
+    },
+    "code": {
+      "acceptance": {
+        "claims": {
+          "accepted_at": 1792454401,
+          "accepted_version": "0",
+          "approval_kind": "code",
+          "approval_sha256": null,
+          "aud": "carlos-mycarlos-device-approval",
+          "candidate_device_key_id": "hSwmO3Paf0PcheknJyNrn8VbXrwA5xZalqVq25ApcP8",
+          "candidate_ed25519_public_key": "-VEiv4BfzfOKPK05QTz5SaGP9a3Qwk075VkjqQGa7Ao",
+          "candidate_x25519_public_key": "g9HlkSYTM4E__K-XSEbNI2Pq6lwEjfzNvbXcW5-ecQs",
+          "challenge_id": "8oBJplSIcd1l9bLQA4y13-ZJnBSpgYp4ujDI3BM_BbA",
+          "challenge_sha256": "100fe5f566dc873de60fcd305cc80a9fc1995c9be00108b318b21cf3b25961c8",
+          "clinic_id": "FAKE-m3-clinic",
+          "kid": "DWjrgoPSuMUtfOOxEVlL1vvyupTtqyYFAO0wyzREY-I",
+          "predecessor_device_key_id": null,
+          "public_portal_base_url": "https://portal.example.invalid/patient",
+          "recipient_id": "FAKE-m3-recipient-0001",
+          "request_id": "61beba15-760b-41d2-8575-f6b9d087e223",
+          "typ": "mycarlos-device-acceptance",
+          "v": 2
+        },
+        "compact": "eyJhY2NlcHRlZF9hdCI6MTc5MjQ1NDQwMSwiYWNjZXB0ZWRfdmVyc2lvbiI6IjAiLCJhcHByb3ZhbF9raW5kIjoiY29kZSIsImFwcHJvdmFsX3NoYTI1NiI6bnVsbCwiYXVkIjoiY2FybG9zLW15Y2FybG9zLWRldmljZS1hcHByb3ZhbCIsImNhbmRpZGF0ZV9kZXZpY2Vfa2V5X2lkIjoiaFN3bU8zUGFmMFBjaGVrbkp5TnJuOFZiWHJ3QTV4WmFscVZxMjVBcGNQOCIsImNhbmRpZGF0ZV9lZDI1NTE5X3B1YmxpY19rZXkiOiItVkVpdjRCZnpmT0tQSzA1UVR6NVNhR1A5YTNRd2swNzVWa2pxUUdhN0FvIiwiY2FuZGlkYXRlX3gyNTUxOV9wdWJsaWNfa2V5IjoiZzlIbGtTWVRNNEVfX0stWFNFYk5JMlBxNmx3RWpmek52YlhjVzUtZWNRcyIsImNoYWxsZW5nZV9pZCI6IjhvQkpwbFNJY2QxbDliTFFBNHkxMy1aSm5CU3BnWXA0dWpESTNCTV9CYkEiLCJjaGFsbGVuZ2Vfc2hhMjU2IjoiMTAwZmU1ZjU2NmRjODczZGU2MGZjZDMwNWNjODBhOWZjMTk5NWM5YmUwMDEwOGIzMThiMjFjZjNiMjU5NjFjOCIsImNsaW5pY19pZCI6IkZBS0UtbTMtY2xpbmljIiwia2lkIjoiRFdqcmdvUFN1TVV0Zk9PeEVWbEwxdnZ5dXBUdHF5WUZBTzB3eXpSRVktSSIsInByZWRlY2Vzc29yX2RldmljZV9rZXlfaWQiOm51bGwsInB1YmxpY19wb3J0YWxfYmFzZV91cmwiOiJodHRwczovL3BvcnRhbC5leGFtcGxlLmludmFsaWQvcGF0aWVudCIsInJlY2lwaWVudF9pZCI6IkZBS0UtbTMtcmVjaXBpZW50LTAwMDEiLCJyZXF1ZXN0X2lkIjoiNjFiZWJhMTUtNzYwYi00MWQyLTg1NzUtZjZiOWQwODdlMjIzIiwidHlwIjoibXljYXJsb3MtZGV2aWNlLWFjY2VwdGFuY2UiLCJ2IjoyfQ.3rSrZ1dvT3oMUg90IUCjUn7dNcpqxHN1BR3aY7KboroSQqp2dq_BJg24BT5DjPfG5QISfxaYi2pQ6C2gbhD-Hw",
+        "compact_sha256": "3b9170ad91f2c23c1c01d51921daf54b99bbb777cf2f42bdd5fdc1a39291cabc"
+      },
+      "challenge": {
+        "claims": {
+          "approval_kind": "code",
+          "aud": "carlos-mycarlos-device-approval",
+          "candidate_device_key_id": "hSwmO3Paf0PcheknJyNrn8VbXrwA5xZalqVq25ApcP8",
+          "candidate_ed25519_public_key": "-VEiv4BfzfOKPK05QTz5SaGP9a3Qwk075VkjqQGa7Ao",
+          "candidate_intent_sha256": "24c81c34951d6da0d888f300ed7f4bdcbb56ede660f4aa97e1a31b994af0bcd8",
+          "candidate_x25519_public_key": "g9HlkSYTM4E__K-XSEbNI2Pq6lwEjfzNvbXcW5-ecQs",
+          "challenge_id": "8oBJplSIcd1l9bLQA4y13-ZJnBSpgYp4ujDI3BM_BbA",
+          "clinic_id": "FAKE-m3-clinic",
+          "expires_at": 1792455000,
+          "issued_at": 1792454400,
+          "kid": "DWjrgoPSuMUtfOOxEVlL1vvyupTtqyYFAO0wyzREY-I",
+          "predecessor_device_key_id": null,
+          "predecessor_version": null,
+          "public_portal_base_url": "https://portal.example.invalid/patient",
+          "recipient_id": "FAKE-m3-recipient-0001",
+          "request_id": "61beba15-760b-41d2-8575-f6b9d087e223",
+          "typ": "mycarlos-device-approval-challenge",
+          "v": 2
+        },
+        "compact": "eyJhcHByb3ZhbF9raW5kIjoiY29kZSIsImF1ZCI6ImNhcmxvcy1teWNhcmxvcy1kZXZpY2UtYXBwcm92YWwiLCJjYW5kaWRhdGVfZGV2aWNlX2tleV9pZCI6ImhTd21PM1BhZjBQY2hla25KeU5ybjhWYlhyd0E1eFphbHFWcTI1QXBjUDgiLCJjYW5kaWRhdGVfZWQyNTUxOV9wdWJsaWNfa2V5IjoiLVZFaXY0QmZ6Zk9LUEswNVFUejVTYUdQOWEzUXdrMDc1VmtqcVFHYTdBbyIsImNhbmRpZGF0ZV9pbnRlbnRfc2hhMjU2IjoiMjRjODFjMzQ5NTFkNmRhMGQ4ODhmMzAwZWQ3ZjRiZGNiYjU2ZWRlNjYwZjRhYTk3ZTFhMzFiOTk0YWYwYmNkOCIsImNhbmRpZGF0ZV94MjU1MTlfcHVibGljX2tleSI6Imc5SGxrU1lUTTRFX19LLVhTRWJOSTJQcTZsd0VqZnpOdmJYY1c1LWVjUXMiLCJjaGFsbGVuZ2VfaWQiOiI4b0JKcGxTSWNkMWw5YkxRQTR5MTMtWkpuQlNwZ1lwNHVqREkzQk1fQmJBIiwiY2xpbmljX2lkIjoiRkFLRS1tMy1jbGluaWMiLCJleHBpcmVzX2F0IjoxNzkyNDU1MDAwLCJpc3N1ZWRfYXQiOjE3OTI0NTQ0MDAsImtpZCI6IkRXanJnb1BTdU1VdGZPT3hFVmxMMXZ2eXVwVHRxeVlGQU8wd3l6UkVZLUkiLCJwcmVkZWNlc3Nvcl9kZXZpY2Vfa2V5X2lkIjpudWxsLCJwcmVkZWNlc3Nvcl92ZXJzaW9uIjpudWxsLCJwdWJsaWNfcG9ydGFsX2Jhc2VfdXJsIjoiaHR0cHM6Ly9wb3J0YWwuZXhhbXBsZS5pbnZhbGlkL3BhdGllbnQiLCJyZWNpcGllbnRfaWQiOiJGQUtFLW0zLXJlY2lwaWVudC0wMDAxIiwicmVxdWVzdF9pZCI6IjYxYmViYTE1LTc2MGItNDFkMi04NTc1LWY2YjlkMDg3ZTIyMyIsInR5cCI6Im15Y2FybG9zLWRldmljZS1hcHByb3ZhbC1jaGFsbGVuZ2UiLCJ2IjoyfQ.KHYYzDiHhD3BA7uh9ApunXNadt41Mqk9SOk21J_om0tfCw3DRnsD84QPe8LODZI-mzmjPao2Bvb7AWyZKCvT_g",
+        "compact_sha256": "100fe5f566dc873de60fcd305cc80a9fc1995c9be00108b318b21cf3b25961c8"
+      },
+      "intent": {
+        "claims": {
+          "aud": "carlos-mycarlos-device-approval-intent",
+          "candidate_device_key_id": "hSwmO3Paf0PcheknJyNrn8VbXrwA5xZalqVq25ApcP8",
+          "candidate_ed25519_public_key": "-VEiv4BfzfOKPK05QTz5SaGP9a3Qwk075VkjqQGa7Ao",
+          "candidate_x25519_public_key": "g9HlkSYTM4E__K-XSEbNI2Pq6lwEjfzNvbXcW5-ecQs",
+          "clinic_id": "FAKE-m3-clinic",
+          "exp": 1792540790,
+          "iat": 1792454390,
+          "iss": "mycarlos",
+          "predecessor_device_key_id": null,
+          "public_portal_base_url": "https://portal.example.invalid/patient",
+          "recipient_id": "FAKE-m3-recipient-0001",
+          "request_id": "61beba15-760b-41d2-8575-f6b9d087e223",
+          "typ": "mycarlos-device-approval-intent",
+          "v": 2
+        },
+        "compact": "eyJhdWQiOiJjYXJsb3MtbXljYXJsb3MtZGV2aWNlLWFwcHJvdmFsLWludGVudCIsImNhbmRpZGF0ZV9kZXZpY2Vfa2V5X2lkIjoiaFN3bU8zUGFmMFBjaGVrbkp5TnJuOFZiWHJ3QTV4WmFscVZxMjVBcGNQOCIsImNhbmRpZGF0ZV9lZDI1NTE5X3B1YmxpY19rZXkiOiItVkVpdjRCZnpmT0tQSzA1UVR6NVNhR1A5YTNRd2swNzVWa2pxUUdhN0FvIiwiY2FuZGlkYXRlX3gyNTUxOV9wdWJsaWNfa2V5IjoiZzlIbGtTWVRNNEVfX0stWFNFYk5JMlBxNmx3RWpmek52YlhjVzUtZWNRcyIsImNsaW5pY19pZCI6IkZBS0UtbTMtY2xpbmljIiwiZXhwIjoxNzkyNTQwNzkwLCJpYXQiOjE3OTI0NTQzOTAsImlzcyI6Im15Y2FybG9zIiwicHJlZGVjZXNzb3JfZGV2aWNlX2tleV9pZCI6bnVsbCwicHVibGljX3BvcnRhbF9iYXNlX3VybCI6Imh0dHBzOi8vcG9ydGFsLmV4YW1wbGUuaW52YWxpZC9wYXRpZW50IiwicmVjaXBpZW50X2lkIjoiRkFLRS1tMy1yZWNpcGllbnQtMDAwMSIsInJlcXVlc3RfaWQiOiI2MWJlYmExNS03NjBiLTQxZDItODU3NS1mNmI5ZDA4N2UyMjMiLCJ0eXAiOiJteWNhcmxvcy1kZXZpY2UtYXBwcm92YWwtaW50ZW50IiwidiI6Mn0.jKwa77_5nqsdpYpHBbcyp-mxT5jI2sYcgDG9-tysXUtnYLsigXCpDSBWzokmRsxCZ4QqHd90Cirhi4gMqfGDAQ",
+        "compact_sha256": "24c81c34951d6da0d888f300ed7f4bdcbb56ede660f4aa97e1a31b994af0bcd8"
+      }
+    },
+    "staff_first": {
+      "acceptance": {
+        "claims": {
+          "accepted_at": 1792454401,
+          "accepted_version": "0",
+          "approval_kind": "staff_first",
+          "approval_sha256": null,
+          "aud": "carlos-mycarlos-device-approval",
+          "candidate_device_key_id": "hSwmO3Paf0PcheknJyNrn8VbXrwA5xZalqVq25ApcP8",
+          "candidate_ed25519_public_key": "-VEiv4BfzfOKPK05QTz5SaGP9a3Qwk075VkjqQGa7Ao",
+          "candidate_x25519_public_key": "g9HlkSYTM4E__K-XSEbNI2Pq6lwEjfzNvbXcW5-ecQs",
+          "challenge_id": "01RXMpEzrnrYkg0uHExjyDkSLzKwKW6trl2AP107GkU",
+          "challenge_sha256": "96f49a0df030c2a21a2a0b41096d9f026d369bf842f81f2aa08ad96e155d654b",
+          "clinic_id": "FAKE-m3-clinic",
+          "kid": "DWjrgoPSuMUtfOOxEVlL1vvyupTtqyYFAO0wyzREY-I",
+          "predecessor_device_key_id": null,
+          "public_portal_base_url": "https://portal.example.invalid/patient",
+          "recipient_id": "FAKE-m3-recipient-0001",
+          "request_id": "50cc12c7-e228-472c-9f76-5fd590055ecb",
+          "typ": "mycarlos-device-acceptance",
+          "v": 2
+        },
+        "compact": "eyJhY2NlcHRlZF9hdCI6MTc5MjQ1NDQwMSwiYWNjZXB0ZWRfdmVyc2lvbiI6IjAiLCJhcHByb3ZhbF9raW5kIjoic3RhZmZfZmlyc3QiLCJhcHByb3ZhbF9zaGEyNTYiOm51bGwsImF1ZCI6ImNhcmxvcy1teWNhcmxvcy1kZXZpY2UtYXBwcm92YWwiLCJjYW5kaWRhdGVfZGV2aWNlX2tleV9pZCI6ImhTd21PM1BhZjBQY2hla25KeU5ybjhWYlhyd0E1eFphbHFWcTI1QXBjUDgiLCJjYW5kaWRhdGVfZWQyNTUxOV9wdWJsaWNfa2V5IjoiLVZFaXY0QmZ6Zk9LUEswNVFUejVTYUdQOWEzUXdrMDc1VmtqcVFHYTdBbyIsImNhbmRpZGF0ZV94MjU1MTlfcHVibGljX2tleSI6Imc5SGxrU1lUTTRFX19LLVhTRWJOSTJQcTZsd0VqZnpOdmJYY1c1LWVjUXMiLCJjaGFsbGVuZ2VfaWQiOiIwMVJYTXBFenJucllrZzB1SEV4anlEa1NMekt3S1c2dHJsMkFQMTA3R2tVIiwiY2hhbGxlbmdlX3NoYTI1NiI6Ijk2ZjQ5YTBkZjAzMGMyYTIxYTJhMGI0MTA5NmQ5ZjAyNmQzNjliZjg0MmY4MWYyYWEwOGFkOTZlMTU1ZDY1NGIiLCJjbGluaWNfaWQiOiJGQUtFLW0zLWNsaW5pYyIsImtpZCI6IkRXanJnb1BTdU1VdGZPT3hFVmxMMXZ2eXVwVHRxeVlGQU8wd3l6UkVZLUkiLCJwcmVkZWNlc3Nvcl9kZXZpY2Vfa2V5X2lkIjpudWxsLCJwdWJsaWNfcG9ydGFsX2Jhc2VfdXJsIjoiaHR0cHM6Ly9wb3J0YWwuZXhhbXBsZS5pbnZhbGlkL3BhdGllbnQiLCJyZWNpcGllbnRfaWQiOiJGQUtFLW0zLXJlY2lwaWVudC0wMDAxIiwicmVxdWVzdF9pZCI6IjUwY2MxMmM3LWUyMjgtNDcyYy05Zjc2LTVmZDU5MDA1NWVjYiIsInR5cCI6Im15Y2FybG9zLWRldmljZS1hY2NlcHRhbmNlIiwidiI6Mn0.LrSjUiGWmALEYhxsttSj7uy4mklqxzpTX2EbRSbPQ5IypWYGumH84IiqF8SQlmq9d3HXgDL87wiCQACHp9bl6Q",
+        "compact_sha256": "c8ff4e61ace4fb126b4802521cb35f36199fff017f0de168be1060adf056be73"
+      },
+      "challenge": {
+        "claims": {
+          "approval_kind": "staff_first",
+          "aud": "carlos-mycarlos-device-approval",
+          "candidate_device_key_id": "hSwmO3Paf0PcheknJyNrn8VbXrwA5xZalqVq25ApcP8",
+          "candidate_ed25519_public_key": "-VEiv4BfzfOKPK05QTz5SaGP9a3Qwk075VkjqQGa7Ao",
+          "candidate_intent_sha256": "95483342d7741616aa93a04359c361eb0ad677ba5752d91ba73e75bf679eb1ce",
+          "candidate_x25519_public_key": "g9HlkSYTM4E__K-XSEbNI2Pq6lwEjfzNvbXcW5-ecQs",
+          "challenge_id": "01RXMpEzrnrYkg0uHExjyDkSLzKwKW6trl2AP107GkU",
+          "clinic_id": "FAKE-m3-clinic",
+          "expires_at": 1792540790,
+          "issued_at": 1792454400,
+          "kid": "DWjrgoPSuMUtfOOxEVlL1vvyupTtqyYFAO0wyzREY-I",
+          "predecessor_device_key_id": null,
+          "predecessor_version": null,
+          "public_portal_base_url": "https://portal.example.invalid/patient",
+          "recipient_id": "FAKE-m3-recipient-0001",
+          "request_id": "50cc12c7-e228-472c-9f76-5fd590055ecb",
+          "typ": "mycarlos-device-approval-challenge",
+          "v": 2
+        },
+        "compact": "eyJhcHByb3ZhbF9raW5kIjoic3RhZmZfZmlyc3QiLCJhdWQiOiJjYXJsb3MtbXljYXJsb3MtZGV2aWNlLWFwcHJvdmFsIiwiY2FuZGlkYXRlX2RldmljZV9rZXlfaWQiOiJoU3dtTzNQYWYwUGNoZWtuSnlOcm44VmJYcndBNXhaYWxxVnEyNUFwY1A4IiwiY2FuZGlkYXRlX2VkMjU1MTlfcHVibGljX2tleSI6Ii1WRWl2NEJmemZPS1BLMDVRVHo1U2FHUDlhM1F3azA3NVZranFRR2E3QW8iLCJjYW5kaWRhdGVfaW50ZW50X3NoYTI1NiI6Ijk1NDgzMzQyZDc3NDE2MTZhYTkzYTA0MzU5YzM2MWViMGFkNjc3YmE1NzUyZDkxYmE3M2U3NWJmNjc5ZWIxY2UiLCJjYW5kaWRhdGVfeDI1NTE5X3B1YmxpY19rZXkiOiJnOUhsa1NZVE00RV9fSy1YU0ViTkkyUHE2bHdFamZ6TnZiWGNXNS1lY1FzIiwiY2hhbGxlbmdlX2lkIjoiMDFSWE1wRXpybnJZa2cwdUhFeGp5RGtTTHpLd0tXNnRybDJBUDEwN0drVSIsImNsaW5pY19pZCI6IkZBS0UtbTMtY2xpbmljIiwiZXhwaXJlc19hdCI6MTc5MjU0MDc5MCwiaXNzdWVkX2F0IjoxNzkyNDU0NDAwLCJraWQiOiJEV2pyZ29QU3VNVXRmT094RVZsTDF2dnl1cFR0cXlZRkFPMHd5elJFWS1JIiwicHJlZGVjZXNzb3JfZGV2aWNlX2tleV9pZCI6bnVsbCwicHJlZGVjZXNzb3JfdmVyc2lvbiI6bnVsbCwicHVibGljX3BvcnRhbF9iYXNlX3VybCI6Imh0dHBzOi8vcG9ydGFsLmV4YW1wbGUuaW52YWxpZC9wYXRpZW50IiwicmVjaXBpZW50X2lkIjoiRkFLRS1tMy1yZWNpcGllbnQtMDAwMSIsInJlcXVlc3RfaWQiOiI1MGNjMTJjNy1lMjI4LTQ3MmMtOWY3Ni01ZmQ1OTAwNTVlY2IiLCJ0eXAiOiJteWNhcmxvcy1kZXZpY2UtYXBwcm92YWwtY2hhbGxlbmdlIiwidiI6Mn0.48FJ-l7Bqk1mjH8I8BxVBoY8u60PU5DWcQCkVAYIxCVUXLR9pleKOLWK3fGHjv4rMAuILvGqhevGfRdrC75VTw",
+        "compact_sha256": "96f49a0df030c2a21a2a0b41096d9f026d369bf842f81f2aa08ad96e155d654b"
+      },
+      "intent": {
+        "claims": {
+          "aud": "carlos-mycarlos-device-approval-intent",
+          "candidate_device_key_id": "hSwmO3Paf0PcheknJyNrn8VbXrwA5xZalqVq25ApcP8",
+          "candidate_ed25519_public_key": "-VEiv4BfzfOKPK05QTz5SaGP9a3Qwk075VkjqQGa7Ao",
+          "candidate_x25519_public_key": "g9HlkSYTM4E__K-XSEbNI2Pq6lwEjfzNvbXcW5-ecQs",
+          "clinic_id": "FAKE-m3-clinic",
+          "exp": 1792540790,
+          "iat": 1792454390,
+          "iss": "mycarlos",
+          "predecessor_device_key_id": null,
+          "public_portal_base_url": "https://portal.example.invalid/patient",
+          "recipient_id": "FAKE-m3-recipient-0001",
+          "request_id": "50cc12c7-e228-472c-9f76-5fd590055ecb",
+          "typ": "mycarlos-device-approval-intent",
+          "v": 2
+        },
+        "compact": "eyJhdWQiOiJjYXJsb3MtbXljYXJsb3MtZGV2aWNlLWFwcHJvdmFsLWludGVudCIsImNhbmRpZGF0ZV9kZXZpY2Vfa2V5X2lkIjoiaFN3bU8zUGFmMFBjaGVrbkp5TnJuOFZiWHJ3QTV4WmFscVZxMjVBcGNQOCIsImNhbmRpZGF0ZV9lZDI1NTE5X3B1YmxpY19rZXkiOiItVkVpdjRCZnpmT0tQSzA1UVR6NVNhR1A5YTNRd2swNzVWa2pxUUdhN0FvIiwiY2FuZGlkYXRlX3gyNTUxOV9wdWJsaWNfa2V5IjoiZzlIbGtTWVRNNEVfX0stWFNFYk5JMlBxNmx3RWpmek52YlhjVzUtZWNRcyIsImNsaW5pY19pZCI6IkZBS0UtbTMtY2xpbmljIiwiZXhwIjoxNzkyNTQwNzkwLCJpYXQiOjE3OTI0NTQzOTAsImlzcyI6Im15Y2FybG9zIiwicHJlZGVjZXNzb3JfZGV2aWNlX2tleV9pZCI6bnVsbCwicHVibGljX3BvcnRhbF9iYXNlX3VybCI6Imh0dHBzOi8vcG9ydGFsLmV4YW1wbGUuaW52YWxpZC9wYXRpZW50IiwicmVjaXBpZW50X2lkIjoiRkFLRS1tMy1yZWNpcGllbnQtMDAwMSIsInJlcXVlc3RfaWQiOiI1MGNjMTJjNy1lMjI4LTQ3MmMtOWY3Ni01ZmQ1OTAwNTVlY2IiLCJ0eXAiOiJteWNhcmxvcy1kZXZpY2UtYXBwcm92YWwtaW50ZW50IiwidiI6Mn0.zaAVbAebK-qvlMDXiM8lgyqN13guElKjN3ecR9Wc1m_7mlCX-gq2m5f3AhuPqdS7KQpijmiSf8AM9Jnmo7ynBQ",
+        "compact_sha256": "95483342d7741616aa93a04359c361eb0ad677ba5752d91ba73e75bf679eb1ce"
+      }
+    }
+  },
+  "format_version": 2,
+  "keys_from": "device-approval-contract-v1.json",
+  "limits_seconds": {
+    "1": {
+      "accepted_device": 600,
+      "code": 600,
+      "intent": 600,
+      "staff_first": 600
+    },
+    "2": {
+      "accepted_device": 600,
+      "code": 600,
+      "intent": 86400,
+      "staff_first": 86400
+    }
+  },
+  "now": 1792454400,
+  "open_request_cases": [
+    {
+      "challenge_expires_at": null,
+      "id": "v2_pending_before_10min",
+      "intent_exp": 1792540790,
+      "intent_iat": 1792454390,
+      "note": "no challenge yet: open until min(exp, iat + 600)",
+      "now": 1792454989,
+      "open": true,
+      "status": "pending",
+      "version": 2
+    },
+    {
+      "challenge_expires_at": null,
+      "id": "v2_pending_at_10min",
+      "intent_exp": 1792540790,
+      "intent_iat": 1792454390,
+      "note": "after 10 min an unanswered request no longer blocks a new one",
+      "now": 1792454990,
+      "open": false,
+      "status": "pending",
+      "version": 2
+    },
+    {
+      "challenge_expires_at": 1792540790,
+      "id": "v2_staff_challenge_before_24h",
+      "intent_exp": 1792540790,
+      "intent_iat": 1792454390,
+      "note": "staff_first challenge open until its expires_at",
+      "now": 1792540789,
+      "open": true,
+      "status": "challenge_ready",
+      "version": 2
+    },
+    {
+      "challenge_expires_at": 1792540790,
+      "id": "v2_staff_challenge_at_24h",
+      "intent_exp": 1792540790,
+      "intent_iat": 1792454390,
+      "note": "ends at expires_at",
+      "now": 1792540790,
+      "open": false,
+      "status": "challenge_ready",
+      "version": 2
+    },
+    {
+      "challenge_expires_at": null,
+      "id": "v1_pending_before_exp",
+      "intent_exp": 1792454990,
+      "intent_iat": 1792454390,
+      "note": "v1 unchanged: open until exp",
+      "now": 1792454989,
+      "open": true,
+      "status": "pending",
+      "version": 1
+    },
+    {
+      "challenge_expires_at": null,
+      "id": "v1_pending_at_exp",
+      "intent_exp": 1792454990,
+      "intent_iat": 1792454390,
+      "note": "v1 unchanged",
+      "now": 1792454990,
+      "open": false,
+      "status": "pending",
+      "version": 1
+    }
+  ],
+  "public_portal_base_url": "https://portal.example.invalid/patient",
+  "recipient_id": "FAKE-m3-recipient-0001",
+  "signed_object_vectors": [
+    {
+      "clinic_key_status": "active",
+      "compact": "eyJhdWQiOiJjYXJsb3MtbXljYXJsb3MtZGV2aWNlLWFwcHJvdmFsLWludGVudCIsImNhbmRpZGF0ZV9kZXZpY2Vfa2V5X2lkIjoiaFN3bU8zUGFmMFBjaGVrbkp5TnJuOFZiWHJ3QTV4WmFscVZxMjVBcGNQOCIsImNhbmRpZGF0ZV9lZDI1NTE5X3B1YmxpY19rZXkiOiItVkVpdjRCZnpmT0tQSzA1UVR6NVNhR1A5YTNRd2swNzVWa2pxUUdhN0FvIiwiY2FuZGlkYXRlX3gyNTUxOV9wdWJsaWNfa2V5IjoiZzlIbGtTWVRNNEVfX0stWFNFYk5JMlBxNmx3RWpmek52YlhjVzUtZWNRcyIsImNsaW5pY19pZCI6IkZBS0UtbTMtY2xpbmljIiwiZXhwIjoxNzkyNTQwNzkwLCJpYXQiOjE3OTI0NTQzOTAsImlzcyI6Im15Y2FybG9zIiwicHJlZGVjZXNzb3JfZGV2aWNlX2tleV9pZCI6bnVsbCwicHVibGljX3BvcnRhbF9iYXNlX3VybCI6Imh0dHBzOi8vcG9ydGFsLmV4YW1wbGUuaW52YWxpZC9wYXRpZW50IiwicmVjaXBpZW50X2lkIjoiRkFLRS1tMy1yZWNpcGllbnQtMDAwMSIsInJlcXVlc3RfaWQiOiI1MGNjMTJjNy1lMjI4LTQ3MmMtOWY3Ni01ZmQ1OTAwNTVlY2IiLCJ0eXAiOiJteWNhcmxvcy1kZXZpY2UtYXBwcm92YWwtaW50ZW50IiwidiI6Mn0.zaAVbAebK-qvlMDXiM8lgyqN13guElKjN3ecR9Wc1m_7mlCX-gq2m5f3AhuPqdS7KQpijmiSf8AM9Jnmo7ynBQ",
+      "compact_sha256": "95483342d7741616aa93a04359c361eb0ad677ba5752d91ba73e75bf679eb1ce",
+      "id": "v2_staff_first_intent_valid",
+      "kind": "intent",
+      "note": "v2 staff_first flow: intent",
+      "now": 1792454400,
+      "valid": true,
+      "version": 2
+    },
+    {
+      "clinic_key_status": "active",
+      "compact": "eyJhcHByb3ZhbF9raW5kIjoic3RhZmZfZmlyc3QiLCJhdWQiOiJjYXJsb3MtbXljYXJsb3MtZGV2aWNlLWFwcHJvdmFsIiwiY2FuZGlkYXRlX2RldmljZV9rZXlfaWQiOiJoU3dtTzNQYWYwUGNoZWtuSnlOcm44VmJYcndBNXhaYWxxVnEyNUFwY1A4IiwiY2FuZGlkYXRlX2VkMjU1MTlfcHVibGljX2tleSI6Ii1WRWl2NEJmemZPS1BLMDVRVHo1U2FHUDlhM1F3azA3NVZranFRR2E3QW8iLCJjYW5kaWRhdGVfaW50ZW50X3NoYTI1NiI6Ijk1NDgzMzQyZDc3NDE2MTZhYTkzYTA0MzU5YzM2MWViMGFkNjc3YmE1NzUyZDkxYmE3M2U3NWJmNjc5ZWIxY2UiLCJjYW5kaWRhdGVfeDI1NTE5X3B1YmxpY19rZXkiOiJnOUhsa1NZVE00RV9fSy1YU0ViTkkyUHE2bHdFamZ6TnZiWGNXNS1lY1FzIiwiY2hhbGxlbmdlX2lkIjoiMDFSWE1wRXpybnJZa2cwdUhFeGp5RGtTTHpLd0tXNnRybDJBUDEwN0drVSIsImNsaW5pY19pZCI6IkZBS0UtbTMtY2xpbmljIiwiZXhwaXJlc19hdCI6MTc5MjU0MDc5MCwiaXNzdWVkX2F0IjoxNzkyNDU0NDAwLCJraWQiOiJEV2pyZ29QU3VNVXRmT094RVZsTDF2dnl1cFR0cXlZRkFPMHd5elJFWS1JIiwicHJlZGVjZXNzb3JfZGV2aWNlX2tleV9pZCI6bnVsbCwicHJlZGVjZXNzb3JfdmVyc2lvbiI6bnVsbCwicHVibGljX3BvcnRhbF9iYXNlX3VybCI6Imh0dHBzOi8vcG9ydGFsLmV4YW1wbGUuaW52YWxpZC9wYXRpZW50IiwicmVjaXBpZW50X2lkIjoiRkFLRS1tMy1yZWNpcGllbnQtMDAwMSIsInJlcXVlc3RfaWQiOiI1MGNjMTJjNy1lMjI4LTQ3MmMtOWY3Ni01ZmQ1OTAwNTVlY2IiLCJ0eXAiOiJteWNhcmxvcy1kZXZpY2UtYXBwcm92YWwtY2hhbGxlbmdlIiwidiI6Mn0.48FJ-l7Bqk1mjH8I8BxVBoY8u60PU5DWcQCkVAYIxCVUXLR9pleKOLWK3fGHjv4rMAuILvGqhevGfRdrC75VTw",
+      "compact_sha256": "96f49a0df030c2a21a2a0b41096d9f026d369bf842f81f2aa08ad96e155d654b",
+      "id": "v2_staff_first_challenge_valid",
+      "kind": "challenge",
+      "note": "v2 staff_first flow: challenge",
+      "now": 1792454400,
+      "valid": true,
+      "version": 2
+    },
+    {
+      "clinic_key_status": "active",
+      "compact": "eyJhY2NlcHRlZF9hdCI6MTc5MjQ1NDQwMSwiYWNjZXB0ZWRfdmVyc2lvbiI6IjAiLCJhcHByb3ZhbF9raW5kIjoic3RhZmZfZmlyc3QiLCJhcHByb3ZhbF9zaGEyNTYiOm51bGwsImF1ZCI6ImNhcmxvcy1teWNhcmxvcy1kZXZpY2UtYXBwcm92YWwiLCJjYW5kaWRhdGVfZGV2aWNlX2tleV9pZCI6ImhTd21PM1BhZjBQY2hla25KeU5ybjhWYlhyd0E1eFphbHFWcTI1QXBjUDgiLCJjYW5kaWRhdGVfZWQyNTUxOV9wdWJsaWNfa2V5IjoiLVZFaXY0QmZ6Zk9LUEswNVFUejVTYUdQOWEzUXdrMDc1VmtqcVFHYTdBbyIsImNhbmRpZGF0ZV94MjU1MTlfcHVibGljX2tleSI6Imc5SGxrU1lUTTRFX19LLVhTRWJOSTJQcTZsd0VqZnpOdmJYY1c1LWVjUXMiLCJjaGFsbGVuZ2VfaWQiOiIwMVJYTXBFenJucllrZzB1SEV4anlEa1NMekt3S1c2dHJsMkFQMTA3R2tVIiwiY2hhbGxlbmdlX3NoYTI1NiI6Ijk2ZjQ5YTBkZjAzMGMyYTIxYTJhMGI0MTA5NmQ5ZjAyNmQzNjliZjg0MmY4MWYyYWEwOGFkOTZlMTU1ZDY1NGIiLCJjbGluaWNfaWQiOiJGQUtFLW0zLWNsaW5pYyIsImtpZCI6IkRXanJnb1BTdU1VdGZPT3hFVmxMMXZ2eXVwVHRxeVlGQU8wd3l6UkVZLUkiLCJwcmVkZWNlc3Nvcl9kZXZpY2Vfa2V5X2lkIjpudWxsLCJwdWJsaWNfcG9ydGFsX2Jhc2VfdXJsIjoiaHR0cHM6Ly9wb3J0YWwuZXhhbXBsZS5pbnZhbGlkL3BhdGllbnQiLCJyZWNpcGllbnRfaWQiOiJGQUtFLW0zLXJlY2lwaWVudC0wMDAxIiwicmVxdWVzdF9pZCI6IjUwY2MxMmM3LWUyMjgtNDcyYy05Zjc2LTVmZDU5MDA1NWVjYiIsInR5cCI6Im15Y2FybG9zLWRldmljZS1hY2NlcHRhbmNlIiwidiI6Mn0.LrSjUiGWmALEYhxsttSj7uy4mklqxzpTX2EbRSbPQ5IypWYGumH84IiqF8SQlmq9d3HXgDL87wiCQACHp9bl6Q",
+      "compact_sha256": "c8ff4e61ace4fb126b4802521cb35f36199fff017f0de168be1060adf056be73",
+      "id": "v2_staff_first_acceptance_valid",
+      "kind": "acceptance",
+      "note": "v2 staff_first flow: acceptance",
+      "now": 1792454400,
+      "valid": true,
+      "version": 2
+    },
+    {
+      "clinic_key_status": "active",
+      "compact": "eyJhdWQiOiJjYXJsb3MtbXljYXJsb3MtZGV2aWNlLWFwcHJvdmFsLWludGVudCIsImNhbmRpZGF0ZV9kZXZpY2Vfa2V5X2lkIjoiaFN3bU8zUGFmMFBjaGVrbkp5TnJuOFZiWHJ3QTV4WmFscVZxMjVBcGNQOCIsImNhbmRpZGF0ZV9lZDI1NTE5X3B1YmxpY19rZXkiOiItVkVpdjRCZnpmT0tQSzA1UVR6NVNhR1A5YTNRd2swNzVWa2pxUUdhN0FvIiwiY2FuZGlkYXRlX3gyNTUxOV9wdWJsaWNfa2V5IjoiZzlIbGtTWVRNNEVfX0stWFNFYk5JMlBxNmx3RWpmek52YlhjVzUtZWNRcyIsImNsaW5pY19pZCI6IkZBS0UtbTMtY2xpbmljIiwiZXhwIjoxNzkyNTQwNzkwLCJpYXQiOjE3OTI0NTQzOTAsImlzcyI6Im15Y2FybG9zIiwicHJlZGVjZXNzb3JfZGV2aWNlX2tleV9pZCI6bnVsbCwicHVibGljX3BvcnRhbF9iYXNlX3VybCI6Imh0dHBzOi8vcG9ydGFsLmV4YW1wbGUuaW52YWxpZC9wYXRpZW50IiwicmVjaXBpZW50X2lkIjoiRkFLRS1tMy1yZWNpcGllbnQtMDAwMSIsInJlcXVlc3RfaWQiOiI2MWJlYmExNS03NjBiLTQxZDItODU3NS1mNmI5ZDA4N2UyMjMiLCJ0eXAiOiJteWNhcmxvcy1kZXZpY2UtYXBwcm92YWwtaW50ZW50IiwidiI6Mn0.jKwa77_5nqsdpYpHBbcyp-mxT5jI2sYcgDG9-tysXUtnYLsigXCpDSBWzokmRsxCZ4QqHd90Cirhi4gMqfGDAQ",
+      "compact_sha256": "24c81c34951d6da0d888f300ed7f4bdcbb56ede660f4aa97e1a31b994af0bcd8",
+      "id": "v2_code_intent_valid",
+      "kind": "intent",
+      "note": "v2 code flow: intent",
+      "now": 1792454400,
+      "valid": true,
+      "version": 2
+    },
+    {
+      "clinic_key_status": "active",
+      "compact": "eyJhcHByb3ZhbF9raW5kIjoiY29kZSIsImF1ZCI6ImNhcmxvcy1teWNhcmxvcy1kZXZpY2UtYXBwcm92YWwiLCJjYW5kaWRhdGVfZGV2aWNlX2tleV9pZCI6ImhTd21PM1BhZjBQY2hla25KeU5ybjhWYlhyd0E1eFphbHFWcTI1QXBjUDgiLCJjYW5kaWRhdGVfZWQyNTUxOV9wdWJsaWNfa2V5IjoiLVZFaXY0QmZ6Zk9LUEswNVFUejVTYUdQOWEzUXdrMDc1VmtqcVFHYTdBbyIsImNhbmRpZGF0ZV9pbnRlbnRfc2hhMjU2IjoiMjRjODFjMzQ5NTFkNmRhMGQ4ODhmMzAwZWQ3ZjRiZGNiYjU2ZWRlNjYwZjRhYTk3ZTFhMzFiOTk0YWYwYmNkOCIsImNhbmRpZGF0ZV94MjU1MTlfcHVibGljX2tleSI6Imc5SGxrU1lUTTRFX19LLVhTRWJOSTJQcTZsd0VqZnpOdmJYY1c1LWVjUXMiLCJjaGFsbGVuZ2VfaWQiOiI4b0JKcGxTSWNkMWw5YkxRQTR5MTMtWkpuQlNwZ1lwNHVqREkzQk1fQmJBIiwiY2xpbmljX2lkIjoiRkFLRS1tMy1jbGluaWMiLCJleHBpcmVzX2F0IjoxNzkyNDU1MDAwLCJpc3N1ZWRfYXQiOjE3OTI0NTQ0MDAsImtpZCI6IkRXanJnb1BTdU1VdGZPT3hFVmxMMXZ2eXVwVHRxeVlGQU8wd3l6UkVZLUkiLCJwcmVkZWNlc3Nvcl9kZXZpY2Vfa2V5X2lkIjpudWxsLCJwcmVkZWNlc3Nvcl92ZXJzaW9uIjpudWxsLCJwdWJsaWNfcG9ydGFsX2Jhc2VfdXJsIjoiaHR0cHM6Ly9wb3J0YWwuZXhhbXBsZS5pbnZhbGlkL3BhdGllbnQiLCJyZWNpcGllbnRfaWQiOiJGQUtFLW0zLXJlY2lwaWVudC0wMDAxIiwicmVxdWVzdF9pZCI6IjYxYmViYTE1LTc2MGItNDFkMi04NTc1LWY2YjlkMDg3ZTIyMyIsInR5cCI6Im15Y2FybG9zLWRldmljZS1hcHByb3ZhbC1jaGFsbGVuZ2UiLCJ2IjoyfQ.KHYYzDiHhD3BA7uh9ApunXNadt41Mqk9SOk21J_om0tfCw3DRnsD84QPe8LODZI-mzmjPao2Bvb7AWyZKCvT_g",
+      "compact_sha256": "100fe5f566dc873de60fcd305cc80a9fc1995c9be00108b318b21cf3b25961c8",
+      "id": "v2_code_challenge_valid",
+      "kind": "challenge",
+      "note": "v2 code flow: challenge",
+      "now": 1792454400,
+      "valid": true,
+      "version": 2
+    },
+    {
+      "clinic_key_status": "active",
+      "compact": "eyJhY2NlcHRlZF9hdCI6MTc5MjQ1NDQwMSwiYWNjZXB0ZWRfdmVyc2lvbiI6IjAiLCJhcHByb3ZhbF9raW5kIjoiY29kZSIsImFwcHJvdmFsX3NoYTI1NiI6bnVsbCwiYXVkIjoiY2FybG9zLW15Y2FybG9zLWRldmljZS1hcHByb3ZhbCIsImNhbmRpZGF0ZV9kZXZpY2Vfa2V5X2lkIjoiaFN3bU8zUGFmMFBjaGVrbkp5TnJuOFZiWHJ3QTV4WmFscVZxMjVBcGNQOCIsImNhbmRpZGF0ZV9lZDI1NTE5X3B1YmxpY19rZXkiOiItVkVpdjRCZnpmT0tQSzA1UVR6NVNhR1A5YTNRd2swNzVWa2pxUUdhN0FvIiwiY2FuZGlkYXRlX3gyNTUxOV9wdWJsaWNfa2V5IjoiZzlIbGtTWVRNNEVfX0stWFNFYk5JMlBxNmx3RWpmek52YlhjVzUtZWNRcyIsImNoYWxsZW5nZV9pZCI6IjhvQkpwbFNJY2QxbDliTFFBNHkxMy1aSm5CU3BnWXA0dWpESTNCTV9CYkEiLCJjaGFsbGVuZ2Vfc2hhMjU2IjoiMTAwZmU1ZjU2NmRjODczZGU2MGZjZDMwNWNjODBhOWZjMTk5NWM5YmUwMDEwOGIzMThiMjFjZjNiMjU5NjFjOCIsImNsaW5pY19pZCI6IkZBS0UtbTMtY2xpbmljIiwia2lkIjoiRFdqcmdvUFN1TVV0Zk9PeEVWbEwxdnZ5dXBUdHF5WUZBTzB3eXpSRVktSSIsInByZWRlY2Vzc29yX2RldmljZV9rZXlfaWQiOm51bGwsInB1YmxpY19wb3J0YWxfYmFzZV91cmwiOiJodHRwczovL3BvcnRhbC5leGFtcGxlLmludmFsaWQvcGF0aWVudCIsInJlY2lwaWVudF9pZCI6IkZBS0UtbTMtcmVjaXBpZW50LTAwMDEiLCJyZXF1ZXN0X2lkIjoiNjFiZWJhMTUtNzYwYi00MWQyLTg1NzUtZjZiOWQwODdlMjIzIiwidHlwIjoibXljYXJsb3MtZGV2aWNlLWFjY2VwdGFuY2UiLCJ2IjoyfQ.3rSrZ1dvT3oMUg90IUCjUn7dNcpqxHN1BR3aY7KboroSQqp2dq_BJg24BT5DjPfG5QISfxaYi2pQ6C2gbhD-Hw",
+      "compact_sha256": "3b9170ad91f2c23c1c01d51921daf54b99bbb777cf2f42bdd5fdc1a39291cabc",
+      "id": "v2_code_acceptance_valid",
+      "kind": "acceptance",
+      "note": "v2 code flow: acceptance",
+      "now": 1792454400,
+      "valid": true,
+      "version": 2
+    },
+    {
+      "clinic_key_status": "active",
+      "compact": "eyJhdWQiOiJjYXJsb3MtbXljYXJsb3MtZGV2aWNlLWFwcHJvdmFsLWludGVudCIsImNhbmRpZGF0ZV9kZXZpY2Vfa2V5X2lkIjoiTklMdkllT1hoLWhselNqWjUzRXVWTWhEcF9GZE9fbmlCYl9hTEliVWJYOCIsImNhbmRpZGF0ZV9lZDI1NTE5X3B1YmxpY19rZXkiOiJtclowWFNUV05LaU50bmRweEJPejktc0djNnNIcDhzT3RKY1VjMDFyOWNBIiwiY2FuZGlkYXRlX3gyNTUxOV9wdWJsaWNfa2V5IjoiZUFLQXdWcUNhZUM2Y0JMckxtbjBGenN3Yk1nYk9IVGp1Q1NvMm5lZmhUYyIsImNsaW5pY19pZCI6IkZBS0UtbTMtY2xpbmljIiwiZXhwIjoxNzkyNTQwNzkwLCJpYXQiOjE3OTI0NTQzOTAsImlzcyI6Im15Y2FybG9zIiwicHJlZGVjZXNzb3JfZGV2aWNlX2tleV9pZCI6ImFmT0lldnVNdVNFdUMxc2gtNEN3clgzUXM1NGlQUzlLVWdHMTVSMU5fbDQiLCJwdWJsaWNfcG9ydGFsX2Jhc2VfdXJsIjoiaHR0cHM6Ly9wb3J0YWwuZXhhbXBsZS5pbnZhbGlkL3BhdGllbnQiLCJyZWNpcGllbnRfaWQiOiJGQUtFLW0zLXJlY2lwaWVudC0wMDAxIiwicmVxdWVzdF9pZCI6IjNkOTdiZGEyLTlkOTItNGM1Ny05ZTc0LWVkNDM4MDZmOWY0ZSIsInR5cCI6Im15Y2FybG9zLWRldmljZS1hcHByb3ZhbC1pbnRlbnQiLCJ2IjoyfQ.dfoLP6ZrTk4gXFf8xzErNwSAhNRjGuGF9s7gwB09LA0bs1B72LOBFrqH9pRfVGyE5g_uek8_JSzpKJy-mXV1AQ",
+      "compact_sha256": "74e9f4cce2537d03cfeac57374104137b40b33e9aa8054912489e252bc1e6c73",
+      "id": "v2_accepted_device_intent_valid",
+      "kind": "intent",
+      "note": "v2 accepted_device flow: intent",
+      "now": 1792454400,
+      "valid": true,
+      "version": 2
+    },
+    {
+      "clinic_key_status": "active",
+      "compact": "eyJhcHByb3ZhbF9raW5kIjoiYWNjZXB0ZWRfZGV2aWNlIiwiYXVkIjoiY2FybG9zLW15Y2FybG9zLWRldmljZS1hcHByb3ZhbCIsImNhbmRpZGF0ZV9kZXZpY2Vfa2V5X2lkIjoiTklMdkllT1hoLWhselNqWjUzRXVWTWhEcF9GZE9fbmlCYl9hTEliVWJYOCIsImNhbmRpZGF0ZV9lZDI1NTE5X3B1YmxpY19rZXkiOiJtclowWFNUV05LaU50bmRweEJPejktc0djNnNIcDhzT3RKY1VjMDFyOWNBIiwiY2FuZGlkYXRlX2ludGVudF9zaGEyNTYiOiI3NGU5ZjRjY2UyNTM3ZDAzY2ZlYWM1NzM3NDEwNDEzN2I0MGIzM2U5YWE4MDU0OTEyNDg5ZTI1MmJjMWU2YzczIiwiY2FuZGlkYXRlX3gyNTUxOV9wdWJsaWNfa2V5IjoiZUFLQXdWcUNhZUM2Y0JMckxtbjBGenN3Yk1nYk9IVGp1Q1NvMm5lZmhUYyIsImNoYWxsZW5nZV9pZCI6ImhKOUNlZEFFUGpHbU81Vm91QWNfNUxRNWFPMVYwcW4tQmRGcG5WOTdoeHMiLCJjbGluaWNfaWQiOiJGQUtFLW0zLWNsaW5pYyIsImV4cGlyZXNfYXQiOjE3OTI0NTUwMDAsImlzc3VlZF9hdCI6MTc5MjQ1NDQwMCwia2lkIjoiRFdqcmdvUFN1TVV0Zk9PeEVWbEwxdnZ5dXBUdHF5WUZBTzB3eXpSRVktSSIsInByZWRlY2Vzc29yX2RldmljZV9rZXlfaWQiOiJhZk9JZXZ1TXVTRXVDMXNoLTRDd3JYM1FzNTRpUFM5S1VnRzE1UjFOX2w0IiwicHJlZGVjZXNzb3JfdmVyc2lvbiI6IjAiLCJwdWJsaWNfcG9ydGFsX2Jhc2VfdXJsIjoiaHR0cHM6Ly9wb3J0YWwuZXhhbXBsZS5pbnZhbGlkL3BhdGllbnQiLCJyZWNpcGllbnRfaWQiOiJGQUtFLW0zLXJlY2lwaWVudC0wMDAxIiwicmVxdWVzdF9pZCI6IjNkOTdiZGEyLTlkOTItNGM1Ny05ZTc0LWVkNDM4MDZmOWY0ZSIsInR5cCI6Im15Y2FybG9zLWRldmljZS1hcHByb3ZhbC1jaGFsbGVuZ2UiLCJ2IjoyfQ.AHpeicOiwrzRWe03n_vhHXmIQnJwDqqDlqlNeP7b1JAJVpMJU94_-mjiLZsW4GYFWGDw72rey6ry6d1MjrNhRg",
+      "compact_sha256": "82846dbc6beb8cc613f43e75b3b27cc1d497581f4a8e5db5dca1d8aa3a343d3a",
+      "id": "v2_accepted_device_challenge_valid",
+      "kind": "challenge",
+      "note": "v2 accepted_device flow: challenge",
+      "now": 1792454400,
+      "valid": true,
+      "version": 2
+    },
+    {
+      "clinic_key_status": "active",
+      "compact": "eyJhdWQiOiJjYXJsb3MtbXljYXJsb3MtZGV2aWNlLWFwcHJvdmFsIiwiY2FuZGlkYXRlX2RldmljZV9rZXlfaWQiOiJOSUx2SWVPWGgtaGx6U2paNTNFdVZNaERwX0ZkT19uaUJiX2FMSWJVYlg4IiwiY2FuZGlkYXRlX2VkMjU1MTlfcHVibGljX2tleSI6Im1yWjBYU1RXTktpTnRuZHB4Qk96OS1zR2M2c0hwOHNPdEpjVWMwMXI5Y0EiLCJjYW5kaWRhdGVfaW50ZW50X3NoYTI1NiI6Ijc0ZTlmNGNjZTI1MzdkMDNjZmVhYzU3Mzc0MTA0MTM3YjQwYjMzZTlhYTgwNTQ5MTI0ODllMjUyYmMxZTZjNzMiLCJjYW5kaWRhdGVfeDI1NTE5X3B1YmxpY19rZXkiOiJlQUtBd1ZxQ2FlQzZjQkxyTG1uMEZ6c3diTWdiT0hUanVDU28ybmVmaFRjIiwiY2hhbGxlbmdlX2lkIjoiaEo5Q2VkQUVQakdtTzVWb3VBY181TFE1YU8xVjBxbi1CZEZwblY5N2h4cyIsImNoYWxsZW5nZV9zaGEyNTYiOiI4Mjg0NmRiYzZiZWI4Y2M2MTNmNDNlNzViM2IyN2NjMWQ0OTc1ODFmNGE4ZTVkYjVkY2ExZDhhYTNhMzQzZDNhIiwiY2xpbmljX2lkIjoiRkFLRS1tMy1jbGluaWMiLCJpc3MiOiJteWNhcmxvcyIsImp0aSI6ImJlZmMzYmM1LTBjYmEtNDgxZi1hY2FhLTRmN2NkMmUwZmI5MiIsInByZWRlY2Vzc29yX2RldmljZV9rZXlfaWQiOiJhZk9JZXZ1TXVTRXVDMXNoLTRDd3JYM1FzNTRpUFM5S1VnRzE1UjFOX2w0IiwicHJlZGVjZXNzb3JfdmVyc2lvbiI6IjAiLCJyZWNpcGllbnRfaWQiOiJGQUtFLW0zLXJlY2lwaWVudC0wMDAxIiwidHlwIjoibXljYXJsb3MtZGV2aWNlLWFwcHJvdmFsIiwidiI6Mn0.T7KPAWX-SXuO2139n_zIFIqxm1uQIgozBMRyo1LghksPTZ5NIEDJj93qMTiroMlM3VzkFYfSsL1I_8PJlX-7Cw",
+      "compact_sha256": "36a8159775a7af44c0a0436a52bdec0d3ff26e72433017de4e1e5ba99c70a23e",
+      "id": "v2_accepted_device_approval_valid",
+      "kind": "approval",
+      "note": "v2 accepted_device flow: approval",
+      "now": 1792454400,
+      "valid": true,
+      "version": 2
+    },
+    {
+      "clinic_key_status": "active",
+      "compact": "eyJhY2NlcHRlZF9hdCI6MTc5MjQ1NDQwMSwiYWNjZXB0ZWRfdmVyc2lvbiI6IjAiLCJhcHByb3ZhbF9raW5kIjoiYWNjZXB0ZWRfZGV2aWNlIiwiYXBwcm92YWxfc2hhMjU2IjoiMzZhODE1OTc3NWE3YWY0NGMwYTA0MzZhNTJiZGVjMGQzZmYyNmU3MjQzMzAxN2RlNGUxZTViYTk5YzcwYTIzZSIsImF1ZCI6ImNhcmxvcy1teWNhcmxvcy1kZXZpY2UtYXBwcm92YWwiLCJjYW5kaWRhdGVfZGV2aWNlX2tleV9pZCI6Ik5JTHZJZU9YaC1obHpTalo1M0V1Vk1oRHBfRmRPX25pQmJfYUxJYlViWDgiLCJjYW5kaWRhdGVfZWQyNTUxOV9wdWJsaWNfa2V5IjoibXJaMFhTVFdOS2lOdG5kcHhCT3o5LXNHYzZzSHA4c090SmNVYzAxcjljQSIsImNhbmRpZGF0ZV94MjU1MTlfcHVibGljX2tleSI6ImVBS0F3VnFDYWVDNmNCTHJMbW4wRnpzd2JNZ2JPSFRqdUNTbzJuZWZoVGMiLCJjaGFsbGVuZ2VfaWQiOiJoSjlDZWRBRVBqR21PNVZvdUFjXzVMUTVhTzFWMHFuLUJkRnBuVjk3aHhzIiwiY2hhbGxlbmdlX3NoYTI1NiI6IjgyODQ2ZGJjNmJlYjhjYzYxM2Y0M2U3NWIzYjI3Y2MxZDQ5NzU4MWY0YThlNWRiNWRjYTFkOGFhM2EzNDNkM2EiLCJjbGluaWNfaWQiOiJGQUtFLW0zLWNsaW5pYyIsImtpZCI6IkRXanJnb1BTdU1VdGZPT3hFVmxMMXZ2eXVwVHRxeVlGQU8wd3l6UkVZLUkiLCJwcmVkZWNlc3Nvcl9kZXZpY2Vfa2V5X2lkIjoiYWZPSWV2dU11U0V1QzFzaC00Q3dyWDNRczU0aVBTOUtVZ0cxNVIxTl9sNCIsInB1YmxpY19wb3J0YWxfYmFzZV91cmwiOiJodHRwczovL3BvcnRhbC5leGFtcGxlLmludmFsaWQvcGF0aWVudCIsInJlY2lwaWVudF9pZCI6IkZBS0UtbTMtcmVjaXBpZW50LTAwMDEiLCJyZXF1ZXN0X2lkIjoiM2Q5N2JkYTItOWQ5Mi00YzU3LTllNzQtZWQ0MzgwNmY5ZjRlIiwidHlwIjoibXljYXJsb3MtZGV2aWNlLWFjY2VwdGFuY2UiLCJ2IjoyfQ.ckZVKK53UwQqG9E7KY95uOga_tUGW-J9B7KQ4zTnl3ELbUAxIma-ufc_VtctAYMa1rY0nAgFbpsGnwDc9dY_Tg",
+      "compact_sha256": "aa12485cb3ca6844c7844db0fc6aa51c649bc2a8d1b29d8626ae90804b792780",
+      "id": "v2_accepted_device_acceptance_valid",
+      "kind": "acceptance",
+      "note": "v2 accepted_device flow: acceptance",
+      "now": 1792454400,
+      "valid": true,
+      "version": 2
+    },
+    {
+      "clinic_key_status": "active",
+      "compact": "eyJhdWQiOiJjYXJsb3MtbXljYXJsb3MtZGV2aWNlLWFwcHJvdmFsLWludGVudCIsImNhbmRpZGF0ZV9kZXZpY2Vfa2V5X2lkIjoiaFN3bU8zUGFmMFBjaGVrbkp5TnJuOFZiWHJ3QTV4WmFscVZxMjVBcGNQOCIsImNhbmRpZGF0ZV9lZDI1NTE5X3B1YmxpY19rZXkiOiItVkVpdjRCZnpmT0tQSzA1UVR6NVNhR1A5YTNRd2swNzVWa2pxUUdhN0FvIiwiY2FuZGlkYXRlX3gyNTUxOV9wdWJsaWNfa2V5IjoiZzlIbGtTWVRNNEVfX0stWFNFYk5JMlBxNmx3RWpmek52YlhjVzUtZWNRcyIsImNsaW5pY19pZCI6IkZBS0UtbTMtY2xpbmljIiwiZXhwIjoxNzkyNTQwNzkxLCJpYXQiOjE3OTI0NTQzOTAsImlzcyI6Im15Y2FybG9zIiwicHJlZGVjZXNzb3JfZGV2aWNlX2tleV9pZCI6bnVsbCwicHVibGljX3BvcnRhbF9iYXNlX3VybCI6Imh0dHBzOi8vcG9ydGFsLmV4YW1wbGUuaW52YWxpZC9wYXRpZW50IiwicmVjaXBpZW50X2lkIjoiRkFLRS1tMy1yZWNpcGllbnQtMDAwMSIsInJlcXVlc3RfaWQiOiI1MGNjMTJjNy1lMjI4LTQ3MmMtOWY3Ni01ZmQ1OTAwNTVlY2IiLCJ0eXAiOiJteWNhcmxvcy1kZXZpY2UtYXBwcm92YWwtaW50ZW50IiwidiI6Mn0.sQ-yTjTmL4w1i6NR715icbUaDW6cYmZIjrM8s0w8h2lkBhqI14mk629VzViVeMAApcWSUQ3UAkIRJt6ikPHdBw",
+      "compact_sha256": "aa0db4b1ff0baf707dc07fe3f7521341dcaa66534cf9f80434f365d8b596c1ba",
+      "id": "v2_intent_24h_plus_1s",
+      "kind": "intent",
+      "note": "v2 intent longer than 24 h",
+      "now": 1792454400,
+      "valid": false,
+      "version": 2
+    },
+    {
+      "clinic_key_status": "active",
+      "compact": "eyJhdWQiOiJjYXJsb3MtbXljYXJsb3MtZGV2aWNlLWFwcHJvdmFsLWludGVudCIsImNhbmRpZGF0ZV9kZXZpY2Vfa2V5X2lkIjoiaFN3bU8zUGFmMFBjaGVrbkp5TnJuOFZiWHJ3QTV4WmFscVZxMjVBcGNQOCIsImNhbmRpZGF0ZV9lZDI1NTE5X3B1YmxpY19rZXkiOiItVkVpdjRCZnpmT0tQSzA1UVR6NVNhR1A5YTNRd2swNzVWa2pxUUdhN0FvIiwiY2FuZGlkYXRlX3gyNTUxOV9wdWJsaWNfa2V5IjoiZzlIbGtTWVRNNEVfX0stWFNFYk5JMlBxNmx3RWpmek52YlhjVzUtZWNRcyIsImNsaW5pY19pZCI6IkZBS0UtbTMtY2xpbmljIiwiZXhwIjoxNzkyNDU0OTkwLCJpYXQiOjE3OTI0NTQzOTAsImlzcyI6Im15Y2FybG9zIiwicHJlZGVjZXNzb3JfZGV2aWNlX2tleV9pZCI6bnVsbCwicHVibGljX3BvcnRhbF9iYXNlX3VybCI6Imh0dHBzOi8vcG9ydGFsLmV4YW1wbGUuaW52YWxpZC9wYXRpZW50IiwicmVjaXBpZW50X2lkIjoiRkFLRS1tMy1yZWNpcGllbnQtMDAwMSIsInJlcXVlc3RfaWQiOiI1MGNjMTJjNy1lMjI4LTQ3MmMtOWY3Ni01ZmQ1OTAwNTVlY2IiLCJ0eXAiOiJteWNhcmxvcy1kZXZpY2UtYXBwcm92YWwtaW50ZW50IiwidiI6Mn0.UpG-cKmwiCnMkb6FlkBMk1gwYDvAyv3Fl_7MjdeDLD3I76sbbB_-v1MsqpvND9yicFlNjMEPEk5tBsM9UKF6BA",
+      "compact_sha256": "239fd950e156d53eadd503e23d23d2f1b8812669d1f97771b6c13d01d0534268",
+      "id": "v2_intent_10min_ok",
+      "kind": "intent",
+      "note": "v2 intent may be shorter than 24 h",
+      "now": 1792454400,
+      "valid": true,
+      "version": 2
+    },
+    {
+      "clinic_key_status": "active",
+      "compact": "eyJhdWQiOiJjYXJsb3MtbXljYXJsb3MtZGV2aWNlLWFwcHJvdmFsLWludGVudCIsImNhbmRpZGF0ZV9kZXZpY2Vfa2V5X2lkIjoiaFN3bU8zUGFmMFBjaGVrbkp5TnJuOFZiWHJ3QTV4WmFscVZxMjVBcGNQOCIsImNhbmRpZGF0ZV9lZDI1NTE5X3B1YmxpY19rZXkiOiItVkVpdjRCZnpmT0tQSzA1UVR6NVNhR1A5YTNRd2swNzVWa2pxUUdhN0FvIiwiY2FuZGlkYXRlX3gyNTUxOV9wdWJsaWNfa2V5IjoiZzlIbGtTWVRNNEVfX0stWFNFYk5JMlBxNmx3RWpmek52YlhjVzUtZWNRcyIsImNsaW5pY19pZCI6IkZBS0UtbTMtY2xpbmljIiwiZXhwIjoxNzkyNDU0OTkxLCJpYXQiOjE3OTI0NTQzOTAsImlzcyI6Im15Y2FybG9zIiwicHJlZGVjZXNzb3JfZGV2aWNlX2tleV9pZCI6bnVsbCwicHVibGljX3BvcnRhbF9iYXNlX3VybCI6Imh0dHBzOi8vcG9ydGFsLmV4YW1wbGUuaW52YWxpZC9wYXRpZW50IiwicmVjaXBpZW50X2lkIjoiRkFLRS1tMy1yZWNpcGllbnQtMDAwMSIsInJlcXVlc3RfaWQiOiI3NDJhZWUzYS1jZjk4LTQ3MmEtYWMxYS02ZDc1ZWViNmVlYTUiLCJ0eXAiOiJteWNhcmxvcy1kZXZpY2UtYXBwcm92YWwtaW50ZW50IiwidiI6MX0.289Le-Ez2IquMUv_4y3E9ogMR2iPMcD3r-bUKXGEY3_MNnIj4ocoa3uW9PEpgUyMmbinDQLiSPYJeQaPALFSCA",
+      "compact_sha256": "9de46aac727cd5b42f3535d98e9df48dd944eb8c8fe70aa41e1ad85131af9c39",
+      "id": "v1_intent_10min_plus_1s",
+      "kind": "intent",
+      "note": "v1 rules unchanged: intent at most 600 s",
+      "now": 1792454400,
+      "valid": false,
+      "version": 1
+    },
+    {
+      "clinic_key_status": "active",
+      "compact": "eyJhcHByb3ZhbF9raW5kIjoic3RhZmZfZmlyc3QiLCJhdWQiOiJjYXJsb3MtbXljYXJsb3MtZGV2aWNlLWFwcHJvdmFsIiwiY2FuZGlkYXRlX2RldmljZV9rZXlfaWQiOiJoU3dtTzNQYWYwUGNoZWtuSnlOcm44VmJYcndBNXhaYWxxVnEyNUFwY1A4IiwiY2FuZGlkYXRlX2VkMjU1MTlfcHVibGljX2tleSI6Ii1WRWl2NEJmemZPS1BLMDVRVHo1U2FHUDlhM1F3azA3NVZranFRR2E3QW8iLCJjYW5kaWRhdGVfaW50ZW50X3NoYTI1NiI6Ijk1NDgzMzQyZDc3NDE2MTZhYTkzYTA0MzU5YzM2MWViMGFkNjc3YmE1NzUyZDkxYmE3M2U3NWJmNjc5ZWIxY2UiLCJjYW5kaWRhdGVfeDI1NTE5X3B1YmxpY19rZXkiOiJnOUhsa1NZVE00RV9fSy1YU0ViTkkyUHE2bHdFamZ6TnZiWGNXNS1lY1FzIiwiY2hhbGxlbmdlX2lkIjoiMDFSWE1wRXpybnJZa2cwdUhFeGp5RGtTTHpLd0tXNnRybDJBUDEwN0drVSIsImNsaW5pY19pZCI6IkZBS0UtbTMtY2xpbmljIiwiZXhwaXJlc19hdCI6MTc5MjU0MDgwMSwiaXNzdWVkX2F0IjoxNzkyNDU0NDAwLCJraWQiOiJEV2pyZ29QU3VNVXRmT094RVZsTDF2dnl1cFR0cXlZRkFPMHd5elJFWS1JIiwicHJlZGVjZXNzb3JfZGV2aWNlX2tleV9pZCI6bnVsbCwicHJlZGVjZXNzb3JfdmVyc2lvbiI6bnVsbCwicHVibGljX3BvcnRhbF9iYXNlX3VybCI6Imh0dHBzOi8vcG9ydGFsLmV4YW1wbGUuaW52YWxpZC9wYXRpZW50IiwicmVjaXBpZW50X2lkIjoiRkFLRS1tMy1yZWNpcGllbnQtMDAwMSIsInJlcXVlc3RfaWQiOiI1MGNjMTJjNy1lMjI4LTQ3MmMtOWY3Ni01ZmQ1OTAwNTVlY2IiLCJ0eXAiOiJteWNhcmxvcy1kZXZpY2UtYXBwcm92YWwtY2hhbGxlbmdlIiwidiI6Mn0.jCUsHwGzaGXozkWaU1FsnL22Lkmbu2ud4QApaY7q1rEF-ckp2f93wdxVEbUgo9Xcnh69mqDYFbQqu4MfSc9TrA",
+      "compact_sha256": "c39ab2486b35d5e04daf56e69ee657f1381ecb6e6d3c67d29b69957120056241",
+      "id": "v2_staff_first_challenge_24h_plus_1s",
+      "kind": "challenge",
+      "note": "v2 staff_first challenge longer than 24 h",
+      "now": 1792454400,
+      "valid": false,
+      "version": 2
+    },
+    {
+      "clinic_key_status": "active",
+      "compact": "eyJhcHByb3ZhbF9raW5kIjoiY29kZSIsImF1ZCI6ImNhcmxvcy1teWNhcmxvcy1kZXZpY2UtYXBwcm92YWwiLCJjYW5kaWRhdGVfZGV2aWNlX2tleV9pZCI6ImhTd21PM1BhZjBQY2hla25KeU5ybjhWYlhyd0E1eFphbHFWcTI1QXBjUDgiLCJjYW5kaWRhdGVfZWQyNTUxOV9wdWJsaWNfa2V5IjoiLVZFaXY0QmZ6Zk9LUEswNVFUejVTYUdQOWEzUXdrMDc1VmtqcVFHYTdBbyIsImNhbmRpZGF0ZV9pbnRlbnRfc2hhMjU2IjoiMjRjODFjMzQ5NTFkNmRhMGQ4ODhmMzAwZWQ3ZjRiZGNiYjU2ZWRlNjYwZjRhYTk3ZTFhMzFiOTk0YWYwYmNkOCIsImNhbmRpZGF0ZV94MjU1MTlfcHVibGljX2tleSI6Imc5SGxrU1lUTTRFX19LLVhTRWJOSTJQcTZsd0VqZnpOdmJYY1c1LWVjUXMiLCJjaGFsbGVuZ2VfaWQiOiI4b0JKcGxTSWNkMWw5YkxRQTR5MTMtWkpuQlNwZ1lwNHVqREkzQk1fQmJBIiwiY2xpbmljX2lkIjoiRkFLRS1tMy1jbGluaWMiLCJleHBpcmVzX2F0IjoxNzkyNDU1MDAxLCJpc3N1ZWRfYXQiOjE3OTI0NTQ0MDAsImtpZCI6IkRXanJnb1BTdU1VdGZPT3hFVmxMMXZ2eXVwVHRxeVlGQU8wd3l6UkVZLUkiLCJwcmVkZWNlc3Nvcl9kZXZpY2Vfa2V5X2lkIjpudWxsLCJwcmVkZWNlc3Nvcl92ZXJzaW9uIjpudWxsLCJwdWJsaWNfcG9ydGFsX2Jhc2VfdXJsIjoiaHR0cHM6Ly9wb3J0YWwuZXhhbXBsZS5pbnZhbGlkL3BhdGllbnQiLCJyZWNpcGllbnRfaWQiOiJGQUtFLW0zLXJlY2lwaWVudC0wMDAxIiwicmVxdWVzdF9pZCI6IjYxYmViYTE1LTc2MGItNDFkMi04NTc1LWY2YjlkMDg3ZTIyMyIsInR5cCI6Im15Y2FybG9zLWRldmljZS1hcHByb3ZhbC1jaGFsbGVuZ2UiLCJ2IjoyfQ.RpSImBC_K_AuQYd46ktVtWLEZsVQAkTIPOD2eCGqyjJXf9akJeeELFHRcjjt-EUI8Cu0Pi2sNRHBrFqDqVBhHg",
+      "compact_sha256": "e26fb1b75a11a50c94b986eaf5391f3c167eff3f3ac4d1124bc4b7dbcb68dfa2",
+      "id": "v2_code_challenge_10min_plus_1s",
+      "kind": "challenge",
+      "note": "v2 code challenge stays at most 600 s",
+      "now": 1792454400,
+      "valid": false,
+      "version": 2
+    },
+    {
+      "clinic_key_status": "active",
+      "compact": "eyJhcHByb3ZhbF9raW5kIjoiYWNjZXB0ZWRfZGV2aWNlIiwiYXVkIjoiY2FybG9zLW15Y2FybG9zLWRldmljZS1hcHByb3ZhbCIsImNhbmRpZGF0ZV9kZXZpY2Vfa2V5X2lkIjoiTklMdkllT1hoLWhselNqWjUzRXVWTWhEcF9GZE9fbmlCYl9hTEliVWJYOCIsImNhbmRpZGF0ZV9lZDI1NTE5X3B1YmxpY19rZXkiOiJtclowWFNUV05LaU50bmRweEJPejktc0djNnNIcDhzT3RKY1VjMDFyOWNBIiwiY2FuZGlkYXRlX2ludGVudF9zaGEyNTYiOiI3NGU5ZjRjY2UyNTM3ZDAzY2ZlYWM1NzM3NDEwNDEzN2I0MGIzM2U5YWE4MDU0OTEyNDg5ZTI1MmJjMWU2YzczIiwiY2FuZGlkYXRlX3gyNTUxOV9wdWJsaWNfa2V5IjoiZUFLQXdWcUNhZUM2Y0JMckxtbjBGenN3Yk1nYk9IVGp1Q1NvMm5lZmhUYyIsImNoYWxsZW5nZV9pZCI6ImhKOUNlZEFFUGpHbU81Vm91QWNfNUxRNWFPMVYwcW4tQmRGcG5WOTdoeHMiLCJjbGluaWNfaWQiOiJGQUtFLW0zLWNsaW5pYyIsImV4cGlyZXNfYXQiOjE3OTI0NTUwMDEsImlzc3VlZF9hdCI6MTc5MjQ1NDQwMCwia2lkIjoiRFdqcmdvUFN1TVV0Zk9PeEVWbEwxdnZ5dXBUdHF5WUZBTzB3eXpSRVktSSIsInByZWRlY2Vzc29yX2RldmljZV9rZXlfaWQiOiJhZk9JZXZ1TXVTRXVDMXNoLTRDd3JYM1FzNTRpUFM5S1VnRzE1UjFOX2w0IiwicHJlZGVjZXNzb3JfdmVyc2lvbiI6IjAiLCJwdWJsaWNfcG9ydGFsX2Jhc2VfdXJsIjoiaHR0cHM6Ly9wb3J0YWwuZXhhbXBsZS5pbnZhbGlkL3BhdGllbnQiLCJyZWNpcGllbnRfaWQiOiJGQUtFLW0zLXJlY2lwaWVudC0wMDAxIiwicmVxdWVzdF9pZCI6IjNkOTdiZGEyLTlkOTItNGM1Ny05ZTc0LWVkNDM4MDZmOWY0ZSIsInR5cCI6Im15Y2FybG9zLWRldmljZS1hcHByb3ZhbC1jaGFsbGVuZ2UiLCJ2IjoyfQ.IXbtwgEQ2_lm2TqVe5lqgwdMkFMDp-tBzQ2it67n868z6PRATB9H3uULWDuLaDR91gFyF8uHFfQYGEq835yffA",
+      "compact_sha256": "4535c8f924cf29b8bbe622eed31663060bfa27cb773addc91ffbc0d4145a27c7",
+      "id": "v2_accepted_device_challenge_10min_plus_1s",
+      "kind": "challenge",
+      "note": "v2 accepted_device challenge stays at most 600 s",
+      "now": 1792454400,
+      "valid": false,
+      "version": 2
+    },
+    {
+      "clinic_key_status": "active",
+      "compact": "eyJhcHByb3ZhbF9raW5kIjoic3RhZmZfZmlyc3QiLCJhdWQiOiJjYXJsb3MtbXljYXJsb3MtZGV2aWNlLWFwcHJvdmFsIiwiY2FuZGlkYXRlX2RldmljZV9rZXlfaWQiOiJoU3dtTzNQYWYwUGNoZWtuSnlOcm44VmJYcndBNXhaYWxxVnEyNUFwY1A4IiwiY2FuZGlkYXRlX2VkMjU1MTlfcHVibGljX2tleSI6Ii1WRWl2NEJmemZPS1BLMDVRVHo1U2FHUDlhM1F3azA3NVZranFRR2E3QW8iLCJjYW5kaWRhdGVfaW50ZW50X3NoYTI1NiI6ImYxZjM3NGQ3YTRkYWYxMThhMjU5ODJhMmI2YWQwMzRiMDUxZjhmZjQ1Yzg1YmM3MmY4NDZiYjdhYTlhZDcyMzEiLCJjYW5kaWRhdGVfeDI1NTE5X3B1YmxpY19rZXkiOiJnOUhsa1NZVE00RV9fSy1YU0ViTkkyUHE2bHdFamZ6TnZiWGNXNS1lY1FzIiwiY2hhbGxlbmdlX2lkIjoicmUwNU16LXlEZGNLTUlCek5PMFYycmx3T3p3TE5aMkhVMklBMWVwdUZMYyIsImNsaW5pY19pZCI6IkZBS0UtbTMtY2xpbmljIiwiZXhwaXJlc19hdCI6MTc5MjQ1NTAwMSwiaXNzdWVkX2F0IjoxNzkyNDU0NDAwLCJraWQiOiJEV2pyZ29QU3VNVXRmT094RVZsTDF2dnl1cFR0cXlZRkFPMHd5elJFWS1JIiwicHJlZGVjZXNzb3JfZGV2aWNlX2tleV9pZCI6bnVsbCwicHJlZGVjZXNzb3JfdmVyc2lvbiI6bnVsbCwicHVibGljX3BvcnRhbF9iYXNlX3VybCI6Imh0dHBzOi8vcG9ydGFsLmV4YW1wbGUuaW52YWxpZC9wYXRpZW50IiwicmVjaXBpZW50X2lkIjoiRkFLRS1tMy1yZWNpcGllbnQtMDAwMSIsInJlcXVlc3RfaWQiOiI3NDJhZWUzYS1jZjk4LTQ3MmEtYWMxYS02ZDc1ZWViNmVlYTUiLCJ0eXAiOiJteWNhcmxvcy1kZXZpY2UtYXBwcm92YWwtY2hhbGxlbmdlIiwidiI6MX0._jCW_S7Lym9ikDVI4wSQe4JntKGO9T01raIVYm54e-ViyPV4zOCFySdxRUa6CYjhJMkowjiBIf8viwBJXg5V5A",
+      "compact_sha256": "fca7a6565d03232e406ab7f4a19bccfb9ca932ef7049530dcd433e9b7eae2945",
+      "id": "v1_staff_first_challenge_10min_plus_1s",
+      "kind": "challenge",
+      "note": "v1 rules unchanged: challenge at most 600 s",
+      "now": 1792454400,
+      "valid": false,
+      "version": 1
+    },
+    {
+      "clinic_key_status": "active",
+      "compact": "eyJhdWQiOiJjYXJsb3MtbXljYXJsb3MtZGV2aWNlLWFwcHJvdmFsLWludGVudCIsImNhbmRpZGF0ZV9kZXZpY2Vfa2V5X2lkIjoiaFN3bU8zUGFmMFBjaGVrbkp5TnJuOFZiWHJ3QTV4WmFscVZxMjVBcGNQOCIsImNhbmRpZGF0ZV9lZDI1NTE5X3B1YmxpY19rZXkiOiItVkVpdjRCZnpmT0tQSzA1UVR6NVNhR1A5YTNRd2swNzVWa2pxUUdhN0FvIiwiY2FuZGlkYXRlX3gyNTUxOV9wdWJsaWNfa2V5IjoiZzlIbGtTWVRNNEVfX0stWFNFYk5JMlBxNmx3RWpmek52YlhjVzUtZWNRcyIsImNsaW5pY19pZCI6IkZBS0UtbTMtY2xpbmljIiwiZXhwIjoxNzkyNTQwNzkwLCJpYXQiOjE3OTI0NTQzOTAsImlzcyI6Im15Y2FybG9zIiwicHJlZGVjZXNzb3JfZGV2aWNlX2tleV9pZCI6bnVsbCwicHVibGljX3BvcnRhbF9iYXNlX3VybCI6Imh0dHBzOi8vcG9ydGFsLmV4YW1wbGUuaW52YWxpZC9wYXRpZW50IiwicmVjaXBpZW50X2lkIjoiRkFLRS1tMy1yZWNpcGllbnQtMDAwMSIsInJlcXVlc3RfaWQiOiI1MGNjMTJjNy1lMjI4LTQ3MmMtOWY3Ni01ZmQ1OTAwNTVlY2IiLCJ0eXAiOiJteWNhcmxvcy1kZXZpY2UtYXBwcm92YWwtaW50ZW50IiwidiI6M30.tedvM7YmM_UBn8z_0vHmFc1Nc9rY7q6jZbEYECY7H8G32-ijtr_sQbQhv5NdK3jnL4gD-ci9yroO1ruW9MyADA",
+      "compact_sha256": "bd04ecb14ac4014d5727ad0f0eb9392439271463886dfa9747ee2cd145824dd0",
+      "id": "v3_intent_unknown_version",
+      "kind": "intent",
+      "note": "only versions 1 and 2 exist",
+      "now": 1792454400,
+      "valid": false,
+      "version": 3
+    }
+  ],
+  "unanswered_request_open_seconds": {
+    "1": "until intent.exp",
+    "2": 600
+  },
+  "v1_public_keys_sha256": "2f8c57459c789946962c1e58cd07808657552c92d82a4eb4b598cfaf11e1ef3a",
+  "versions": [
+    1,
+    2
+  ],
+  "versions_endpoint": {
+    "auth": "a device assertion, as for the other device approval routes",
+    "method": "GET",
+    "missing": "an older portal answers 404: the app then signs v1",
+    "path": "/api/mycarlos/device-approval-versions",
+    "response": {
+      "versions": [
+        1,
+        2
+      ]
+    }
+  }
+}
