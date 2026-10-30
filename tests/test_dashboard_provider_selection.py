@@ -9,6 +9,7 @@ from carlos_patient_portal.unlock_secrets import (
 )
 from tests.support import (
     UNLOCK_SECRET_ENCRYPTION_SECRET,
+    RecordingPortalEmailSender,
     browser_sign_in_seeded_patient,
     migrated_development_app,
 )
@@ -34,7 +35,7 @@ class ProviderOptions(HTMLParser):
 
 
 def test_selected_provider_outside_the_capped_options_remains_selected_and_filters_rows() -> None:
-    app = migrated_development_app()
+    app = migrated_development_app(email_sender=RecordingPortalEmailSender())
     with TestClient(app) as client:
         browser_sign_in_seeded_patient(app, client)
         selected_value = "id:provider-selected"
