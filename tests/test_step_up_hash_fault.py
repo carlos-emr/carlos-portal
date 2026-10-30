@@ -12,6 +12,7 @@ from carlos_patient_portal.web_support import PORTAL_SESSION_COOKIE_NAME
 from tests.support import (
     STRONG_PASSWORD,
     STRONG_RESET_PASSWORD,
+    RecordingPortalEmailSender,
     browser_sign_in_seeded_patient,
     csrf_token_from_response,
     migrated_development_app,
@@ -20,6 +21,7 @@ from tests.support import (
 
 def test_unusable_step_up_hash_preserves_budget_session_and_durable_fault_audit(tmp_path) -> None:
     app = migrated_development_app(
+        email_sender=RecordingPortalEmailSender(),
         database_url=f"sqlite+pysqlite:///{tmp_path / 'private-step-up.sqlite'}",
         auth_max_failed_password_attempts=3,
     )
