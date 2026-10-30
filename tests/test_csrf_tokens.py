@@ -1,5 +1,8 @@
 """CSRF lifetime and double-submit checks must hold even for otherwise authentic tokens."""
 
+from hashlib import sha256
+from hmac import new as new_hmac
+
 import pytest
 
 from carlos_patient_portal import web_support
@@ -91,3 +94,20 @@ def test_non_ascii_signature_is_refused_without_a_comparison_error(clock):
     message, _, _ = token.rpartition(".")
 
     assert web_support.is_valid_csrf_token(f"{message}.FAKE_żółć", FAKE_SECRET) is False
+
+
+@pytest.mark.parametrize(
+    ("domain_prefix", "expected"),
+    [("csrf_token:", True), ("", False), ("session:", False), ("password_reset:", False)],
+)
+def test_csrf_verification_enforces_the_domain_even_when_other_tokens_use_the_same_key(
+    clock, domain_prefix, expected
+):
+    message = f"{NOW}.FAKE_nonce"
+    # Construct the wire signature independently: a production signing-helper regression
+    # must not change both the test token and the verifier's expectation together.
+    signature = new_hmac(
+        FAKE_SECRET.encode(), f"{domain_prefix}{message}".encode(), sha256
+    ).hexdigest()
+
+    assert web_support.is_valid_csrf_token(f"{message}.{signature}", FAKE_SECRET) is expected
