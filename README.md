@@ -343,7 +343,8 @@ A second live browser check covers the account flows the smoke test does not dri
 email change from the emailed link, creating Link myCarlos codes (with the MFA-proof step-up),
 listing and removing linked devices, a wrong current password on the account forms and the locked
 page, and declining offered appointment times. Its fixtures are single-use, so it needs a fresh
-database and its own seed; the full recipe is at the top of
+database, its own seed and a handful of settings (myCarlos delivery on, an https public address,
+a raised sign-in rate limit); the full recipe is at the top of
 `scripts/patient-portal-account-playwright-checks.js`:
 
 ```bash

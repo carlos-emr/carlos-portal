@@ -105,6 +105,7 @@ assert(
   lockAccount && lockAccount.username && lockAccount.password && lockAccount.email,
   `lock fixture is incomplete in ${fixturePath}`
 );
+// The seed refuses a plain-http address too; re-checked here because the fixture may be stale.
 assert(
   typeof settings.publicBaseUrl === 'string' && settings.publicBaseUrl.startsWith('https://'),
   'the seed must run with an https PATIENT_PORTAL_PUBLIC_BASE_URL'
@@ -116,9 +117,11 @@ assert(
     + 'before the sign-in lockout is checked (the recipe uses 4)'
 );
 // Every POST /auth/login shares one per-client bucket: the lock account's first sign-in, its
-// wrong passwords, the locked sign-in and one wrong password after it; the email-change account's
-// two sign-ins; and the myCarlos account's sign-in plus, without a mail server, a second one.
-const plannedSignInRequests = 1 + settings.lockThreshold + 2 + 2
+// reset probe (one short of the threshold in wrong passwords, then the right one), its wrong
+// passwords up to the threshold, the locked sign-in and one wrong password after it; the
+// email-change account's two sign-ins; and the myCarlos account's sign-in plus, without a mail
+// server, a second one.
+const plannedSignInRequests = 1 + settings.lockThreshold + settings.lockThreshold + 2 + 2
   + (settings.stepUpEmailAvailable ? 1 : 2);
 assert(
   settings.authRateLimitMaxRequests >= plannedSignInRequests,
@@ -554,7 +557,8 @@ async function checkWrongPasswordsAndLockout(page, context) {
   );
 
   // The seeded password still passes the same step-up, so the refused password change changed
-  // nothing. A good step-up also clears the failure count the three refusals built up.
+  // nothing. (That a good step-up clears the failure count the refusals built up is shown by
+  // the probe after sign-out.)
   await mfaForm.locator('select[name="preferred_mfa_method"]').selectOption('email');
   await mfaForm.locator('input[name="current_password"]').fill(lockAccount.password);
   const goodStepUp = await submit(
@@ -571,6 +575,32 @@ async function checkWrongPasswordsAndLockout(page, context) {
   assert((await accountDetail(page, 'email').innerText()).trim() === lockAccount.email,
     'the email address moved although every contact change was refused');
   await signOut(page, context);
+
+  // The good step-up cleared the failure count the three refusals built up: one short of the
+  // threshold in wrong passwords does not lock, and the right password then reaches the sign-in
+  // code page. (The locked check runs before the password is verified, so an early lock would
+  // show here as 423.) The right password resets the count; its challenge is left unanswered.
+  // A right password sends a new sign-in code, which the account's resend cooldown governs.
+  await waitForMfaCooldown(lockAccount);
+  for (let attempt = 1; attempt < settings.lockThreshold; attempt += 1) {
+    await fillSignIn(page, lockAccount.username, fakePassword());
+    expectHttpError(401, portalPathname('/auth/login'));
+    const wrong = await submit(page, signInButton(page), {
+      pathname: portalPathname('/auth/login'),
+    });
+    assert(wrong.status() === 401,
+      `reset probe: wrong password ${attempt} of ${settings.lockThreshold - 1} returned ${wrong.status()}`);
+  }
+  await fillSignIn(page, lockAccount.username, lockAccount.password);
+  const probe = await submit(page, signInButton(page), {
+    pathname: portalPathname('/auth/login'),
+  });
+  assert(probe.status() === 200,
+    `the right password after ${settings.lockThreshold - 1} wrong ones returned ${probe.status()}`);
+  lockAccount.lastMfaSentAt = Date.now();
+  await page.getByRole('heading', { name: t('mfa_heading'), exact: true }).waitFor();
+  await open(page, '/');
+  await page.getByRole('heading', { name: t('sign_in_heading'), exact: true }).waitFor();
 
   // Wrong passwords at sign-in up to the configured threshold. The last one locks the account
   // but still answers like any wrong password.
@@ -756,7 +786,10 @@ async function checkLinkedDevices(page) {
   await openModule(page, 'account', '/portal/account');
   const markupDevice = linkAccount.devices.find((device) => device.name.includes('<'));
   const keptDevice = linkAccount.devices.find((device) => device !== markupDevice);
-  assert(markupDevice && keptDevice, 'the device fixture needs one name with markup in it');
+  const unseenDevice = linkAccount.devices.find((device) => !device.seen);
+  const seenDevice = linkAccount.devices.find((device) => device.seen);
+  assert(markupDevice && keptDevice && unseenDevice && seenDevice,
+    'the device fixture needs one name with markup in it, one device never seen and one seen');
   const section = page.locator('section.settings-section', {
     has: page.locator('#mycarlos-devices-heading'),
   });
@@ -777,9 +810,9 @@ async function checkLinkedDevices(page) {
     has: page.locator('h3.mycarlos-device-name', { hasText: exactText(device.name) }),
   });
   // Linked, then Last seen (_mycarlos_devices.jinja:9-10).
-  assert((await deviceItem(markupDevice).locator('dd').nth(1).innerText()).trim()
+  assert((await deviceItem(unseenDevice).locator('dd').nth(1).innerText()).trim()
     === t('mycarlos_not_seen'), 'a device never seen should say so');
-  assert((await deviceItem(keptDevice).locator('dd').nth(1).innerText()).trim()
+  assert((await deviceItem(seenDevice).locator('dd').nth(1).innerText()).trim()
     !== t('mycarlos_not_seen'), 'a seen device should show when it was last seen');
 
   const removeLink = (device) => section.getByRole('link', {
@@ -862,7 +895,7 @@ async function createLinkCode(page, labelKey) {
   const headers = response.headers();
   assert(headers['cache-control'] === 'no-store', 'a page with a link code must not be cached');
   assert((headers['content-security-policy'] || '').includes("img-src 'self' data:"),
-    'the link code page must allow its inline QR image and nothing more');
+    'the link code page must allow its inline QR image');
   const code = (await page.locator('.mycarlos-code code').innerText()).trim();
   assert(linkCodePattern.test(code), `the link code has an unexpected shape: ${code}`);
   assert(!page.url().includes(code) && !page.url().includes(code.replace(/-/g, '')),
@@ -939,7 +972,8 @@ async function checkLinkCodes(page, context) {
   await page.getByRole('heading', { name: t('mycarlos_portal_address'), exact: true }).waitFor();
   assert((await page.locator('.mycarlos-portal-address code').innerText()).trim()
     === settings.publicBaseUrl, 'the linking page shows the wrong portal address');
-  // Opening the page never makes a code (README: a GET never creates one).
+  // Opening the page shows no code; only Create makes one (that a GET creates no row is the
+  // unit tests' claim, tests/test_mycarlos_portal.py).
   await assertNoCodeShown(page, 'the linking page before Create');
   assert(await createCodeButton(page, 'mycarlos_create').count() === 1,
     'the linking page should offer Create a code');

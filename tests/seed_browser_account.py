@@ -167,6 +167,12 @@ def link_code_pattern() -> str:
     )
 
 
+def audit_hash_secret(settings: Settings) -> str:
+    """The secret the portal recomputes offer digests with; require_browser_settings checked it."""
+    assert settings.audit_hash_secret is not None
+    return settings.audit_hash_secret.get_secret_value()
+
+
 def require_browser_settings(settings: Settings) -> str:
     """Refuse a configuration the check cannot pass on; return the session secret."""
     problems = []
@@ -178,8 +184,11 @@ def require_browser_settings(settings: Settings) -> str:
         problems.append("PATIENT_PORTAL_MYCARLOS_DELIVERY_ENABLED=true (Link myCarlos pages)")
     if settings.public_base_url is None or not settings.public_base_url.startswith("https://"):
         problems.append("an https:// PATIENT_PORTAL_PUBLIC_BASE_URL (the link QR needs one)")
-    if problems or settings.session_secret is None:
+    if settings.audit_hash_secret is None:
+        problems.append("PATIENT_PORTAL_AUDIT_HASH_SECRET (keys the offered-times digest)")
+    if problems:
         raise RuntimeError("the account browser check needs " + "; ".join(problems))
+    assert settings.session_secret is not None
     return settings.session_secret.get_secret_value()
 
 
@@ -356,14 +365,7 @@ def main() -> None:
                     created_by_id="fake-provider-1",
                     created_at=now,
                     expires_at=now + timedelta(days=90),
-                    offer_digest=offer_digest(
-                        offered_slots,
-                        secret=(
-                            settings.audit_hash_secret.get_secret_value()
-                            if settings.audit_hash_secret is not None
-                            else token_urlsafe(32)
-                        ),
-                    ),
+                    offer_digest=offer_digest(offered_slots, secret=audit_hash_secret(settings)),
                 )
                 session.add(decline_prompt)
                 session.flush()
