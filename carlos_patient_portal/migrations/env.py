@@ -18,14 +18,16 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from carlos_patient_portal import models
+from carlos_patient_portal.approval_models import ApprovalBase
 from carlos_patient_portal.config import get_migration_database_url
+from carlos_patient_portal.mailbox_models import MailboxBase
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = models.Base.metadata
+target_metadata = [models.Base.metadata, MailboxBase.metadata, ApprovalBase.metadata]
 
 
 def get_url() -> str:
