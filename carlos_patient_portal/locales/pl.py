@@ -83,7 +83,7 @@ TEXT: dict[str, str] = {
     "activation_rate_limited": (
         "Wykonano zbyt wiele prób aktywacji. Poczekaj, zanim spróbujesz ponownie."
     ),
-    "activation_success": "Twoje konto w portalu jest gotowe.",
+    "activation_success": "Konto w portalu jest gotowe.",
     "activation_success_heading": "Konto aktywowane",
     "back_to_sign_in": "Powrót do logowania",
     "booking_prompt_contact": "Aby umówić wizytę, skontaktuj się z {clinic_name}.",
@@ -92,7 +92,7 @@ TEXT: dict[str, str] = {
     ),
     "booking_prompt_no_online_booking": "W tym portalu nie można umawiać wizyt.",
     "booking_prompt_suggested_by": "{provider} proponuje tę wizytę.",
-    "booking_prompt_suggested_by_clinic": "Twoja przychodnia proponuje tę wizytę.",
+    "booking_prompt_suggested_by_clinic": "Przychodnia proponuje tę wizytę.",
     "booking_prompt_title_annual_exam": "Umów coroczne badanie",
     "booking_prompt_title_follow_up": "Umów wizytę kontrolną",
     "booking_prompt_title_lab_review": "Umów wizytę w celu omówienia wyników badań laboratoryjnych",
@@ -103,13 +103,13 @@ TEXT: dict[str, str] = {
     "booking_choice_error": (
         "Nie udało się wybrać tego terminu. Zapoznaj się z komunikatem poniżej i spróbuj ponownie."
     ),
-    "booking_choice_pending": "Potwierdzamy Twój termin z przychodnią.",
+    "booking_choice_pending": "Termin jest potwierdzany z przychodnią.",
     "booking_choice_pending_overdue": (
-        "Przychodnia potwierdzi Twój termin. Jeśli sprawa jest pilna, zadzwoń do przychodni."
+        "Przychodnia potwierdzi termin. Jeśli sprawa jest pilna, zadzwoń do przychodni."
     ),
     "booking_choice_pending_overdue_phone": (
-        "Przychodnia potwierdzi Twój termin. Jeśli sprawa jest pilna, zadzwoń do przychodni pod "
-        "numer {phone}."
+        "Przychodnia potwierdzi termin. Jeśli sprawa jest pilna, zadzwoń do przychodni pod numer "
+        "{phone}."
     ),
     "booking_choice_expired": "Ten termin nie jest już dostępny. Wybierz inny termin.",
     "booking_choice_expired_contact": (
@@ -163,12 +163,12 @@ TEXT: dict[str, str] = {
         "linków do resetowania hasła."
     ),
     "email_change_success": (
-        "Twój adres e-mail został zaktualizowany. Personel przychodni sprawdzi odpowiadające mu "
-        "dane w kartotece CARLOS."
+        "Adres e-mail został zaktualizowany. Personel przychodni sprawdzi odpowiadające mu dane w "
+        "kartotece CARLOS."
     ),
     "email_change_success_heading": "Adres e-mail potwierdzony",
     "email_change_phone_confirmation_pending": (
-        "Twój nowy adres e-mail został potwierdzony. Zaloguj się i wpisz kod wysłany na nowy numer "
+        "Nowy adres e-mail został potwierdzony. Zaloguj się i wpisz kod wysłany na nowy numer "
         "telefonu, aby dokończyć zmianę danych kontaktowych."
     ),
     "change_password": "Zmień hasło",
@@ -180,14 +180,14 @@ TEXT: dict[str, str] = {
     ),
     "contact_info": "Dane kontaktowe",
     "contact_change_notice_failed": (
-        "Twoje dane kontaktowe zostały zaktualizowane i nastąpiło wylogowanie, ale nie udało się "
-        "wysłać powiadomienia o bezpieczeństwie. Skontaktuj się z przychodnią, jeśli ta zmiana nie "
-        "została wprowadzona przez Ciebie."
+        "Dane kontaktowe zostały zaktualizowane i nastąpiło wylogowanie, ale nie udało się wysłać "
+        "powiadomienia o bezpieczeństwie. Skontaktuj się z przychodnią, jeśli ta zmiana nie była "
+        "zamierzona."
     ),
     "contact_change_success": (
-        "Twoje dane kontaktowe zostały zaktualizowane. Ze względów bezpieczeństwa nastąpiło "
-        "wylogowanie; zaloguj się ponownie, używając zaktualizowanej metody weryfikacji. Personel "
-        "przychodni sprawdzi odpowiadające im dane w kartotece CARLOS."
+        "Dane kontaktowe zostały zaktualizowane. Ze względów bezpieczeństwa nastąpiło wylogowanie; "
+        "zaloguj się ponownie, używając zaktualizowanej metody weryfikacji. Personel przychodni "
+        "sprawdzi odpowiadające im dane w kartotece CARLOS."
     ),
     "contact_change_success_heading": "Dane kontaktowe zaktualizowane",
     "contact_the_clinic": "Skontaktuj się z przychodnią",
@@ -271,9 +271,9 @@ TEXT: dict[str, str] = {
     "mfa": "MFA",
     "mfa_code": "Kod",
     "mfa_code_sent_email": "Kod wysłano e-mailem na adres {destination}.",
-    "mfa_code_sent_email_unmasked": "Kod wysłano na Twój adres e-mail.",
+    "mfa_code_sent_email_unmasked": "Kod wysłano na zarejestrowany adres e-mail.",
     "mfa_code_sent_sms": "Kod wysłano SMS-em na numer {destination}.",
-    "mfa_code_sent_sms_unmasked": "Kod wysłano na Twój numer telefonu komórkowego.",
+    "mfa_code_sent_sms_unmasked": "Kod wysłano na zarejestrowany numer telefonu komórkowego.",
     "mfa_delivery_unavailable": "Ta metoda dostarczania jest niedostępna.",
     "mfa_email": "E-mail",
     "mfa_heading": "Kod weryfikacyjny",
@@ -324,9 +324,7 @@ TEXT: dict[str, str] = {
     ),
     "password_reset_request_heading": "Zresetuj hasło",
     "password_reset_send": "Wyślij link do resetowania",
-    "password_reset_success": (
-        "Twoje hasło zostało zresetowane. Zaloguj się, używając nowego hasła."
-    ),
+    "password_reset_success": "Hasło zostało zresetowane. Zaloguj się, używając nowego hasła.",
     "password_reset_success_heading": "Hasło zresetowane",
     "password_reset_update": "Zaktualizuj hasło",
     "password_updated": "Hasło zaktualizowane",
