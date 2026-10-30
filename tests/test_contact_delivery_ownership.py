@@ -69,9 +69,12 @@ def test_late_delivery_failure_cannot_revoke_an_already_confirmed_contact_change
                 )
                 token = parse_qs(urlsplit(message["confirmation_url"]).fragment)["token"][0]
                 # A separate browser can use the delivered link before the sender acknowledges it.
-                with TestClient(app, raise_server_exceptions=False) as recipient:
+                recipient = TestClient(app, raise_server_exceptions=False)
+                try:
                     confirmed = confirm_seeded_email_change(recipient, token)
                     assert confirmed.status_code == 200
+                finally:
+                    recipient.close()
                 with app.state.session_factory() as session:
                     request = session.scalar(select(PatientPortalEmailChangeRequest))
                     assert request.status == EMAIL_CHANGE_STATUS_CONFIRMED
@@ -80,6 +83,7 @@ def test_late_delivery_failure_cannot_revoke_an_already_confirmed_contact_change
                 finish_delivery.set()
                 response = waiting.result(timeout=10)
 
+        assert response.status_code == 303
         with app.state.session_factory() as session:
             account = session.get(PatientPortalAccount, account_id)
             request = session.scalar(select(PatientPortalEmailChangeRequest))
@@ -101,4 +105,3 @@ def test_late_delivery_failure_cannot_revoke_an_already_confirmed_contact_change
             assert [event.reason for event in failures] == [
                 ACCOUNT_SETTINGS_REASON_DELIVERY_UNAVAILABLE
             ]
-        assert response.status_code == 303
