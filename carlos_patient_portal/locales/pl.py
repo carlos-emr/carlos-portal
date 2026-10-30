@@ -96,10 +96,10 @@ TEXT: dict[str, str] = {
     "booking_prompt_title_annual_exam": "Umów coroczne badanie",
     "booking_prompt_title_follow_up": "Umów wizytę kontrolną",
     "booking_prompt_title_lab_review": "Umów wizytę w celu omówienia wyników badań laboratoryjnych",
-    "booking_prompt_urgency_as_soon_as_possible": "Proszę umówić wizytę jak najszybciej.",
-    "booking_prompt_urgency_routine": "Proszę umówić wizytę w dogodnym dla siebie terminie.",
-    "booking_prompt_urgency_soon": "Proszę umówić wizytę w ciągu najbliższych kilku tygodni.",
-    "booking_booked": "Umówiono na {date} o {time}.",
+    "booking_prompt_urgency_as_soon_as_possible": "Umów wizytę jak najszybciej.",
+    "booking_prompt_urgency_routine": "Umów wizytę w dogodnym dla siebie terminie.",
+    "booking_prompt_urgency_soon": "Umów wizytę w ciągu najbliższych kilku tygodni.",
+    "booking_booked": "Termin wizyty: {date}, godz. {time}.",
     "booking_choice_error": (
         "Nie udało się wybrać tego terminu. Zapoznaj się z komunikatem poniżej i spróbuj ponownie."
     ),
@@ -111,12 +111,9 @@ TEXT: dict[str, str] = {
         "Przychodnia potwierdzi Twój termin. Jeśli sprawa jest pilna, zadzwoń do przychodni pod "
         "numer {phone}."
     ),
-    "booking_choice_expired": (
-        "Ten termin minął, zanim przychodnia zdążyła go potwierdzić. Proszę wybrać inny."
-    ),
+    "booking_choice_expired": "Ten termin nie jest już dostępny. Wybierz inny termin.",
     "booking_choice_expired_contact": (
-        "Ten termin minął, zanim przychodnia zdążyła go potwierdzić. Proszę skontaktować się z "
-        "przychodnią."
+        "Ten termin nie jest już dostępny. Skontaktuj się z przychodnią."
     ),
     "booking_choose": "Wybierz ten termin",
     "booking_decline": "Żaden z tych terminów mi nie odpowiada",
@@ -140,16 +137,14 @@ TEXT: dict[str, str] = {
     "booking_slot_duration_few": "{minutes} minuty",
     "booking_slot_duration_many": "{minutes} minut",
     "booking_slot_duration_one": "{minutes} minuta",
-    "booking_slot_taken": "Ten termin został właśnie zajęty. Proszę wybrać inny.",
-    "booking_slot_taken_contact": (
-        "Ten termin został właśnie zajęty. Proszę skontaktować się z przychodnią."
-    ),
+    "booking_slot_taken": "Ten termin został właśnie zajęty. Wybierz inny termin.",
+    "booking_slot_taken_contact": "Ten termin został właśnie zajęty. Skontaktuj się z przychodnią.",
     "booking_slot_time": "{hour:02d}:{minute:02d}",
     "booking_slot_when": "{date} o {time}",
     "booking_slots_legend": "Dostępne terminy",
     "booking_visit_mode_in_person": "Osobiście",
     "booking_visit_mode_phone": "Telefonicznie",
-    "booking_visit_mode_video": "Wideorozmowa",
+    "booking_visit_mode_video": "Przez wideo",
     "booking_weekday_0": "Poniedziałek",
     "booking_weekday_1": "Wtorek",
     "booking_weekday_2": "Środa",
@@ -254,7 +249,7 @@ TEXT: dict[str, str] = {
     "forgot_username_help": (
         "Jeśli nie znasz swojej nazwy użytkownika, skontaktuj się z przychodnią."
     ),
-    "future": "W przyszłości",
+    "future": "Wkrótce",
     "health_card_number": "Numer karty zdrowia (HCN/HIN)",
     "help": "Pomoc",
     "hide_password": "Ukryj hasło",
@@ -303,7 +298,7 @@ TEXT: dict[str, str] = {
     "mfa_method": "Metoda",
     "new_password": "Nowe hasło",
     "new_password_confirmation": "Potwierdź nowe hasło",
-    "next": "Dalej",
+    "next": "Następna",
     "no_email_passwords": "Brak haseł do wiadomości e-mail",
     "no_matching_email_passwords": "Brak pasujących haseł do wiadomości e-mail",
     "open_reset_page": "Otwórz stronę resetowania",
@@ -341,7 +336,7 @@ TEXT: dict[str, str] = {
     "phone_confirmation_code": "Kod potwierdzający numer telefonu",
     "confirm_phone": "Potwierdź numer telefonu",
     "resend_phone_confirmation": "Wyślij kolejny kod",
-    "previous": "Wstecz",
+    "previous": "Poprzednia",
     "provider": "Lekarz",
     "provider_options_truncated": (
         "Na liście znajdują się tylko ostatni lekarze. Użyj pola wyszukiwania, aby zawęzić wyniki."
@@ -350,7 +345,7 @@ TEXT: dict[str, str] = {
     "reveal_failed": "Nie udało się wyświetlić hasła. Spróbuj ponownie.",
     "reveal_password_hint": "Wpisz swoje obecne hasło, zanim wyświetlisz hasło do wiadomości.",
     "password_reset_temporarily_unavailable": (
-        "Resetowanie hasła jest tymczasowo niedostępne. Proszę spróbować ponownie za chwilę."
+        "Resetowanie hasła jest tymczasowo niedostępne. Spróbuj ponownie za chwilę."
     ),
     "revealing": "Wyświetlanie...",
     "reset_filters": "Wyczyść filtry",
@@ -395,9 +390,7 @@ TEXT: dict[str, str] = {
     "username_label": "Nazwa użytkownika",
     "username_placeholder": "nazwa użytkownika",
     "username_unavailable": "Ta nazwa użytkownika jest niedostępna.",
-    "verification_delivery_failed": (
-        "Nie udało się wysłać kodu weryfikacyjnego. Proszę spróbować ponownie."
-    ),
+    "verification_delivery_failed": "Nie udało się wysłać kodu weryfikacyjnego. Spróbuj ponownie.",
     "view_module": "Otwórz",
 }
 

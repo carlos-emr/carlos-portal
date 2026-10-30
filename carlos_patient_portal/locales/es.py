@@ -268,7 +268,7 @@ TEXT: dict[str, str] = {
     "messages_empty": "No tiene mensajes de su clínica.",
     "messages_new_count_one": "{count} nuevo",
     "messages_new_count_other": "{count} nuevos",
-    "mfa": "Autenticación multifactor",
+    "mfa": "MFA",
     "mfa_code": "Código",
     "mfa_code_sent_email": "Código enviado a {destination} por correo electrónico.",
     "mfa_code_sent_email_unmasked": "Código enviado a su dirección de correo electrónico.",
@@ -283,10 +283,10 @@ TEXT: dict[str, str] = {
     "mfa_new_code_sent_email": "Se envió un código nuevo por correo electrónico.",
     "mfa_new_code_sent_sms": "Se envió un código nuevo por SMS.",
     "mfa_rate_limited_one": (
-        "Se envió un código hace poco. Inténtelo de nuevo dentro de {seconds} segundo."
+        "Se envió un código hace poco. Inténtelo de nuevo en {seconds} segundo."
     ),
     "mfa_rate_limited_other": (
-        "Se envió un código hace poco. Inténtelo de nuevo dentro de {seconds} segundos."
+        "Se envió un código hace poco. Inténtelo de nuevo en {seconds} segundos."
     ),
     "mfa_resend": "Reenviar código",
     "mfa_sign_in_again": "Inicie sesión de nuevo para solicitar un nuevo código de verificación.",

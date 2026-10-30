@@ -79,7 +79,7 @@ TEXT: dict[str, str] = {
     "activation_reenter_password": "Seus outros dados foram mantidos: digite sua senha novamente.",
     "activation_heading": "Ative sua conta",
     "activation_rate_limited": (
-        "Foram feitas tentativas de ativação demais. Aguarde antes de tentar novamente."
+        "Foram feitas muitas tentativas de ativação. Aguarde antes de tentar novamente."
     ),
     "activation_success": "Sua conta do portal está pronta.",
     "activation_success_heading": "Conta ativada",
@@ -355,7 +355,7 @@ TEXT: dict[str, str] = {
     "revealing": "Revelando...",
     "reset_filters": "Limpar filtros",
     "search": "Buscar",
-    "sent": "Enviada",
+    "sent": "Envio",
     "session_locked_details": (
         "A equipe da clínica precisa desbloquear esta conta antes de um novo acesso ou redefinição "
         "de senha. Entre em contato com a clínica para obter ajuda."
@@ -365,7 +365,7 @@ TEXT: dict[str, str] = {
         "O portal não conseguiu concluir essa solicitação. Isso geralmente significa que a página "
         "ficou aberta por muito tempo. Volte ao portal e tente novamente."
     ),
-    "service_busy_heading": "Solicitações demais",
+    "service_busy_heading": "Excesso de solicitações",
     "service_busy_details": (
         "O portal recebeu solicitações demais desta conexão. Aguarde um momento e tente novamente."
     ),

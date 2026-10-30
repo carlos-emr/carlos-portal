@@ -42,7 +42,7 @@ TEXT: dict[str, str] = {
         "入口網站聯絡資料已更新。診所人員將審核 CARLOS 中相符的病患基本資料。"
     ),
     "account_status_contact_confirmation_required": (
-        "請確認新的電子郵件地址，並輸入傳送至新手機號碼的驗證碼。在兩者都確認之前，"
+        "請確認新的電子郵件地址，並輸入傳送至新電話號碼的確認碼。在兩者都確認之前，"
         "您目前的聯絡資料仍然有效。"
     ),
     "account_status_email_confirmation_required": (
@@ -53,7 +53,7 @@ TEXT: dict[str, str] = {
         "無法將確認郵件傳送至新的電子郵件地址。您的聯絡資料未變更。請再試一次，或聯絡診所。"
     ),
     "account_status_phone_confirmation_required": (
-        "請輸入傳送至新手機號碼的確認碼。在確認之前，您目前的電話號碼仍然有效。"
+        "請輸入傳送至新電話號碼的確認碼。在確認之前，您目前的電話號碼仍然有效。"
     ),
     "account_status_phone_confirmation_invalid": (
         "電話確認碼無效或已過期。請重新申請確認碼後再試一次。"
@@ -68,9 +68,7 @@ TEXT: dict[str, str] = {
     "all_providers": "所有醫師",
     "activate_account": "啟用帳戶",
     "activation_details": "請輸入診所提供的邀請資料，並建立您的入口網站登入資訊。",
-    "activation_date_of_birth_invalid": (
-        "請檢查出生日期：請輸入真實的日期，例如 1985 年 6 月 15 日。"
-    ),
+    "activation_date_of_birth_invalid": "請檢查出生日期：輸入真實的日期，例如 1985 年 6 月 15 日。",
     "activation_error": "無法驗證啟用資料。",
     "activation_password_rejected": (
         "請選擇其他密碼：至少使用 12 "
@@ -142,7 +140,7 @@ TEXT: dict[str, str] = {
     "email_change_success": "您的電子郵件地址已更新。診所人員將審核 CARLOS 中相符的病歷資料。",
     "email_change_success_heading": "電子郵件地址已確認",
     "email_change_phone_confirmation_pending": (
-        "您的新電子郵件地址已確認。請登入並輸入傳送至新手機號碼的驗證碼，以完成聯絡資料變更。"
+        "您的新電子郵件地址已確認。請登入並輸入傳送至新電話號碼的確認碼，以完成聯絡資料變更。"
     ),
     "change_password": "變更密碼",
     "clinic": "診所",
@@ -246,7 +244,7 @@ TEXT: dict[str, str] = {
     "mfa_verification_failed": "無法完成多重驗證。",
     "modal_close": "確定",
     "module_navigation": "入口網站功能",
-    "mfa_method": "方式",
+    "mfa_method": "驗證方式",
     "new_password": "新密碼",
     "new_password_confirmation": "確認新密碼",
     "next": "下一頁",
@@ -335,7 +333,9 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_mfa_rate_limited": "最近已傳送過登入驗證碼。請稍候再重新申請。",
     "mycarlos_link": "連結 myCarlos",
     "mycarlos_devices": "已連結的裝置",
-    "mycarlos_instruction": "在 myCarlos 中選擇連結診所入口網站的選項，然後輸入此連結碼。",
+    "mycarlos_instruction": (
+        "在 myCarlos 中選擇「連結診所」以連結您的診所入口網站，然後輸入此連結碼。"
+    ),
     "mycarlos_code_label": "一次性連結碼",
     "mycarlos_lifetime": "此連結碼只能使用一次，有效期限 10 分鐘。請保持登入此入口網站。",
     "mycarlos_approval": "裝置還必須經過核准，才能接收文件。",

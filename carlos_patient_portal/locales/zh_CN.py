@@ -336,7 +336,7 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_approval": "该设备还必须获得批准，才能接收文档。",
     "mycarlos_create": "创建关联码",
     "mycarlos_another": "再创建一个关联码",
-    "mycarlos_linked": "已关联",
+    "mycarlos_linked": "关联时间",
     "mycarlos_last_seen": "上次连接",
     "mycarlos_empty": "没有已关联的设备。请选择「关联 myCarlos」添加设备。",
     "mycarlos_remove_question": "要移除此设备吗？",

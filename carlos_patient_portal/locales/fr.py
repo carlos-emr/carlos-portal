@@ -325,8 +325,8 @@ TEXT: dict[str, str] = {
     "password_placeholder": "mot de passe",
     "password_requirements": (
         "Utilisez au moins 12 caractères. Évitez les mots de passe courants ainsi que les "
-        "renseignements liés à votre compte, à la clinique ou à votre vie personnelle; plusieurs "
-        "mots sans lien entre eux sont un bon choix."
+        "renseignements sur votre compte, votre clinique ou vous-même (renseignements personnels); "
+        "plusieurs mots sans lien entre eux sont un bon choix."
     ),
     "password_reset_complete_error": (
         "Le lien de réinitialisation du mot de passe est invalide ou a expiré."

@@ -183,25 +183,12 @@ def test_complete_locales_define_every_key_and_plural_form(code: str) -> None:
     assert not missing, f"{code} is listed as complete but lacks: {sorted(missing)}"
 
 
-# Values a translation may share with English: brand names, codes, symbols, and the few words a
-# language spells as English does (French "Documents", "Messages", "Code", "{minutes} minute(s)").
-ENGLISH_ALLOWED_VERBATIM = frozenset(
-    {
-        "myCarlos",
-        "CARLOS",
-        "SMS",
-        "OK",
-        "MFA",
-        "PDF",
-        "FHIR",
-        "HTTPS",
-        "Documents",
-        "Messages",
-        "Code",
-        "{minutes} minute",
-        "{minutes} minutes",
-    }
-)
+# Values a translation may share with English: brand names and codes in every language, plus the
+# few words a given language spells as English does.
+ENGLISH_ALLOWED_VERBATIM = frozenset({"CARLOS", "SMS", "OK", "MFA"})
+ENGLISH_ALLOWED_VERBATIM_BY_LOCALE: dict[str, frozenset[str]] = {
+    "fr": frozenset({"Documents", "Messages", "Code", "{minutes} minute", "{minutes} minutes"}),
+}
 
 
 def _looks_untranslated(value: str) -> bool:
@@ -221,6 +208,7 @@ def test_complete_locales_do_not_leave_english_in_a_translated_string(code: str)
         if key in ENGLISH
         and value == ENGLISH[key]
         and value not in ENGLISH_ALLOWED_VERBATIM
+        and value not in ENGLISH_ALLOWED_VERBATIM_BY_LOCALE.get(code, frozenset())
         and not _looks_untranslated(value)
     )
     assert not leaked, f"{code} still has the English text for: {leaked}"
