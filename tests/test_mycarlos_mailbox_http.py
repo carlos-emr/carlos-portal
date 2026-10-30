@@ -215,8 +215,11 @@ def test_signed_list_download_receipt_and_anchor_survive_actual_http(http_mailbo
     assert [value["proof_kind"] for value in anchors.json()["anchors"]] == ["request", "receipt"]
 
 
-def test_failed_download_commit_exposes_no_bytes_but_keeps_the_assertion_consumed(
-    http_mailbox, monkeypatch, caplog
+@pytest.mark.parametrize(
+    "nonce_already_committed", [False, True], ids=["nonce_commit", "operation_commit"]
+)
+def test_download_commit_failure_preserves_the_durable_nonce_boundary(
+    http_mailbox, monkeypatch, caplog, nonce_already_committed
 ):
     app, client, _proxy = http_mailbox
     markers = (
@@ -230,6 +233,15 @@ def test_failed_download_commit_exposes_no_bytes_but_keeps_the_assertion_consume
     prepared = []
     real_anchor = mycarlos_mailbox.record_request_anchor
     real_response = mycarlos_mailbox.Response
+    real_consume = mycarlos_mailbox.consume_device_assertion
+
+    def consume_with_marked_session(session_factory, principal, **kwargs):
+        def marked_session():
+            session = session_factory()
+            session.info["fake_nonce_commit"] = True
+            return session
+
+        return real_consume(marked_session, principal, **kwargs)
 
     def record_prepared_response(*args, **kwargs):
         response = real_response(*args, **kwargs)
@@ -241,18 +253,27 @@ def test_failed_download_commit_exposes_no_bytes_but_keeps_the_assertion_consume
         session.info["fake_download_commit"] = recorded
         return recorded
 
-    def fail_operation_commit(session):
-        # Nonce consumption uses a separate transaction and must succeed first.
-        if session.info.pop("fake_download_commit", False) and not faults:
-            assert len(prepared) == 1
-            assert prepared[0].status_code == 200
-            assert prepared[0].body == parse_upload(BODY).sealed
+    def fail_selected_commit(session):
+        marker = "fake_download_commit" if nonce_already_committed else "fake_nonce_commit"
+        if session.info.pop(marker, False) and not faults:
+            # The real nonce insert was flushed, but only the selected commit fails.
+            assert (
+                session.scalar(select(func.count()).select_from(PatientPortalStaffAssertionUse))
+                == nonce_count + 1
+            )
+            if nonce_already_committed:
+                assert len(prepared) == 1
+                assert prepared[0].status_code == 200
+                assert prepared[0].body == parse_upload(BODY).sealed
+            else:
+                assert prepared == []
             faults.append(True)
             raise failure
 
     monkeypatch.setattr(mycarlos_mailbox, "record_request_anchor", anchor_then_mark_operation)
     monkeypatch.setattr(mycarlos_mailbox, "Response", record_prepared_response)
-    event.listen(app.state.session_factory.class_, "before_commit", fail_operation_commit)
+    monkeypatch.setattr(mycarlos_mailbox, "consume_device_assertion", consume_with_marked_session)
+    event.listen(app.state.session_factory.class_, "before_commit", fail_selected_commit)
     try:
         assert client.post(UPLOAD_PATH, content=BODY, headers=job_headers()).status_code == 201
         with app.state.session_factory() as session:
@@ -289,15 +310,20 @@ def test_failed_download_commit_exposes_no_bytes_but_keeps_the_assertion_consume
         assert "Portal database operation unavailable" in caplog.text
         assert all(marker not in refused.text + caplog.text for marker in markers)
         assert stored_operation() == before
-        assert used_assertions() == nonce_count + 1
+        assert used_assertions() == nonce_count + int(nonce_already_committed)
 
-        replayed = client.get(COPY_PATH, headers=headers)
-        assert replayed.status_code == 404
-        assert replayed.json() == {"detail": "not found"}
-        assert stored_operation() == before
-        assert used_assertions() == nonce_count + 1
+        if nonce_already_committed:
+            replayed = client.get(COPY_PATH, headers=headers)
+            assert replayed.status_code == 404
+            assert replayed.json() == {"detail": "not found"}
+            assert stored_operation() == before
+            assert used_assertions() == nonce_count + 1
+            retry_headers = device_headers(COPY_PATH, anchor="22" * 32)
+        else:
+            # A failed nonce commit did not consume the otherwise valid assertion.
+            retry_headers = headers
 
-        recovered = client.get(COPY_PATH, headers=device_headers(COPY_PATH, anchor="22" * 32))
+        recovered = client.get(COPY_PATH, headers=retry_headers)
         assert recovered.status_code == 200
         assert recovered.content == before["sealed"]
         assert recovered.headers["cache-control"] == "no-store"
@@ -308,9 +334,15 @@ def test_failed_download_commit_exposes_no_bytes_but_keeps_the_assertion_consume
         assert after["proofs"] == before["proofs"] + 1
         assert after["events"] == before["events"] + 1
         assert after["downloads"] == 1
-        assert used_assertions() == nonce_count + 2
+        assert len(prepared) == 1 + int(nonce_already_committed)
+        assert used_assertions() == nonce_count + 1 + int(nonce_already_committed)
+        replay_after_success = client.get(COPY_PATH, headers=retry_headers)
+        assert replay_after_success.status_code == 404
+        assert replay_after_success.json() == {"detail": "not found"}
+        assert stored_operation() == after
+        assert used_assertions() == nonce_count + 1 + int(nonce_already_committed)
     finally:
-        event.remove(app.state.session_factory.class_, "before_commit", fail_operation_commit)
+        event.remove(app.state.session_factory.class_, "before_commit", fail_selected_commit)
         client.close()
         app.state.database_engine.dispose()
 
