@@ -67,7 +67,7 @@ from tests.support import (
 
 # Locales whose catalogs must define every key. English is the source. A translation PR that
 # finishes a language adds it here, which turns on the completeness check for that language.
-COMPLETE_LOCALES = ("en",)
+COMPLETE_LOCALES = ("en", "fr", "es", "pl", "pt-BR", "zh-CN", "zh-TW")
 
 PACKAGE_DIR = Path(web_support.PACKAGE_DIR)
 SUPPORTED_CODES = tuple(locale.code for locale in SUPPORTED_LOCALES)
@@ -181,6 +181,49 @@ def test_complete_locales_define_every_key_and_plural_form(code: str) -> None:
             if f"{base}_{category}" not in own
         )
     assert not missing, f"{code} is listed as complete but lacks: {sorted(missing)}"
+
+
+# Values a translation may share with English: brand names, codes, symbols, and the few words a
+# language spells as English does (French "Documents", "Messages", "Code", "{minutes} minute(s)").
+ENGLISH_ALLOWED_VERBATIM = frozenset(
+    {
+        "myCarlos",
+        "CARLOS",
+        "SMS",
+        "OK",
+        "MFA",
+        "PDF",
+        "FHIR",
+        "HTTPS",
+        "Documents",
+        "Messages",
+        "Code",
+        "{minutes} minute",
+        "{minutes} minutes",
+    }
+)
+
+
+def _looks_untranslated(value: str) -> bool:
+    """Only placeholders, digits, punctuation and symbols: nothing to translate."""
+    bare = re.sub(r"\{[^}]*\}", "", value)
+    return not re.search(r"[A-Za-z\u00c0-\u024f\u0370-\u03ff\u0400-\u04ff\u4e00-\u9fff]", bare)
+
+
+@pytest.mark.parametrize("code", [code for code in COMPLETE_LOCALES if code != "en"])
+def test_complete_locales_do_not_leave_english_in_a_translated_string(code: str) -> None:
+    """A finished catalog holds real translations: no value copied from English, apart from brand
+    names, codes and format-only strings (Ben's rule: never an English placeholder)."""
+    own = _own_strings(code)
+    leaked = sorted(
+        key
+        for key, value in own.items()
+        if key in ENGLISH
+        and value == ENGLISH[key]
+        and value not in ENGLISH_ALLOWED_VERBATIM
+        and not _looks_untranslated(value)
+    )
+    assert not leaked, f"{code} still has the English text for: {leaked}"
 
 
 def test_english_plural_keys_have_both_english_forms() -> None:
