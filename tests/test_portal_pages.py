@@ -1450,6 +1450,50 @@ def test_email_change_confirmation_rejects_an_unknown_token() -> None:
     assert "no longer valid" in forged.text
 
 
+def test_phone_code_resend_inside_the_cooldown_is_rate_limited_not_an_error() -> None:
+    """A resend right after the code was sent must answer with the rate-limited notice.
+
+    On SQLite the stored send time comes back without a zone; the remaining-time arithmetic
+    then raised TypeError and the patient got a 500 page.
+    """
+    sms_sender = RecordingPortalSmsSender()
+    app = migrated_development_app(
+        email_sender=RecordingPortalEmailSender(), sms_sender=sms_sender
+    )
+    client = TestClient(app)
+    browser_sign_in_seeded_patient(app, client)
+    account_page = client.get("/portal/account")
+    requested = client.post(
+        "/portal/account/contact",
+        data={
+            "csrf_token": csrf_token_from_response(account_page),
+            "email": SEEDED_INVITE_EMAIL,
+            "phone_number": "+1 555 010 5556",
+            "current_password": STRONG_PASSWORD,
+        },
+        follow_redirects=False,
+    )
+    assert requested.status_code == 303
+    assert (
+        requested.headers["location"] == "/portal/account?status=phone-confirmation-required"
+    )
+    sent_codes = len(sms_sender.messages)
+
+    confirmation_page = client.get("/portal/account")
+    resent = client.post(
+        "/portal/account/contact/resend-phone",
+        data={"csrf_token": csrf_token_from_response(confirmation_page)},
+        follow_redirects=False,
+    )
+
+    assert resent.status_code == 303
+    assert (
+        resent.headers["location"]
+        == "/portal/account?status=phone-confirmation-rate-limited"
+    )
+    assert len(sms_sender.messages) == sent_codes
+
+
 PORTAL_MUTATING_ROUTES = (
     ("/portal/account/password", {"current_password": "x", "new_password": "y"}),
     ("/portal/account/contact", {"email": "a@b.test", "current_password": "x"}),
