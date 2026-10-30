@@ -8,7 +8,7 @@ from threading import Event, Thread
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import StatementError
 
 from carlos_patient_portal import delivery_outbox
 from carlos_patient_portal.auth import PasswordResetRequestResult
@@ -269,6 +269,7 @@ def test_outbox_rotation_retains_the_old_key_for_queued_delivery() -> None:
 
 def test_delivery_retries_when_its_audit_row_cannot_be_written(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """An unwritable audit row must send the delivery back, not close it as delivered.
 
@@ -283,15 +284,30 @@ def test_delivery_retries_when_its_audit_row_cannot_be_written(
     )
     account_id = activate_seeded_patient_account(app, TestClient(app))
     delivery_id, reset_id = queue_reset(app, account_id)
+    private_markers = (
+        "FAKE_PRIVATE_SQL_STATEMENT",
+        "FAKE_PRIVATE_PARAMETER",
+        "FAKE_PRIVATE_DRIVER_DETAIL",
+    )
+    driver_error = RuntimeError(private_markers[2])
+    audit_error = StatementError(
+        str(driver_error),
+        "INSERT INTO FAKE_PRIVATE_SQL_STATEMENT (actor) VALUES (:actor)",
+        {"actor": private_markers[1]},
+        driver_error,
+    )
+    assert all(marker in str(audit_error) for marker in private_markers)
 
     def fail_audit(*args: object, **kwargs: object) -> None:
-        raise SQLAlchemyError("audit unavailable")
+        raise audit_error
 
     monkeypatch.setattr(
         delivery_outbox,
         "record_password_reset_delivery_outcome",
         fail_audit,
     )
+    caplog.set_level(logging.ERROR, logger="carlos_patient_portal.delivery_outbox")
+    caplog.clear()
     result = process_one_delivery(
         app.state.session_factory,
         email_sender=sender,
@@ -302,10 +318,15 @@ def test_delivery_retries_when_its_audit_row_cannot_be_written(
 
     assert result is not None
     assert result.status == OUTBOX_STATUS_PENDING
+    assert len(sender.messages) == 1, "the provider succeeded before the audit failed"
+    assert "StatementError" in caplog.text
+    assert f"delivery {delivery_id}" in caplog.text
+    assert all(marker not in caplog.text for marker in private_markers)
     with app.state.session_factory() as session:
         delivery = session.get(PatientPortalOutboundDelivery, delivery_id)
         assert delivery.status == OUTBOX_STATUS_PENDING
         assert delivery.delivered_at is None
+        assert delivery.last_failure_code == delivery_outbox.OUTBOX_FAILURE_AUDIT_UNAVAILABLE
         # The token stays usable: the message did go out, and the patient must still be able
         # to complete the reset while the row is retried.
         assert session.get(PatientPortalPasswordResetToken, reset_id).status == (
