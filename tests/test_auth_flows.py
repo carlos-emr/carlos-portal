@@ -1,5 +1,6 @@
 """Login, MFA, sessions, lockout, and password reset."""
 
+import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -9,7 +10,8 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.orm import Session
 
 from carlos_patient_portal import auth, credentials, main, web_support
 from carlos_patient_portal.account_settings import update_account_mfa_method
@@ -306,6 +308,89 @@ def test_login_sends_mfa_email_after_committing_challenge() -> None:
         challenge = session.scalar(select(PatientPortalMfaChallenge))
         assert challenge is not None
         assert challenge.last_email_sent_at is not None
+
+
+def test_failed_challenge_commit_sends_no_mfa_and_allows_a_clean_retry(monkeypatch, caplog) -> None:
+    sender = RecordingPortalEmailSender()
+    app = migrated_development_app(email_sender=sender)
+    client = TestClient(app)
+    try:
+        account_id = activate_seeded_patient_account(app, client)
+        private_markers = (
+            "FAKE_PRIVATE_SQL_STATEMENT",
+            "FAKE_PRIVATE_PARAMETER",
+            "FAKE_PRIVATE_DRIVER_DETAIL",
+        )
+        database_error = OperationalError(
+            "INSERT INTO FAKE_PRIVATE_SQL_STATEMENT VALUES (:actor)",
+            {"actor": private_markers[1]},
+            RuntimeError(private_markers[2]),
+        )
+        assert all(marker in str(database_error) for marker in private_markers)
+        commit_attempts = []
+
+        def fail_commit(session):
+            commit_attempts.append(session)
+            raise database_error
+
+        caplog.set_level(logging.WARNING, logger="carlos_patient_portal.main")
+        caplog.clear()
+        with monkeypatch.context() as failure:
+            failure.setattr(Session, "commit", fail_commit)
+            unavailable = client.post(
+                "/auth/login",
+                json={"username": "patient.user", "password": STRONG_PASSWORD},
+            )
+
+        assert commit_attempts, "the database fault must occur at the commit boundary"
+        assert unavailable.status_code == 503
+        assert unavailable.json() == {"detail": "service temporarily unavailable"}
+        assert unavailable.headers["retry-after"] == "1"
+        assert web_support.PORTAL_SESSION_COOKIE_NAME not in unavailable.cookies
+        assert sender.messages == []
+        assert all(marker not in unavailable.text for marker in private_markers)
+        assert "RuntimeError" in caplog.text
+        assert all(marker not in caplog.text for marker in private_markers)
+        assert app.state.operational_metrics.snapshot()["failures"]["database"] == 1
+        with app.state.session_factory() as session:
+            assert (
+                session.scalar(
+                    select(PatientPortalMfaChallenge.id).where(
+                        PatientPortalMfaChallenge.account_id == account_id
+                    )
+                )
+                is None
+            )
+            assert (
+                session.scalar(
+                    select(PatientPortalSession.id).where(
+                        PatientPortalSession.account_id == account_id
+                    )
+                )
+                is None
+            )
+            assert session.get(PatientPortalAccount, account_id).last_mfa_email_sent_at is None
+
+        recovered = client.post(
+            "/auth/login",
+            json={"username": "patient.user", "password": STRONG_PASSWORD},
+        )
+
+        assert recovered.status_code == 200
+        assert len(sender.messages) == 1
+        assert sender.messages[0]["code"] == recovered.json()["development_mfa_code"]
+        with app.state.session_factory() as session:
+            assert (
+                session.scalar(
+                    select(PatientPortalMfaChallenge.id).where(
+                        PatientPortalMfaChallenge.account_id == account_id
+                    )
+                )
+                is not None
+            )
+    finally:
+        client.close()
+        app.state.database_engine.dispose()
 
 
 def test_login_mfa_delivery_failure_is_generic_and_audited() -> None:
