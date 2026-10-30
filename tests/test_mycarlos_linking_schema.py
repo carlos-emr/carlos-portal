@@ -71,11 +71,11 @@ def fake_key_bytes(label: str) -> bytes:
 
 
 @pytest.fixture
-def migrated(tmp_path: Path) -> Iterator[tuple[Engine, Config]]:
+def migrated(tmp_path: Path, request: pytest.FixtureRequest) -> Iterator[tuple[Engine, Config]]:
     database_url = f"sqlite+pysqlite:///{tmp_path / 'mycarlos.db'}"
     config = alembic_config_for_tests()
     config.set_main_option("sqlalchemy.url", database_url)
-    command.upgrade(config, "head")
+    command.upgrade(config, getattr(request, "param", "head"))
     engine = create_engine(database_url)
 
     @event.listens_for(engine, "connect")
@@ -417,6 +417,7 @@ def test_the_mycarlos_audit_types_are_accepted_and_others_are_not(migrated) -> N
     )
 
 
+@pytest.mark.parametrize("migrated", ["0017_mycarlos_linking"], indirect=True)
 def test_the_downgrade_is_refused_while_mycarlos_rows_exist(migrated) -> None:
     engine, config = migrated
     with Session(engine) as session:
@@ -442,6 +443,7 @@ def test_the_downgrade_is_refused_while_mycarlos_rows_exist(migrated) -> None:
     assert MYCARLOS_TABLES <= set(inspect(engine).get_table_names())
 
 
+@pytest.mark.parametrize("migrated", ["0017_mycarlos_linking"], indirect=True)
 def test_a_clean_downgrade_drops_the_tables_and_the_audit_types(migrated) -> None:
     engine, config = migrated
     command.downgrade(config, "0016_job_assertion_audit")

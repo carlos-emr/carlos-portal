@@ -43,7 +43,10 @@ test result, ticket, or named approver is not evidence.
 - [ ] Alert on readiness, restarts, database saturation, authentication failures, terminal outbox
       work, oldest queued-message age, audit export failure, backup failure, and certificate expiry.
 - [ ] Schedule outbox review, transient-auth cleanup (at least daily: it also deletes offered
-      appointment times), audit export, and approved retention pruning.
+      appointment times and expired self sign-up requests), audit export, and approved retention
+      pruning.
+- [ ] If self sign-up is turned on, confirm CARLOS collects the requests end to end and alert on
+      the sign-up backlog and its oldest request age in readiness.
 - [ ] Exercise session, internal API, outbox, and unlock-key rotation procedures.
 
 ## Patient safety, privacy, and access

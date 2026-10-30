@@ -208,6 +208,17 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.patient_portal_email_change_requests,
   public.patient_portal_invites,
   public.patient_portal_mfa_challenges,
+  public.patient_portal_mycarlos_approval_clinics,
+  public.patient_portal_mycarlos_approval_requests,
+  public.patient_portal_mycarlos_mailbox_accounts,
+  public.patient_portal_mycarlos_mailbox_anchors,
+  public.patient_portal_mycarlos_mailbox_blobs,
+  public.patient_portal_mycarlos_mailbox_clinics,
+  public.patient_portal_mycarlos_mailbox_copies,
+  public.patient_portal_mycarlos_mailbox_devices,
+  public.patient_portal_mycarlos_mailbox_events,
+  public.patient_portal_mycarlos_mailbox_proofs,
+  public.patient_portal_mycarlos_mailbox_rates,
   public.patient_portal_mycarlos_devices,
   public.patient_portal_mycarlos_link_codes,
   public.patient_portal_mycarlos_link_failures,
@@ -215,6 +226,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.patient_portal_outbound_deliveries,
   public.patient_portal_password_reset_tokens,
   public.patient_portal_sessions,
+  public.patient_portal_signup_requests,
   public.patient_portal_staff_assertion_uses,
   public.patient_portal_unlock_secrets
 TO :"runtime_role";
@@ -228,12 +240,17 @@ GRANT USAGE, SELECT ON SEQUENCE
   public.patient_portal_email_change_requests_id_seq,
   public.patient_portal_invites_id_seq,
   public.patient_portal_mfa_challenges_id_seq,
+  public.patient_portal_mycarlos_mailbox_copies_id_seq,
+  public.patient_portal_mycarlos_mailbox_anchors_id_seq,
+  public.patient_portal_mycarlos_mailbox_events_id_seq,
+  public.patient_portal_mycarlos_mailbox_proofs_id_seq,
   public.patient_portal_mycarlos_devices_id_seq,
   public.patient_portal_mycarlos_link_codes_id_seq,
   public.patient_portal_mycarlos_link_failures_id_seq,
   public.patient_portal_outbound_deliveries_id_seq,
   public.patient_portal_password_reset_tokens_id_seq,
   public.patient_portal_sessions_id_seq,
+  public.patient_portal_signup_requests_id_seq,
   public.patient_portal_unlock_secrets_id_seq
 TO :"runtime_role";
 

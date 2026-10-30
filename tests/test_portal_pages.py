@@ -1337,6 +1337,7 @@ def test_presenters_perform_no_writes() -> None:
         ("activate.jinja", "public_auth_template_context"),
         ("password_reset_request.jinja", "public_auth_template_context"),
         ("password_reset_complete.jinja", "public_auth_template_context"),
+        ("sign_up.jinja", "public_auth_template_context"),
         ("email_change_complete.jinja", "public_auth_template_context"),
         ("auth_result.jinja", "public_auth_template_context"),
         ("locked.jinja", "public_auth_template_context"),

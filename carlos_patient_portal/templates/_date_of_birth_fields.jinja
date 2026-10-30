@@ -1,0 +1,47 @@
+{# The date of birth as Day, Month and Year boxes, shared by activation and self sign-up; the
+   server combines them with web_support.date_of_birth_from_form. Three boxes rather than a date
+   field: a date field reads typed digits in an order the page cannot know or show (month first
+   in many browsers), so "1985-06-15" became another date. Named months leave no day/month doubt. #}
+<fieldset class="date-of-birth" aria-describedby="date-of-birth-hint">
+  <legend>{{ text.date_of_birth }}</legend>
+  <small id="date-of-birth-hint">{{ text.date_of_birth_hint }}</small>
+  <div class="date-of-birth-parts">
+    <label>
+      <span>{{ text.date_of_birth_day }}</span>
+      <input
+        type="text"
+        name="date_of_birth_day"
+        value="{{ form_values.date_of_birth_day or '' }}"
+        inputmode="numeric"
+        pattern="[0-9]{1,2}"
+        maxlength="2"
+        autocomplete="bday-day"
+        required
+      >
+    </label>
+    <label>
+      <span>{{ text.date_of_birth_month }}</span>
+      <select name="date_of_birth_month" autocomplete="bday-month" required>
+        <option value="">{{ text.date_of_birth_month_choose }}</option>
+        {# The list's own month names: some languages name a month differently inside a date. #}
+        {% for month in range(1, 13) %}
+          <option value="{{ month }}"{% if form_values.date_of_birth_month == month|string %} selected{% endif %}>{{ text["date_of_birth_month_" ~ month] }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      <span>{{ text.date_of_birth_year }}</span>
+      <input
+        type="text"
+        name="date_of_birth_year"
+        value="{{ form_values.date_of_birth_year or '' }}"
+        inputmode="numeric"
+        pattern="[0-9]{4}"
+        minlength="4"
+        maxlength="4"
+        autocomplete="bday-year"
+        required
+      >
+    </label>
+  </div>
+</fieldset>

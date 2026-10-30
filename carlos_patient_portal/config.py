@@ -23,7 +23,7 @@ from typing import Literal
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
@@ -346,6 +346,7 @@ class Settings(BaseSettings):
     # Private M4 source is separately gated while its migration/security holds remain.
     # Enabling M2 linking alone never assumes these new tables already exist.
     mycarlos_mailbox_enabled: bool = False
+    mycarlos_approval_enabled: bool = False
     mycarlos_mailbox_device_bytes: int = Field(default=268435456, ge=20971520)
     mycarlos_mailbox_account_bytes: int = Field(default=1073741824, ge=20971520)
     mycarlos_mailbox_clinic_bytes: int = Field(default=21474836480, ge=20971520)
@@ -510,6 +511,33 @@ class Settings(BaseSettings):
     # is exhausted. The endpoint returns one account-neutral 503 when this limit is reached.
     password_reset_queue_max_pending: int = Field(default=1_000, ge=10, le=1_000_000)
     password_reset_queue_retry_after_seconds: int = Field(default=60, ge=1, le=60 * 60)
+    # Self sign-up (carlos-portal#15): a public page where a patient asks for an account with their
+    # health card number, date of birth and email address. Off by default; while off the page is
+    # not registered at all, so it answers 404 like any unknown path and stores nothing.
+    self_signup_enabled: bool = False
+    # A stored request waits this long for CARLOS to collect it, and is then deleted unread.
+    self_signup_request_ttl_seconds: int = Field(
+        default=24 * 60 * 60,
+        ge=60 * 60,
+        le=7 * 24 * 60 * 60,
+    )
+    # Database limits, counted from audit events so every web worker shares them. A request over
+    # either limit is answered with the same page as any other and nothing is stored.
+    self_signup_max_requests_per_client: int = Field(default=5, ge=1, le=1000)
+    self_signup_client_window_seconds: int = Field(default=60 * 60, ge=60, le=24 * 60 * 60)
+    self_signup_max_requests_per_health_card: int = Field(default=3, ge=1, le=100)
+    self_signup_health_card_window_seconds: int = Field(
+        default=24 * 60 * 60,
+        ge=60 * 60,
+        le=30 * 24 * 60 * 60,
+    )
+    # Unexpired requests waiting for CARLOS. A full backlog answers one global 503 for everyone, as
+    # a full password-reset queue does, so a stopped CARLOS poller cannot grow it without limit.
+    self_signup_queue_max_pending: int = Field(default=1_000, ge=10, le=1_000_000)
+    self_signup_queue_retry_after_seconds: int = Field(default=5 * 60, ge=1, le=60 * 60)
+    # Every answered request takes at least this long, so a stored request and one refused by a
+    # rate limit cannot be told apart by timing. 0 turns the floor off (tests only).
+    self_signup_response_floor_ms: int = Field(default=250, ge=0, le=5_000)
     global_rate_limit_window_seconds: int = Field(default=60, ge=1, le=60 * 60)
     global_rate_limit_max_requests: int = Field(default=300, ge=1, le=10000)
     auth_rate_limit_window_seconds: int = Field(default=60, ge=1, le=60 * 60)
@@ -764,6 +792,15 @@ class Settings(BaseSettings):
                     "PATIENT_PORTAL_PROBE_ALLOWED_HOSTS must list literal hostnames; "
                     "a wildcard entry disables Host validation entirely"
                 )
+        return value
+
+    @field_validator("public_base_url", mode="before")
+    @classmethod
+    def validate_raw_approval_public_base(cls, value: object, info: ValidationInfo) -> object:
+        if info.data.get("mycarlos_approval_enabled"):
+            from carlos_patient_portal.public_portal_base import normalize_portal
+
+            normalize_portal(value)
         return value
 
     @field_validator("public_base_url")
@@ -1337,6 +1374,12 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def reject_unsafe_runtime_policy(self) -> "Settings":
+        if self.mycarlos_approval_enabled:
+            if not self.mycarlos_delivery_enabled or not self.mycarlos_mailbox_enabled:
+                raise ValueError("myCarlos approval requires delivery and mailbox to be enabled")
+            from carlos_patient_portal.public_portal_base import normalize_portal
+
+            normalize_portal(self.public_base_url)
         self.validate_audit_retention_policy()
         self.validate_secret_policy()
         self.validate_required_production_services()

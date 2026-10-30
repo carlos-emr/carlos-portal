@@ -82,6 +82,8 @@ AUDIT_EVENT_PASSWORD_RESET_DELIVERY = "password_reset.delivery"
 AUDIT_EVENT_PASSWORD_RESET_REQUEST = "password_reset.request"
 AUDIT_EVENT_RETENTION_POLICY_OVERRIDE = "retention.policy_override"
 AUDIT_EVENT_SESSION_LOGOUT = "session.logout"
+# A self sign-up request from the public page (carlos-portal#15), stored or refused by a limit.
+AUDIT_EVENT_SIGNUP_REQUEST = "signup.request"
 AUDIT_EVENT_STAFF_ACTION = "staff.action"
 AUDIT_EVENT_FHIR_READ = "fhir.read"
 AUDIT_EVENT_FHIR_SEARCH = "fhir.search"
@@ -192,6 +194,7 @@ MAX_UNLOCK_SECRET_KEY_ID_LENGTH = 64
 MAX_UNLOCK_SECRET_REVOKE_REASON_LENGTH = 64
 UNLOCK_SECRET_NONCE_LENGTH = 12
 OUTBOX_NONCE_LENGTH = 12
+SIGNUP_REQUEST_NONCE_LENGTH = 12
 MAX_INVITE_DELIVERY_OPERATION_ID_LENGTH = 64
 MAX_INVITE_DELIVERY_REFERENCE_LENGTH = 128
 MAX_BOOKING_PROMPT_OPERATION_ID_LENGTH = 64
@@ -1608,6 +1611,59 @@ class PatientPortalBookingChoice(Base):
     result_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class PatientPortalSignupRequest(Base):
+    """A patient's self sign-up request, waiting for CARLOS to collect it (carlos-portal#15).
+
+    The portal never looks the details up or sends anything to them. CARLOS collects pending
+    requests (carlos-portal#16), matches them against a chart, and invites the patient at the
+    email address already on file. The health card number, date of birth and typed email exist
+    only inside `encrypted_payload`, encrypted with the outbox keyring. `health_card_hash` is the
+    same keyed hash the `signup.request` audit events carry, so a later claim or result can be
+    audited without decrypting. A row lives until CARLOS reports a result or `expires_at` passes.
+    """
+
+    __tablename__ = "patient_portal_signup_requests"
+    __table_args__ = (
+        CheckConstraint(
+            f"length(clinic_id) between 1 and {MAX_CLINIC_ID_LENGTH}",
+            name="ck_pp_signup_requests_clinic_id_length",
+        ),
+        CheckConstraint(
+            f"length(health_card_hash) = {HASH_LENGTH}",
+            name="ck_pp_signup_requests_health_card_hash_length",
+        ),
+        CheckConstraint(
+            "length(encryption_key_id) between 1 and 64",
+            name="ck_pp_signup_requests_key_id_length",
+        ),
+        CheckConstraint(
+            f"length(encryption_nonce) = {SIGNUP_REQUEST_NONCE_LENGTH}",
+            name="ck_pp_signup_requests_nonce_length",
+        ),
+        CheckConstraint(
+            EXPIRY_AFTER_CREATION_SQL,
+            name="ck_pp_signup_requests_expiry_after_creation",
+        ),
+        # The backlog count, the expiry purge, and (carlos-portal#16) the claim all filter on it.
+        Index("ix_pp_signup_requests_expires", "expires_at"),
+        # CARLOS reports a result by id. A reused id could delete a newer patient's request.
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    clinic_id: Mapped[str] = mapped_column(String(MAX_CLINIC_ID_LENGTH), nullable=False)
+    health_card_hash: Mapped[str] = mapped_column(String(HASH_LENGTH), nullable=False)
+    encrypted_payload: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    encryption_nonce: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    encryption_key_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class PatientPortalAuditEvent(Base):
     """Security-relevant event trail for portal-owned workflows."""
 
@@ -1641,6 +1697,7 @@ class PatientPortalAuditEvent(Base):
                 "'login', 'mfa.challenge', 'mfa.delivery', 'mfa.resend', 'mfa.verify', "
                 "'password_reset.complete', 'password_reset.delivery', "
                 "'password_reset.request', 'retention.policy_override', 'session.logout', "
+                "'signup.request', "
                 "'staff.action', "
                 "'fhir.read', 'fhir.search', "
                 "'booking_prompt.create', 'booking_prompt.delivery', 'booking_prompt.list', "

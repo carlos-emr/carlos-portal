@@ -271,8 +271,7 @@ def test_postgresql_engine_pins_the_search_path_and_read_committed_isolation(
     assert captured["connect_args"] == {
         "connect_timeout": 5,
         "options": (
-            "-c statement_timeout=15000 -c lock_timeout=5000 "
-            "-c search_path=pg_catalog,public"
+            "-c statement_timeout=15000 -c lock_timeout=5000 -c search_path=pg_catalog,public"
         ),
     }
     assert captured["isolation_level"] == "READ COMMITTED"
@@ -370,3 +369,28 @@ def test_preflight_cli_reports_a_malformed_database_url_as_json(
     assert payload["status"] == "failed"
     assert payload["checks"][0]["name"] == "configuration"
     assert "valid SQLAlchemy database URL" in payload["checks"][0]["detail"]
+
+
+def test_packaged_runtime_grants_match_explicit_preflight_tables_and_sequences() -> None:
+    import re
+    from pathlib import Path
+
+    script = (
+        Path(__file__).parents[1] / "carlos_patient_portal/deploy/postgresql-audit-roles.sql"
+    ).read_text()
+    table_block = re.search(
+        r'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE(.*?)TO :"runtime_role";', script, re.S
+    )
+    sequence_block = re.search(
+        r'GRANT USAGE, SELECT ON SEQUENCE(.*?)TO :"runtime_role";', script, re.S
+    )
+    assert table_block and sequence_block
+    tables = {name.strip().removeprefix("public.") for name in table_block.group(1).split(",")}
+    sequences = {
+        name.strip().removeprefix("public.") for name in sequence_block.group(1).split(",")
+    }
+    # Audit UPDATE/DELETE is revoked separately; Alembic SELECT is granted separately.
+    assert tables == set(EXPECTED_TABLE_PRIVILEGES) - {"alembic_version"}
+    assert sequences == set(EXPECTED_SEQUENCE_PRIVILEGES)
+    assert EXPECTED_TABLE_PRIVILEGES["patient_portal_audit_events"] == {"select", "insert"}
+    assert EXPECTED_TABLE_PRIVILEGES["alembic_version"] == {"select"}
