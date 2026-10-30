@@ -22,7 +22,8 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
+from sqlalchemy.exc import OperationalError
 
 from carlos_patient_portal.mailbox_codec import parse_upload
 from carlos_patient_portal.mailbox_models import (
@@ -30,11 +31,15 @@ from carlos_patient_portal.mailbox_models import (
     MailboxBase,
     MailboxBlob,
     MailboxCopy,
+    MailboxEvent,
+    MailboxProof,
+    MailboxRate,
 )
 from carlos_patient_portal.models import (
     PatientPortalAccount,
     PatientPortalMyCarlosDevice,
     PatientPortalMyCarlosRecipient,
+    PatientPortalStaffAssertionUse,
 )
 from carlos_patient_portal.routes import mycarlos_mailbox
 from tests import delivery_contract_reference as ref
@@ -209,6 +214,105 @@ def test_signed_list_download_receipt_and_anchor_survive_actual_http(http_mailbo
     assert anchors.status_code == 200
     assert [value["proof_kind"] for value in anchors.json()["anchors"]] == ["request", "receipt"]
 
+
+def test_failed_download_commit_exposes_no_bytes_but_keeps_the_assertion_consumed(
+    http_mailbox, monkeypatch, caplog
+):
+    app, client, _proxy = http_mailbox
+    markers = (
+        "FAKE_MAILBOX_PRIVATE_SQL",
+        "FAKE_MAILBOX_PRIVATE_PARAMETER",
+        "FAKE_MAILBOX_PRIVATE_DRIVER",
+    )
+    failure = OperationalError(markers[0], {"value": markers[1]}, RuntimeError(markers[2]))
+    assert all(marker in str(failure) for marker in markers)
+    faults = []
+    prepared = []
+    real_anchor = mycarlos_mailbox.record_request_anchor
+    real_response = mycarlos_mailbox.Response
+
+    def record_prepared_response(*args, **kwargs):
+        response = real_response(*args, **kwargs)
+        prepared.append(response)
+        return response
+
+    def anchor_then_mark_operation(session, *args, **kwargs):
+        recorded = real_anchor(session, *args, **kwargs)
+        session.info["fake_download_commit"] = recorded
+        return recorded
+
+    def fail_operation_commit(session):
+        # Nonce consumption uses a separate transaction and must succeed first.
+        if session.info.pop("fake_download_commit", False) and not faults:
+            assert len(prepared) == 1
+            assert prepared[0].status_code == 200
+            assert prepared[0].body == parse_upload(BODY).sealed
+            faults.append(True)
+            raise failure
+
+    monkeypatch.setattr(mycarlos_mailbox, "record_request_anchor", anchor_then_mark_operation)
+    monkeypatch.setattr(mycarlos_mailbox, "Response", record_prepared_response)
+    event.listen(app.state.session_factory.class_, "before_commit", fail_operation_commit)
+    try:
+        assert client.post(UPLOAD_PATH, content=BODY, headers=job_headers()).status_code == 201
+        with app.state.session_factory() as session:
+            device_id = session.scalar(select(PatientPortalMyCarlosDevice.id))
+        bucket = ("clinic-a", f"download:{device_id}")
+
+        def stored_operation():
+            with app.state.session_factory() as session:
+                download_rate = session.get(MailboxRate, bucket)
+                return {
+                    "status": session.scalar(select(MailboxCopy.status)),
+                    "sealed": session.scalar(select(MailboxBlob.sealed)),
+                    "anchors": tuple(session.scalars(select(MailboxAnchor.sequence))),
+                    "proofs": session.scalar(select(func.count()).select_from(MailboxProof)),
+                    "events": session.scalar(select(func.count()).select_from(MailboxEvent)),
+                    "downloads": None if download_rate is None else download_rate.count,
+                }
+
+        def used_assertions():
+            with app.state.session_factory() as session:
+                return session.scalar(
+                    select(func.count()).select_from(PatientPortalStaffAssertionUse)
+                )
+
+        before = stored_operation()
+        nonce_count = used_assertions()
+        headers = device_headers(COPY_PATH, anchor="22" * 32)
+        refused = client.get(COPY_PATH, headers=headers)
+        assert faults == [True]
+        assert refused.status_code == 503
+        assert refused.json() == {"detail": "service temporarily unavailable"}
+        assert refused.headers["retry-after"] == "1"
+        assert parse_upload(BODY).sealed not in refused.content
+        assert "Portal database operation unavailable" in caplog.text
+        assert all(marker not in refused.text + caplog.text for marker in markers)
+        assert stored_operation() == before
+        assert used_assertions() == nonce_count + 1
+
+        replayed = client.get(COPY_PATH, headers=headers)
+        assert replayed.status_code == 404
+        assert replayed.json() == {"detail": "not found"}
+        assert stored_operation() == before
+        assert used_assertions() == nonce_count + 1
+
+        recovered = client.get(COPY_PATH, headers=device_headers(COPY_PATH, anchor="22" * 32))
+        assert recovered.status_code == 200
+        assert recovered.content == before["sealed"]
+        assert recovered.headers["cache-control"] == "no-store"
+        after = stored_operation()
+        assert after["status"] == before["status"] == "waiting"
+        assert after["sealed"] == before["sealed"]
+        assert after["anchors"] == (1,)
+        assert after["proofs"] == before["proofs"] + 1
+        assert after["events"] == before["events"] + 1
+        assert after["downloads"] == 1
+        assert used_assertions() == nonce_count + 2
+    finally:
+        event.remove(app.state.session_factory.class_, "before_commit", fail_operation_commit)
+        client.close()
+        app.state.database_engine.dispose()
 
 def test_mailbox_routes_are_absent_with_only_m2_linking_enabled():
     app = internal_app(mycarlos_delivery_enabled=True, mycarlos_mailbox_enabled=False)
