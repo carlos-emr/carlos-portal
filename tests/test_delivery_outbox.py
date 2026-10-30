@@ -1,9 +1,9 @@
 import json
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import timedelta
-from threading import Event
+from threading import Event, Thread
 
 import pytest
 from fastapi.testclient import TestClient
@@ -429,6 +429,128 @@ def test_active_delivery_renews_its_lease_during_a_slow_provider_call(tmp_path) 
     assert second_worker is None
     assert first_result is not None
     assert first_result.status == OUTBOX_STATUS_DELIVERED
+
+
+@pytest.mark.parametrize("old_send_fails", [False, True])
+def test_stale_worker_cannot_complete_a_reclaimed_delivery_while_its_new_owner_sends(
+    tmp_path, old_send_fails: bool
+) -> None:
+    old_entered, new_entered = Event(), Event()
+    release_old, release_new = Event(), Event()
+    workers = []
+
+    class GatedSender:
+        def __init__(self, entered, release, fail=False):
+            self.entered, self.release, self.fail = entered, release, fail
+            self.calls = []
+
+        def send_contact_change_notice(self, *, recipient, message_id):
+            self.calls.append((recipient, message_id))
+            self.entered.set()
+            assert self.release.wait(timeout=15), "provider gate was not released"
+            if self.fail:
+                raise PortalEmailDeliveryError("FAKE old provider failure")
+
+    app = migrated_development_app(
+        database_url=f"sqlite+pysqlite:///{tmp_path / 'lease-owner.db'}",
+        email_sender=RecordingPortalEmailSender(),
+        outbox_encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+    )
+    client = TestClient(app)
+    try:
+        account_id = activate_seeded_patient_account(app, client)
+        with app.state.session_factory() as session, session.begin():
+            queued = enqueue_contact_change_delivery(
+                session,
+                account_id=account_id,
+                recipient="fake-recipient@example.test",
+                encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+            )
+            delivery_id, message_id = queued.id, queued.message_id
+
+        def start_worker(sender):
+            completion = Future()
+
+            def run():
+                try:
+                    completion.set_result(
+                        process_one_delivery(
+                            app.state.session_factory,
+                            email_sender=sender,
+                            encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+                            max_attempts=2,
+                            lease_seconds=90,
+                            delivery_id=delivery_id,
+                        )
+                    )
+                except Exception as error:
+                    completion.set_exception(error)
+
+            worker = Thread(target=run, daemon=True)
+            workers.append(worker)
+            worker.start()
+            return completion
+
+        old_sender = GatedSender(old_entered, release_old, old_send_fails)
+        old = start_worker(old_sender)
+        assert old_entered.wait(timeout=5)
+        with app.state.session_factory() as session, session.begin():
+            # Model a lease expiring while the provider call is still in flight.
+            row = session.get(PatientPortalOutboundDelivery, delivery_id)
+            assert row.attempt_count == 1
+            row.lease_expires_at = utc_now() - timedelta(seconds=1)
+
+        new_sender = GatedSender(new_entered, release_new)
+        newer = start_worker(new_sender)
+        assert new_entered.wait(timeout=5)
+        with app.state.session_factory() as session:
+            new_lease = session.get(PatientPortalOutboundDelivery, delivery_id).lease_expires_at
+
+        release_old.set()
+        old_result = old.result(timeout=10)
+        assert old_result is not None
+        assert old_result.status == OUTBOX_STATUS_PROCESSING
+        with app.state.session_factory() as session:
+            owned = session.get(PatientPortalOutboundDelivery, delivery_id)
+            assert owned.status == OUTBOX_STATUS_PROCESSING
+            assert owned.attempt_count == 2
+            assert owned.lease_expires_at == new_lease
+            assert owned.delivered_at is None
+            assert owned.last_failure_code is None
+            assert (
+                session.scalar(
+                    select(PatientPortalAuditEvent.id).where(
+                        PatientPortalAuditEvent.event_type == AUDIT_EVENT_ACCOUNT_CONTACT_UPDATE,
+                        PatientPortalAuditEvent.outcome == AUDIT_OUTCOME_FAILURE,
+                        PatientPortalAuditEvent.account_id == account_id,
+                    )
+                )
+                is None
+            )
+
+        release_new.set()
+        new_result = newer.result(timeout=10)
+        assert new_result is not None
+        assert new_result.status == OUTBOX_STATUS_DELIVERED
+        with app.state.session_factory() as session:
+            delivered = session.get(PatientPortalOutboundDelivery, delivery_id)
+            assert delivered.attempt_count == 2
+            assert delivered.delivered_at is not None
+            assert delivered.lease_expires_at is None
+        # Reclaimed leases can invoke a provider twice; both use the same Message-ID.
+        expected = [("fake-recipient@example.test", message_id)]
+        assert old_sender.calls == expected
+        assert new_sender.calls == expected
+    finally:
+        release_old.set()
+        release_new.set()
+        try:
+            for worker in workers:
+                worker.join(timeout=15)
+            assert all(not worker.is_alive() for worker in workers)
+        finally:
+            client.close()
+            app.state.database_engine.dispose()
 
 
 def test_terminal_delivery_failure_revokes_reset_token() -> None:
