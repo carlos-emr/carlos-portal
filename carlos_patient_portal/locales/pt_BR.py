@@ -36,9 +36,9 @@ TEXT: dict[str, str] = {
         "Seus dados de contato atuais permanecem ativos até que ambos sejam confirmados."
     ),
     "account_status_email_confirmation_required": (
-        "Verifique o novo endereço de e-mail para encontrar o link de confirmação. Seu endereço "
-        "atual continua recebendo códigos de verificação e links de redefinição de senha até que "
-        "você use o link."
+        "Verifique o novo endereço de e-mail para encontrar o link de confirmação. Seu "
+        "endereço atual continua recebendo códigos de acesso e links de redefinição de senha "
+        "até que você use o link."
     ),
     "account_status_email_confirmation_notice_failed": (
         "Não foi possível enviar a confirmação por e-mail ao novo endereço. Seus dados de contato "
@@ -60,7 +60,7 @@ TEXT: dict[str, str] = {
         "Um código de confirmação do telefone foi enviado há pouco. Aguarde antes de solicitar "
         "outro."
     ),
-    "account_status_mfa_updated": "Configurações de MFA atualizadas.",
+    "account_status_mfa_updated": "Configurações de verificação em duas etapas atualizadas.",
     "account_status_no_change": "Nenhuma alteração na conta.",
     "account_status_password_updated": "Senha atualizada.",
     "all_providers": "Todos os profissionais",
@@ -161,8 +161,8 @@ TEXT: dict[str, str] = {
     ),
     "email_change_complete_heading": "Confirme seu novo endereço de e-mail",
     "email_change_complete_intro": (
-        "Ao confirmar, você atualiza o endereço de e-mail usado para os códigos de verificação de "
-        "acesso e os links de redefinição de senha."
+        "Ao confirmar, você atualiza o endereço de e-mail usado para os códigos de acesso e os "
+        "links de redefinição de senha."
     ),
     "email_change_success": (
         "Seu endereço de e-mail foi atualizado. A equipe da clínica revisará os dados "
@@ -203,7 +203,7 @@ TEXT: dict[str, str] = {
         "Os documentos poderão ficar disponíveis em uma versão futura."
     ),
     "dashboard_email_passwords_description": (
-        "Obtenha as senhas das mensagens criptografadas enviadas pela sua clínica."
+        "Obtenha as senhas dos documentos criptografados enviados pela sua clínica."
     ),
     "dashboard_greeting": "Portal do paciente",
     "dashboard_help_description": "Encontre informações de suporte da clínica e da conta.",
@@ -234,8 +234,8 @@ TEXT: dict[str, str] = {
     "date_of_birth_year": "Ano",
     "date_to": "Data final",
     "development_mfa_code": (
-        "Código MFA de desenvolvimento (o mesmo código enviado por e-mail, para agilizar os "
-        "testes; será removido depois):"
+        "Código de acesso de desenvolvimento (o mesmo código enviado por e-mail, para agilizar "
+        "os testes; será removido depois):"
     ),
     "development_reset_link": (
         "Link de redefinição de senha de desenvolvimento (também enviado por e-mail quando o "
@@ -244,16 +244,16 @@ TEXT: dict[str, str] = {
     "documents": "Documentos",
     "email": "E-mail",
     "email_codes_rate": "Os códigos por e-mail podem ser reenviados uma vez por minuto.",
-    "email_password": "Senha de e-mail",
+    "email_password": "Senha do documento",
     "email_password_page_indicator": "Página {page} de {total_pages}",
-    "email_password_pages": "Páginas de senhas de e-mail",
-    "email_passwords": "Senhas de e-mail",
-    "email_passwords_region": "Senhas de e-mail",
+    "email_password_pages": "Páginas de senhas dos documentos",
+    "email_passwords": "Senhas dos documentos",
+    "email_passwords_region": "Senhas dos documentos",
     "forgot_username_password": "Esqueceu o nome de usuário ou a senha?",
     "forgot_username_help": (
         "Se você não souber seu nome de usuário, entre em contato com a clínica."
     ),
-    "future": "Em breve",
+    "future": "Futuramente",
     "health_card_number": "Número do cartão de saúde (HCN/HIN)",
     "help": "Ajuda",
     "hide_password": "Ocultar senha",
@@ -271,7 +271,7 @@ TEXT: dict[str, str] = {
     "messages_empty": "Você não tem mensagens da sua clínica.",
     "messages_new_count_one": "{count} nova",
     "messages_new_count_other": "{count} novas",
-    "mfa": "MFA",
+    "mfa": "Verificação em duas etapas",
     "mfa_code": "Código",
     "mfa_code_sent_email": "Código enviado para {destination} por e-mail.",
     "mfa_code_sent_email_unmasked": "Código enviado para seu endereço de e-mail.",
@@ -279,10 +279,10 @@ TEXT: dict[str, str] = {
     "mfa_code_sent_sms_unmasked": "Código enviado para seu número de celular.",
     "mfa_delivery_unavailable": "Esse método de envio está indisponível.",
     "mfa_email": "E-mail",
-    "mfa_heading": "Código de verificação",
+    "mfa_heading": "Código de acesso",
     "mfa_help_message": (
-        "Entre em contato com {clinic_name} se você não conseguir receber ou usar seu código de "
-        "verificação."
+        "Entre em contato com {clinic_name} se você não conseguir receber ou usar seu código "
+        "de acesso."
     ),
     "mfa_new_code_sent_email": "Um novo código foi enviado por e-mail.",
     "mfa_new_code_sent_sms": "Um novo código foi enviado por SMS.",
@@ -291,21 +291,21 @@ TEXT: dict[str, str] = {
         "Um código foi enviado há pouco. Tente novamente em {seconds} segundos."
     ),
     "mfa_resend": "Reenviar código",
-    "mfa_sign_in_again": "Entre novamente para solicitar um novo código de verificação.",
+    "mfa_sign_in_again": "Entre novamente para solicitar um novo código de acesso.",
     "mfa_send_by": "Enviar código por",
-    "mfa_settings": "Configurações de MFA",
+    "mfa_settings": "Configurações de verificação em duas etapas",
     "mfa_sms": "SMS",
     "mfa_sms_rate": "Os códigos por SMS podem ser reenviados uma vez a cada cinco minutos.",
     "mfa_verify": "Verificar",
-    "mfa_verification_failed": "Não foi possível verificar a MFA.",
+    "mfa_verification_failed": "Não foi possível concluir a verificação em duas etapas.",
     "modal_close": "OK",
     "module_navigation": "Módulos do portal",
     "mfa_method": "Método",
     "new_password": "Nova senha",
     "new_password_confirmation": "Confirmar nova senha",
     "next": "Próxima",
-    "no_email_passwords": "Nenhuma senha de e-mail",
-    "no_matching_email_passwords": "Nenhuma senha de e-mail correspondente",
+    "no_email_passwords": "Nenhuma senha de documento",
+    "no_matching_email_passwords": "Nenhuma senha de documento correspondente",
     "open_reset_page": "Abrir página de redefinição",
     "password_label": "Senha",
     "password_hidden": "Oculta",
@@ -348,7 +348,7 @@ TEXT: dict[str, str] = {
     ),
     "reveal": "Revelar",
     "reveal_failed": "Não foi possível revelar a senha. Tente novamente.",
-    "reveal_password_hint": "Digite sua senha atual antes de revelar uma frase-senha.",
+    "reveal_password_hint": "Digite sua senha atual antes de revelar a senha do documento.",
     "password_reset_temporarily_unavailable": (
         "A redefinição de senha está temporariamente indisponível. Tente novamente em instantes."
     ),
@@ -389,14 +389,14 @@ TEXT: dict[str, str] = {
     "subject": "Assunto",
     "unavailable": "Indisponível",
     "update_contact": "Atualizar contato",
-    "update_mfa": "Atualizar MFA",
+    "update_mfa": "Atualizar verificação em duas etapas",
     "update_password": "Atualizar senha",
     "username": "Nome de usuário",
     "username_label": "Nome de usuário",
     "username_placeholder": "nome de usuário",
     "username_unavailable": "Esse nome de usuário não está disponível.",
     "verification_delivery_failed": (
-        "Não foi possível enviar o código de verificação. Por favor, tente novamente."
+        "Não foi possível enviar o código de acesso. Por favor, tente novamente."
     ),
     "view_module": "Abrir",
 }
@@ -411,7 +411,7 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_instruction": (
         "No myCarlos, escolha a opção de vincular o portal da sua clínica e digite este código."
     ),
-    "mycarlos_code_label": "Código de uso único",
+    "mycarlos_code_label": "Código de vinculação",
     "mycarlos_lifetime": (
         "Este código funciona uma única vez, por 10 minutos. Mantenha a sessão iniciada neste "
         "portal."

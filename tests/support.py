@@ -136,7 +136,7 @@ CSRF_TOKEN_PATTERN = re.compile(r'name="csrf_token" value="([^"]+)"')
 
 
 DEVELOPMENT_MFA_CODE_PATTERN = re.compile(
-    r"Development MFA code \(same code as sent by email, to make testing quicker, "
+    r"Development sign-in code \(same code as sent by email, to make testing quicker, "
     r"will be removed later\): (\d{6})"
 )
 
@@ -724,7 +724,7 @@ def browser_sign_in_seeded_patient(app: main.FastAPI, client: TestClient) -> int
     )
 
     assert login_response.status_code == 200
-    assert "Verification code" in login_response.text
+    assert "Sign-in code" in login_response.text
     assert web_support.PORTAL_SESSION_COOKIE_NAME not in login_response.cookies
     mfa_challenge_token_match = MFA_CHALLENGE_TOKEN_PATTERN.search(login_response.text)
     mfa_code_match = DEVELOPMENT_MFA_CODE_PATTERN.search(login_response.text)

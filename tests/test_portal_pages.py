@@ -671,10 +671,10 @@ def test_email_password_dashboard_empty_search_and_unavailable_password_states()
     empty_search_response = client.get("/portal/email-passwords?q=missing")
 
     assert empty_response.status_code == 200
-    assert "No email passwords" in empty_response.text
+    assert "No document passwords" in empty_response.text
     assert "Page 1 of 1" in empty_response.text
     assert empty_search_response.status_code == 200
-    assert "No matching email passwords" in empty_search_response.text
+    assert "No matching document passwords" in empty_search_response.text
     assert "Page 1 of 1" in empty_search_response.text
 
     with app.state.session_factory() as session:

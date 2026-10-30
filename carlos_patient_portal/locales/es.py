@@ -38,8 +38,8 @@ TEXT: dict[str, str] = {
     ),
     "account_status_email_confirmation_required": (
         "Busque el enlace de confirmación en la nueva dirección de correo electrónico. Su "
-        "dirección actual seguirá recibiendo los códigos de verificación y los enlaces de "
-        "restablecimiento de contraseña hasta que lo use."
+        "dirección actual seguirá recibiendo los códigos de acceso y los enlaces de "
+        "restablecimiento de contraseña hasta que use ese enlace."
     ),
     "account_status_email_confirmation_notice_failed": (
         "No se pudo enviar la confirmación a la nueva dirección de correo electrónico. Sus datos "
@@ -60,7 +60,7 @@ TEXT: dict[str, str] = {
     "account_status_phone_confirmation_rate_limited": (
         "Se envió un código de confirmación al teléfono hace poco. Espere antes de solicitar otro."
     ),
-    "account_status_mfa_updated": "Configuración de MFA actualizada.",
+    "account_status_mfa_updated": "Configuración de la verificación en dos pasos actualizada.",
     "account_status_no_change": "No hay cambios en la cuenta.",
     "account_status_password_updated": "Contraseña actualizada.",
     "all_providers": "Todos los profesionales",
@@ -160,8 +160,8 @@ TEXT: dict[str, str] = {
     ),
     "email_change_complete_heading": "Confirme su nueva dirección de correo electrónico",
     "email_change_complete_intro": (
-        "Al confirmar, se actualiza la dirección de correo electrónico que recibe los códigos de "
-        "verificación de inicio de sesión y los enlaces de restablecimiento de contraseña."
+        "Al confirmar, se actualiza la dirección de correo electrónico que recibe los códigos "
+        "de acceso y los enlaces de restablecimiento de contraseña."
     ),
     "email_change_success": (
         "Su dirección de correo electrónico se ha actualizado. El personal de la clínica revisará "
@@ -200,7 +200,7 @@ TEXT: dict[str, str] = {
         "Los documentos podrían estar disponibles en una versión futura."
     ),
     "dashboard_email_passwords_description": (
-        "Obtenga las contraseñas de los mensajes cifrados que le envía su clínica."
+        "Obtenga las contraseñas de los documentos cifrados que le envía su clínica."
     ),
     "dashboard_greeting": "Portal del paciente",
     "dashboard_help_description": "Encuentre información de ayuda sobre la clínica y su cuenta.",
@@ -231,8 +231,8 @@ TEXT: dict[str, str] = {
     "date_of_birth_year": "Año",
     "date_to": "Fecha hasta",
     "development_mfa_code": (
-        "Código MFA de desarrollo (el mismo código que se envía por correo electrónico, para "
-        "agilizar las pruebas; se eliminará más adelante):"
+        "Código de acceso de desarrollo (el mismo código que se envía por correo electrónico, "
+        "para agilizar las pruebas; se eliminará más adelante):"
     ),
     "development_reset_link": (
         "Enlace de desarrollo para restablecer la contraseña (también se envía por correo "
@@ -241,14 +241,14 @@ TEXT: dict[str, str] = {
     "documents": "Documentos",
     "email": "Correo electrónico",
     "email_codes_rate": "Los códigos por correo electrónico se pueden reenviar una vez por minuto.",
-    "email_password": "Contraseña de correo electrónico",
+    "email_password": "Contraseña del documento",
     "email_password_page_indicator": "Página {page} de {total_pages}",
-    "email_password_pages": "Páginas de contraseñas de correo electrónico",
-    "email_passwords": "Contraseñas de correo electrónico",
-    "email_passwords_region": "Contraseñas de correo electrónico",
+    "email_password_pages": "Páginas de contraseñas de los documentos",
+    "email_passwords": "Contraseñas de los documentos",
+    "email_passwords_region": "Contraseñas de los documentos",
     "forgot_username_password": "¿Olvidó su nombre de usuario o su contraseña?",
     "forgot_username_help": "Si no conoce su nombre de usuario, contacte con la clínica.",
-    "future": "Próximamente",
+    "future": "En el futuro",
     "health_card_number": "Número de tarjeta de salud (HCN/HIN)",
     "help": "Ayuda",
     "hide_password": "Ocultar contraseña",
@@ -268,7 +268,7 @@ TEXT: dict[str, str] = {
     "messages_empty": "No tiene mensajes de su clínica.",
     "messages_new_count_one": "{count} nuevo",
     "messages_new_count_other": "{count} nuevos",
-    "mfa": "MFA",
+    "mfa": "Verificación en dos pasos",
     "mfa_code": "Código",
     "mfa_code_sent_email": "Código enviado a {destination} por correo electrónico.",
     "mfa_code_sent_email_unmasked": "Código enviado a su dirección de correo electrónico.",
@@ -276,9 +276,9 @@ TEXT: dict[str, str] = {
     "mfa_code_sent_sms_unmasked": "Código enviado a su número de móvil.",
     "mfa_delivery_unavailable": "Ese método de envío no está disponible.",
     "mfa_email": "Correo electrónico",
-    "mfa_heading": "Código de verificación",
+    "mfa_heading": "Código de acceso",
     "mfa_help_message": (
-        "Contacte con {clinic_name} si no puede recibir o usar su código de verificación."
+        "Contacte con {clinic_name} si no puede recibir o usar su código de acceso."
     ),
     "mfa_new_code_sent_email": "Se envió un código nuevo por correo electrónico.",
     "mfa_new_code_sent_sms": "Se envió un código nuevo por SMS.",
@@ -289,21 +289,21 @@ TEXT: dict[str, str] = {
         "Se envió un código hace poco. Inténtelo de nuevo en {seconds} segundos."
     ),
     "mfa_resend": "Reenviar código",
-    "mfa_sign_in_again": "Inicie sesión de nuevo para solicitar un nuevo código de verificación.",
+    "mfa_sign_in_again": "Inicie sesión de nuevo para solicitar un nuevo código de acceso.",
     "mfa_send_by": "Enviar código por",
-    "mfa_settings": "Configuración de MFA",
+    "mfa_settings": "Configuración de la verificación en dos pasos",
     "mfa_sms": "SMS",
     "mfa_sms_rate": "Los códigos por SMS se pueden reenviar una vez cada cinco minutos.",
     "mfa_verify": "Verificar",
-    "mfa_verification_failed": "No se pudo verificar la autenticación multifactor.",
+    "mfa_verification_failed": "No se pudo completar la verificación en dos pasos.",
     "modal_close": "Aceptar",
     "module_navigation": "Módulos del portal",
     "mfa_method": "Método",
     "new_password": "Nueva contraseña",
     "new_password_confirmation": "Confirmar nueva contraseña",
     "next": "Siguiente",
-    "no_email_passwords": "No hay contraseñas de correo electrónico",
-    "no_matching_email_passwords": "No hay contraseñas de correo electrónico que coincidan",
+    "no_email_passwords": "No hay contraseñas de documentos",
+    "no_matching_email_passwords": "No hay contraseñas de documentos que coincidan",
     "open_reset_page": "Abrir la página de restablecimiento",
     "password_label": "Contraseña",
     "password_hidden": "Oculta",
@@ -352,7 +352,7 @@ TEXT: dict[str, str] = {
     "reveal": "Mostrar",
     "reveal_failed": "No se pudo mostrar la contraseña. Inténtelo de nuevo.",
     "reveal_password_hint": (
-        "Introduzca su contraseña actual antes de mostrar una frase de contraseña."
+        "Introduzca su contraseña actual antes de mostrar la contraseña del documento."
     ),
     "password_reset_temporarily_unavailable": (
         "El restablecimiento de contraseña no está disponible temporalmente. Inténtelo de nuevo en "
@@ -396,15 +396,13 @@ TEXT: dict[str, str] = {
     "subject": "Asunto",
     "unavailable": "No disponible",
     "update_contact": "Actualizar contacto",
-    "update_mfa": "Actualizar MFA",
+    "update_mfa": "Actualizar verificación en dos pasos",
     "update_password": "Actualizar contraseña",
     "username": "Nombre de usuario",
     "username_label": "Nombre de usuario",
     "username_placeholder": "nombre de usuario",
     "username_unavailable": "Ese nombre de usuario no está disponible.",
-    "verification_delivery_failed": (
-        "No se pudo enviar el código de verificación. Inténtelo de nuevo."
-    ),
+    "verification_delivery_failed": ("No se pudo enviar el código de acceso. Inténtelo de nuevo."),
     "view_module": "Abrir",
 }
 
@@ -419,7 +417,7 @@ MYCARLOS_TEXT: dict[str, str] = {
         "En myCarlos, elija la opción para vincular el portal de su clínica y luego introduzca "
         "este código."
     ),
-    "mycarlos_code_label": "Código de un solo uso",
+    "mycarlos_code_label": "Código de vinculación",
     "mycarlos_lifetime": (
         "Este código sirve una sola vez, durante 10 minutos. Mantenga la sesión iniciada en este "
         "portal."

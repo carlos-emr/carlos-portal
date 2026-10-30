@@ -517,7 +517,7 @@ def test_form_mfa_error_keeps_retry_and_resend_screen() -> None:
     )
 
     assert response.status_code == 401
-    assert "Verification code" in response.text
+    assert "Sign-in code" in response.text
     assert "The code was not accepted. Try again or request a new code." in response.text
     assert "Resend code" in response.text
     assert 'value="email"' in response.text
@@ -606,7 +606,7 @@ def test_form_mfa_resend_shows_cooldown_without_leaving_screen() -> None:
     assert response.status_code == 429
     assert response.headers["retry-after"] == "60"
     assert "A code was sent recently. Try again in 60 seconds." in response.text
-    assert "Verification code" in response.text
+    assert "Sign-in code" in response.text
     assert "Resend code" in response.text
 
 
@@ -742,7 +742,7 @@ def test_dashboard_shell_navigation_and_cookie_logout() -> None:
     assert "selected" in email_passwords_link
     assert 'data-active-module="account"' not in email_passwords_response.text
     assert '<th scope="col">Subject</th>' in email_passwords_response.text
-    assert "No email passwords" in email_passwords_response.text
+    assert "No document passwords" in email_passwords_response.text
     assert help_response.status_code == 200
     assert 'data-active-module="help"' in help_response.text
     assert "Your clinic" in help_response.text

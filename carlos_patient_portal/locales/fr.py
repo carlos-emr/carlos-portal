@@ -38,8 +38,8 @@ TEXT: dict[str, str] = {
     ),
     "account_status_email_confirmation_required": (
         "Consultez la nouvelle adresse courriel pour y trouver un lien de confirmation. Votre "
-        "adresse actuelle continue de recevoir les codes de vérification et les liens de "
-        "réinitialisation du mot de passe jusqu’à ce que vous l’utilisiez."
+        "adresse actuelle continue de recevoir les codes de connexion et les liens de "
+        "réinitialisation du mot de passe jusqu’à ce que vous utilisiez ce lien."
     ),
     "account_status_email_confirmation_notice_failed": (
         "La confirmation n’a pas pu être envoyée par courriel à la nouvelle adresse. Vos "
@@ -61,7 +61,7 @@ TEXT: dict[str, str] = {
         "Un code de confirmation par téléphone a été envoyé récemment. Veuillez patienter avant "
         "d’en demander un autre."
     ),
-    "account_status_mfa_updated": "Paramètres de l’AMF mis à jour.",
+    "account_status_mfa_updated": "Paramètres de vérification en deux étapes mis à jour.",
     "account_status_no_change": "Aucune modification du compte.",
     "account_status_password_updated": "Mot de passe mis à jour.",
     "all_providers": "Tous les professionnels",
@@ -168,8 +168,8 @@ TEXT: dict[str, str] = {
     ),
     "email_change_complete_heading": "Confirmez votre nouvelle adresse courriel",
     "email_change_complete_intro": (
-        "La confirmation met à jour l’adresse courriel utilisée pour les codes de vérification de "
-        "connexion et les liens de réinitialisation du mot de passe."
+        "La confirmation met à jour l’adresse courriel utilisée pour les codes de connexion et "
+        "les liens de réinitialisation du mot de passe."
     ),
     "email_change_success": (
         "Votre adresse courriel est mise à jour. Le personnel de la clinique vérifiera les "
@@ -210,7 +210,7 @@ TEXT: dict[str, str] = {
         "Les documents pourraient être offerts dans une version future."
     ),
     "dashboard_email_passwords_description": (
-        "Récupérez les mots de passe des courriels chiffrés envoyés par votre clinique."
+        "Récupérez les mots de passe des documents chiffrés envoyés par votre clinique."
     ),
     "dashboard_greeting": "Portail patient",
     "dashboard_help_description": (
@@ -243,8 +243,8 @@ TEXT: dict[str, str] = {
     "date_of_birth_year": "Année",
     "date_to": "Date de fin",
     "development_mfa_code": (
-        "Code d’AMF de développement (le même code que celui envoyé par courriel, pour accélérer "
-        "les tests; sera retiré plus tard) :"
+        "Code de connexion de développement (le même code que celui envoyé par courriel, pour "
+        "accélérer les tests; sera retiré plus tard) :"
     ),
     "development_reset_link": (
         "Lien de réinitialisation du mot de passe de développement (aussi envoyé par courriel "
@@ -253,11 +253,11 @@ TEXT: dict[str, str] = {
     "documents": "Documents",
     "email": "Courriel",
     "email_codes_rate": "Les codes par courriel peuvent être renvoyés une fois par minute.",
-    "email_password": "Mot de passe de courriel",
+    "email_password": "Mot de passe du document",
     "email_password_page_indicator": "Page {page} de {total_pages}",
-    "email_password_pages": "Pages des mots de passe de courriel",
-    "email_passwords": "Mots de passe de courriel",
-    "email_passwords_region": "Mots de passe de courriel",
+    "email_password_pages": "Pages des mots de passe des documents",
+    "email_passwords": "Mots de passe des documents",
+    "email_passwords_region": "Mots de passe des documents",
     "forgot_username_password": "Nom d’utilisateur ou mot de passe oublié?",
     "forgot_username_help": (
         "Si vous ne connaissez pas votre nom d’utilisateur, contactez la clinique."
@@ -280,7 +280,7 @@ TEXT: dict[str, str] = {
     "messages_empty": "Vous n’avez aucun message de votre clinique.",
     "messages_new_count_one": "{count} nouveau",
     "messages_new_count_other": "{count} nouveaux",
-    "mfa": "AMF",
+    "mfa": "Vérification en deux étapes",
     "mfa_code": "Code",
     "mfa_code_sent_email": "Code envoyé à {destination} par courriel.",
     "mfa_code_sent_email_unmasked": "Code envoyé à votre adresse courriel.",
@@ -288,31 +288,31 @@ TEXT: dict[str, str] = {
     "mfa_code_sent_sms_unmasked": "Code envoyé à votre numéro de cellulaire.",
     "mfa_delivery_unavailable": "Ce mode d’envoi n’est pas disponible.",
     "mfa_email": "Courriel",
-    "mfa_heading": "Code de vérification",
+    "mfa_heading": "Code de connexion",
     "mfa_help_message": (
         "Contactez {clinic_name} si vous ne pouvez pas recevoir ou utiliser votre code de "
-        "vérification."
+        "connexion."
     ),
     "mfa_new_code_sent_email": "Un nouveau code a été envoyé par courriel.",
     "mfa_new_code_sent_sms": "Un nouveau code a été envoyé par SMS.",
     "mfa_rate_limited_one": "Un code a été envoyé récemment. Réessayez dans {seconds} seconde.",
     "mfa_rate_limited_other": "Un code a été envoyé récemment. Réessayez dans {seconds} secondes.",
     "mfa_resend": "Renvoyer le code",
-    "mfa_sign_in_again": "Reconnectez-vous pour demander un nouveau code de vérification.",
+    "mfa_sign_in_again": "Reconnectez-vous pour demander un nouveau code de connexion.",
     "mfa_send_by": "Envoyer le code par",
-    "mfa_settings": "Paramètres de l’AMF",
+    "mfa_settings": "Paramètres de vérification en deux étapes",
     "mfa_sms": "SMS",
     "mfa_sms_rate": "Les codes par SMS peuvent être renvoyés une fois toutes les cinq minutes.",
     "mfa_verify": "Vérifier",
-    "mfa_verification_failed": "L’AMF n’a pas pu être vérifiée.",
+    "mfa_verification_failed": "La vérification en deux étapes n’a pas pu être effectuée.",
     "modal_close": "OK",
     "module_navigation": "Modules du portail",
     "mfa_method": "Méthode",
     "new_password": "Nouveau mot de passe",
     "new_password_confirmation": "Confirmer le nouveau mot de passe",
     "next": "Suivant",
-    "no_email_passwords": "Aucun mot de passe de courriel",
-    "no_matching_email_passwords": "Aucun mot de passe de courriel correspondant",
+    "no_email_passwords": "Aucun mot de passe de document",
+    "no_matching_email_passwords": "Aucun mot de passe de document correspondant",
     "open_reset_page": "Ouvrir la page de réinitialisation",
     "password_label": "Mot de passe",
     "password_hidden": "Masqué",
@@ -364,7 +364,7 @@ TEXT: dict[str, str] = {
     "reveal": "Afficher",
     "reveal_failed": "Le mot de passe n’a pas pu être affiché. Réessayez.",
     "reveal_password_hint": (
-        "Saisissez votre mot de passe actuel avant d’afficher une phrase de passe."
+        "Saisissez votre mot de passe actuel avant d’afficher le mot de passe du document."
     ),
     "password_reset_temporarily_unavailable": (
         "La réinitialisation du mot de passe est temporairement indisponible. Veuillez réessayer "
@@ -407,14 +407,14 @@ TEXT: dict[str, str] = {
     "subject": "Objet",
     "unavailable": "Indisponible",
     "update_contact": "Mettre à jour les coordonnées",
-    "update_mfa": "Mettre à jour l’AMF",
+    "update_mfa": "Mettre à jour la vérification en deux étapes",
     "update_password": "Mettre à jour le mot de passe",
     "username": "Nom d’utilisateur",
     "username_label": "Nom d’utilisateur",
     "username_placeholder": "nom d’utilisateur",
     "username_unavailable": "Ce nom d’utilisateur n’est pas disponible.",
     "verification_delivery_failed": (
-        "Le code de vérification n’a pas pu être envoyé. Veuillez réessayer."
+        "Le code de connexion n’a pas pu être envoyé. Veuillez réessayer."
     ),
     "view_module": "Ouvrir",
 }
@@ -430,7 +430,7 @@ MYCARLOS_TEXT: dict[str, str] = {
         "Dans myCarlos, choisissez l’option permettant d’associer le portail de votre clinique, "
         "puis saisissez ce code."
     ),
-    "mycarlos_code_label": "Code à usage unique",
+    "mycarlos_code_label": "Code d’association",
     "mycarlos_lifetime": (
         "Ce code est valable une seule fois, pendant 10 minutes. Restez connecté à ce portail."
     ),
@@ -461,7 +461,7 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_verify": "Vérifier la connexion",
     "mycarlos_portal_address": "Adresse du portail",
     "mycarlos_qr_label": "Scanner dans myCarlos",
-    "mycarlos_qr_alt": "Code QR pour lier myCarlos à ce portail.",
+    "mycarlos_qr_alt": "Code QR pour associer myCarlos à ce portail.",
     "mycarlos_qr_unavailable": (
         "Code QR indisponible. Contactez votre clinique si vous ne pouvez pas utiliser cette "
         "adresse du portail."
