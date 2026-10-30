@@ -389,14 +389,14 @@ function screenshotPath(name) {
       await page.locator('link[rel="icon"][href$="/static/carlos-birdman.png"]').count() === 1,
       'CARLOS favicon is not declared'
     );
-    // Four links plus a span for the active locale — the switcher navigates now rather than
+    // Six links plus a span for the active locale — the switcher navigates now rather than
     // opening a "language unavailable" modal, so these are no longer buttons.
-    assert(await page.locator('.language-switch .text-tab').count() === 5, 'expected five languages');
+    assert(await page.locator('.language-switch .text-tab').count() === 7, 'expected seven languages');
     assert(
       await page.locator(
         `.language-switch a[href^="${portalPathname('/locale/')}"]`
-      ).count() === 4,
-      'expected four selectable languages'
+      ).count() === 6,
+      'expected six selectable languages'
     );
     await page.locator(
       `.language-switch a[href^="${portalPathname('/locale/fr')}"]`
@@ -738,6 +738,40 @@ function screenshotPath(name) {
     );
     assert(!page.url().includes('#'), 'password-reset token remained in browser history');
 
+    // A language switch reloads this page through a redirect. The token rides along in the
+    // fragment, so it never reaches the server, and lands in the form again; then it is stripped.
+    const requestsCarryingResetToken = [];
+    // Only the part before "#" is sent; Playwright may report a navigation's fragment too.
+    const recordResetTokenRequest = (request) => {
+      if (request.url().split('#')[0].includes(passwordResetFixture.token)) {
+        requestsCarryingResetToken.push(request.url());
+      }
+    };
+    page.on('request', recordResetTokenRequest);
+    for (const languageCode of ['fr', 'en']) {
+      const languageLink = page.locator(
+        `.language-switch a[href^="${portalPathname(`/locale/${languageCode}`)}"]`
+      );
+      assert(
+        !(await languageLink.getAttribute('href')).includes('#'),
+        'a language link holds the password-reset token before it is clicked'
+      );
+      await languageLink.click();
+      await page.locator(`.language-switch .text-tab.selected[lang="${languageCode}"]`).waitFor();
+      await page.waitForFunction(() => window.location.hash === '');
+      assert(
+        await page.locator('input[name="reset_token"]').inputValue()
+          === passwordResetFixture.token,
+        `switching to ${languageCode} lost the password-reset token`
+      );
+      assert(!page.url().includes('#'), 'password-reset token remained in browser history');
+    }
+    page.off('request', recordResetTokenRequest);
+    assert(
+      requestsCarryingResetToken.length === 0,
+      `the password-reset token reached the server: ${requestsCarryingResetToken.length} requests`
+    );
+
     await page.locator('input[name="new_password"]').fill(passwordResetFixture.newPassword);
     await page.locator('input[name="new_password_confirmation"]').fill(
       `${passwordResetFixture.newPassword}-mismatch`
@@ -890,6 +924,29 @@ function screenshotPath(name) {
     });
 
     const mfaCode = await readBrowserMfaCode(page, expectedEmail);
+
+    // The MFA page has no GET route, so its language buttons post the challenge back: the same
+    // sign-in continues in the new language and no new code is sent (the resend below still hits
+    // the cooldown from the first code).
+    const challengeTokenField = page.locator('form.form-stack input[name="mfa_challenge_token"]');
+    const challengeTokenBeforeSwitch = await challengeTokenField.inputValue();
+    const mfaLanguageResponsePromise = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === portalPathname('/auth/mfa/language')
+    );
+    await page.locator('.language-switch button[value="fr"]').click();
+    const mfaLanguageResponse = await mfaLanguageResponsePromise;
+    assert(
+      mfaLanguageResponse.status() === 200,
+      `MFA language switch returned ${mfaLanguageResponse.status()}`
+    );
+    await page.locator('.language-switch .text-tab.selected[lang="fr"]').waitFor();
+    assert(
+      await challengeTokenField.inputValue() === challengeTokenBeforeSwitch,
+      'the MFA language switch lost the sign-in'
+    );
+    await page.locator('.language-switch button[value="en"]').click();
+    await page.locator('.language-switch .text-tab.selected[lang="en"]').waitFor();
+    await page.getByRole('heading', { name: 'Verification code' }).waitFor();
     const resendResponsePromise = page.waitForResponse(
       (response) => new URL(response.url()).pathname === portalPathname('/auth/mfa/resend')
     );

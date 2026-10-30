@@ -144,7 +144,7 @@ from carlos_patient_portal.web_support import (
     service_notice_response,
     set_csrf_cookie,
     templates,
-    wants_html_response,
+    wants_html_error_page,
 )
 
 logger = logging.getLogger(__name__)
@@ -342,6 +342,15 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
                 path=CSRF_COOKIE_PATH,
             )
             return response
+        if wants_html_error_page(request):
+            return service_notice_response(
+                request,
+                settings=runtime.settings,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                heading_key="request_failed_heading",
+                message_key="request_failed_details",
+                retry_after_seconds=None,
+            )
         return JSONResponse(
             status_code=422,
             content={"detail": sanitized_validation_errors(exc)},
@@ -362,12 +371,21 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
     async def password_hash_unusable_handler(
         request: Request,
         exc: PasswordHashUnusableError,
-    ) -> JSONResponse:
+    ) -> Response:
         # A stored hash that cannot be evaluated is a server-side data fault, not a bad password.
         # Returning 401/403 here would tell the patient they mistyped and, on the settings screen,
         # would charge the attempt to a lockout budget they cannot recover from.
         request.app.state.operational_metrics.record_failure("password_hash_unusable")
         logger.error("Stored password hash is unusable; credential check cannot be completed")
+        if wants_html_error_page(request):
+            return service_notice_response(
+                request,
+                settings=runtime.settings,
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                heading_key="service_unavailable_heading",
+                message_key="service_unavailable_details",
+                retry_after_seconds=1,
+            )
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={"detail": SERVICE_UNAVAILABLE_DETAIL},
@@ -392,19 +410,18 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
                 code="processing",
                 diagnostics=str(exc.detail),
             )
-        # Path alone is the wrong discriminator: /auth/activate serves a browser form *and*
-        # accepts a JSON body. A caller that declared JSON gets JSON back; a browser form post
-        # or a navigation gets the page.
-        declared_json = "application/json" in (request.headers.get("content-type") or "").lower()
-        if wants_html_response(request.url.path) and not declared_json and request.method != "HEAD":
-            return service_notice_response(
+        if wants_html_error_page(request):
+            response = service_notice_response(
                 request,
                 settings=runtime.settings,
                 status_code=exc.status_code,
                 heading_key="request_failed_heading",
                 message_key="request_failed_details",
-                retry_after_seconds=0,
+                retry_after_seconds=None,
             )
+            # Keep the headers the exception set (a 405's Allow, a Retry-After).
+            response.headers.update(getattr(exc, "headers", None) or {})
+            return response
         return JSONResponse(
             status_code=exc.status_code,
             content={"detail": exc.detail},
@@ -428,22 +445,44 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
         # bound patient values. Keep the application log useful without copying that material into
         # a sink whose redaction policy is outside this process.
         logger.error("Unhandled portal error: %s", type(exc).__name__)
+        response: Response | None = None
         if request.url.path.startswith(FHIR_PATH_PREFIX):
-            return fhir_operation_outcome_response(
+            response = fhir_operation_outcome_response(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 code="exception",
                 diagnostics="the request could not be completed",
             )
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"detail": "the request could not be completed"},
-        )
+        elif wants_html_error_page(request):
+            try:
+                response = service_notice_response(
+                    request,
+                    settings=runtime.settings,
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    heading_key="service_unavailable_heading",
+                    message_key="service_unavailable_details",
+                    retry_after_seconds=None,
+                )
+            except Exception as render_error:
+                # A fault while drawing the page must not lose the 500 itself.
+                logger.error(
+                    "Portal error page could not be rendered: %s", type(render_error).__name__
+                )
+        if response is None:
+            response = JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content={"detail": "the request could not be completed"},
+            )
+        # This handler runs outside the middleware that adds these to every other response, so
+        # its answer gets them here. An error answer is never cached.
+        apply_standard_response_headers(request, response, runtime.settings)
+        response.headers.setdefault("Cache-Control", "no-store")
+        return response
 
     @app.exception_handler(OperationalError)
     async def database_operational_error_handler(
         request: Request,
         exc: OperationalError,
-    ) -> JSONResponse:
+    ) -> Response:
         request.app.state.operational_metrics.record_failure("database")
         logger.warning("Portal database operation unavailable: %s", type(exc.orig).__name__)
         if request.url.path.startswith(FHIR_PATH_PREFIX):
@@ -452,10 +491,55 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
                 code="transient",
                 diagnostics=SERVICE_UNAVAILABLE_DETAIL,
             )
+        if wants_html_error_page(request):
+            return service_notice_response(
+                request,
+                settings=runtime.settings,
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                heading_key="service_unavailable_heading",
+                message_key="service_unavailable_details",
+                retry_after_seconds=1,
+            )
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={"detail": SERVICE_UNAVAILABLE_DETAIL},
             headers={"Retry-After": "1"},
+        )
+
+
+def apply_standard_response_headers(
+    request: Request,
+    response: Response,
+    settings: Settings,
+) -> None:
+    """The security and caching headers every portal response carries.
+
+    The middleware applies them to every response. The 500 handler runs outside the middleware,
+    so it applies them to its error page itself.
+    """
+    path = request.url.path
+    for header, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(header, value)
+    if not path.startswith("/api/"):
+        response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+
+    if (
+        path in NO_STORE_PATHS
+        or path.startswith("/auth/")
+        or path.startswith("/api/patient/")
+        or path.startswith(MYCARLOS_API_PREFIX)
+        or path.startswith(FHIR_PATH_PREFIX)
+        or is_portal_path(path)
+        or path.startswith("/internal/")
+        or path.startswith("/dev/admin/")
+    ):
+        response.headers.setdefault("Cache-Control", "no-store")
+        response.headers.setdefault("Pragma", "no-cache")
+
+    if settings.is_production:
+        response.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains",
         )
 
 
@@ -512,7 +596,7 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
                     code="transient",
                     diagnostics=SERVICE_UNAVAILABLE_DETAIL,
                 )
-            elif wants_html_response(request.url.path):
+            elif wants_html_error_page(request):
                 # A patient who navigated here in a browser gets a page, not a raw JSON body.
                 response = service_notice_response(
                     request,
@@ -553,7 +637,7 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
                     diagnostics="too many requests",
                 )
                 response.headers["Retry-After"] = str(retry_after_seconds)
-            elif wants_html_response(request.url.path):
+            elif wants_html_error_page(request):
                 response = service_notice_response(
                     request,
                     settings=settings,
@@ -570,29 +654,7 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
                 )
         else:
             response = await call_next(request)
-        for header, value in SECURITY_HEADERS.items():
-            response.headers.setdefault(header, value)
-        if not request.url.path.startswith("/api/"):
-            response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
-
-        if (
-            request.url.path in NO_STORE_PATHS
-            or request.url.path.startswith("/auth/")
-            or request.url.path.startswith("/api/patient/")
-            or request.url.path.startswith(MYCARLOS_API_PREFIX)
-            or request.url.path.startswith(FHIR_PATH_PREFIX)
-            or is_portal_path(request.url.path)
-            or request.url.path.startswith("/internal/")
-            or request.url.path.startswith("/dev/admin/")
-        ):
-            response.headers.setdefault("Cache-Control", "no-store")
-            response.headers.setdefault("Pragma", "no-cache")
-
-        if settings.is_production:
-            response.headers.setdefault(
-                "Strict-Transport-Security",
-                "max-age=31536000; includeSubDomains",
-            )
+        apply_standard_response_headers(request, response, settings)
         return response
 
     # Registration order is nesting order, and it is inverted: add_middleware inserts at

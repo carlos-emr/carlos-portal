@@ -25,7 +25,7 @@ database session, or performs I/O beyond rendering a template.
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import date, timedelta
 from hashlib import sha256
 from hmac import new as new_hmac
@@ -44,6 +44,7 @@ from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 from starlette.responses import Response
+from starlette.routing import Match, Mount
 
 from carlos_patient_portal.audit import UNKNOWN_CLIENT_REFERENCE
 from carlos_patient_portal.auth import (
@@ -54,9 +55,11 @@ from carlos_patient_portal.auth import (
     hash_auth_token,
     logout_patient_session,
 )
-from carlos_patient_portal.config import Settings
+from carlos_patient_portal.config import DEFAULT_SERVICE_NAME, Settings
 from carlos_patient_portal.i18n import (
+    LOCALE_COOKIE_MAX_AGE_SECONDS,
     LOCALE_COOKIE_NAME,
+    plural_text,
     portal_text,
     resolve_locale,
     supported_locale_options,
@@ -270,17 +273,37 @@ class BrowserFormValidationError(Exception):
 
 
 def wants_html_response(path: str) -> bool:
-    """Whether a patient reached `path` from a browser and should get a page, not a JSON body.
+    """Whether `path` is a patient-facing path, whose errors may be a page rather than JSON.
 
-    Rate limiting and maintenance mode are the two states a real patient hits on an ordinary
-    browser navigation, so they are the two that most need a readable page. Machine surfaces keep
-    their JSON/FHIR shapes: an API client parsing `{"detail": ...}` must not start receiving HTML.
+    The path half of `wants_html_error_page`, which also looks at what the caller sent and asked
+    for. Machine surfaces keep their JSON/FHIR shapes: an API client parsing `{"detail": ...}`
+    must not start receiving HTML.
     """
     return not (
         path.startswith("/api/")
         or path.startswith(FHIR_PATH_PREFIX)
         or path.startswith("/internal/")
         or path.startswith("/dev/admin/")
+    )
+
+
+def wants_html_error_page(request: Request) -> bool:
+    """Whether an error answering this request should be a page rather than a JSON body.
+
+    Path alone is the wrong discriminator: /auth/activate serves a browser form *and* accepts a
+    JSON body, and /auth/session and /auth/logout serve bearer clients. A caller that sent JSON,
+    asked only for JSON, or authenticated with a bearer token gets JSON back; a browser form post
+    or a navigation gets the page. HEAD has no body to read either way.
+    """
+    headers = request.headers
+    declared_json = JSON_MEDIA_TYPE in (headers.get("content-type") or "").lower()
+    accept = (headers.get("accept") or "").lower()
+    asked_for_json = JSON_MEDIA_TYPE in accept and "text/html" not in accept
+    bearer_client = (headers.get("authorization") or "").lower().startswith("bearer ")
+    return (
+        wants_html_response(request.url.path)
+        and not (declared_json or asked_for_json or bearer_client)
+        and request.method != "HEAD"
     )
 
 
@@ -291,9 +314,9 @@ def service_notice_response(
     status_code: int,
     heading_key: str,
     message_key: str,
-    retry_after_seconds: int,
+    retry_after_seconds: int | None,
 ) -> Response:
-    """Render the browser-facing page for a throttled or unavailable portal."""
+    """Render the browser-facing page for a failed request or a throttled or unavailable portal."""
     locale = request_locale(request)
     text = portal_text(locale)
     return templates.TemplateResponse(
@@ -301,7 +324,7 @@ def service_notice_response(
         name="service_notice.jinja",
         context={
             "clinic_name": settings.clinic_name,
-            "service_name": settings.service_name,
+            "service_name": displayed_service_name(settings, text),
             "source_code_url": settings.source_code_url,
             "locale": locale,
             "locale_switch_target": locale_switch_targets(request),
@@ -311,7 +334,9 @@ def service_notice_response(
             "notice_message": text[message_key],
         },
         status_code=status_code,
-        headers={"Retry-After": str(retry_after_seconds)},
+        headers=(
+            {"Retry-After": str(retry_after_seconds)} if retry_after_seconds is not None else None
+        ),
     )
 
 
@@ -336,24 +361,108 @@ def is_safe_local_redirect(destination: str) -> bool:
     return not parsed_destination.scheme and not parsed_destination.netloc
 
 
+# Where a route that changes the language mid-request (the MFA page's language form) records the
+# new choice, so the page it renders is already in that language: the cookie it sets only arrives
+# with the next request.
+REQUEST_LOCALE_STATE_ATTRIBUTE = "portal_locale"
+
+
 def request_locale(request: Request) -> str:
     """The locale to render this request in."""
+    chosen_this_request = getattr(
+        getattr(request, "state", None), REQUEST_LOCALE_STATE_ATTRIBUTE, None
+    )
+    if chosen_this_request is not None:
+        return chosen_this_request
     return resolve_locale(
         cookie_value=request.cookies.get(LOCALE_COOKIE_NAME),
         accept_language=request.headers.get("Accept-Language"),
     )
 
 
-def locale_switch_targets(request: Request) -> str:
+def set_locale_cookie(response: Response, locale: str, *, settings: Settings) -> None:
+    """Remember a display-language choice for a year.
+
+    HttpOnly even though this is only a display preference: nothing on the page reads it from
+    script, so withholding it from JavaScript costs nothing and keeps every cookie the portal sets
+    consistent.
+    """
+    response.set_cookie(
+        LOCALE_COOKIE_NAME,
+        locale,
+        max_age=LOCALE_COOKIE_MAX_AGE_SECONDS,
+        httponly=True,
+        samesite="lax",
+        secure=not settings.is_development,
+        path="/",
+    )
+
+
+def displayed_service_name(settings: Settings, text: Mapping[str, str]) -> str:
+    """The product name a page shows: translated when it is the default, else as configured.
+
+    A name the clinic configured is its own and is never translated; only the stock
+    "CARLOS Patient Portal" follows the patient's language.
+    """
+    if settings.service_name == DEFAULT_SERVICE_NAME:
+        return text["service_name_default"]
+    return settings.service_name
+
+
+# GET pages that only work with the token from an emailed link, which rides in the URL fragment and
+# never reaches the server. A page answering the form they post must not send the patient back to
+# them: without the token they are an empty form that cannot succeed.
+LINK_TOKEN_PAGE_ROUTE_NAMES = frozenset(
+    {"password_reset_complete_page", "email_change_confirm_page"}
+)
+
+
+def _get_route_name_for_path(request: Request) -> str | None:
+    """The name of the page route that answers a GET at this request's path, or None.
+
+    A mount (the static files) matches every path under its prefix, but a missing file there is
+    a 404, not a page to come back to, so mounts do not count.
+    """
+    scope = getattr(request, "scope", None) or {}
+    app = scope.get("app")
+    if app is None:
+        return None
+    # Matched as the application sees the path: inside the static mount, root_path has grown by
+    # the mount's own prefix, which would let another route match the rest of the path.
+    app_root_path = scope.get("app_root_path", scope.get("root_path", ""))
+    get_scope = {**scope, "method": "GET", "root_path": app_root_path}
+    for route in app.router.routes:
+        if isinstance(route, Mount):
+            continue
+        if route.matches(get_scope)[0] is Match.FULL:
+            return getattr(route, "name", None) or ""
+    return None
+
+
+def locale_switch_targets(request: Request, *, get_fallback: str | None = None) -> str:
     """The path a language button should return the patient to.
 
     Query string included so a filtered dashboard survives a language change, but never the
     fragment — reset tokens live there and must not travel in a redirect target.
+
+    The language link redirects with a GET, and not every page is reachable that way at its own
+    path: a failed sign-in is rendered at POST /auth/login, a password change at POST
+    /portal/account/password, and a 404 or 405 page at a path with no GET page. Those return the
+    patient to `get_fallback` (a signed-in page passes its module's own page), else to the front
+    page. So does a page answering the form of an emailed-link page (LINK_TOKEN_PAGE_ROUTE_NAMES).
+    The MFA page has its own POST form instead; see /auth/mfa/language.
     """
     scope = getattr(request, "scope", {})
-    destination = f"{scope.get('root_path', '').rstrip('/')}{request.url.path}"
-    if request.url.query:
-        destination = f"{destination}?{request.url.query}"
+    # Inside a mount (a 404 under /static/) root_path includes the mount; app_root_path does not.
+    root_path = scope.get("app_root_path", scope.get("root_path", "")).rstrip("/")
+    is_get = getattr(request, "method", "GET") in ("GET", "HEAD")
+    get_route_name = _get_route_name_for_path(request)
+    if get_route_name is None or (not is_get and get_route_name in LINK_TOKEN_PAGE_ROUTE_NAMES):
+        destination = get_fallback or f"{root_path}/"
+    else:
+        destination = f"{root_path}{request.url.path}"
+        if request.url.query and is_get:
+            destination = f"{destination}?{request.url.query}"
     return destination if is_safe_local_redirect(destination) else "/"
 
 
@@ -778,17 +887,18 @@ def index_template_context(
     error_message: str | None = None,
 ) -> dict[str, object]:
     locale = request_locale(request)
+    text = portal_text(locale)
     return {
         "request": request,
         "locale": locale,
         "clinic_name": settings.clinic_name,
         "csrf_token": csrf_token,
         "error_message": error_message,
-        "service_name": settings.service_name,
+        "service_name": displayed_service_name(settings, text),
         "source_code_url": settings.source_code_url,
         "supported_locales": supported_locale_options(locale),
         "locale_switch_target": locale_switch_targets(request),
-        "text": portal_text(locale),
+        "text": text,
     }
 
 
@@ -810,6 +920,7 @@ def public_auth_template_context(
     # Declared explicitly rather than as **extra_context: these five keys are read by individual
     # public templates, and a kwargs bag let a caller typo one into silence.
     locale = request_locale(request)
+    text = portal_text(locale)
     return {
         "request": request,
         "locale": locale,
@@ -818,11 +929,11 @@ def public_auth_template_context(
         "error_message": error_message,
         "form_values": form_values or {},
         "notice_message": notice_message,
-        "service_name": settings.service_name,
+        "service_name": displayed_service_name(settings, text),
         "source_code_url": settings.source_code_url,
         "supported_locales": supported_locale_options(locale),
         "locale_switch_target": locale_switch_targets(request),
-        "text": portal_text(locale),
+        "text": text,
         "sms_mfa_available": sms_mfa_available,
         "email_mfa_available": (
             settings.is_development if email_mfa_available is None else email_mfa_available
@@ -895,32 +1006,49 @@ def mfa_template_context(
         ),
         "error_message": error_message,
         "notice_message": notice_message,
-        "masked_mfa_destination": mask_mfa_destination(delivery),
+        "mfa_code_sent_message": mfa_code_sent_message(delivery, text),
         "mfa_challenge_token": delivery.challenge_token,
-        "mfa_delivery_method": delivery.delivery_method,
         "mfa_email_available": (MFA_DELIVERY_METHOD_EMAIL in delivery.available_delivery_methods),
         "mfa_email_selected": is_email,
         "mfa_rate_limit_message": (text["email_codes_rate"] if is_email else text["mfa_sms_rate"]),
         "mfa_sms_available": (MFA_DELIVERY_METHOD_SMS in delivery.available_delivery_methods),
         "mfa_sms_selected": not is_email,
-        "service_name": settings.service_name,
+        "service_name": displayed_service_name(settings, text),
         "source_code_url": settings.source_code_url,
+        # The MFA page is only ever rendered in answer to a POST and its challenge token lives in
+        # the form, so its language buttons are small POST forms to /auth/mfa/language rather
+        # than the GET links the other pages use; a GET link would drop the sign-in.
+        "supported_locales": supported_locale_options(locale),
         "text": text,
     }
 
 
-def mask_mfa_destination(delivery: MfaChallengeDelivery) -> str:
+def mask_mfa_destination(delivery: MfaChallengeDelivery) -> str | None:
+    """The code's destination with most of it hidden, or None when it cannot be masked safely."""
     if delivery.delivery_method == MFA_DELIVERY_METHOD_EMAIL:
         local_part, separator, domain = delivery.destination.partition("@")
         if not separator:
-            return "your email address"
+            return None
         visible_prefix = local_part[:2] if len(local_part) > 1 else local_part[:1]
         return visible_prefix + "***@" + domain
 
     digits = "".join(character for character in delivery.destination if character.isdigit())
     if len(digits) < 4:
-        return "your mobile number"
+        return None
     return f"***-***-{digits[-4:]}"
+
+
+def mfa_code_sent_message(delivery: MfaChallengeDelivery, text: Mapping[str, str]) -> str:
+    """The MFA page's "Code sent to … by …" line: one translated sentence per delivery method.
+
+    One key per method (and an unmasked variant) rather than a method code spliced into a
+    shared sentence, because "by email" and "by SMS" are grammar, not a word to substitute.
+    """
+    method = "email" if delivery.delivery_method == MFA_DELIVERY_METHOD_EMAIL else "sms"
+    masked_destination = mask_mfa_destination(delivery)
+    if masked_destination is None:
+        return text[f"mfa_code_sent_{method}_unmasked"]
+    return text[f"mfa_code_sent_{method}"].format(destination=masked_destination)
 
 
 def portal_modules(
@@ -964,18 +1092,27 @@ def portal_template_context(
     account = authenticated_session.account
     locale = request_locale(request)
     text = portal_text(locale)
+    modules = portal_modules(
+        request, active_module, text, mycarlos_enabled=settings.mycarlos_delivery_enabled
+    )
+    # A page answering a form POST (a password change, a revealed email password) switches
+    # language back to its module's own page, never to the POST-only path it was rendered at.
+    active_module_href = next(
+        (str(module["href"]) for module in modules if module["is_active"]),
+        None,
+    )
     context: dict[str, object] = {
         "request": request,
         "locale": locale,
-        "service_name": settings.service_name,
+        "service_name": displayed_service_name(settings, text),
         "clinic_name": settings.clinic_name,
         "source_code_url": settings.source_code_url,
+        "supported_locales": supported_locale_options(locale),
+        "locale_switch_target": locale_switch_targets(request, get_fallback=active_module_href),
         "account": account,
         "password_updated_date": account.password_updated_at.date().isoformat(),
         "active_module": active_module,
-        "modules": portal_modules(
-            request, active_module, text, mycarlos_enabled=settings.mycarlos_delivery_enabled
-        ),
+        "modules": modules,
         "csrf_token": csrf_token,
         "account_notice": account_notice,
         "account_error": account_error,
@@ -987,6 +1124,9 @@ def portal_template_context(
     context["email_passwords"] = email_passwords
     context["messages"] = messages
     context["new_message_count"] = new_message_count
+    context["new_messages_label"] = plural_text(
+        text, "messages_new_count", new_message_count, locale
+    ).format(count=new_message_count)
     context["mycarlos_enabled"] = settings.mycarlos_delivery_enabled
     context["mycarlos"] = mycarlos
     return context

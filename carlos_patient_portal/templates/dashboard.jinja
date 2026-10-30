@@ -20,6 +20,7 @@
             <span>{{ clinic_name }}</span>
           </div>
         </div>
+        {% include "_language_switch.jinja" %}
         <div class="portal-user-actions">
           <span class="signed-in-user">{{ account.username }}</span>
           <form class="logout-form" method="post" action="{{ url_for('portal_logout') }}">
@@ -82,7 +83,7 @@
                 <div class="module-tile-heading">
                   <h2>{{ text.messages }}</h2>
                   {% if new_message_count %}
-                    <span class="message-count">{{ text.messages_new_count.format(count=new_message_count) }}</span>
+                    <span class="message-count">{{ new_messages_label }}</span>
                   {% endif %}
                 </div>
                 <p>{{ text.dashboard_messages_description }}</p>
@@ -112,7 +113,7 @@
               </div>
               <div>
                 <dt>{{ text.mfa }}</dt>
-                <dd>{{ account.preferred_mfa_method|upper }}</dd>
+                <dd>{% if account.preferred_mfa_method == "email" %}{{ text.mfa_email }}{% else %}{{ text.mfa_sms }}{% endif %}</dd>
               </div>
               <div>
                 <dt>{{ text.password_updated }}</dt>
@@ -349,7 +350,7 @@
                 <span class="pagination-disabled">{{ text.previous }}</span>
               {% endif %}
               <span class="page-indicator">
-                {{ text.page }} {{ email_passwords.page }} {{ text.of }} {{ email_passwords.total_pages }}
+                {{ text.email_password_page_indicator.format(page=email_passwords.page, total_pages=email_passwords.total_pages) }}
               </span>
               {% if email_passwords.next_href %}
                 <a class="secondary-action" href="{{ email_passwords.next_href }}">{{ text.next }}</a>

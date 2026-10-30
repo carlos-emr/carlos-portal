@@ -53,6 +53,7 @@ from carlos_patient_portal.auth import (
     complete_password_reset,
     get_mfa_challenge_delivery_state,
     get_mfa_challenge_for_token,
+    is_past,
     logout_patient_session,
     record_password_reset_delivery_outcome,
     request_password_reset,
@@ -68,13 +69,14 @@ from carlos_patient_portal.delivery_outbox import (
     process_one_delivery,
 )
 from carlos_patient_portal.email_delivery import PortalEmailDeliveryError
-from carlos_patient_portal.i18n import portal_text
+from carlos_patient_portal.i18n import normalize_locale, plural_text, portal_text
 from carlos_patient_portal.models import (
     AUDIT_OUTCOME_FAILURE,
     AUDIT_OUTCOME_SUCCESS,
     MFA_CHALLENGE_STATUS_VERIFIED,
     MFA_DELIVERY_METHOD_EMAIL,
     MFA_DELIVERY_METHOD_SMS,
+    utc_now,
 )
 from carlos_patient_portal.notifications import (
     build_password_reset_url,
@@ -108,7 +110,9 @@ from carlos_patient_portal.web_support import (
     EMAIL_CHANGE_TEMPLATE,
     MFA_DELIVERY_UNAVAILABLE_DETAIL,
     MFA_VERIFICATION_FAILED_DETAIL,
+    NOT_FOUND_DETAIL,
     PASSWORD_RESET_COMPLETE_TEMPLATE,
+    REQUEST_LOCALE_STATE_ATTRIBUTE,
     BrowserFormValidationError,
     auth_error_response,
     clear_portal_session_cookie,
@@ -129,6 +133,7 @@ from carlos_patient_portal.web_support import (
     render_public_auth_template,
     request_locale,
     set_csrf_cookie,
+    set_locale_cookie,
     set_portal_mfa_proof_cookie,
     set_portal_session_cookie,
     templates,
@@ -139,6 +144,13 @@ logger = logging.getLogger(__name__)
 
 def localized_auth_text(request: Request) -> dict[str, str]:
     return portal_text(request_locale(request))
+
+
+def mfa_rate_limited_message(request: Request, retry_after_seconds: int) -> str:
+    """The "code sent recently, try again in N seconds" message, in the plural form N takes."""
+    locale = request_locale(request)
+    message = plural_text(portal_text(locale), "mfa_rate_limited", retry_after_seconds, locale)
+    return message.format(seconds=retry_after_seconds)
 
 
 @dataclass(frozen=True)
@@ -359,9 +371,7 @@ def register_login_routes(
                 request=request,
                 render_index_response=deps.render_index_response,
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                browser_message=localized_auth_text(request)["mfa_rate_limited"].format(
-                    seconds=exc.retry_after_seconds,
-                ),
+                browser_message=mfa_rate_limited_message(request, exc.retry_after_seconds),
                 json_content={"detail": "MFA code was sent recently; try again later"},
                 headers={"Retry-After": str(exc.retry_after_seconds)},
             )
@@ -449,16 +459,17 @@ def register_mfa_routes(
                         request,
                         delivery_state,
                         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                        error_message=(
-                            localized_auth_text(request)["mfa_rate_limited"].format(
-                                seconds=exc.retry_after_seconds,
-                            )
-                        ),
+                        error_message=mfa_rate_limited_message(request, exc.retry_after_seconds),
                         retry_after_seconds=exc.retry_after_seconds,
                     )
-            return JSONResponse(
+            # A browser whose challenge can no longer be shown gets the sign-in page, not JSON.
+            return auth_error_response(
+                is_browser_form=is_browser_form,
+                request=request,
+                render_index_response=deps.render_index_response,
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                content={"detail": "MFA code was sent recently; try again later"},
+                browser_message=mfa_rate_limited_message(request, exc.retry_after_seconds),
+                json_content={"detail": "MFA code was sent recently; try again later"},
                 headers={"Retry-After": str(exc.retry_after_seconds)},
             )
         except (MfaChallengeNotFoundError, ValueError):
@@ -502,9 +513,13 @@ def register_mfa_routes(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         error_message=localized_auth_text(request)["mfa_delivery_unavailable"],
                     )
-            return JSONResponse(
-                status_code=400,
-                content={"detail": MFA_DELIVERY_UNAVAILABLE_DETAIL},
+            return auth_error_response(
+                is_browser_form=is_browser_form,
+                request=request,
+                render_index_response=deps.render_index_response,
+                status_code=status.HTTP_400_BAD_REQUEST,
+                browser_message=localized_auth_text(request)["mfa_delivery_unavailable"],
+                json_content={"detail": MFA_DELIVERY_UNAVAILABLE_DETAIL},
             )
         await run_in_threadpool(session.commit)
         try:
@@ -528,9 +543,13 @@ def register_mfa_routes(
                         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                         error_message=localized_auth_text(request)["verification_delivery_failed"],
                     )
-            return JSONResponse(
+            return auth_error_response(
+                is_browser_form=is_browser_form,
+                request=request,
+                render_index_response=deps.render_index_response,
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                content={"detail": "verification code could not be sent"},
+                browser_message=localized_auth_text(request)["verification_delivery_failed"],
+                json_content={"detail": "verification code could not be sent"},
             )
         await run_in_threadpool(
             record_mfa_delivery_and_commit,
@@ -542,9 +561,11 @@ def register_mfa_routes(
             return deps.render_mfa_page(
                 request,
                 delivery,
-                notice_message=localized_auth_text(request)["mfa_new_code_sent"].format(
-                    method=delivery.delivery_method.upper(),
-                ),
+                notice_message=localized_auth_text(request)[
+                    "mfa_new_code_sent_email"
+                    if delivery.delivery_method == MFA_DELIVERY_METHOD_EMAIL
+                    else "mfa_new_code_sent_sms"
+                ],
             )
         return mfa_challenge_response_payload(delivery, settings=deps.settings)
 
@@ -659,6 +680,54 @@ def register_mfa_routes(
                     )
             return redirect_response
         return {"status": "signed_in", "session_token": session_token}
+
+    @app.post("/auth/mfa/language", name="select_mfa_language", include_in_schema=False)
+    async def select_mfa_language(
+        request: Request,
+        session: Annotated[
+            Session,
+            function_scoped_database_dependency(deps.get_app_database_session),
+        ],
+    ) -> Response:
+        """Show the MFA page in another language without leaving the sign-in.
+
+        The MFA page has no GET route: it answers the sign-in POST, and its challenge token lives
+        in the form. The GET language links every other page uses would therefore drop the patient
+        out of the sign-in, and a fresh sign-in can run into the "code sent recently" limit. This
+        route reads the pending challenge, remembers the language and renders the same page again.
+        It sends no code and changes no sign-in state: the lookup is the same read-only one the
+        resend route uses to redraw the page after an error. Browser form only, CSRF-checked.
+        """
+        form_values = await get_csrf_urlencoded_form_values(
+            request,
+            deps.csrf_secret,
+            unsupported_media_type_detail="MFA language change requires a form request body",
+        )
+        selected_locale = normalize_locale(first_form_value_or_empty(form_values, "locale"))
+        if selected_locale is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND_DETAIL)
+        # This response is already in the new language; the cookie covers the requests after it.
+        setattr(request.state, REQUEST_LOCALE_STATE_ATTRIBUTE, selected_locale)
+        challenge_token = first_form_value_or_empty(form_values, "mfa_challenge_token")
+        delivery_state = None
+        if challenge_token:
+            delivery_state = await run_in_threadpool(
+                get_mfa_challenge_delivery_state,
+                session,
+                challenge_token,
+                challenge_token_secret=runtime.token_keys.mfa,
+                allow_email=deps.auth_policy.allow_email_mfa,
+            )
+        if delivery_state is None or is_past(delivery_state.expires_at, utc_now()):
+            response = deps.render_index_response(
+                request,
+                status_code=status.HTTP_400_BAD_REQUEST,
+                error_message=localized_auth_text(request)["mfa_sign_in_again"],
+            )
+        else:
+            response = deps.render_mfa_page(request, delivery_state)
+        set_locale_cookie(response, selected_locale, settings=deps.settings)
+        return response
 
 
 def register_password_reset_routes(

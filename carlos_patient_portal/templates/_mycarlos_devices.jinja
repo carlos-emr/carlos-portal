@@ -9,7 +9,7 @@
             <dt>{{ text.mycarlos_linked }}</dt><dd>{{ device.linked_at }}</dd>
             <dt>{{ text.mycarlos_last_seen }}</dt><dd>{{ device.last_seen_at }}</dd>
           </dl>
-          <a class="secondary-action" href="{{ device.remove_href }}" aria-label="{{ text.mycarlos_remove }}: {{ device.name }}">{{ text.mycarlos_remove }}</a>
+          <a class="secondary-action" href="{{ device.remove_href }}" aria-label="{{ text.mycarlos_remove_named.format(name=device.name) }}">{{ text.mycarlos_remove }}</a>
         </li>
       {% endfor %}
     </ul>
