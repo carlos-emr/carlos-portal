@@ -5,6 +5,7 @@ from sqlalchemy import select
 from carlos_patient_portal.main import create_app
 from carlos_patient_portal.models import PatientPortalAccount, PatientPortalSession
 from tests.support import (
+    RecordingPortalEmailSender,
     activate_seeded_patient_account,
     bearer_headers,
     expire_email_mfa_cooldown,
@@ -15,6 +16,7 @@ from tests.support import (
 
 def test_session_survives_same_secret_restart_but_not_secret_rotation(tmp_path) -> None:
     app = migrated_development_app(
+        email_sender=RecordingPortalEmailSender(),
         database_url=f"sqlite+pysqlite:///{tmp_path / 'private-restart.sqlite'}",
         session_secret="FAKE-old-session-secret-000000001",
     )
@@ -34,7 +36,7 @@ def test_session_survives_same_secret_restart_but_not_secret_rotation(tmp_path) 
             original_expiry = original_session.expires_at
 
     # Fresh runtimes reconnect to the migrated file; no session is seeded for either restart.
-    restarted = create_app(settings)
+    restarted = create_app(settings, email_sender=RecordingPortalEmailSender())
     with TestClient(restarted) as client:
         accepted = client.get("/auth/session", headers=bearer_headers(original_token))
         assert accepted.status_code == 200
@@ -43,7 +45,7 @@ def test_session_survives_same_secret_restart_but_not_secret_rotation(tmp_path) 
     rotated_settings = settings.model_copy(
         update={"session_secret": SecretStr("FAKE-new-session-secret-000000002")}
     )
-    rotated = create_app(rotated_settings)
+    rotated = create_app(rotated_settings, email_sender=RecordingPortalEmailSender())
     with TestClient(rotated) as client:
         refused = client.get("/auth/session", headers=bearer_headers(original_token))
         assert refused.status_code == 401
