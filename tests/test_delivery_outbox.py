@@ -145,6 +145,95 @@ def test_outbox_encrypts_and_delivers_reset_with_stable_message_id() -> None:
         ) is not None
 
 
+@pytest.mark.parametrize("tamper_mode", ["corrupt-ciphertext", "swap-encrypted-rows"])
+def test_authenticated_outbox_tampering_is_isolated_without_disclosing_recipients(
+    tamper_mode: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    sender = RecordingPortalEmailSender()
+    app = migrated_development_app(outbox_encryption_secret=OUTBOX_ENCRYPTION_SECRET)
+    client = TestClient(app)
+    recipients = ["fake-previous@example.test", "fake-next@example.test"]
+    try:
+        account_id = activate_seeded_patient_account(app, client)
+        with app.state.session_factory() as session, session.begin():
+            damaged = enqueue_contact_change_delivery(
+                session,
+                account_id=account_id,
+                recipient=recipients[0],
+                encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+            )
+            intact = enqueue_contact_change_delivery(
+                session,
+                account_id=account_id,
+                recipient=recipients[1],
+                encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+            )
+            damaged_id, intact_id = damaged.id, intact.id
+            intact_message_id = intact.message_id
+            if tamper_mode == "corrupt-ciphertext":
+                corrupted = bytearray(damaged.encrypted_payload)
+                corrupted[0] ^= 1
+                damaged.encrypted_payload = bytes(corrupted)
+            else:
+                # This is valid ciphertext under the same key, account and kind.
+                # Its row identity differs: accepting it would send the wrong recipient.
+                damaged.encrypted_payload = intact.encrypted_payload
+                damaged.encryption_nonce = intact.encryption_nonce
+
+        caplog.set_level(logging.ERROR, logger="carlos_patient_portal.delivery_outbox")
+        caplog.clear()
+        rejected = process_one_delivery(
+            app.state.session_factory,
+            email_sender=sender,
+            encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+            max_attempts=1,
+            lease_seconds=60,
+            delivery_id=damaged_id,
+        )
+
+        assert rejected is not None
+        assert rejected.status == OUTBOX_STATUS_FAILED
+        assert sender.messages == []
+        with app.state.session_factory() as session:
+            failed = session.get(PatientPortalOutboundDelivery, damaged_id)
+            assert failed.last_failure_code == "payload_invalid"
+            assert failed.attempt_count == 1
+            assert failed.delivered_at is None
+            assert (
+                session.get(PatientPortalOutboundDelivery, intact_id).status
+                == OUTBOX_STATUS_PENDING
+            )
+            audit = session.scalar(
+                select(PatientPortalAuditEvent).where(
+                    PatientPortalAuditEvent.event_type == AUDIT_EVENT_ACCOUNT_CONTACT_UPDATE,
+                    PatientPortalAuditEvent.outcome == AUDIT_OUTCOME_FAILURE,
+                    PatientPortalAuditEvent.account_id == account_id,
+                )
+            )
+            assert audit is not None
+            assert audit.reason == "delivery_unavailable"
+        assert "payload_invalid" in caplog.text
+        assert all(recipient not in caplog.text for recipient in recipients)
+
+        delivered = process_one_delivery(
+            app.state.session_factory,
+            email_sender=sender,
+            encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+            max_attempts=1,
+            lease_seconds=60,
+            delivery_id=intact_id,
+        )
+
+        assert delivered is not None
+        assert delivered.status == OUTBOX_STATUS_DELIVERED
+        assert len(sender.messages) == 1
+        assert sender.messages[0]["recipient"] == recipients[1]
+        assert sender.messages[0]["message_id"] == intact_message_id
+    finally:
+        client.close()
+        app.state.database_engine.dispose()
+
+
 def test_outbox_rotation_retains_the_old_key_for_queued_delivery() -> None:
     old_secret = "v" * 32
     active_secret = "n" * 32
