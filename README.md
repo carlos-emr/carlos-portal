@@ -339,7 +339,20 @@ Override `PORTAL_BASE_URL`, `PORTAL_TEST_USER`, `PORTAL_TEST_PASSWORD`, `PORTAL_
 use a particular Chrome or Chromium executable. The test refuses public hosts unless
 `PORTAL_ALLOW_NON_LOCAL_BASE_URL=true` is deliberately set.
 
-A second live check covers the sign-in and session flows the smoke test does not drive: a code sent
+A second live browser check covers the account flows the smoke test does not drive: confirming an
+email change from the emailed link, creating Link myCarlos codes (with the MFA-proof step-up),
+listing and removing linked devices, a wrong current password on the account forms and the locked
+page, and declining offered appointment times. Its fixtures are single-use, so it needs a fresh
+database, its own seed and a handful of settings (myCarlos delivery on, an https public address,
+a raised sign-in rate limit); the full recipe is at the top of
+`scripts/patient-portal-account-playwright-checks.js`:
+
+```bash
+python tests/seed_browser_account.py
+npm run test:patient-portal-account-playwright
+```
+
+A third live check covers the sign-in and session flows the smoke test does not drive: a code sent
 by SMS (captured by `scripts/patient-portal-sms-capture.js`, a loopback webhook the portal posts to,
 so no SMS provider is needed), Resend after the cooldown, a phone change confirmed by SMS, the
 signed-in pages in every locale, the notice pages a browser gets for an unknown route, a stale form

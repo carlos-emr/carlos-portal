@@ -6,6 +6,7 @@
     "node": ">=18"
   },
   "scripts": {
+    "test:patient-portal-account-playwright": "node scripts/patient-portal-account-playwright-checks.js",
     "test:patient-portal-mail-capture": "node --test tests/patient-portal-mail-capture.test.js",
     "test:patient-portal-playwright": "node scripts/patient-portal-playwright-checks.js",
     "test:patient-portal-session-playwright": "node scripts/patient-portal-session-playwright-checks.js"
