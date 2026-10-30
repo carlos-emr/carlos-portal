@@ -1189,6 +1189,7 @@ def record_mfa_delivery_outcome(
         delivery_expiry = delivery_expiry.replace(tzinfo=UTC)
     if (
         not compare_digest(challenge.code_hash, delivery.expected_code_hash)
+        or challenge.status == MFA_CHALLENGE_STATUS_CANCELLED
         or challenge.delivery_method != delivery.delivery_method
         or challenge_expiry != delivery_expiry
     ):
