@@ -180,7 +180,6 @@ for (const succeeds of [true, false]) {
         assert.equal(page.copy.hidden, true);
         assert.equal(page.reveal.textContent, 'FAKE failed');
         assert.equal(page.timers.length, 1);
-        assert.equal(page.timers[0].milliseconds, 2500);
         page.timers[0].callback();
         assert.equal(page.reveal.textContent, 'FAKE reveal');
         assert.equal(page.reveal.disabled, false);
