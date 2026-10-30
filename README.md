@@ -339,6 +339,18 @@ Override `PORTAL_BASE_URL`, `PORTAL_TEST_USER`, `PORTAL_TEST_PASSWORD`, `PORTAL_
 use a particular Chrome or Chromium executable. The test refuses public hosts unless
 `PORTAL_ALLOW_NON_LOCAL_BASE_URL=true` is deliberately set.
 
+A second live browser check covers the account flows the smoke test does not drive: confirming an
+email change from the emailed link, creating Link myCarlos codes (with the MFA-proof step-up),
+listing and removing linked devices, a wrong current password on the account forms and the locked
+page, and declining offered appointment times. Its fixtures are single-use, so it needs a fresh
+database and its own seed; the full recipe is at the top of
+`scripts/patient-portal-account-playwright-checks.js`:
+
+```bash
+python tests/seed_browser_account.py
+npm run test:patient-portal-account-playwright
+```
+
 `PATIENT_PORTAL_CLINIC_ID` and `PATIENT_PORTAL_CLINIC_NAME` have development placeholders.
 Non-development startup rejects those placeholders. The configured clinic is enforced on login
 and on every CARLOS internal request; a request asserting another clinic is rejected.
