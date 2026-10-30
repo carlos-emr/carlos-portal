@@ -401,7 +401,8 @@ function screenshotPath(name) {
     await page.locator(
       `.language-switch a[href^="${portalPathname('/locale/fr')}"]`
     ).click();
-    await page.getByRole('heading', { name: 'Sign in' }).waitFor();
+    // The page now reads in French: the heading is the catalogue's, not the English fallback.
+    await page.getByRole('heading', { name: 'Connexion' }).waitFor();
     assert(
       await page.locator('.language-switch .text-tab.selected[lang="fr"]').count() === 1,
       'selecting a language did not persist'
