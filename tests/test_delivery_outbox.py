@@ -18,7 +18,10 @@ from carlos_patient_portal.delivery_outbox import (
     enqueue_password_reset_delivery,
     process_one_delivery,
 )
-from carlos_patient_portal.email_delivery import PortalEmailDeliveryError
+from carlos_patient_portal.email_delivery import (
+    PortalEmailDeliveryError,
+    PortalEmailFooterUnavailableError,
+)
 from carlos_patient_portal.maintenance import cleanup_transient_auth_rows, summarize_outbox
 from carlos_patient_portal.models import (
     AUDIT_EVENT_ACCOUNT_CONTACT_UPDATE,
@@ -1010,3 +1013,34 @@ def test_password_reset_queue_applies_account_neutral_durable_backpressure() -> 
     assert app.state.operational_metrics.snapshot()["failures"] == {
         "password_reset_queue_full": 1
     }
+
+
+def test_footer_failure_is_recorded_with_its_own_failure_code() -> None:
+    # A clinic footer problem (here a bad signature) must not look like an SMTP outage.
+    class FooterRefusingSender(RecordingPortalEmailSender):
+        def send_password_reset(self, **kwargs) -> None:
+            raise PortalEmailFooterUnavailableError("signature")
+
+    sender = FooterRefusingSender()
+    app = migrated_development_app(
+        email_sender=sender,
+        outbox_encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+    )
+    account_id = activate_seeded_patient_account(app, TestClient(app))
+    delivery_id, _ = queue_reset(app, account_id)
+
+    result = process_one_delivery(
+        app.state.session_factory,
+        email_sender=sender,
+        encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+        max_attempts=1,
+        lease_seconds=60,
+    )
+
+    assert result is not None
+    assert result.status == OUTBOX_STATUS_FAILED
+    with app.state.session_factory() as session:
+        assert (
+            session.get(PatientPortalOutboundDelivery, delivery_id).last_failure_code
+            == "clinic_footer_signature"
+        )
