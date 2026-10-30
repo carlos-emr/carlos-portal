@@ -352,6 +352,19 @@ python tests/seed_browser_account.py
 npm run test:patient-portal-account-playwright
 ```
 
+A third live check covers the sign-in and session flows the smoke test does not drive: a code sent
+by SMS (captured by `scripts/patient-portal-sms-capture.js`, a loopback webhook the portal posts to,
+so no SMS provider is needed), Resend after the cooldown, a phone change confirmed by SMS, the
+signed-in pages in every locale, the notice pages a browser gets for an unknown route, a stale form
+token and the sign-in throttle, and idle session expiry. It needs its own fresh database, seed and
+short cooldown/idle settings; the full recipe is at the top of
+`scripts/patient-portal-session-playwright-checks.js`:
+
+```bash
+python tests/seed_browser_session.py
+npm run test:patient-portal-session-playwright
+```
+
 `PATIENT_PORTAL_CLINIC_ID` and `PATIENT_PORTAL_CLINIC_NAME` have development placeholders.
 Non-development startup rejects those placeholders. The configured clinic is enforced on login
 and on every CARLOS internal request; a request asserting another clinic is rejected.
