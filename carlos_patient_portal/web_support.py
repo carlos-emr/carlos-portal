@@ -593,7 +593,8 @@ def is_rate_limited_path(path: str) -> bool:
 
 
 def is_maintenance_exempt_path(path: str) -> bool:
-    return path in {
+    # Language selection changes only the display-preference cookie.
+    return path.startswith("/locale/") or path in {
         "/health",
         "/internal/health/db",
         "/internal/readiness",
