@@ -1181,9 +1181,19 @@ def record_mfa_delivery_outcome(
     challenge = lock_mfa_challenge(session, challenge_locator.id)
     if challenge is None or challenge.account_id != account.id:
         raise MfaChallengeNotFoundError()
-    if not compare_digest(challenge.code_hash, delivery.expected_code_hash):
-        # A newer resend replaced this delivery's code while its provider call was in flight.
-        # Its eventual result no longer owns either the challenge or the channel cooldown.
+    challenge_expiry = challenge.expires_at
+    delivery_expiry = delivery.expires_at
+    if challenge_expiry.tzinfo is None:
+        challenge_expiry = challenge_expiry.replace(tzinfo=UTC)
+    if delivery_expiry.tzinfo is None:
+        delivery_expiry = delivery_expiry.replace(tzinfo=UTC)
+    if (
+        not compare_digest(challenge.code_hash, delivery.expected_code_hash)
+        or challenge.delivery_method != delivery.delivery_method
+        or challenge_expiry != delivery_expiry
+    ):
+        # A resend can repeat a six-digit code, so its expiry and channel also identify
+        # which delivery result still owns the challenge and channel cooldown.
         record_audit_event(
             session,
             event_type=AUDIT_EVENT_MFA_DELIVERY,
