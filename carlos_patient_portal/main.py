@@ -41,6 +41,7 @@ from starlette._utils import get_route_path
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import Response
+from starlette.types import Scope
 
 from carlos_patient_portal.accounts import ActivationRateLimit
 from carlos_patient_portal.audit import hash_sensitive_reference, record_audit_event
@@ -149,6 +150,21 @@ from carlos_patient_portal.web_support import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+_STATIC_MOUNT_PATH = "/static"
+
+
+class _PortalStaticFiles(StaticFiles):
+    def get_path(self, scope: Scope) -> str:
+        # Use the application path captured before Mount extends root_path. A stripping
+        # proxy leaves scope.path without the deployment prefix, unlike the mount root.
+        # This lookup-only copy preserves the original URI and security classification;
+        # StaticFiles still normalizes the name and enforces filesystem containment.
+        asset_scope = dict(scope)
+        asset_scope["path"] = scope["state"]["_portal_application_path"]
+        asset_scope["root_path"] = _STATIC_MOUNT_PATH
+        return super().get_path(asset_scope)
 
 
 def build_portal_runtime(
@@ -1014,8 +1030,8 @@ def create_app(
     app.state.unlock_secret_encryption_secret = runtime.unlock_secret_encryption_secret
     logging.getLogger("uvicorn.access").disabled = not settings.is_development
     app.mount(
-        "/static",
-        StaticFiles(directory=str(PACKAGE_DIR / "static")),
+        _STATIC_MOUNT_PATH,
+        _PortalStaticFiles(directory=str(PACKAGE_DIR / "static")),
         name="static",
     )
     register_exception_handlers(app, runtime)
