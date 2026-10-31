@@ -8,9 +8,9 @@ fixtures can disturb the other's. It may run against the same database as that s
 demographic numbers and booking operation IDs are its own. Every fixture is still single-use (a
 confirmation token, a removed device, a locked account), so recreate the database before each run.
 
-Everything is FAKE: example.com addresses, passwords generated here at run time, and a clinic key
-and device keys derived from readable seed text by tests/delivery_contract_reference.py, exactly
-as tests/test_mycarlos_portal.py builds them.
+Everything is FAKE: example.com addresses, bootstrap passwords generated here at run time, one
+public non-Latin password-policy specimen, and clinic/device keys derived from readable seed
+text by tests/delivery_contract_reference.py, exactly as tests/test_mycarlos_portal.py builds them.
 
 Run it with the same environment as the server it seeds for: the email-change token is keyed by the
 session secret, and the fixture records the server's lockout, rate-limit and cooldown settings so
@@ -55,7 +55,9 @@ from carlos_patient_portal.models import (
 )
 from carlos_patient_portal.mycarlos_links import LINK_CODE_ALPHABET
 from carlos_patient_portal.token_keys import PortalTokenKeys
+from carlos_patient_portal.unlock_secrets import create_unlock_secret
 from carlos_patient_portal.web_support import (
+    CSRF_COOKIE_NAME,
     PORTAL_MFA_PROOF_COOKIE_NAME,
     PORTAL_SESSION_COOKIE_NAME,
 )
@@ -85,10 +87,14 @@ LOCK_USERNAME = "fake-lock-account"
 LOCK_EMAIL = "fake.lock.account@example.com"
 LOCK_DEMOGRAPHIC_NO = 7103
 
+# The same public FAKE specimen as test_unicode_password_activation.py.
+NON_LATIN_PASSWORD = "松雲海竹星河雨石山鳥風林月湖雪花"
+
 # Every string the check asserts, read from the portal's own English catalog so a copy edit there
 # cannot leave the check asserting stale text.
 TEXT_KEYS = (
     "account",
+    "account_status_password_updated",
     "account_change_error",
     "account_status_mfa_updated",
     "back_to_sign_in",
@@ -317,6 +323,21 @@ def main() -> None:
                     email=LINK_EMAIL,
                     password=link_password,
                 )
+                # One real Reveal control for the cached-page/session-loss browser check.
+                email_password = create_unlock_secret(
+                    session,
+                    clinic_id=settings.clinic_id,
+                    demographic_no=link_account.demographic_no,
+                    account_id=link_account.id,
+                    created_by="FAKE browser fixture",
+                    encryption_secret=settings.resolved_unlock_secret_keyring[
+                        settings.unlock_secret_active_key_id
+                    ],
+                    encryption_key_id=settings.unlock_secret_active_key_id,
+                    label="FAKE Unicode redirect fixture",
+                    source_reference="ci-unicode-reveal",
+                )
+                email_password_id = email_password.unlock_secret.id
                 clinic_key = ref.ClinicKey(CLINIC_KEY_LABEL, settings.clinic_id)
                 session.add(
                     PatientPortalClinicKey(
@@ -406,9 +427,11 @@ def main() -> None:
                     "stepUpEmailAvailable": settings.smtp_host is not None,
                     "proofCookieName": PORTAL_MFA_PROOF_COOKIE_NAME,
                     "sessionCookieName": PORTAL_SESSION_COOKIE_NAME,
+                    "csrfCookieName": CSRF_COOKIE_NAME,
                     "linkCodePattern": link_code_pattern(),
                 },
                 "text": text,
+                "nonLatinPassword": NON_LATIN_PASSWORD,
                 "emailChange": {
                     "username": validate_username(EMAIL_CHANGE_USERNAME),
                     "password": email_change_password,
@@ -420,6 +443,7 @@ def main() -> None:
                     "username": validate_username(LINK_USERNAME),
                     "password": link_password,
                     "email": LINK_EMAIL,
+                    "emailPasswordId": email_password_id,
                     "devices": devices,
                     "decline": {
                         "title": english[f"booking_prompt_title_{DECLINE_APPOINTMENT_TYPE}"],

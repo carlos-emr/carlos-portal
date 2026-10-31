@@ -59,6 +59,7 @@
  *   npm run test:patient-portal-session-playwright
  *
  * PORTAL_SESSION_STEPS=locales (or any comma list of sms,phone,locales,idle,notices) runs a subset.
+ * maintenance is explicit-only and requires its own configured maintenance instance.
  *
  * Every 4xx the check provokes is declared before it happens; any other 4xx/5xx fails the run.
  */
@@ -80,7 +81,7 @@ const smsCaptureFile = process.env.PORTAL_SMS_CAPTURE_FILE || '';
 const screenshotDir = path.resolve(process.env.PORTAL_SCREENSHOT_DIR || os.tmpdir());
 const chromePath = process.env.PORTAL_CHROME_PATH || process.env.CHROME_PATH || '';
 // PORTAL_SESSION_STEPS=sms,phone,locales,idle,notices runs only those steps (default: all).
-const STEP_NAMES = ['sms', 'phone', 'locales', 'idle', 'notices'];
+const STEP_NAMES = ['sms', 'phone', 'locales', 'idle', 'notices', 'maintenance'];
 const selectedSteps = (process.env.PORTAL_SESSION_STEPS || '').split(',').map((name) => name.trim()).filter(Boolean);
 
 const fixtures = readFixtures(fixturePath);
@@ -100,6 +101,8 @@ assert(Array.isArray(locales) && locales.length >= 2 && locales.some((locale) =>
 for (const name of selectedSteps) {
   assert(STEP_NAMES.includes(name), `PORTAL_SESSION_STEPS names an unknown step ${name}; known: ${STEP_NAMES.join(', ')}`);
 }
+assert(!selectedSteps.includes('maintenance') || selectedSteps.length === 1,
+  'maintenance must run alone on its separate configured instance');
 const runs = (name) => selectedSteps.length === 0 || selectedSteps.includes(name);
 // The sign-in budget is one bucket per client: every POST /auth/login of this run counts. The
 // steps below spend at most this many before the throttle step empties the bucket on purpose.
@@ -649,6 +652,66 @@ async function checkLocales(page, context) {
   await page.getByRole('heading', { name: t('sign_in_heading'), exact: true }).waitFor();
 }
 
+// Explicit-only: the normal default five steps still run on a non-maintenance instance.
+async function checkMaintenanceLocale(page, context) {
+  const polish = locales.find((locale) => locale.code === 'pl');
+  const translated = (key) => {
+    const value = polish?.text[key];
+    assert(typeof value === 'string' && value.length > 0, 'the Polish notice fixture is incomplete');
+    return value;
+  };
+  assert(translated('service_maintenance_heading') !== t('service_maintenance_heading'),
+    'the Polish maintenance heading must differ from English');
+  function assertUnavailable(response) {
+    assert(response && response.status() === 503, 'maintenance did not keep the portal unavailable');
+    assert(/^[0-9]+$/.test(response.headers()['retry-after'] || ''), 'the notice lost Retry-After');
+    assert((response.headers()['cache-control'] || '').includes('no-store'), 'the notice became cacheable');
+  }
+  expectHttpError(503, portalPathname('/'));
+  const landing = await page.goto(portalUrl('/'), { waitUntil: 'load', timeout: 30000 });
+  assertUnavailable(landing);
+  await page.getByRole('heading', { name: t('service_maintenance_heading'), exact: true }).waitFor();
+  assert(await page.locator('input[name="password"]').count() === 0, 'maintenance still offers sign-in');
+
+  expectHttpError(503, portalPathname('/'));
+  const choicePromise = page.waitForResponse((response) => response.request().method() === 'GET'
+    && new URL(response.url()).pathname === portalPathname('/locale/pl'));
+  const noticePromise = page.waitForResponse((response) => response.request().isNavigationRequest()
+    && new URL(response.url()).pathname === portalPathname('/') && response.status() === 503);
+  choicePromise.catch(() => {});
+  noticePromise.catch(() => {});
+  await page.locator('.language-switch a[lang="pl"]').click();
+  assert((await choicePromise).status() === 303, 'language selection did not redirect locally');
+  assertUnavailable(await noticePromise);
+  await page.getByRole('heading', { name: translated('service_maintenance_heading'), exact: true }).waitFor();
+  assert(await page.locator('html').getAttribute('lang') === 'pl', 'the notice did not select Polish');
+  await page.getByRole('alert').filter({ hasText: translated('service_maintenance_details') }).waitFor();
+  assert((await context.cookies()).some((cookie) => cookie.name === settings.localeCookieName
+    && cookie.value === 'pl' && cookie.path === '/'), 'the real locale cookie was not kept');
+  assert(await page.locator('.language-switch span.text-tab.selected[lang="pl"][aria-current="true"]').count() === 1,
+    'Polish is not the selected language');
+
+  expectHttpError(503, portalPathname('/'));
+  assertUnavailable(await page.reload({ waitUntil: 'load' }));
+  await page.getByRole('heading', { name: translated('service_maintenance_heading'), exact: true }).waitFor();
+  assert(await page.locator('html').getAttribute('lang') === 'pl', 'reload lost the selected language');
+  assert(await page.locator('.brand-logo').evaluate((image) => image instanceof HTMLImageElement
+    && image.complete && image.naturalWidth > 0), 'the maintenance logo did not load');
+  await page.getByRole('button', { name: translated('clinic_help'), exact: true }).click();
+  const help = page.getByRole('dialog');
+  await help.getByRole('heading', { name: translated('clinic_help'), exact: true }).waitFor();
+  await help.getByText(translated('clinic_help_message'), { exact: true }).waitFor();
+  await help.getByRole('button', { name: translated('modal_close'), exact: true }).click();
+  await help.waitFor({ state: 'hidden' });
+  await page.screenshot({ path: screenshotPath('patient-portal-maintenance-pl-prefixed'), fullPage: true });
+
+  expectHttpError(503, portalPathname('/portal/account'));
+  assertUnavailable(await page.goto(portalUrl('/portal/account'), { waitUntil: 'load', timeout: 30000 }));
+  await page.getByRole('heading', { name: translated('service_maintenance_heading'), exact: true }).waitFor();
+  assert(await page.locator('form input[name="current_password"]').count() === 0,
+    'language selection bypassed the maintenance restriction');
+}
+
 // ---- Step 4: the notice pages a browser gets ----
 async function checkNoticePages(page) {
   // An unknown route: the notice page, not JSON.
@@ -736,6 +799,7 @@ async function checkIdleExpiry(page, context) {
   const page = await context.newPage();
   watchPage(page, 'main');
   try {
+    if (selectedSteps.includes('maintenance')) await checkMaintenanceLocale(page, context);
     if (runs('sms')) await checkSmsSignInAndResend(page, context);
     if (runs('phone')) await checkPhoneChange(page, context);
     if (runs('locales')) await checkLocales(page, context);
