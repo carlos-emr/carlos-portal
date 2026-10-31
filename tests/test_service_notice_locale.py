@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from carlos_patient_portal import main
 from carlos_patient_portal.i18n import LOCALE_COOKIE_NAME
+from carlos_patient_portal.web_support import PACKAGE_DIR
 from tests.support import development_settings
 
 
@@ -80,8 +81,33 @@ def test_maintenance_language_exception_keeps_route_and_redirect_guards(prefix):
     )
     client = TestClient(prefix_stripping_proxy(app, prefix), base_url="https://portal.example.test")
     try:
-        for path in ["/auth/login", "/api/patient/email-passwords", "/api/mycarlos/deliveries"]:
+        for path in [
+            "/auth/login",
+            "/portal/account",
+            "/api/patient/email-passwords",
+            "/api/mycarlos/deliveries",
+            "/fhir/metadata",
+            "/internal/carlos/FAKE-maintenance-guard",
+        ]:
             assert client.get(prefix + path).status_code == 503
+            assert client.post(prefix + path, json={}).status_code == 503
+        for filename, content_type in [
+            ("styles.css", "text/css"),
+            ("portal.js", "javascript"),
+            ("carlos-birdman.png", "image/png"),
+        ]:
+            target = prefix + "/static/" + filename
+            asset = client.get(target)
+            assert asset.status_code == 200
+            assert content_type in asset.headers["content-type"]
+            assert asset.content == (PACKAGE_DIR / "static" / filename).read_bytes()
+            head = client.head(target)
+            assert head.status_code == 200
+            assert head.content == b""
+            assert head.headers["content-length"] == asset.headers["content-length"]
+            assert client.post(target).status_code == 503
+        assert client.get(prefix + "/static/FAKE-unlisted-notice-asset").status_code == 503
+        assert client.post(prefix + "/static/FAKE-unlisted-notice-asset").status_code == 503
         assert client.get(prefix + "/locale/zz", follow_redirects=False).status_code == 404
         refused_redirect = client.get(
             prefix + "/locale/fr",

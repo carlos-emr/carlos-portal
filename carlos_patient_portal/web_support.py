@@ -593,7 +593,14 @@ def is_rate_limited_path(path: str) -> bool:
     )
 
 
-def is_maintenance_exempt_path(path: str) -> bool:
+def is_maintenance_exempt_path(path: str, *, method: str = "GET") -> bool:
+    # The notice's public assets are read-only; other maintenance requests stay blocked.
+    if method in {"GET", "HEAD"} and path in {
+        "/static/styles.css",
+        "/static/portal.js",
+        "/static/carlos-birdman.png",
+    }:
+        return True
     # Language selection changes only the display-preference cookie.
     return path.startswith("/locale/") or path in {
         "/health",

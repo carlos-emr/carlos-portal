@@ -537,7 +537,9 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
     ) -> Response:
         path = get_route_path(request.scope)
         request.state._portal_application_path = path
-        if settings.maintenance_mode and not is_maintenance_exempt_path(path):
+        if settings.maintenance_mode and not is_maintenance_exempt_path(
+            path, method=request.method
+        ):
             if path.startswith(FHIR_PATH_PREFIX):
                 response = fhir_operation_outcome_response(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
