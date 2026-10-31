@@ -411,6 +411,7 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
             headers=getattr(exc, "headers", None) or {},
         )
 
+    @app.exception_handler(SQLAlchemyError)
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(
         request: Request,
