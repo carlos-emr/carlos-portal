@@ -852,12 +852,7 @@ def test_hl7_message_control_id_respects_the_v251_bound() -> None:
 
 
 def test_document_reference_search_compartment_rejects_another_patients_subject() -> None:
-    """`subject=` and `_id=` were never sent to any FHIR endpoint by the suite.
-
-    The compartment check `subject_matches` could therefore have become `True` unconditionally
-    with a fully green suite. This drives both parameters: another patient's subject must
-    return an empty bundle, and `_id` must stay scoped to the caller's own records.
-    """
+    """A foreign or unrecognized subject must return an empty patient compartment."""
     app = migrated_development_app()
     client = TestClient(app)
     activate_seeded_patient_account(app, client)

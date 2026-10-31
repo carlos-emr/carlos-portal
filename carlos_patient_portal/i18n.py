@@ -359,7 +359,7 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
         "previous": "Previous",
         "provider": "Provider",
         "provider_options_truncated": (
-            "Only the most recent providers are listed. Use the search box to narrow your results."
+            "Only some providers are listed. Use the search box to narrow your results."
         ),
         "reveal": "Reveal",
         "reveal_failed": "Password could not be revealed. Try again.",
@@ -414,6 +414,10 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
 TEXT_CATALOG["fr"] = {
     "hide_password": "Masquer le mot de passe",
     "show_password": "Afficher le mot de passe",
+    "provider_options_truncated": (
+        "Seuls certains professionnels de la santé sont affichés. Utilisez le champ de recherche "
+        "pour affiner les résultats."
+    ),
     "booking_month_1": "janvier",
     "booking_month_2": "février",
     "booking_month_3": "mars",
@@ -467,6 +471,10 @@ TEXT_CATALOG["fr"] = {
 TEXT_CATALOG["es"] = {
     "hide_password": "Ocultar contraseña",
     "show_password": "Mostrar contraseña",
+    "provider_options_truncated": (
+        "Solo se muestran algunos profesionales de la salud. Use el campo de búsqueda para "
+        "acotar los resultados."
+    ),
     "booking_month_1": "enero",
     "booking_month_2": "febrero",
     "booking_month_3": "marzo",
@@ -519,6 +527,10 @@ TEXT_CATALOG["es"] = {
 TEXT_CATALOG["pl"] = {
     "hide_password": "Ukryj hasło",
     "show_password": "Pokaż hasło",
+    "provider_options_truncated": (
+        "Wyświetlani są tylko niektórzy pracownicy medyczni. Proszę skorzystać z pola "
+        "wyszukiwania, aby zawęzić wyniki."
+    ),
     "booking_month_1": "stycznia",
     "booking_month_2": "lutego",
     "booking_month_3": "marca",
@@ -570,6 +582,10 @@ TEXT_CATALOG["pl"] = {
 TEXT_CATALOG["pt-BR"] = {
     "hide_password": "Ocultar senha",
     "show_password": "Mostrar senha",
+    "provider_options_truncated": (
+        "Somente alguns profissionais de saúde são exibidos. Use o campo de pesquisa para "
+        "refinar os resultados."
+    ),
     "booking_month_1": "janeiro",
     "booking_month_2": "fevereiro",
     "booking_month_3": "março",

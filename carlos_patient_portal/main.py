@@ -37,6 +37,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import Engine
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette._utils import get_route_path
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import Response
@@ -308,19 +309,27 @@ def build_lifespan(
     return lifespan
 
 
+def _request_application_path(request: Request) -> str:
+    """Keep the portal boundary path when child mounts change root_path during dispatch."""
+    path = getattr(request.state, "_portal_application_path", None)
+    return request.url.path if path is None else path
+
+
 def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(
         request: Request,
         exc: RequestValidationError,
     ) -> Response:
-        if request.url.path.startswith(FHIR_PATH_PREFIX):
+        if _request_application_path(request).startswith(FHIR_PATH_PREFIX):
             return fhir_operation_outcome_response(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 code="invalid",
                 diagnostics="request parameters are invalid",
             )
-        if request.url.path == "/auth/login" and is_urlencoded_form_request(request):
+        if _request_application_path(request) == "/auth/login" and is_urlencoded_form_request(
+            request
+        ):
             csrf_token = create_csrf_token(runtime.token_keys.csrf)
             response = templates.TemplateResponse(
                 request=request,
@@ -386,7 +395,7 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
         60-minute CSRF token TTL and then submitted got that JSON in their browser window,
         with no way back to the portal - the most reachable instance of a broad gap.
         """
-        if request.url.path.startswith(FHIR_PATH_PREFIX):
+        if _request_application_path(request).startswith(FHIR_PATH_PREFIX):
             return fhir_operation_outcome_response(
                 status_code=exc.status_code,
                 code="processing",
@@ -396,7 +405,11 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
         # accepts a JSON body. A caller that declared JSON gets JSON back; a browser form post
         # or a navigation gets the page.
         declared_json = "application/json" in (request.headers.get("content-type") or "").lower()
-        if wants_html_response(request.url.path) and not declared_json and request.method != "HEAD":
+        if (
+            wants_html_response(_request_application_path(request))
+            and not declared_json
+            and request.method != "HEAD"
+        ):
             return service_notice_response(
                 request,
                 settings=runtime.settings,
@@ -411,6 +424,7 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
             headers=getattr(exc, "headers", None) or {},
         )
 
+    @app.exception_handler(SQLAlchemyError)
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(
         request: Request,
@@ -428,7 +442,7 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
         # bound patient values. Keep the application log useful without copying that material into
         # a sink whose redaction policy is outside this process.
         logger.error("Unhandled portal error: %s", type(exc).__name__)
-        if request.url.path.startswith(FHIR_PATH_PREFIX):
+        if _request_application_path(request).startswith(FHIR_PATH_PREFIX):
             return fhir_operation_outcome_response(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 code="exception",
@@ -446,7 +460,7 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
     ) -> JSONResponse:
         request.app.state.operational_metrics.record_failure("database")
         logger.warning("Portal database operation unavailable: %s", type(exc.orig).__name__)
-        if request.url.path.startswith(FHIR_PATH_PREFIX):
+        if _request_application_path(request).startswith(FHIR_PATH_PREFIX):
             return fhir_operation_outcome_response(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 code="transient",
@@ -505,14 +519,16 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
-        if settings.maintenance_mode and not is_maintenance_exempt_path(request.url.path):
-            if request.url.path.startswith(FHIR_PATH_PREFIX):
+        path = get_route_path(request.scope)
+        request.state._portal_application_path = path
+        if settings.maintenance_mode and not is_maintenance_exempt_path(path):
+            if path.startswith(FHIR_PATH_PREFIX):
                 response = fhir_operation_outcome_response(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     code="transient",
                     diagnostics=SERVICE_UNAVAILABLE_DETAIL,
                 )
-            elif wants_html_response(request.url.path):
+            elif wants_html_response(path):
                 # A patient who navigated here in a browser gets a page, not a raw JSON body.
                 response = service_notice_response(
                     request,
@@ -528,11 +544,11 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
                     content={"detail": SERVICE_UNAVAILABLE_DETAIL},
                 )
             response.headers["Retry-After"] = str(settings.maintenance_retry_after_seconds)
-        elif is_rate_limited_path(request.url.path):
-            is_login = request.url.path == "/auth/login"
+        elif is_rate_limited_path(path):
+            is_login = path == "/auth/login"
             # Linking a device checks a one-time code, so it gets the login limiter's stricter
             # budget, in its own bucket.
-            is_mycarlos_link = request.url.path == MYCARLOS_LINK_PATH
+            is_mycarlos_link = path == MYCARLOS_LINK_PATH
             limiter = (
                 runtime.auth_rate_limiter if is_login or is_mycarlos_link else runtime.rate_limiter
             )
@@ -546,14 +562,14 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
             retry_after_seconds = limiter.consume(bucket)
             if retry_after_seconds is None:
                 response = await call_next(request)
-            elif request.url.path.startswith(FHIR_PATH_PREFIX):
+            elif path.startswith(FHIR_PATH_PREFIX):
                 response = fhir_operation_outcome_response(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     code="throttled",
                     diagnostics="too many requests",
                 )
                 response.headers["Retry-After"] = str(retry_after_seconds)
-            elif wants_html_response(request.url.path):
+            elif wants_html_response(path):
                 response = service_notice_response(
                     request,
                     settings=settings,
@@ -572,18 +588,18 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
             response = await call_next(request)
         for header, value in SECURITY_HEADERS.items():
             response.headers.setdefault(header, value)
-        if not request.url.path.startswith("/api/"):
+        if not path.startswith("/api/"):
             response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
 
         if (
-            request.url.path in NO_STORE_PATHS
-            or request.url.path.startswith("/auth/")
-            or request.url.path.startswith("/api/patient/")
-            or request.url.path.startswith(MYCARLOS_API_PREFIX)
-            or request.url.path.startswith(FHIR_PATH_PREFIX)
-            or is_portal_path(request.url.path)
-            or request.url.path.startswith("/internal/")
-            or request.url.path.startswith("/dev/admin/")
+            path in NO_STORE_PATHS
+            or path.startswith("/auth/")
+            or path.startswith("/api/patient/")
+            or path.startswith(MYCARLOS_API_PREFIX)
+            or path.startswith(FHIR_PATH_PREFIX)
+            or is_portal_path(path)
+            or path.startswith("/internal/")
+            or path.startswith("/dev/admin/")
         ):
             response.headers.setdefault("Cache-Control", "no-store")
             response.headers.setdefault("Pragma", "no-cache")
@@ -740,7 +756,7 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
                     "fhir_client",
                     get_request_client_reference(request, settings),
                 ),
-                resource_type=request.url.path.split("/")[2][:64],
+                resource_type=_request_application_path(request).split("/")[2][:64],
                 reason="authentication_failed",
             )
             session.commit()
@@ -767,7 +783,7 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
                     "fhir_client",
                     get_request_client_reference(request, settings),
                 ),
-                resource_type=request.url.path.split("/")[2][:64],
+                resource_type=_request_application_path(request).split("/")[2][:64],
                 reason="authentication_failed",
             )
             session.commit()
