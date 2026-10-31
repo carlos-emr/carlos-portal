@@ -187,6 +187,8 @@ class MfaChallengeDelivery:
     previous_account_email_sent_at: datetime | None = None
     previous_account_sms_sent_at: datetime | None = None
     reserved_cooldown: timedelta | None = None
+    # The channel reservation this send created; display-only state has no ownership.
+    expected_account_sent_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -689,6 +691,7 @@ def create_mfa_challenge(
         previous_account_email_sent_at=previous_account_email_sent_at,
         previous_account_sms_sent_at=previous_account_sms_sent_at,
         reserved_cooldown=cooldown,
+        expected_account_sent_at=now,
     )
 
 
@@ -1152,6 +1155,7 @@ def resend_mfa_challenge(
         previous_account_email_sent_at=previous_account_email_sent_at,
         previous_account_sms_sent_at=previous_account_sms_sent_at,
         reserved_cooldown=cooldown,
+        expected_account_sent_at=now,
     )
 
 
@@ -1175,15 +1179,56 @@ def record_mfa_delivery_outcome(
         select(PatientPortalAccount)
         .where(PatientPortalAccount.id == challenge_locator.account_id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if account is None:
         raise MfaChallengeNotFoundError()
     challenge = lock_mfa_challenge(session, challenge_locator.id)
     if challenge is None or challenge.account_id != account.id:
         raise MfaChallengeNotFoundError()
-    if not compare_digest(challenge.code_hash, delivery.expected_code_hash):
-        # A newer resend replaced this delivery's code while its provider call was in flight.
-        # Its eventual result no longer owns either the challenge or the channel cooldown.
+    challenge_expiry = challenge.expires_at
+    delivery_expiry = delivery.expires_at
+    if challenge_expiry.tzinfo is None:
+        challenge_expiry = challenge_expiry.replace(tzinfo=UTC)
+    if delivery_expiry.tzinfo is None:
+        delivery_expiry = delivery_expiry.replace(tzinfo=UTC)
+    account_sent_at = (
+        account.last_mfa_email_sent_at
+        if delivery.delivery_method == MFA_DELIVERY_METHOD_EMAIL
+        else account.last_mfa_sms_sent_at
+    )
+    expected_account_sent_at = delivery.expected_account_sent_at
+    if account_sent_at is not None and account_sent_at.tzinfo is None:
+        account_sent_at = account_sent_at.replace(tzinfo=UTC)
+    if expected_account_sent_at is not None and expected_account_sent_at.tzinfo is None:
+        expected_account_sent_at = expected_account_sent_at.replace(tzinfo=UTC)
+    newer_challenge_id = None
+    if (
+        challenge.status == MFA_CHALLENGE_STATUS_VERIFIED
+        and expected_account_sent_at is not None
+        and account_sent_at != expected_account_sent_at
+    ):
+        # A failed resend can restore this same code before or after verification,
+        # leaving a different retry reservation. A distinct newer login row is
+        # needed to distinguish that legitimate acknowledgement from a stale one.
+        newer_challenge_id = session.scalar(
+            select(PatientPortalMfaChallenge.id)
+            .where(
+                PatientPortalMfaChallenge.account_id == account.id,
+                PatientPortalMfaChallenge.id > challenge.id,
+            )
+            .limit(1)
+        )
+    if (
+        not compare_digest(challenge.code_hash, delivery.expected_code_hash)
+        or challenge.status == MFA_CHALLENGE_STATUS_CANCELLED
+        or challenge.delivery_method != delivery.delivery_method
+        or challenge_expiry != delivery_expiry
+        or expected_account_sent_at is None
+        or newer_challenge_id is not None
+    ):
+        # Bind repeated codes to their expiry/channel, and prevent an older
+        # verified login from overwriting a newer login's channel reservation.
         record_audit_event(
             session,
             event_type=AUDIT_EVENT_MFA_DELIVERY,
