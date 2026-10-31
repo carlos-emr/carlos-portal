@@ -1735,7 +1735,7 @@ def authenticate_session_token(
             ),
         )
         .values(last_seen_at=now)
-        .execution_options(synchronize_session=False)
+        .execution_options(synchronize_session="fetch")
     )
     return AuthenticatedPortalSession(account=account, portal_session=portal_session)
 
