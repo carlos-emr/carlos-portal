@@ -412,6 +412,11 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
 
 # The first translated strings. Every key a locale does not define still falls back to English.
 TEXT_CATALOG["fr"] = {
+    "service_maintenance_heading": "Portail indisponible",
+    "service_maintenance_details": (
+        "Le portail est temporairement indisponible pour cause d’entretien. Réessayez sous "
+        "peu ou contactez la clinique si vous avez besoin d’aide maintenant."
+    ),
     "hide_password": "Masquer le mot de passe",
     "show_password": "Afficher le mot de passe",
     "provider_options_truncated": (
@@ -469,6 +474,11 @@ TEXT_CATALOG["fr"] = {
     ),
 }
 TEXT_CATALOG["es"] = {
+    "service_maintenance_heading": "Portal no disponible",
+    "service_maintenance_details": (
+        "El portal no está disponible temporalmente por mantenimiento. Inténtelo de nuevo en "
+        "unos momentos o contacte con la clínica si necesita ayuda ahora."
+    ),
     "hide_password": "Ocultar contraseña",
     "show_password": "Mostrar contraseña",
     "provider_options_truncated": (
@@ -525,6 +535,12 @@ TEXT_CATALOG["es"] = {
     "activation_reenter_password": "Sus demás datos se conservan: vuelva a escribir su contraseña.",
 }
 TEXT_CATALOG["pl"] = {
+    "service_maintenance_heading": "Portal niedostępny",
+    "service_maintenance_details": (
+        "Portal jest tymczasowo niedostępny z powodu prac konserwacyjnych. Proszę spróbować "
+        "ponownie za chwilę lub skontaktować się z przychodnią, jeśli pomoc jest potrzebna "
+        "teraz."
+    ),
     "hide_password": "Ukryj hasło",
     "show_password": "Pokaż hasło",
     "provider_options_truncated": (
@@ -580,6 +596,11 @@ TEXT_CATALOG["pl"] = {
     "activation_reenter_password": "Pozostałe dane zostały zachowane: wpisz ponownie hasło.",
 }
 TEXT_CATALOG["pt-BR"] = {
+    "service_maintenance_heading": "Portal indisponível",
+    "service_maintenance_details": (
+        "O portal está temporariamente indisponível para manutenção. Tente novamente em "
+        "instantes ou entre em contato com a clínica se precisar de ajuda agora."
+    ),
     "hide_password": "Ocultar senha",
     "show_password": "Mostrar senha",
     "provider_options_truncated": (

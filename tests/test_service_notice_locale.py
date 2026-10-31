@@ -54,6 +54,11 @@ def test_language_switch_on_a_service_notice_persists_without_bypassing_the_noti
         translated_notice = client.get(prefix + "/")
         assert translated_notice.status_code == notice_status
         assert '<html lang="fr">' in translated_notice.text
+        if notice_status == 503:
+            assert '<h1 id="notice-title">Portail indisponible</h1>' in translated_notice.text
+            assert "Le portail est temporairement indisponible pour cause d’entretien." in (
+                translated_notice.text
+            )
         assert '<span class="text-tab selected" aria-current="true" lang="fr"' in (
             translated_notice.text
         )
