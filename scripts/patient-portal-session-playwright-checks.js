@@ -103,7 +103,7 @@ for (const name of selectedSteps) {
 const runs = (name) => selectedSteps.length === 0 || selectedSteps.includes(name);
 // The sign-in budget is one bucket per client: every POST /auth/login of this run counts. The
 // steps below spend at most this many before the throttle step empties the bucket on purpose.
-const plannedSignInRequests = 1 + 1 + 2 + (locales.length - 1) + 1 + 1;
+const plannedSignInRequests = 1 + 1 + 2 + (locales.length - 1) + 1 + 1 + 1;
 assert(settings.authRateLimitMaxRequests > plannedSignInRequests,
   `PATIENT_PORTAL_AUTH_RATE_LIMIT_MAX_REQUESTS is ${settings.authRateLimitMaxRequests}; it must exceed the `
     + `${plannedSignInRequests} sign-ins the steps before the throttle step make (the recipe uses 30)`);
@@ -586,6 +586,17 @@ async function checkPhoneChange(page, context) {
   await accountStatus(page, 'mfa-updated');
   assert(await page.locator('form[action$="/portal/account/mfa"] select[name="preferred_mfa_method"]').inputValue() === 'sms',
     'the account page does not show SMS as the chosen method');
+  await signOut(page, context);
+
+  // The confirmed number must work for this patient's next sign-in.
+  const nextSignInSince = Date.now();
+  await startSignIn(page, account);
+  const destination = (await page.locator('.mfa-destination').innerText()).trim();
+  assert(destination.includes(t('mfa_sms')),
+    'the next sign-in did not send its code by SMS');
+  assert(!destination.includes(newPhone),
+    'the next sign-in shows the full confirmed phone number');
+  await verifyCode(page, await smsCode(page, newPhone, nextSignInSince));
   await signOut(page, context);
 }
 
