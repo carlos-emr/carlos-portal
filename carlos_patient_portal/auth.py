@@ -1768,7 +1768,7 @@ def authenticate_session_token(
         portal_session.revoked_reason = AUTH_REASON_ACCOUNT_LOCKED
         raise PortalSessionInvalidError()
 
-    last_seen_cutoff = now - SESSION_LAST_SEEN_UPDATE_INTERVAL
+    last_seen_cutoff = now - min(SESSION_LAST_SEEN_UPDATE_INTERVAL, idle_timeout / 2)
     session.execute(
         update(PatientPortalSession)
         .where(
@@ -1780,7 +1780,7 @@ def authenticate_session_token(
             ),
         )
         .values(last_seen_at=now)
-        .execution_options(synchronize_session=False)
+        .execution_options(synchronize_session="fetch")
     )
     return AuthenticatedPortalSession(account=account, portal_session=portal_session)
 
