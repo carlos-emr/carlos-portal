@@ -574,6 +574,7 @@ def maintenance(argv: Sequence[str] | None = None) -> None:
                     active_key_id=settings.unlock_secret_active_key_id,
                     limit=args.batch_size,
                 )
+                session.commit()
                 print(f"rotated {rotated_count} unlock secrets")
                 return
             if args.command == "outbox-status":
@@ -592,6 +593,7 @@ def maintenance(argv: Sequence[str] | None = None) -> None:
                     batch_size=args.batch_size,
                     dry_run=args.dry_run,
                 )
+                session.commit()
                 action = "dry run completed" if args.dry_run else "cleanup completed"
                 # Every interpolated value is an aggregate row count, never a token or hash;
                 # `reset_records` is what draws the detector, and it is a COUNT of deleted rows.
@@ -633,6 +635,7 @@ def maintenance(argv: Sequence[str] | None = None) -> None:
                 before=cutoff,
                 batch_size=args.batch_size,
             )
+            session.commit()
             print(f"deleted {deleted_count} audit events older than retention")
     finally:
         if runtime_database_engine is not None:
