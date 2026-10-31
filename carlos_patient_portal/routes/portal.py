@@ -881,7 +881,7 @@ def register_portal_routes(
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 content={"detail": AUTHENTICATION_REQUIRED_DETAIL},
-                headers={"Location": request.url_for("index").path},
+                headers={"Location": authenticated_session.headers["location"]},
             )
         account = authenticated_session.account
         try:

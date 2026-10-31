@@ -128,7 +128,8 @@ def assert_trace(proxy, captured, external_target, method, body=b"", query=b""):
     assert scope["raw_path"] == forwarded["raw_path"] == scope["path"].encode("ascii")
     assert scope["query_string"] == query
     assert scope["root_path"] == settings.root_path == proxy.app.root_path
-    assert deployment_cookie_path(settings, "/portal") == settings.root_path + "/portal"
+    wire_prefix = external_target.rsplit("/api/mycarlos/", 1)[0]
+    assert deployment_cookie_path(settings, "/portal") == wire_prefix + "/portal"
     expected_hash = ref.request_hash(method, external_target.encode("ascii"), query, body)
     assert ref.request_hash(method, signed, query, body) == expected_hash
     return {
