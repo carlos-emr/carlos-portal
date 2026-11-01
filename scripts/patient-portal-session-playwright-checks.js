@@ -804,31 +804,77 @@ async function checkNoticePages(page) {
 }
 
 // ---- Step 5: idle session expiry ----
-// The portal ends a session `idle limit` after its last recorded activity. (It records activity at
-// most once per SESSION_LAST_SEEN_UPDATE_INTERVAL, 5 minutes, so with a limit below that a page
-// opened halfway does not extend the session; the step waits the full limit after that page, so
-// it holds whether or not the page counted.)
+// Activity within the idle window must keep the same session alive beyond its original idle
+// deadline. A full quiet window must still expire it and reject the copied old credential.
 async function checkIdleExpiry(page, context) {
   const account = accounts.idle;
   const limitMs = settings.idleTimeoutSeconds * 1000;
+  const verifiedPromise = page.waitForResponse((response) => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === portalPathname('/auth/mfa/verify'));
+  verifiedPromise.catch(() => {});
   await signInWithEmailCode(page, account);
+  const verified = await verifiedPromise;
+  assert(verified.status() === 303, 'idle test did not establish its session through actual MFA');
+  // This timestamp is AFTER the session cookie was issued and the dashboard loaded, so waiting
+  // a whole limit from here conservatively crosses the session's original idle deadline.
+  const signedInAt = Date.now();
+  function serverDate(response) {
+    const value = Date.parse(response.headers()['date'] || '');
+    assert(Number.isFinite(value), 'idle test response has no real server Date header');
+    return value;
+  }
+  const issuedServerAt = serverDate(verified);
   const cookie = (await context.cookies()).find((candidate) => candidate.name === settings.sessionCookieName);
   assert(cookie, 'no session cookie while signed in');
   // Halfway through the limit the session is alive.
   await wait(limitMs * 0.5);
-  await open(page, '/portal/account');
+  const midpoint = await open(page, '/portal/account');
   assert(atPath(page, portalPathname('/portal/account')), 'the session ended before the idle limit');
+  assert(midpoint.status() === 200, 'midpoint account activity did not succeed');
+  const midpointAt = Date.now();
+  const midpointServerAt = serverDate(midpoint);
+  console.log(JSON.stringify({ check: 'idle midpoint', sinceDashboardMs: midpointAt - signedInAt }));
+  await wait(Math.max(0, signedInAt + limitMs + 5000 - Date.now()));
+  const activeRequestAt = Date.now();
+  assert(activeRequestAt - midpointAt < limitMs,
+    'the test waited an idle window before its active-session request');
+  const active = await open(page, '/portal');
+  const activeServerAt = serverDate(active);
+  assert(active.status() === 200 && !active.request().redirectedFrom()
+    && atPath(page, portalPathname('/portal')),
+  'normal activity did not keep the session alive beyond its original idle deadline');
+  assert(activeServerAt - issuedServerAt > limitMs
+    && activeServerAt - midpointServerAt < limitMs,
+  'real server timing did not cross the original deadline inside the renewed idle window');
+  assert((await page.locator('.signed-in-user').innerText()).trim() === account.username.toLowerCase()
+    && (await context.cookies()).some((candidate) => candidate.name === settings.sessionCookieName
+      && candidate.value === cookie.value), 'activity did not retain the same account and session');
+  console.log(JSON.stringify({ check: 'active session beyond original idle deadline',
+    sinceDashboardMs: activeRequestAt - signedInAt,
+    sinceMidpointMs: activeRequestAt - midpointAt,
+    serverSinceMfaMs: activeServerAt - issuedServerAt,
+    serverSinceMidpointMs: activeServerAt - midpointServerAt, sameAccountAndCookie: true }));
+  await page.screenshot({ path: screenshotPath('patient-portal-session-active-renewal'), fullPage: true });
   const lastPageAt = Date.now();
   // Idle for the whole limit after that page: the next request lands on sign-in and the old
   // cookie is dead.
   console.log(`Waiting ${Math.ceil(limitMs / 1000) + 5}s for the idle limit`);
   await wait(Math.max(0, lastPageAt + limitMs + 5000 - Date.now()));
-  await open(page, '/portal');
+  const expired = await open(page, '/portal');
   assert(atPath(page, portalPathname('/')), 'an idle session was not ended');
   await page.getByRole('heading', { name: t('sign_in_heading'), exact: true }).waitFor();
+  assert(serverDate(expired) - activeServerAt >= limitMs,
+    'the test did not leave a full quiet interval before checking expiry');
+  assert(!(await context.cookies()).some((candidate) => candidate.name === settings.sessionCookieName),
+    'quiet expiry did not clear the session cookie');
+  await page.screenshot({ path: screenshotPath('patient-portal-session-expired-after-renewal'), fullPage: true });
   await context.addCookies([cookie]);
   await open(page, '/portal/account');
   assert(atPath(page, portalPathname('/')), 'the expired session cookie still opens the account page');
+  assert(!(await context.cookies()).some((candidate) => candidate.name === settings.sessionCookieName),
+    'the rejected expired replay cookie was not cleared');
+  console.log(JSON.stringify({ check: 'renewed session quiet expiry and replay rejected',
+    serverQuietMs: serverDate(expired) - activeServerAt, cookieCleared: true }));
 }
 
 (async () => {
