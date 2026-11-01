@@ -654,6 +654,15 @@ async function checkLocales(page, context) {
 
 // Explicit-only: the normal default five steps still run on a non-maintenance instance.
 async function checkMaintenanceLocale(page, context) {
+  await page.setViewportSize({ width: 360, height: 800 });
+  async function assertNoHorizontalOverflow(surface) {
+    const layout = await page.evaluate(() => ({
+      viewport: window.innerWidth,
+      document: document.documentElement.scrollWidth,
+    }));
+    assert(layout.document <= layout.viewport + 1,
+      `${surface} overflows horizontally at 360px: ${layout.document}px > ${layout.viewport}px`);
+  }
   const polish = locales.find((locale) => locale.code === 'pl');
   const translated = (key) => {
     const value = polish?.text[key];
@@ -697,12 +706,41 @@ async function checkMaintenanceLocale(page, context) {
   assert(await page.locator('html').getAttribute('lang') === 'pl', 'reload lost the selected language');
   assert(await page.locator('.brand-logo').evaluate((image) => image instanceof HTMLImageElement
     && image.complete && image.naturalWidth > 0), 'the maintenance logo did not load');
+  await assertNoHorizontalOverflow('Polish maintenance notice');
   await page.getByRole('button', { name: translated('clinic_help'), exact: true }).click();
   const help = page.getByRole('dialog');
   await help.getByRole('heading', { name: translated('clinic_help'), exact: true }).waitFor();
   await help.getByText(translated('clinic_help_message'), { exact: true }).waitFor();
   await help.getByRole('button', { name: translated('modal_close'), exact: true }).click();
   await help.waitFor({ state: 'hidden' });
+  // Keep the pointer open/close check above, then use its restored focus to reopen with the
+  // keyboard. The real production modal must trap both Tab directions and restore its opener.
+  const helpTrigger = page.getByRole('button', { name: translated('clinic_help'), exact: true });
+  assert(await helpTrigger.evaluate((element) => element === document.activeElement),
+    'closing maintenance Help did not restore focus to its trigger');
+  await page.keyboard.press('Enter');
+  await help.waitFor({ state: 'visible' });
+  await help.getByRole('heading', { name: translated('clinic_help'), exact: true }).waitFor();
+  await help.getByText(translated('clinic_help_message'), { exact: true }).waitFor();
+  assert(await help.getByRole('button', { name: translated('modal_close'), exact: true })
+    .evaluate((element) => element === document.activeElement),
+  'keyboard-opened maintenance Help did not focus Close');
+  for (const key of ['Tab', 'Shift+Tab']) {
+    await page.keyboard.press(key);
+    assert(await help.evaluate((dialog) => dialog.contains(document.activeElement)),
+      `${key} moved focus outside maintenance Help`);
+  }
+  await assertNoHorizontalOverflow('Polish maintenance Help');
+  const helpBox = await help.boundingBox();
+  assert(helpBox && helpBox.x >= -1 && helpBox.x + helpBox.width <= 361,
+    'maintenance Help extends outside the 360px viewport');
+  await page.screenshot({
+    path: screenshotPath('patient-portal-maintenance-pl-help-keyboard-mobile'), fullPage: true,
+  });
+  await page.keyboard.press('Escape');
+  await help.waitFor({ state: 'hidden' });
+  assert(await helpTrigger.evaluate((element) => element === document.activeElement),
+    'Escape did not restore focus to the maintenance Help trigger');
   await page.screenshot({ path: screenshotPath('patient-portal-maintenance-pl-prefixed'), fullPage: true });
 
   expectHttpError(503, portalPathname('/portal/account'));
@@ -710,6 +748,11 @@ async function checkMaintenanceLocale(page, context) {
   await page.getByRole('heading', { name: translated('service_maintenance_heading'), exact: true }).waitFor();
   assert(await page.locator('form input[name="current_password"]').count() === 0,
     'language selection bypassed the maintenance restriction');
+  assert(await page.locator('html').getAttribute('lang') === 'pl'
+    && (await context.cookies()).some((cookie) => cookie.name === settings.localeCookieName
+      && cookie.value === 'pl' && cookie.path === '/'),
+  'keyboard Help or protected-page navigation lost the Polish locale');
+  await assertNoHorizontalOverflow('Protected Polish maintenance notice');
 }
 
 // ---- Step 4: the notice pages a browser gets ----
