@@ -412,6 +412,13 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
 
 # The first translated strings. Every key a locale does not define still falls back to English.
 TEXT_CATALOG["fr"] = {
+    "clinic_help": "Aide de la clinique",
+    "clinic_help_message": (
+        "Contactez la clinique si vous ne pouvez pas accéder à votre compte ou à votre "
+        "méthode de vérification."
+    ),
+    "modal_close": "OK",
+    "back_to_sign_in": "Retour à la connexion",
     "service_maintenance_heading": "Portail indisponible",
     "service_maintenance_details": (
         "Le portail est temporairement indisponible pour cause d’entretien. Réessayez sous "
@@ -474,6 +481,12 @@ TEXT_CATALOG["fr"] = {
     ),
 }
 TEXT_CATALOG["es"] = {
+    "clinic_help": "Ayuda de la clínica",
+    "clinic_help_message": (
+        "Contacte con la clínica si no puede acceder a su cuenta o a su método de verificación."
+    ),
+    "modal_close": "Aceptar",
+    "back_to_sign_in": "Volver al inicio de sesión",
     "service_maintenance_heading": "Portal no disponible",
     "service_maintenance_details": (
         "El portal no está disponible temporalmente por mantenimiento. Inténtelo de nuevo en "
@@ -535,6 +548,13 @@ TEXT_CATALOG["es"] = {
     "activation_reenter_password": "Sus demás datos se conservan: vuelva a escribir su contraseña.",
 }
 TEXT_CATALOG["pl"] = {
+    "clinic_help": "Pomoc przychodni",
+    "clinic_help_message": (
+        "W razie braku dostępu do konta lub metody weryfikacji proszę skontaktować się "
+        "z przychodnią."
+    ),
+    "modal_close": "OK",
+    "back_to_sign_in": "Powrót do logowania",
     "service_maintenance_heading": "Portal niedostępny",
     "service_maintenance_details": (
         "Portal jest tymczasowo niedostępny z powodu prac konserwacyjnych. Proszę spróbować "
@@ -596,6 +616,13 @@ TEXT_CATALOG["pl"] = {
     "activation_reenter_password": "Pozostałe dane zostały zachowane: wpisz ponownie hasło.",
 }
 TEXT_CATALOG["pt-BR"] = {
+    "clinic_help": "Ajuda da clínica",
+    "clinic_help_message": (
+        "Entre em contato com a clínica se você não conseguir acessar sua conta ou seu "
+        "método de verificação."
+    ),
+    "modal_close": "OK",
+    "back_to_sign_in": "Voltar para o login",
     "service_maintenance_heading": "Portal indisponível",
     "service_maintenance_details": (
         "O portal está temporariamente indisponível para manutenção. Tente novamente em "

@@ -119,3 +119,64 @@ def test_maintenance_language_exception_keeps_route_and_redirect_guards(prefix):
     finally:
         client.close()
         app.state.database_engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("locale", "help_title", "help_message", "close_label", "back_label"),
+    [
+        (
+            "fr",
+            "Aide de la clinique",
+            "Contactez la clinique si vous ne pouvez pas accéder à votre compte ou à votre "
+            "méthode de vérification.",
+            "OK",
+            "Retour à la connexion",
+        ),
+        (
+            "es",
+            "Ayuda de la clínica",
+            "Contacte con la clínica si no puede acceder a su cuenta o a su método de "
+            "verificación.",
+            "Aceptar",
+            "Volver al inicio de sesión",
+        ),
+        (
+            "pl",
+            "Pomoc przychodni",
+            "W razie braku dostępu do konta lub metody weryfikacji proszę skontaktować się "
+            "z przychodnią.",
+            "OK",
+            "Powrót do logowania",
+        ),
+        (
+            "pt-BR",
+            "Ajuda da clínica",
+            "Entre em contato com a clínica se você não conseguir acessar sua conta ou seu "
+            "método de verificação.",
+            "OK",
+            "Voltar para o login",
+        ),
+    ],
+)
+def test_maintenance_notice_renders_translated_help_and_return_controls(
+    locale, help_title, help_message, close_label, back_label
+):
+    app = main.create_app(
+        development_settings(database_url="sqlite+pysqlite:///:memory:", maintenance_mode=True)
+    )
+    try:
+        with TestClient(app) as client:
+            selected = client.get(f"/locale/{locale}", follow_redirects=False)
+            assert selected.status_code == 303
+            assert client.cookies[LOCALE_COOKIE_NAME] == locale
+            notice = client.get("/")
+            assert notice.status_code == 503
+            assert notice.headers["cache-control"] == "no-store"
+            assert f'<html lang="{locale}">' in notice.text
+            assert f'data-modal-title="{help_title}"' in notice.text
+            assert f'data-modal-message="{help_message}"' in notice.text
+            assert f">{help_title}</button>" in notice.text
+            assert f"data-modal-close>{close_label}</button>" in notice.text
+            assert f'class="auth-back-link" href="/">{back_label}</a>' in notice.text
+    finally:
+        app.state.database_engine.dispose()
