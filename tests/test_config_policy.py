@@ -623,6 +623,16 @@ def test_root_mounted_deployment_keeps_unprefixed_urls() -> None:
 
 
 @pytest.mark.parametrize(
+    "url",
+    ["https://portal.example.test/patient;blue", "http://localhost/nested/patient;blue"],
+)
+def test_public_base_url_rejects_literal_semicolons_in_deployment_paths(url) -> None:
+    # Cookie Path treats ';' as an attribute delimiter. An escaped prefix remains supported.
+    with pytest.raises(ValidationError, match="semicolons; use %3B"):
+        development_settings(public_base_url=url)
+
+
+@pytest.mark.parametrize(
     "email",
     [".patient@example.com", "patient.@example.com", "pa..tient@example.com"],
 )

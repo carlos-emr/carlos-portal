@@ -59,7 +59,10 @@
  *   npm run test:patient-portal-session-playwright
  *
  * PORTAL_SESSION_STEPS=locales (or any comma list of sms,phone,locales,idle,notices) runs a subset.
- * maintenance is explicit-only and requires its own configured maintenance instance.
+ * maintenance is explicit-only and requires its own configured maintenance instance. Set
+ * PORTAL_SESSION_STEPS=maintenance for both the seed and browser commands: the seed then writes
+ * only a private locale fixture, without a database, accounts, MFA codes or SMS capture. Keep
+ * the normal server settings; maintenance does not need the short idle/high throttle recipe.
  *
  * Every 4xx the check provokes is declared before it happens; any other 4xx/5xx fails the run.
  */
@@ -89,13 +92,6 @@ const settings = fixtures.settings;
 const accounts = fixtures.accounts;
 const locales = fixtures.locales;
 
-assert(useDevelopmentMfaCode, 'this check reads email codes from the page: set PORTAL_USE_DEVELOPMENT_MFA_CODE=true');
-assert(smsCaptureFile, 'PORTAL_SMS_CAPTURE_FILE must name the SMS capture file');
-for (const role of ['sms', 'phone', 'locale', 'throttle', 'idle']) {
-  assert(accounts[role] && accounts[role].username && accounts[role].password && accounts[role].email,
-    `${role} account fixture is incomplete in ${fixturePath}`);
-}
-assert(accounts.sms.phone && fixtures.newPhone, 'the SMS account needs a phone number and the fixture a new one');
 assert(Array.isArray(locales) && locales.length >= 2 && locales.some((locale) => locale.code === settings.defaultLocale),
   'the fixture must list the portal locales including the default');
 for (const name of selectedSteps) {
@@ -104,14 +100,24 @@ for (const name of selectedSteps) {
 assert(!selectedSteps.includes('maintenance') || selectedSteps.length === 1,
   'maintenance must run alone on its separate configured instance');
 const runs = (name) => selectedSteps.length === 0 || selectedSteps.includes(name);
-// The sign-in budget is one bucket per client: every POST /auth/login of this run counts. The
-// steps below spend at most this many before the throttle step empties the bucket on purpose.
-const plannedSignInRequests = 1 + 1 + 2 + (locales.length - 1) + 1 + 1 + 1;
-assert(settings.authRateLimitMaxRequests > plannedSignInRequests,
-  `PATIENT_PORTAL_AUTH_RATE_LIMIT_MAX_REQUESTS is ${settings.authRateLimitMaxRequests}; it must exceed the `
-    + `${plannedSignInRequests} sign-ins the steps before the throttle step make (the recipe uses 30)`);
-assert(settings.idleTimeoutSeconds <= 120,
-  `PATIENT_PORTAL_SESSION_IDLE_TIMEOUT_SECONDS is ${settings.idleTimeoutSeconds}; the idle step waits it out, keep it at the 60 s minimum`);
+// Maintenance uses only the public notice and language preference, with no patient sign-in.
+if (!selectedSteps.includes('maintenance')) {
+  assert(useDevelopmentMfaCode, 'this check reads email codes from the page: set PORTAL_USE_DEVELOPMENT_MFA_CODE=true');
+  assert(smsCaptureFile, 'PORTAL_SMS_CAPTURE_FILE must name the SMS capture file');
+  for (const role of ['sms', 'phone', 'locale', 'throttle', 'idle']) {
+    assert(accounts[role] && accounts[role].username && accounts[role].password && accounts[role].email,
+      `${role} account fixture is incomplete in ${fixturePath}`);
+  }
+  assert(accounts.sms.phone && fixtures.newPhone, 'the SMS account needs a phone number and the fixture a new one');
+  // The sign-in budget is one bucket per client: every POST /auth/login of this run counts. The
+  // steps below spend at most this many before the throttle step empties the bucket on purpose.
+  const plannedSignInRequests = 1 + 1 + 2 + (locales.length - 1) + 1 + 1 + 1;
+  assert(settings.authRateLimitMaxRequests > plannedSignInRequests,
+    `PATIENT_PORTAL_AUTH_RATE_LIMIT_MAX_REQUESTS is ${settings.authRateLimitMaxRequests}; it must exceed the `
+      + `${plannedSignInRequests} sign-ins the steps before the throttle step make (the recipe uses 30)`);
+  assert(settings.idleTimeoutSeconds <= 120,
+    `PATIENT_PORTAL_SESSION_IDLE_TIMEOUT_SECONDS is ${settings.idleTimeoutSeconds}; the idle step waits it out, keep it at the 60 s minimum`);
+}
 
 function readFixtures(filePath) {
   // The fixture holds generated test passwords and a one-time confirmation token.

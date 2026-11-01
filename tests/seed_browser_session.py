@@ -154,12 +154,24 @@ def write_fixture(fixture_path: Path, payload: dict[str, object]) -> None:
 
 def main() -> None:
     settings = get_settings()
-    require_browser_settings(settings)
     fixture_path = Path(
         os.environ.get(
             "PORTAL_SESSION_FIXTURE_FILE", str(Path(tempfile.gettempdir()) / DEFAULT_FIXTURE_NAME)
         )
     )
+    selected_steps = [
+        name.strip()
+        for name in os.environ.get("PORTAL_SESSION_STEPS", "").split(",")
+        if name.strip()
+    ]
+    if selected_steps == ["maintenance"]:
+        write_fixture(fixture_path, locale_fixture(settings))
+        print(
+            f"wrote maintenance locale fixture at {fixture_path}; no accounts seeded",
+            file=sys.stderr,
+        )
+        return
+    require_browser_settings(settings)
     engine = create_portal_engine(settings.database_url)
     session_factory = create_session_factory(engine)
     accounts: dict[str, dict[str, object]] = {}
@@ -186,20 +198,30 @@ def main() -> None:
                     }
     finally:
         engine.dispose()
-    payload = {
-        "settings": {
-            "sessionCookieName": PORTAL_SESSION_COOKIE_NAME,
-            "proofCookieName": PORTAL_MFA_PROOF_COOKIE_NAME,
-            "localeCookieName": LOCALE_COOKIE_NAME,
-            "mfaEmailCooldownSeconds": settings.mfa_email_resend_cooldown_seconds,
-            "mfaSmsCooldownSeconds": settings.mfa_sms_resend_cooldown_seconds,
-            "idleTimeoutSeconds": settings.session_idle_timeout_seconds,
-            "lastSeenUpdateIntervalSeconds": int(SESSION_LAST_SEEN_UPDATE_INTERVAL.total_seconds()),
-            "authRateLimitMaxRequests": settings.auth_rate_limit_max_requests,
-            "authRateLimitWindowSeconds": settings.auth_rate_limit_window_seconds,
-            "smsSenderId": settings.sms_sender_id,
-            "defaultLocale": DEFAULT_LOCALE,
-        },
+    payload = locale_fixture(settings)
+    payload["settings"] = {
+        "sessionCookieName": PORTAL_SESSION_COOKIE_NAME,
+        "proofCookieName": PORTAL_MFA_PROOF_COOKIE_NAME,
+        "localeCookieName": LOCALE_COOKIE_NAME,
+        "mfaEmailCooldownSeconds": settings.mfa_email_resend_cooldown_seconds,
+        "mfaSmsCooldownSeconds": settings.mfa_sms_resend_cooldown_seconds,
+        "idleTimeoutSeconds": settings.session_idle_timeout_seconds,
+        "lastSeenUpdateIntervalSeconds": int(SESSION_LAST_SEEN_UPDATE_INTERVAL.total_seconds()),
+        "authRateLimitMaxRequests": settings.auth_rate_limit_max_requests,
+        "authRateLimitWindowSeconds": settings.auth_rate_limit_window_seconds,
+        "smsSenderId": settings.sms_sender_id,
+        "defaultLocale": DEFAULT_LOCALE,
+    }
+    payload["accounts"] = accounts
+    payload["newPhone"] = NEW_PHONE
+    write_fixture(fixture_path, payload)
+    print(f"seeded {len(accounts)} session accounts; fixture at {fixture_path}", file=sys.stderr)
+
+
+def locale_fixture(settings: Settings) -> dict[str, object]:
+    """Public notice metadata shared by maintenance and the authenticated browser flows."""
+    return {
+        "settings": {"localeCookieName": LOCALE_COOKIE_NAME, "defaultLocale": DEFAULT_LOCALE},
         "text": portal_text(DEFAULT_LOCALE),
         "locales": [
             {
@@ -210,11 +232,7 @@ def main() -> None:
             }
             for option in SUPPORTED_LOCALES
         ],
-        "accounts": accounts,
-        "newPhone": NEW_PHONE,
     }
-    write_fixture(fixture_path, payload)
-    print(f"seeded {len(accounts)} session accounts; fixture at {fixture_path}", file=sys.stderr)
 
 
 if __name__ == "__main__":

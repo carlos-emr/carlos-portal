@@ -18,6 +18,8 @@ from tests.test_public_device_path import SplitProxy
         pytest.param("/患者", "/%E6%82%A3%E8%80%85", id="unicode"),
         pytest.param("/%E6%82%A3%E8%80%85", "/%E6%82%A3%E8%80%85", id="escaped"),
         pytest.param("/patients:archive@main", "/patients:archive@main", id="ascii_reserved"),
+        pytest.param("/patient%3Bblue", "/patient%3Bblue", id="escaped_semicolon"),
+        pytest.param("/patient%3bblue", "/patient%3bblue", id="escaped_semicolon_lowercase"),
     ],
 )
 def test_unicode_deployment_prefix_can_set_and_receive_the_browser_csrf_cookie(

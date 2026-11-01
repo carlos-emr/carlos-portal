@@ -108,6 +108,14 @@ def test_maintenance_language_exception_keeps_route_and_redirect_guards(prefix):
             assert client.post(target).status_code == 503
         assert client.get(prefix + "/static/FAKE-unlisted-notice-asset").status_code == 503
         assert client.post(prefix + "/static/FAKE-unlisted-notice-asset").status_code == 503
+        for method in ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"]:
+            blocked = client.request(method, prefix + "/locale/fr", follow_redirects=False)
+            assert blocked.status_code == 503
+            assert blocked.headers["retry-after"].isdigit()
+        # Preserve GET-only route behavior: HEAD is exempt but still has no locale handler.
+        assert client.head(prefix + "/locale/fr", follow_redirects=False).status_code == 405
+        assert client.get(prefix + "/health").status_code == 200
+        assert client.post(prefix + "/health").status_code == 405
         assert client.get(prefix + "/locale/zz", follow_redirects=False).status_code == 404
         refused_redirect = client.get(
             prefix + "/locale/fr",

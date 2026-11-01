@@ -602,7 +602,7 @@ def is_maintenance_exempt_path(path: str, *, method: str = "GET") -> bool:
     }:
         return True
     # Language selection changes only the display-preference cookie.
-    return path.startswith("/locale/") or path in {
+    return (method in {"GET", "HEAD"} and path.startswith("/locale/")) or path in {
         "/health",
         "/internal/health/db",
         "/internal/readiness",
