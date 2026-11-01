@@ -1188,6 +1188,8 @@ async function checkNonLatinPasswordAndCachedReveal(page, context) {
     (cookie) => cookie.name === settings.sessionCookieName
   );
   assert(previousSession, 'the initial browser session is missing');
+  const previousProof = await proofCookie(context);
+  assert(previousProof, 'password rotation must start with the real sign-in MFA proof cookie');
   const form = page.locator('form[action$="/portal/account/password"]');
   await form.locator('input[name="current_password"]').fill(linkAccount.password);
   await form.locator('input[name="new_password"]').fill(password);
@@ -1209,6 +1211,11 @@ async function checkNonLatinPasswordAndCachedReveal(page, context) {
   );
   assert(replacement && replacement.value !== previousSession.value,
     'the password change did not replace the browser session');
+  const proofAfterRotation = await proofCookie(context);
+  assert(!proofAfterRotation, 'password rotation retained an MFA proof cookie');
+  console.log(JSON.stringify({ check: 'password rotation clears existing MFA proof',
+    proofPresentBefore: Boolean(previousProof), proofPresentAfter: Boolean(proofAfterRotation),
+    sessionReplaced: replacement.value !== previousSession.value }));
   await assertCookiePaths({ requireProof: false });
   await open(page, '/portal');
   assert(atPath(page, portalPathname('/portal')), 'the replacement session did not open the dashboard');
