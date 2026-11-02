@@ -1308,11 +1308,11 @@ function screenshotPath(name) {
       fullPage: true,
     });
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await page.getByRole('link', { name: 'Email passwords', exact: true }).click();
+    await page.getByRole('link', { name: 'Document passwords', exact: true }).click();
     await page.waitForURL(
       (url) => url.pathname === portalPathname('/portal/email-passwords')
     );
-    await page.getByRole('heading', { name: 'Email passwords' }).waitFor();
+    await page.getByRole('heading', { name: 'Document passwords' }).waitFor();
     await assertAccessiblePage(page, 'email-password page');
     assert(
       await page.locator('select[name="provider"]').count() === 1
@@ -1426,7 +1426,7 @@ function screenshotPath(name) {
       page.waitForURL((url) => url.searchParams.get('q') === 'No such message'),
       page.getByRole('button', { name: 'Search' }).click(),
     ]);
-    await page.getByText('No matching email passwords', { exact: true }).waitFor();
+    await page.getByText('No matching document passwords', { exact: true }).waitFor();
     await Promise.all([
       page.waitForURL((url) => url.pathname === portalPathname('/portal/email-passwords')),
       page.getByRole('link', { name: 'Clear filters' }).click(),

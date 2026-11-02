@@ -271,9 +271,9 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
         "email": "Email",
         "email_codes_rate": "Email codes can be resent once per minute.",
         "email_password": "Email password",
-        "email_password_pages": "Email password pages",
-        "email_passwords": "Email passwords",
-        "email_passwords_region": "Email passwords",
+        "email_password_pages": "Document password pages",
+        "email_passwords": "Document passwords",
+        "email_passwords_region": "Document passwords",
         "filters": "Filters",
         "forgot_username_password": "Forgot username or password?",
         "forgot_username_help": "If you do not know your username, contact the clinic.",
@@ -319,8 +319,8 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
         "new_password": "New password",
         "new_password_confirmation": "Confirm new password",
         "next": "Next",
-        "no_email_passwords": "No email passwords",
-        "no_matching_email_passwords": "No matching email passwords",
+        "no_email_passwords": "No document passwords",
+        "no_matching_email_passwords": "No matching document passwords",
         "of": "of",
         "open_reset_page": "Open reset page",
         "page": "Page",
@@ -363,7 +363,9 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
         ),
         "reveal": "Reveal",
         "reveal_failed": "Password could not be revealed. Try again.",
-        "reveal_password_hint": "Enter your current password before revealing a passphrase.",
+        "reveal_password_hint": (
+            "Enter your current password before revealing a document password."
+        ),
         "password_reset_temporarily_unavailable": (
             "Password reset is temporarily unavailable. Please try again shortly."
         ),
@@ -548,6 +550,27 @@ TEXT_CATALOG["es"] = {
     "activation_reenter_password": "Sus demás datos se conservan: vuelva a escribir su contraseña.",
 }
 TEXT_CATALOG["pl"] = {
+    "email_password_pages": "Strony haseł dokumentów",
+    "email_passwords_region": "Hasła dokumentów",
+    "no_email_passwords": "Brak haseł dokumentów",
+    "no_matching_email_passwords": "Brak pasujących haseł dokumentów",
+    "account": "Konto",
+    "current_password": "Obecne hasło",
+    "dashboard": "Panel główny",
+    "date_from": "Data od",
+    "date_to": "Data do",
+    "email_passwords": "Hasła dokumentów",
+    "logout": "Wylogowanie",
+    "messages": "Wiadomości",
+    "password_hidden": "Ukryte",
+    "password_label": "Hasło",
+    "reveal": "Proszę pokazać",
+    "reveal_password_hint": (
+        "Przed wyświetleniem hasła dokumentu proszę wpisać obecne hasło do konta."
+    ),
+    "search": "Proszę szukać",
+    "sent": "Wysłano",
+    "subject": "Temat",
     "clinic_help": "Pomoc przychodni",
     "clinic_help_message": (
         "W razie braku dostępu do konta lub metody weryfikacji proszę skontaktować się "
@@ -562,7 +585,7 @@ TEXT_CATALOG["pl"] = {
         "teraz."
     ),
     "hide_password": "Ukryj hasło",
-    "show_password": "Pokaż hasło",
+    "show_password": "Proszę pokazać hasło",
     "provider_options_truncated": (
         "Wyświetlani są tylko niektórzy pracownicy medyczni. Proszę skorzystać z pola "
         "wyszukiwania, aby zawęzić wyniki."
