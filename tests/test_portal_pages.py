@@ -3,6 +3,7 @@
 import re
 from dataclasses import fields
 from datetime import UTC, datetime, timedelta
+from html import unescape
 from types import SimpleNamespace
 
 import pytest
@@ -2163,3 +2164,92 @@ def test_initial_phone_delivery_failure_revokes_proof_then_allows_explicit_retry
             and message["recipient"] == SEEDED_INVITE_EMAIL
             for message in email_sender.messages
         )
+
+
+def test_native_legacy_provider_filter_isolates_retained_records_and_clear_restores_both() -> None:
+    app = migrated_development_app()
+    client = TestClient(app)
+    try:
+        account_id = browser_sign_in_seeded_patient(app, client)
+        legacy_secret = "FAKE legacy document passphrase"
+        current_secret = "FAKE current document passphrase"
+        with app.state.session_factory() as session, session.begin():
+            legacy = create_unlock_secret(
+                session,
+                clinic_id="default",
+                demographic_no=1234,
+                account_id=account_id,
+                secret_type=UNLOCK_SECRET_TYPE_EMAIL,
+                secret=legacy_secret,
+                created_by="Clinic Nurse",
+                encryption_secret=UNLOCK_SECRET_ENCRYPTION_SECRET,
+                label="Retained letter",
+                source_reference="retained-provider-letter",
+            ).unlock_secret
+            current = create_unlock_secret(
+                session,
+                clinic_id="default",
+                demographic_no=1234,
+                account_id=account_id,
+                secret_type=UNLOCK_SECRET_TYPE_EMAIL,
+                secret=current_secret,
+                created_by="Clinic Nurse",
+                created_by_id="provider-42",
+                encryption_secret=UNLOCK_SECRET_ENCRYPTION_SECRET,
+                label="Current report",
+                source_reference="current-provider-report",
+            ).unlock_secret
+            legacy_id, current_id = legacy.id, current.id
+            assert legacy.created_by_id is None
+            assert current.created_by_id == "provider-42"
+
+        listing = client.get("/portal/email-passwords")
+        assert listing.status_code == 200
+        assert set(re.findall(r'id="email-password-(\d+)"', listing.text)) == {
+            str(legacy_id),
+            str(current_id),
+        }
+        provider_select = re.search(
+            r'<select[^>]*name="provider"[^>]*>(.*?)</select>', listing.text, re.S
+        )
+        assert provider_select is not None
+        legacy_option = re.search(
+            r'<option value="(name:[^"]+)">Clinic Nurse</option>', provider_select.group(1)
+        )
+        assert legacy_option is not None
+        assert '<option value="id:provider-42">Clinic Nurse</option>' in provider_select.group(1)
+
+        # Submit the value actually emitted for the retained NULL-ID group, not an old bookmark.
+        filtered = client.get(
+            "/portal/email-passwords", params={"provider": unescape(legacy_option.group(1))}
+        )
+        assert filtered.status_code == 200
+        assert set(re.findall(r'id="email-password-(\d+)"', filtered.text)) == {str(legacy_id)}
+        assert "Retained letter" in filtered.text
+        assert "Current report" not in filtered.text
+        assert f'<option value="{legacy_option.group(1)}" selected>' in filtered.text
+        clear_link = re.search(r'<a[^>]*href="([^"]+)"[^>]*>Clear filters</a>', filtered.text)
+        assert clear_link is not None
+
+        cleared = client.get(unescape(clear_link.group(1)))
+        assert cleared.status_code == 200
+        assert not cleared.url.query
+        assert set(re.findall(r'id="email-password-(\d+)"', cleared.text)) == {
+            str(legacy_id),
+            str(current_id),
+        }
+        assert f'<option value="{legacy_option.group(1)}" selected>' not in cleared.text
+        for response in (listing, filtered, cleared):
+            assert legacy_secret not in response.text
+            assert current_secret not in response.text
+
+        with app.state.session_factory() as session:
+            legacy = session.get(PatientPortalUnlockSecret, legacy_id)
+            current = session.get(PatientPortalUnlockSecret, current_id)
+            assert legacy is not None and current is not None
+            assert legacy.created_by_id is None
+            assert current.created_by_id == "provider-42"
+            assert legacy.last_viewed_at is None
+            assert current.last_viewed_at is None
+    finally:
+        app.state.database_engine.dispose()
