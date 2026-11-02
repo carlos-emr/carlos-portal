@@ -202,6 +202,20 @@ def test_runtime_database_allowlist_rejects_missing_required_access() -> None:
     assert str(tables[0]["name"]) in check.detail
 
 
+@pytest.mark.parametrize("missing_kind", ["table", "sequence"])
+def test_runtime_database_allowlist_reports_a_missing_required_object(missing_kind: str) -> None:
+    tables, sequences = compliant_runtime_data_privileges()
+    objects = tables if missing_kind == "table" else sequences
+    missing = objects.pop()
+
+    check = evaluate_runtime_database_allowlist(tables, sequences)
+
+    assert not check.passed
+    assert check.detail == (
+        f"runtime database allowlist failed: missing_{missing_kind}:public.{missing['name']}"
+    )
+
+
 def test_runtime_database_allowlist_rejects_access_outside_public() -> None:
     tables, sequences = compliant_runtime_data_privileges()
     tables.append(
