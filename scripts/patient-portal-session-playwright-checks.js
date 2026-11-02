@@ -109,9 +109,10 @@ if (!selectedSteps.includes('maintenance')) {
       `${role} account fixture is incomplete in ${fixturePath}`);
   }
   assert(accounts.sms.phone && fixtures.newPhone, 'the SMS account needs a phone number and the fixture a new one');
-  // The sign-in budget is one bucket per client: every POST /auth/login of this run counts. The
-  // steps below spend at most this many before the throttle step empties the bucket on purpose.
-  const plannedSignInRequests = 1 + 1 + 2 + (locales.length - 1) + 1 + 1 + 1;
+  // The sign-in budget is one bucket per client: every POST /auth/login of this run counts.
+  // Before deliberate throttling: SMS/email 3, phone 4, non-default locales one each,
+  // idle 1, and the stale-CSRF notice 1 (even a rejected CSRF request spends the budget).
+  const plannedSignInRequests = 3 + 4 + (locales.length - 1) + 1 + 1;
   assert(settings.authRateLimitMaxRequests > plannedSignInRequests,
     `PATIENT_PORTAL_AUTH_RATE_LIMIT_MAX_REQUESTS is ${settings.authRateLimitMaxRequests}; it must exceed the `
       + `${plannedSignInRequests} sign-ins the steps before the throttle step make (the recipe uses 30)`);

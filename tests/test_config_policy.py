@@ -632,6 +632,23 @@ def test_public_base_url_rejects_literal_semicolons_in_deployment_paths(url) -> 
         development_settings(public_base_url=url)
 
 
+@pytest.mark.parametrize("codepoint", [0, 11, 31, 127])
+def test_public_base_url_rejects_retained_literal_path_controls(codepoint) -> None:
+    with pytest.raises(ValidationError, match="control characters; use percent-encoded"):
+        development_settings(
+            public_base_url="https://portal.example.test/patient" + chr(codepoint) + "blue"
+        )
+
+
+@pytest.mark.parametrize("codepoint", [9, 10, 13])
+def test_public_base_url_preserves_existing_urlsplit_control_filtering(codepoint) -> None:
+    settings = development_settings(
+        public_base_url="https://portal.example.test/patient" + chr(codepoint) + "blue"
+    )
+    assert settings.public_base_url == "https://portal.example.test/patientblue"
+    assert settings.root_path == "/patientblue"
+
+
 @pytest.mark.parametrize(
     "email",
     [".patient@example.com", "patient.@example.com", "pa..tient@example.com"],

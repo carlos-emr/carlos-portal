@@ -44,6 +44,7 @@ CASES = [
     ("/caf%C3%A9", "/caf%C3%A9"),
     ("/patients", "/patients"),
     ("/patient%3Bblue", "/patient%3Bblue"),
+    ("/patient%0Bblue", "/patient%0Bblue"),
 ]
 
 

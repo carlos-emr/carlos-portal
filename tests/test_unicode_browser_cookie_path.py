@@ -20,6 +20,7 @@ from tests.test_public_device_path import SplitProxy
         pytest.param("/patients:archive@main", "/patients:archive@main", id="ascii_reserved"),
         pytest.param("/patient%3Bblue", "/patient%3Bblue", id="escaped_semicolon"),
         pytest.param("/patient%3bblue", "/patient%3bblue", id="escaped_semicolon_lowercase"),
+        pytest.param("/patient%0Bblue", "/patient%0Bblue", id="escaped_control"),
     ],
 )
 def test_unicode_deployment_prefix_can_set_and_receive_the_browser_csrf_cookie(
