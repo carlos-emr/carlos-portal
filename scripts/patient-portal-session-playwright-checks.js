@@ -662,14 +662,6 @@ async function checkLocales(page, context) {
 // Explicit-only: the normal default five steps still run on a non-maintenance instance.
 async function checkMaintenanceLocale(page, context) {
   await page.setViewportSize({ width: 360, height: 800 });
-  async function assertNoHorizontalOverflow(surface) {
-    const layout = await page.evaluate(() => ({
-      viewport: window.innerWidth,
-      document: document.documentElement.scrollWidth,
-    }));
-    assert(layout.document <= layout.viewport + 1,
-      `${surface} overflows horizontally at 360px: ${layout.document}px > ${layout.viewport}px`);
-  }
   const polish = locales.find((locale) => locale.code === 'pl');
   const translated = (key) => {
     const value = polish?.text[key];
@@ -713,7 +705,7 @@ async function checkMaintenanceLocale(page, context) {
   assert(await page.locator('html').getAttribute('lang') === 'pl', 'reload lost the selected language');
   assert(await page.locator('.brand-logo').evaluate((image) => image instanceof HTMLImageElement
     && image.complete && image.naturalWidth > 0), 'the maintenance logo did not load');
-  await assertNoHorizontalOverflow('Polish maintenance notice');
+  await assertNoHorizontalOverflow(page, 'Polish maintenance notice');
   await page.getByRole('button', { name: translated('clinic_help'), exact: true }).click();
   const help = page.getByRole('dialog');
   await help.getByRole('heading', { name: translated('clinic_help'), exact: true }).waitFor();
@@ -737,7 +729,7 @@ async function checkMaintenanceLocale(page, context) {
     assert(await help.evaluate((dialog) => dialog.contains(document.activeElement)),
       `${key} moved focus outside maintenance Help`);
   }
-  await assertNoHorizontalOverflow('Polish maintenance Help');
+  await assertNoHorizontalOverflow(page, 'Polish maintenance Help');
   const helpBox = await help.boundingBox();
   assert(helpBox && helpBox.x >= -1 && helpBox.x + helpBox.width <= 361,
     'maintenance Help extends outside the 360px viewport');
@@ -759,7 +751,7 @@ async function checkMaintenanceLocale(page, context) {
     && (await context.cookies()).some((cookie) => cookie.name === settings.localeCookieName
       && cookie.value === 'pl' && cookie.path === '/'),
   'keyboard Help or protected-page navigation lost the Polish locale');
-  await assertNoHorizontalOverflow('Protected Polish maintenance notice');
+  await assertNoHorizontalOverflow(page, 'Protected Polish maintenance notice');
 }
 
 // ---- Step 4: the notice pages a browser gets ----
