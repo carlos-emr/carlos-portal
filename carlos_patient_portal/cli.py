@@ -353,6 +353,10 @@ def deployment_probe(argv: Sequence[str] | None = None) -> None:
                 ),
             )
         )
+    except SQLAlchemyError:
+        # Driver diagnostics can contain connection credentials. The probe's output is consumed
+        # by deployment tooling, so report a stable failure without exposing the exception.
+        parser.error("deployment probe database check failed")
     finally:
         database_engine.dispose()
 
