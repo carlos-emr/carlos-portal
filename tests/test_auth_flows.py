@@ -2543,3 +2543,128 @@ def test_a_reset_token_cannot_be_used_against_another_account() -> None:
         ).status_code
         == 401
     )
+
+
+@pytest.mark.parametrize("browser_form", [True, False], ids=["browser", "json"])
+def test_expired_mfa_resend_requires_new_sign_in_without_sending(browser_form: bool) -> None:
+    """A stale MFA screen must not send a new code or create an authenticated session."""
+    sender = RecordingPortalEmailSender()
+    app = migrated_development_app(email_sender=sender)
+    with TestClient(app) as client:
+        activate_seeded_patient_account(app, client)
+        login = client.post(
+            "/auth/login", json={"username": "patient.user", "password": STRONG_PASSWORD}
+        )
+        assert login.status_code == 200
+        token = login.json()["mfa_challenge_token"]
+        with app.state.session_factory() as session:
+            challenge = session.scalars(select(PatientPortalMfaChallenge)).one()
+            # Age a valid whole challenge lifetime, preserving expires_after_created.
+            challenge.created_at = utc_now() - timedelta(
+                seconds=app.state.settings.mfa_code_ttl_seconds + 1
+            )
+            challenge.expires_at = challenge.created_at + timedelta(
+                seconds=app.state.settings.mfa_code_ttl_seconds
+            )
+            session.commit()
+        payload = {"mfa_challenge_token": token, "mfa_delivery_method": "email"}
+        if browser_form:
+            response = client.post(
+                "/auth/mfa/resend", data={**payload, "csrf_token": get_csrf_token(client)}
+            )
+            assert response.headers["content-type"].startswith("text/html")
+            assert "Sign in again to request a new verification code." in response.text
+            assert 'name="username"' in response.text
+            assert 'name="mfa_challenge_token"' not in response.text
+        else:
+            response = client.post("/auth/mfa/resend", json=payload)
+            assert response.json() == {"detail": "MFA could not be verified"}
+        assert response.status_code == 400
+        assert len(sender.messages) == 1
+        assert web_support.PORTAL_SESSION_COOKIE_NAME not in client.cookies
+        with app.state.session_factory() as session:
+            challenge = session.scalars(select(PatientPortalMfaChallenge)).one()
+            assert challenge.status == MFA_CHALLENGE_STATUS_CANCELLED
+            assert session.scalar(select(PatientPortalSession)) is None
+            event = session.scalars(
+                select(PatientPortalAuditEvent).where(
+                    PatientPortalAuditEvent.event_type == AUDIT_EVENT_MFA_RESEND
+                )
+            ).one()
+            assert (event.outcome, event.reason) == (AUDIT_OUTCOME_FAILURE, "mfa_expired")
+
+
+@pytest.mark.parametrize("provider_failure", [False, True], ids=["no-phone", "failed-sms"])
+def test_browser_mfa_switch_failure_keeps_the_delivered_email_code(
+    provider_failure: bool,
+) -> None:
+    """An unavailable channel must leave the patient able to use their delivered email code."""
+    email_sender = RecordingPortalEmailSender()
+    sms_sender = RecordingPortalSmsSender(fail=True)
+    app = migrated_development_app(email_sender=email_sender, sms_sender=sms_sender)
+    with TestClient(app) as client:
+        account_id = activate_seeded_patient_account(app, client)
+        if provider_failure:
+            with app.state.session_factory() as session, session.begin():
+                session.get(PatientPortalAccount, account_id).phone_number = "+16135550199"
+        login = client.post(
+            "/auth/login", json={"username": "patient.user", "password": STRONG_PASSWORD}
+        )
+        assert login.status_code == 200
+        token = login.json()["mfa_challenge_token"]
+        original_code = email_sender.messages[0]["code"]
+        switched = client.post(
+            "/auth/mfa/resend",
+            data={
+                "csrf_token": get_csrf_token(client),
+                "mfa_challenge_token": token,
+                "mfa_delivery_method": "sms",
+            },
+        )
+        assert switched.status_code == (503 if provider_failure else 400)
+        assert switched.headers["content-type"].startswith("text/html")
+        expected_message = (
+            "Verification code could not be sent. Please try again."
+            if provider_failure
+            else "That delivery method is unavailable."
+        )
+        assert expected_message in switched.text
+        retained = MFA_CHALLENGE_TOKEN_PATTERN.search(switched.text)
+        assert retained is not None and retained.group(1) == token
+        assert len(email_sender.messages) == 1
+        assert len(sms_sender.messages) == int(provider_failure)
+        assert web_support.PORTAL_SESSION_COOKIE_NAME not in client.cookies
+        with app.state.session_factory() as session:
+            challenge = session.scalars(select(PatientPortalMfaChallenge)).one()
+            assert challenge.delivery_method == "email"
+            assert challenge.status == "pending"
+            assert session.scalar(select(PatientPortalSession)) is None
+            failures = list(
+                session.scalars(
+                    select(PatientPortalAuditEvent).where(
+                        PatientPortalAuditEvent.outcome == AUDIT_OUTCOME_FAILURE,
+                        PatientPortalAuditEvent.event_type.in_(
+                            [AUDIT_EVENT_MFA_RESEND, AUDIT_EVENT_MFA_DELIVERY]
+                        ),
+                    )
+                )
+            )
+            assert len(failures) == 1
+            assert failures[0].event_type == (
+                AUDIT_EVENT_MFA_DELIVERY if provider_failure else AUDIT_EVENT_MFA_RESEND
+            )
+        if provider_failure:
+            assert app.state.operational_metrics.snapshot()["failures"]["mfa_delivery"] == 1
+        verified = client.post(
+            "/auth/mfa/verify",
+            data={
+                "csrf_token": csrf_token_from_response(switched),
+                "mfa_challenge_token": token,
+                "code": original_code,
+            },
+            follow_redirects=False,
+        )
+        assert verified.status_code == 303
+        assert verified.headers["location"] == "/portal"
+        assert client.cookies.get(web_support.PORTAL_SESSION_COOKIE_NAME)
+        assert client.get("/portal").status_code == 200
