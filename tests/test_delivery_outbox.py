@@ -50,6 +50,7 @@ from tests.support import (
     activate_seeded_patient_account,
     activation_request,
     carlos_staff_headers,
+    csrf_token_from_response,
     development_settings,
     migrated_development_app,
     migrated_staging_app,
@@ -1239,6 +1240,125 @@ def test_password_reset_queue_applies_account_neutral_durable_backpressure() -> 
         commands = session.scalars(select(PatientPortalOutboundDelivery)).all()
     assert len(commands) == 10
     assert all(command.kind == OUTBOX_KIND_PASSWORD_RESET_REQUEST for command in commands)
+    assert app.state.operational_metrics.snapshot()["failures"] == {
+        "password_reset_queue_full": 1
+    }
+
+
+def test_browser_password_reset_recovers_after_public_worker_frees_queue_capacity() -> None:
+    sender = RecordingPortalEmailSender()
+    app = migrated_staging_app(
+        email_sender=sender,
+        password_reset_queue_max_pending=10,
+        password_reset_queue_retry_after_seconds=45,
+    )
+    client = TestClient(app, base_url="https://portal.example.test")
+    for index in range(10):
+        admitted = client.post(
+            "/auth/password-reset/request",
+            json={
+                "username": f"missing.patient{index}",
+                "email": f"missing{index}@example.test",
+            },
+        )
+        assert admitted.status_code == 202
+
+    page = client.get("/auth/password-reset")
+    assert page.status_code == 200
+    form_values = {"username": "missing.retry.patient", "email": "missing.retry@example.test"}
+    full = client.post(
+        "/auth/password-reset/request",
+        data={**form_values, "csrf_token": csrf_token_from_response(page)},
+    )
+    assert full.status_code == 503
+    assert full.headers["content-type"].startswith("text/html")
+    assert full.headers["retry-after"] == "45"
+    assert 'role="alert"' in full.text
+    assert "Password reset is temporarily unavailable. Please try again shortly." in full.text
+    assert 'action="https://portal.example.test/auth/password-reset/request"' in full.text
+    assert app.state.operational_metrics.snapshot()["failures"] == {
+        "password_reset_queue_full": 1
+    }
+    with app.state.session_factory() as session:
+        commands = session.scalars(
+            select(PatientPortalOutboundDelivery).order_by(PatientPortalOutboundDelivery.id)
+        ).all()
+        original_ids = {command.id for command in commands}
+        assert len(original_ids) == 10
+        assert all(command.kind == OUTBOX_KIND_PASSWORD_RESET_REQUEST for command in commands)
+        assert all(command.status == OUTBOX_STATUS_PENDING for command in commands)
+        assert all(command.account_id is None for command in commands)
+        assert session.scalars(select(PatientPortalPasswordResetToken)).all() == []
+    assert sender.messages == []
+
+    settings = app.state.settings
+    assert settings.session_secret is not None
+    assert settings.public_base_url is not None
+    processed = process_one_delivery(
+        app.state.session_factory,
+        email_sender=sender,
+        encryption_secret=settings.resolved_outbox_keyring[settings.outbox_active_key_id],
+        encryption_keys=settings.resolved_outbox_keyring,
+        max_attempts=settings.outbox_max_attempts,
+        lease_seconds=settings.outbox_lease_seconds,
+        password_reset_request_context=PasswordResetRequestContext(
+            policy=auth_policy_from_settings(settings),
+            reset_token_secret=PortalTokenKeys.derive(
+                settings.session_secret.get_secret_value()
+            ).password_reset,
+            clinic_id=settings.clinic_id,
+            public_base_url=settings.public_base_url,
+            token_ttl_seconds=settings.password_reset_token_ttl_seconds,
+            outbox_active_key_id=settings.outbox_active_key_id,
+        ),
+    )
+    assert processed is not None
+    assert processed.status == OUTBOX_STATUS_DELIVERED
+    with app.state.session_factory() as session:
+        commands = session.scalars(select(PatientPortalOutboundDelivery)).all()
+        assert {command.id for command in commands} == original_ids
+        assert sum(command.status == OUTBOX_STATUS_DELIVERED for command in commands) == 1
+        assert sum(
+            command.status in {OUTBOX_STATUS_PENDING, OUTBOX_STATUS_PROCESSING}
+            for command in commands
+        ) == 9
+        assert session.scalars(select(PatientPortalPasswordResetToken)).all() == []
+    assert sender.messages == []
+
+    # Retry the real form returned by the full-queue response, including its fresh CSRF token.
+    retry = client.post(
+        "/auth/password-reset/request",
+        data={**form_values, "csrf_token": csrf_token_from_response(full)},
+    )
+    assert retry.status_code == 202
+    assert retry.headers["content-type"].startswith("text/html")
+    assert "retry-after" not in retry.headers
+    assert 'role="status"' in retry.text
+    assert (
+        "If the account details match, a password reset link has been sent by email." in retry.text
+    )
+    assert "Open reset page" not in full.text
+    assert "Open reset page" not in retry.text
+    assert "/auth/password-reset/complete#token=" not in retry.text
+    with app.state.session_factory() as session:
+        commands = session.scalars(select(PatientPortalOutboundDelivery)).all()
+        assert len(commands) == 11
+        assert sum(
+            command.status in {OUTBOX_STATUS_PENDING, OUTBOX_STATUS_PROCESSING}
+            for command in commands
+        ) == 10
+        new_commands = [command for command in commands if command.id not in original_ids]
+        assert len(new_commands) == 1
+        command = new_commands[0]
+        assert command.kind == OUTBOX_KIND_PASSWORD_RESET_REQUEST
+        assert command.status == OUTBOX_STATUS_PENDING
+        assert command.account_id is None
+        assert command.reset_token_id is None
+        assert command.encrypted_payload
+        assert form_values["username"].encode() not in command.encrypted_payload
+        assert form_values["email"].encode() not in command.encrypted_payload
+        assert session.scalars(select(PatientPortalPasswordResetToken)).all() == []
+    assert sender.messages == []
     assert app.state.operational_metrics.snapshot()["failures"] == {
         "password_reset_queue_full": 1
     }

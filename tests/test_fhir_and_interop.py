@@ -1,7 +1,7 @@
 """Patient-scoped FHIR R4 routes and the HL7 v2.5.1 conformance artifact."""
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest import mock
 
 import pytest
@@ -16,6 +16,7 @@ from fhir.resources.practitioner import Practitioner
 from sqlalchemy import select
 
 from carlos_patient_portal import presenters
+from carlos_patient_portal.audit import hash_sensitive_reference
 from carlos_patient_portal.interop import (
     FHIR_RELEASE,
     FHIR_VERSION,
@@ -38,6 +39,8 @@ from carlos_patient_portal.models import (
     UNLOCK_SECRET_TYPE_EMAIL,
     PatientPortalAccount,
     PatientPortalAuditEvent,
+    PatientPortalSession,
+    utc_now,
 )
 from carlos_patient_portal.routes import fhir as fhir_routes
 from carlos_patient_portal.unlock_secrets import (
@@ -51,6 +54,7 @@ from carlos_patient_portal.view_models import (
     ProviderFilterOptionViewModel,
 )
 from tests.support import (
+    AUDIT_HASH_SECRET,
     SEEDED_INVITE_DOB,
     SEEDED_INVITE_EMAIL,
     SEEDED_INVITE_HCN,
@@ -873,3 +877,87 @@ def test_document_reference_search_compartment_rejects_another_patients_subject(
     assert foreign.json().get("entry", []) == []
     assert bare_id.json()["total"] == 0
     Bundle(foreign.json())
+
+
+def test_fhir_idle_expiry_commits_revocation_and_private_failure_audit_before_replay() -> None:
+    app = migrated_development_app()
+    client = TestClient(app)
+    activate_seeded_patient_account(app, client)
+    token = sign_in_patient_api_session(client)
+    headers = bearer_headers(token)
+    valid = client.get("/fhir/Patient", headers=headers)
+    assert valid.status_code == 200
+    assert valid.json()["total"] == 1
+    Bundle(valid.json())
+
+    # Keep the normal future token expiry; only advance the established inactivity fixture.
+    assert app.state.settings.session_idle_timeout_seconds == 600
+    with app.state.session_factory() as session:
+        portal_session = session.scalar(select(PatientPortalSession))
+        assert portal_session is not None
+        assert portal_session.revoked_at is None
+        session_id = portal_session.id
+        original_expiry = portal_session.expires_at
+        assert original_expiry.replace(tzinfo=UTC) > utc_now()
+        portal_session.last_seen_at = utc_now() - timedelta(
+            seconds=app.state.settings.session_idle_timeout_seconds + 1
+        )
+        session.commit()
+
+    denied = client.get("/fhir/Patient", headers=headers)
+    assert denied.status_code == 401
+    assert denied.headers["content-type"].startswith("application/fhir+json")
+    assert denied.json() == {
+        "resourceType": "OperationOutcome",
+        "issue": [
+            {"severity": "error", "code": "login", "diagnostics": "authentication required"}
+        ],
+    }
+    OperationOutcome(denied.json())
+    assert token not in denied.text
+    assert SEEDED_INVITE_EMAIL not in denied.text
+
+    # A fresh session after request teardown must see both writes despite the 401.
+    with app.state.session_factory() as session:
+        portal_session = session.get(PatientPortalSession, session_id)
+        assert portal_session is not None
+        first_revoked_at = portal_session.revoked_at
+        assert first_revoked_at is not None
+        assert portal_session.revoked_reason == "idle_timeout"
+        assert portal_session.expires_at == original_expiry
+        failures = session.scalars(
+            select(PatientPortalAuditEvent).where(
+                PatientPortalAuditEvent.event_type == "fhir.search",
+                PatientPortalAuditEvent.outcome == "failure",
+            )
+        ).all()
+        assert len(failures) == 1
+        failure = failures[0]
+        assert failure.actor_type == "patient"
+        assert failure.reason == "authentication_failed"
+        assert failure.resource_type == "Patient"
+        assert failure.client_reference_hash == hash_sensitive_reference(
+            AUDIT_HASH_SECRET, "fhir_client", "testclient"
+        )
+        assert failure.actor is None
+        assert failure.account_id is None
+        assert failure.clinic_id is None
+        assert failure.demographic_no is None
+        assert failure.resource_id is None
+
+    replay = client.get("/fhir/Patient", headers=headers)
+    assert replay.status_code == 401
+    assert replay.json() == denied.json()
+    with app.state.session_factory() as session:
+        portal_session = session.get(PatientPortalSession, session_id)
+        assert portal_session is not None
+        assert portal_session.revoked_at == first_revoked_at
+        assert portal_session.revoked_reason == "idle_timeout"
+        assert portal_session.expires_at == original_expiry
+        failures = session.scalars(
+            select(PatientPortalAuditEvent).where(
+                PatientPortalAuditEvent.event_type == "fhir.search",
+                PatientPortalAuditEvent.outcome == "failure",
+            )
+        ).all()
+        assert len(failures) == 2
