@@ -4,7 +4,7 @@ import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, timedelta
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -2668,3 +2668,82 @@ def test_browser_mfa_switch_failure_keeps_the_delivered_email_code(
         assert verified.headers["location"] == "/portal"
         assert client.cookies.get(web_support.PORTAL_SESSION_COOKIE_NAME)
         assert client.get("/portal").status_code == 200
+
+
+def test_password_reset_eagerly_cancels_a_delivered_live_mfa_before_replay() -> None:
+    """Recovery must kill a code issued with the old password before its next use."""
+    sender = RecordingPortalEmailSender()
+    app = migrated_development_app(email_sender=sender)
+    with TestClient(app) as client:
+        account_id = activate_seeded_patient_account(app, client)
+        login = client.post(
+            "/auth/login", json={"username": "patient.user", "password": STRONG_PASSWORD}
+        )
+        assert login.status_code == 200
+        old_token = login.json()["mfa_challenge_token"]
+        old_code = sender.messages[-1]["code"]
+        reset = client.post(
+            "/auth/password-reset/request",
+            json={"username": "patient.user", "email": SEEDED_INVITE_EMAIL},
+        )
+        assert reset.status_code == 202
+        completed = client.post(
+            "/auth/password-reset/complete",
+            json={
+                "reset_token": reset.json()["development_reset_token"],
+                "new_password": STRONG_RESET_PASSWORD,
+            },
+        )
+        assert completed.status_code == 200
+        # Inspect BEFORE replay: expiry or a lazy reset-required guard must not mask
+        # a missing recovery-time cancellation of the still-live credential.
+        with app.state.session_factory() as session:
+            challenge = session.scalars(select(PatientPortalMfaChallenge)).one()
+            old_challenge_id = challenge.id
+            assert challenge.expires_at.replace(tzinfo=UTC) > utc_now()
+            assert challenge.status == MFA_CHALLENGE_STATUS_CANCELLED
+            assert session.get(PatientPortalAccount, account_id).force_password_reset is False
+            assert session.scalars(select(PatientPortalPasswordResetToken)).one().status == "used"
+            assert session.scalar(select(PatientPortalSession)) is None
+        sent_before_replay = list(sender.messages)
+        stale_verify = client.post(
+            "/auth/mfa/verify", json={"mfa_challenge_token": old_token, "code": old_code}
+        )
+        stale_resend = client.post(
+            "/auth/mfa/resend",
+            json={"mfa_challenge_token": old_token, "mfa_delivery_method": "email"},
+        )
+        assert stale_verify.status_code == stale_resend.status_code == 400
+        assert stale_verify.json() == stale_resend.json() == {"detail": "MFA could not be verified"}
+        assert sender.messages == sent_before_replay
+        with app.state.session_factory() as session:
+            assert session.scalar(select(PatientPortalSession)) is None
+        old_password = client.post(
+            "/auth/login", json={"username": "patient.user", "password": STRONG_PASSWORD}
+        )
+        assert old_password.status_code == 401
+        expire_email_mfa_cooldown(app)
+        fresh = client.post(
+            "/auth/login", json={"username": "patient.user", "password": STRONG_RESET_PASSWORD}
+        )
+        assert fresh.status_code == 200
+        assert fresh.json()["mfa_challenge_token"] != old_token
+        assert len([message for message in sender.messages if "code" in message]) == 2
+        verified = client.post(
+            "/auth/mfa/verify",
+            json={
+                "mfa_challenge_token": fresh.json()["mfa_challenge_token"],
+                "code": sender.messages[-1]["code"],
+            },
+        )
+        assert verified.status_code == 200
+        assert (
+            client.get(
+                "/auth/session", headers=bearer_headers(verified.json()["session_token"])
+            ).status_code
+            == 200
+        )
+        with app.state.session_factory() as session:
+            assert session.get(PatientPortalMfaChallenge, old_challenge_id).status == "cancelled"
+            authenticated = session.scalars(select(PatientPortalSession)).one()
+            assert authenticated.account_id == account_id and authenticated.revoked_at is None

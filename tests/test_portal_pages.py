@@ -1781,3 +1781,84 @@ def test_legacy_sender_without_advisory_methods_still_confirms_email_change() ->
         assert replay.status_code == 303 and replay.headers["location"] == "/"
         assert web_support.PORTAL_SESSION_COOKIE_NAME not in client.cookies
         assert app.state.operational_metrics.snapshot()["failures"] == {}
+
+
+def test_sms_preference_change_invalidates_a_pending_phone_removal_link() -> None:
+    """A link created before an MFA change must not remove its newly required phone."""
+    email_sender, sms_sender = RecordingPortalEmailSender(), RecordingPortalSmsSender()
+    app = migrated_development_app(email_sender=email_sender, sms_sender=sms_sender)
+    with TestClient(app) as client:
+        account_id = browser_sign_in_seeded_patient(app, client)
+        old_phone = "+15550105555"
+        # Normal initial contact fixture, as in the existing phone-removal regression.
+        # Every change to MFA preference and the proposed contact uses an actual route.
+        with app.state.session_factory() as session, session.begin():
+            account = session.get(PatientPortalAccount, account_id)
+            assert account.preferred_mfa_method == "email"
+            account.phone_number = old_phone
+        token = request_seeded_email_change(
+            app, client, email_sender, email="fake.pending-contact@example.test"
+        )
+        with app.state.session_factory() as session:
+            pending = session.scalars(select(PatientPortalEmailChangeRequest)).one()
+            assert pending.status == "pending" and pending.new_phone_number is None
+            assert pending.email_confirmed_at is None and pending.phone_confirmed_at is not None
+            assert session.get(PatientPortalAccount, account_id).phone_number == old_phone
+        preference = client.post(
+            "/portal/account/mfa",
+            data={
+                "csrf_token": csrf_token_from_response(client.get("/portal/account")),
+                "current_password": STRONG_PASSWORD,
+                "preferred_mfa_method": "sms",
+            },
+            follow_redirects=False,
+        )
+        assert preference.status_code == 303
+        assert preference.headers["location"] == "/portal/account?status=mfa-updated"
+        assert sms_sender.messages == []
+        sent_before_confirmation = list(email_sender.messages)
+        refused = confirm_seeded_email_change(client, token)
+        assert refused.status_code == 400
+        assert refused.headers["content-type"].startswith("text/html")
+        assert "no longer valid" in refused.text
+        assert email_sender.messages == sent_before_confirmation
+        assert sms_sender.messages == []
+        with app.state.session_factory() as session:
+            account = session.get(PatientPortalAccount, account_id)
+            assert (account.email, account.phone_number, account.preferred_mfa_method) == (
+                SEEDED_INVITE_EMAIL,
+                old_phone,
+                "sms",
+            )
+            assert (
+                session.scalars(select(PatientPortalEmailChangeRequest)).one().status == "revoked"
+            )
+            assert session.scalar(select(PatientPortalContactReviewRequest)) is None
+            event = session.scalars(
+                select(PatientPortalAuditEvent).where(
+                    PatientPortalAuditEvent.event_type == AUDIT_EVENT_ACCOUNT_EMAIL_CHANGE_CONFIRM
+                )
+            ).one()
+            assert (event.outcome, event.reason) == (AUDIT_OUTCOME_FAILURE, "delivery_unavailable")
+        assert client.get("/portal/account").status_code == 200
+        fresh = client.post(
+            "/auth/login", json={"username": "patient.user", "password": STRONG_PASSWORD}
+        )
+        assert fresh.status_code == 200 and fresh.json()["mfa_delivery_method"] == "sms"
+        assert len(sms_sender.messages) == 1
+        assert sms_sender.messages[0]["recipient"] == old_phone
+        assert email_sender.messages == sent_before_confirmation
+        verified = client.post(
+            "/auth/mfa/verify",
+            json={
+                "mfa_challenge_token": fresh.json()["mfa_challenge_token"],
+                "code": sms_sender.messages[0]["code"],
+            },
+        )
+        assert verified.status_code == 200
+        assert (
+            client.get(
+                "/auth/session", headers=bearer_headers(verified.json()["session_token"])
+            ).status_code
+            == 200
+        )
