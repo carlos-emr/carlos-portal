@@ -15,6 +15,7 @@ from carlos_patient_portal.config import (
     MIN_PRODUCTION_SECRET_LENGTH,
     Settings,
 )
+from carlos_patient_portal.email_delivery import PortalEmailDeliveryError
 from carlos_patient_portal.i18n import (
     DEFAULT_LOCALE,
     LOCALE_COOKIE_NAME,
@@ -1862,3 +1863,97 @@ def test_sms_preference_change_invalidates_a_pending_phone_removal_link() -> Non
             ).status_code
             == 200
         )
+
+
+def test_public_email_confirmation_notice_failure_keeps_change_and_other_notice(
+    tmp_path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An advisory failure after confirmation must not undo recovery or skip the other address."""
+    new_email = "fake.confirmed-notice@example.test"
+    attempts = []
+    committed_observations = []
+
+    class FirstNoticeFails(RecordingPortalEmailSender):
+        def send_contact_change_notice(self, *, recipient, message_id=None):
+            # File SQLite gives this observer a separate connection: uncommitted
+            # contact/session writes cannot satisfy these provider-boundary assertions.
+            with app.state.session_factory() as session:
+                account = session.get(PatientPortalAccount, account_id)
+                proof = session.scalars(select(PatientPortalEmailChangeRequest)).one()
+                authorizing = session.scalars(select(PatientPortalSession)).one()
+                reviews = list(session.scalars(select(PatientPortalContactReviewRequest)))
+                assert account.email == new_email
+                assert proof.status == "confirmed" and proof.confirmed_at is not None
+                assert authorizing.revoked_at is not None
+                assert authorizing.revoked_reason == "contact_change"
+                assert len(reviews) == 1
+                committed_observations.append(recipient)
+            attempts.append(recipient)
+            super().send_contact_change_notice(recipient=recipient, message_id=message_id)
+            if recipient == SEEDED_INVITE_EMAIL:
+                raise PortalEmailDeliveryError(
+                    f"FAKE private provider refusal recipient={recipient} proof={token}"
+                )
+
+    sender = FirstNoticeFails()
+    app = migrated_development_app(
+        email_sender=sender,
+        database_url=f"sqlite+pysqlite:///{tmp_path / 'public-confirmation-notice.sqlite'}",
+    )
+    with TestClient(app) as patient:
+        account_id = browser_sign_in_seeded_patient(app, patient)
+        token = request_seeded_email_change(app, patient, sender, email=new_email)
+        assert attempts == []
+        caplog.clear()
+        mailbox = TestClient(app)
+        try:
+            assert web_support.PORTAL_SESSION_COOKIE_NAME not in mailbox.cookies
+            confirmed = confirm_seeded_email_change(mailbox, token)
+            assert web_support.PORTAL_SESSION_COOKIE_NAME not in mailbox.cookies
+        finally:
+            mailbox.close()
+        assert confirmed.status_code == 200
+        assert "Email address confirmed" in confirmed.text
+        assert attempts == committed_observations == [SEEDED_INVITE_EMAIL, new_email]
+        assert [
+            message["recipient"]
+            for message in sender.messages
+            if message.get("type") == "contact_change_notice"
+        ] == attempts
+        assert app.state.operational_metrics.snapshot()["failures"]["contact_change_delivery"] == 1
+        errors = [record for record in caplog.records if record.levelname == "ERROR"]
+        assert [record.getMessage() for record in errors] == [
+            "Contact-change notice delivery failed"
+        ]
+        for private_detail in (
+            SEEDED_INVITE_EMAIL,
+            new_email,
+            token,
+            "FAKE private provider refusal",
+        ):
+            assert private_detail not in caplog.text
+            assert private_detail not in confirmed.text
+        # Assert eager revocation before replaying the old session or one-time proof.
+        with app.state.session_factory() as session:
+            assert session.get(PatientPortalAccount, account_id).email == new_email
+            assert (
+                session.scalars(select(PatientPortalEmailChangeRequest)).one().status == "confirmed"
+            )
+            assert (
+                session.scalars(select(PatientPortalSession)).one().revoked_reason
+                == "contact_change"
+            )
+            assert len(list(session.scalars(select(PatientPortalContactReviewRequest)))) == 1
+        replayed = confirm_seeded_email_change(patient, token)
+        assert replayed.status_code == 400
+        assert attempts == [SEEDED_INVITE_EMAIL, new_email]
+        stale_session = patient.get("/portal/account", follow_redirects=False)
+        assert stale_session.status_code == 303 and stale_session.headers["location"] == "/"
+        assert web_support.PORTAL_SESSION_COOKIE_NAME not in patient.cookies
+        with app.state.session_factory() as session:
+            assert session.get(PatientPortalAccount, account_id).email == new_email
+            assert (
+                session.scalars(select(PatientPortalEmailChangeRequest)).one().status == "confirmed"
+            )
+            assert len(list(session.scalars(select(PatientPortalContactReviewRequest)))) == 1
