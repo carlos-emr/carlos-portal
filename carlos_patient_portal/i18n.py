@@ -270,7 +270,7 @@ TEXT_CATALOG: dict[str, dict[str, str]] = {
         "documents": "Documents",
         "email": "Email",
         "email_codes_rate": "Email codes can be resent once per minute.",
-        "email_password": "Email password",
+        "email_password": "Document password",
         "email_password_pages": "Document password pages",
         "email_passwords": "Document passwords",
         "email_passwords_region": "Document passwords",
@@ -550,6 +550,7 @@ TEXT_CATALOG["es"] = {
     "activation_reenter_password": "Sus demás datos se conservan: vuelva a escribir su contraseña.",
 }
 TEXT_CATALOG["pl"] = {
+    "email_password": "Hasło dokumentu",
     "email_password_pages": "Strony haseł dokumentów",
     "email_passwords_region": "Hasła dokumentów",
     "no_email_passwords": "Brak haseł dokumentów",
