@@ -2044,3 +2044,122 @@ def test_sms_mfa_rejects_immediate_phone_removal_without_losing_sign_in() -> Non
             ).status_code
             == 200
         )
+
+
+def test_initial_phone_delivery_failure_revokes_proof_then_allows_explicit_retry() -> None:
+    """Initial delivery failure closes its unusable proof; an explicit retry can recover."""
+    email_sender = RecordingPortalEmailSender()
+    sms_sender = RecordingPortalSmsSender(fail=True)
+    app = migrated_development_app(email_sender=email_sender, sms_sender=sms_sender)
+    with TestClient(app) as client:
+        account_id = browser_sign_in_seeded_patient(app, client)
+        new_phone = "+15550105556"
+        with app.state.session_factory() as session:
+            account = session.get(PatientPortalAccount, account_id)
+            original_contact = (account.email, account.phone_number)
+            authorizing_id = session.scalars(select(PatientPortalSession.id)).one()
+        failed = submit_contact_change(
+            app, client, email=SEEDED_INVITE_EMAIL, phone_number=new_phone
+        )
+        assert failed.status_code == 303
+        assert (
+            failed.headers["location"] == "/portal/account?status=phone-confirmation-notice-failed"
+        )
+        assert len(sms_sender.messages) == 1
+        assert sms_sender.messages[0]["recipient"] == new_phone
+        failed_code = sms_sender.messages[0]["code"]
+        with app.state.session_factory() as session:
+            proof = session.scalars(select(PatientPortalEmailChangeRequest)).one()
+            failed_proof_id = proof.id
+            assert proof.status == EMAIL_CHANGE_STATUS_REVOKED
+            assert proof.phone_confirmed_at is None
+            account = session.get(PatientPortalAccount, account_id)
+            assert (account.email, account.phone_number) == original_contact
+            assert session.get(PatientPortalSession, authorizing_id).revoked_at is None
+            assert session.scalar(select(PatientPortalContactReviewRequest)) is None
+            failure = session.scalars(
+                select(PatientPortalAuditEvent).where(
+                    PatientPortalAuditEvent.event_type == AUDIT_EVENT_ACCOUNT_EMAIL_CHANGE_REQUEST,
+                    PatientPortalAuditEvent.outcome == AUDIT_OUTCOME_FAILURE,
+                )
+            ).one()
+            assert failure.reason == "delivery_unavailable"
+        assert app.state.operational_metrics.snapshot()["failures"]["email_change_delivery"] == 1
+        assert client.get("/portal/account").status_code == 200
+        attempts_after_failure = (len(email_sender.messages), len(sms_sender.messages))
+        # Check before creating a fresh proof: two random codes could legitimately coincide.
+        stale = client.post(
+            "/portal/account/contact/confirm-phone",
+            data={
+                "csrf_token": csrf_token_from_response(client.get("/portal/account")),
+                "phone_confirmation_code": failed_code,
+            },
+            follow_redirects=False,
+        )
+        assert stale.status_code == 303
+        assert stale.headers["location"] == "/portal/account?status=phone-confirmation-invalid"
+        assert (len(email_sender.messages), len(sms_sender.messages)) == attempts_after_failure
+        with app.state.session_factory() as session:
+            assert session.get(PatientPortalEmailChangeRequest, failed_proof_id).status == "revoked"
+            assert (
+                session.scalar(
+                    select(PatientPortalEmailChangeRequest).where(
+                        PatientPortalEmailChangeRequest.status == EMAIL_CHANGE_STATUS_PENDING
+                    )
+                )
+                is None
+            )
+            assert session.get(PatientPortalSession, authorizing_id).revoked_at is None
+            assert session.scalar(select(PatientPortalContactReviewRequest)) is None
+        # Toggle only the established recorder's fault; retry through the real contact route.
+        sms_sender.fail = False
+        retried = submit_contact_change(
+            app, client, email=SEEDED_INVITE_EMAIL, phone_number=new_phone
+        )
+        assert retried.status_code == 303
+        assert retried.headers["location"] == "/portal/account?status=phone-confirmation-required"
+        assert len(sms_sender.messages) == 2
+        assert sms_sender.messages[1]["recipient"] == new_phone
+        new_code = sms_sender.messages[1]["code"]
+        assert any(
+            message.get("type") == "email_change_requested_notice"
+            and message["recipient"] == SEEDED_INVITE_EMAIL
+            for message in email_sender.messages
+        )
+        with app.state.session_factory() as session:
+            proofs = session.scalars(
+                select(PatientPortalEmailChangeRequest).order_by(PatientPortalEmailChangeRequest.id)
+            ).all()
+            assert [proof.status for proof in proofs] == ["revoked", "pending"]
+            fresh_proof_id = proofs[1].id
+            assert fresh_proof_id != failed_proof_id
+            account = session.get(PatientPortalAccount, account_id)
+            assert (account.email, account.phone_number) == original_contact
+            assert session.get(PatientPortalSession, authorizing_id).revoked_at is None
+        completed = client.post(
+            "/portal/account/contact/confirm-phone",
+            data={
+                "csrf_token": csrf_token_from_response(client.get("/portal/account")),
+                "phone_confirmation_code": new_code,
+            },
+            follow_redirects=False,
+        )
+        assert completed.status_code == 200
+        assert "Contact information updated" in completed.text
+        with app.state.session_factory() as session:
+            account = session.get(PatientPortalAccount, account_id)
+            assert (account.email, account.phone_number) == (SEEDED_INVITE_EMAIL, new_phone)
+            assert session.get(PatientPortalEmailChangeRequest, failed_proof_id).status == "revoked"
+            confirmed = session.get(PatientPortalEmailChangeRequest, fresh_proof_id)
+            assert confirmed.status == "confirmed" and confirmed.phone_confirmed_at is not None
+            reviews = session.scalars(select(PatientPortalContactReviewRequest)).all()
+            assert len(reviews) == 1 and reviews[0].phone_number_after == new_phone
+            authorizing = session.get(PatientPortalSession, authorizing_id)
+            assert authorizing.revoked_at is not None
+            assert authorizing.revoked_reason == "contact_change"
+        assert web_support.PORTAL_SESSION_COOKIE_NAME not in client.cookies
+        assert any(
+            message.get("type") == "contact_change_notice"
+            and message["recipient"] == SEEDED_INVITE_EMAIL
+            for message in email_sender.messages
+        )
