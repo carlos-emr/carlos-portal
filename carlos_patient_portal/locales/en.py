@@ -154,7 +154,8 @@ TEXT: dict[str, str] = {
     ),
     "email_change_complete_heading": "Confirm your new email address",
     "email_change_complete_intro": (
-        "Confirming updates the email address used for sign-in codes and password reset links."
+        "Confirm your new email address. If you also provided a new phone number, confirm "
+        "that number in the portal to complete the contact change."
     ),
     "email_change_success": (
         "Your email address is updated. Clinic staff will review the matching CARLOS chart details."
@@ -321,7 +322,7 @@ TEXT: dict[str, str] = {
     "previous": "Previous",
     "provider": "Provider",
     "provider_options_truncated": (
-        "Only the most recent providers are listed. Use the search box to narrow your results."
+        "Only some providers are listed. Use the search box to narrow your results."
     ),
     "reveal": "Reveal",
     "reveal_failed": "Password could not be revealed. Try again.",
@@ -377,6 +378,9 @@ TEXT: dict[str, str] = {
     "username_unavailable": "That username is unavailable.",
     "verification_delivery_failed": "The sign-in code could not be sent. Please try again.",
     "view_module": "Open",
+    "filters": "Filters",
+    "of": "of",
+    "page": "Page",
 }
 
 # The pages that link the myCarlos app to this portal.

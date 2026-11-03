@@ -187,7 +187,9 @@ def test_complete_locales_define_every_key_and_plural_form(code: str) -> None:
 # few words a given language spells as English does.
 ENGLISH_ALLOWED_VERBATIM = frozenset({"CARLOS", "SMS", "OK", "MFA"})
 ENGLISH_ALLOWED_VERBATIM_BY_LOCALE: dict[str, frozenset[str]] = {
-    "fr": frozenset({"Documents", "Messages", "Code", "{minutes} minute", "{minutes} minutes"}),
+    "fr": frozenset(
+        {"Documents", "Messages", "Code", "Page", "{minutes} minute", "{minutes} minutes"}
+    ),
 }
 
 

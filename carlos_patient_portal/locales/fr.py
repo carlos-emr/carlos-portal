@@ -168,8 +168,9 @@ TEXT: dict[str, str] = {
     ),
     "email_change_complete_heading": "Confirmez votre nouvelle adresse courriel",
     "email_change_complete_intro": (
-        "La confirmation met à jour l’adresse courriel utilisée pour les codes de connexion et "
-        "les liens de réinitialisation du mot de passe."
+        "Confirmez votre nouvelle adresse courriel. Si vous avez également fourni un nouveau "
+        "numéro de téléphone, confirmez-le dans le portail pour terminer le changement "
+        "de coordonnées."
     ),
     "email_change_success": (
         "Votre adresse courriel est mise à jour. Le personnel de la clinique vérifiera les "
@@ -358,8 +359,8 @@ TEXT: dict[str, str] = {
     "previous": "Précédent",
     "provider": "Professionnel",
     "provider_options_truncated": (
-        "Seuls les professionnels les plus récents sont affichés. Utilisez la zone de recherche "
-        "pour affiner vos résultats."
+        "Seuls certains professionnels de la santé sont affichés. Utilisez le champ de recherche "
+        "pour affiner les résultats."
     ),
     "reveal": "Afficher",
     "reveal_failed": "Le mot de passe n’a pas pu être affiché. Réessayez.",
@@ -417,6 +418,9 @@ TEXT: dict[str, str] = {
         "Le code de connexion n’a pas pu être envoyé. Veuillez réessayer."
     ),
     "view_module": "Ouvrir",
+    "filters": "Filtres",
+    "of": "sur",
+    "page": "Page",
 }
 
 # The pages that link the myCarlos app to this portal.

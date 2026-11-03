@@ -64,7 +64,7 @@ TEXT: dict[str, str] = {
     "account_status_mfa_updated": "Ustawienia weryfikacji dwuetapowej zostały zaktualizowane.",
     "account_status_no_change": "Brak zmian na koncie.",
     "account_status_password_updated": "Hasło zostało zaktualizowane.",
-    "all_providers": "Wszyscy lekarze",
+    "all_providers": "Wszyscy pracownicy medyczni",
     "activate_account": "Aktywacja konta",
     "activation_details": (
         "Proszę wpisać dane z zaproszenia otrzymanego od przychodni i utworzyć dane logowania "
@@ -76,7 +76,7 @@ TEXT: dict[str, str] = {
     ),
     "activation_error": "Nie udało się zweryfikować danych aktywacyjnych.",
     "activation_password_rejected": (
-        "Proszę wybrać inne hasło: użyć co najmniej 12 znaków, proszę unikać popularnych słów "
+        "Proszę wybrać inne hasło. Należy użyć co najmniej 12 znaków, unikać popularnych słów "
         "i schematów oraz nie umieszczać w nim nazwy użytkownika, adresu e-mail, daty "
         "urodzenia ani numeru karty zdrowia."
     ),
@@ -172,8 +172,8 @@ TEXT: dict[str, str] = {
     ),
     "email_change_complete_heading": "Proszę potwierdzić nowy adres e-mail",
     "email_change_complete_intro": (
-        "Potwierdzenie zmienia adres e-mail używany do wysyłania kodów weryfikacyjnych logowania i "
-        "linków do resetowania hasła."
+        "Proszę potwierdzić nowy adres e-mail. Jeśli podano również nowy numer telefonu, "
+        "proszę potwierdzić ten numer w portalu, aby dokończyć zmianę danych kontaktowych."
     ),
     "email_change_success": (
         "Adres e-mail został zaktualizowany. Personel przychodni sprawdzi odpowiadające mu dane w "
@@ -262,6 +262,7 @@ TEXT: dict[str, str] = {
     "forgot_username_help": (
         "W razie nieznajomości nazwy użytkownika proszę skontaktować się z przychodnią."
     ),
+    "filters": "Filtry",
     "future": "W przyszłości",
     "health_card_number": "Numer karty zdrowia (HCN/HIN)",
     "help": "Pomoc",
@@ -323,7 +324,9 @@ TEXT: dict[str, str] = {
     "next": "Następna",
     "no_email_passwords": "Brak haseł dokumentów",
     "no_matching_email_passwords": "Brak pasujących haseł dokumentów",
+    "of": "z",
     "open_reset_page": "Proszę otworzyć stronę resetowania",
+    "page": "Strona",
     "password_label": "Hasło",
     "password_hidden": "Ukryte",
     "password_for": "Hasło do: {subject}",
@@ -361,10 +364,10 @@ TEXT: dict[str, str] = {
     "confirm_phone": "Proszę potwierdzić numer telefonu",
     "resend_phone_confirmation": "Proszę wysłać kolejny kod",
     "previous": "Poprzednia",
-    "provider": "Lekarz",
+    "provider": "Pracownik medyczny",
     "provider_options_truncated": (
-        "Na liście znajdują się tylko ostatni lekarze. Proszę użyć pola wyszukiwania, aby "
-        "zawęzić wyniki."
+        "Wyświetlani są tylko niektórzy pracownicy medyczni. Proszę skorzystać z pola "
+        "wyszukiwania, aby zawęzić wyniki."
     ),
     "reveal": "Proszę pokazać",
     "reveal_failed": "Nie udało się wyświetlić hasła. Proszę spróbować ponownie.",

@@ -160,8 +160,8 @@ TEXT: dict[str, str] = {
     ),
     "email_change_complete_heading": "Confirme su nueva dirección de correo electrónico",
     "email_change_complete_intro": (
-        "Al confirmar, se actualiza la dirección de correo electrónico que recibe los códigos "
-        "de acceso y los enlaces de restablecimiento de contraseña."
+        "Confirme su nueva dirección de correo electrónico. Si también indicó un nuevo número "
+        "de teléfono, confírmelo en el portal para completar el cambio de datos de contacto."
     ),
     "email_change_success": (
         "Su dirección de correo electrónico se ha actualizado. El personal de la clínica revisará "
@@ -346,8 +346,8 @@ TEXT: dict[str, str] = {
     "previous": "Anterior",
     "provider": "Profesional",
     "provider_options_truncated": (
-        "Solo se muestran los profesionales más recientes. Use el cuadro de búsqueda para acotar "
-        "los resultados."
+        "Solo se muestran algunos profesionales de la salud. Use el campo de búsqueda para "
+        "acotar los resultados."
     ),
     "reveal": "Mostrar",
     "reveal_failed": "No se pudo mostrar la contraseña. Inténtelo de nuevo.",
@@ -404,6 +404,9 @@ TEXT: dict[str, str] = {
     "username_unavailable": "Ese nombre de usuario no está disponible.",
     "verification_delivery_failed": ("No se pudo enviar el código de acceso. Inténtelo de nuevo."),
     "view_module": "Abrir",
+    "filters": "Filtros",
+    "of": "de",
+    "page": "Página",
 }
 
 # The pages that link the myCarlos app to this portal.

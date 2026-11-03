@@ -132,7 +132,10 @@ TEXT: dict[str, str] = {
     "email_change_confirm": "确认电子邮件地址",
     "email_change_complete_error": "此确认链接已失效。请在您的账户页面重新申请更改。",
     "email_change_complete_heading": "确认您的新电子邮件地址",
-    "email_change_complete_intro": "确认后，将更新用于接收登录验证码和密码重置链接的电子邮件地址。",
+    "email_change_complete_intro": (
+        "请确认您的新电子邮件地址。如果您还提供了新的电话号码，"
+        "请在门户网站确认该号码，以完成联系方式更改。"
+    ),
     "email_change_success": "您的电子邮件地址已更新。诊所工作人员将核对 CARLOS 中相应的病历信息。",
     "email_change_success_heading": "电子邮件地址已确认",
     "email_change_phone_confirmation_pending": (
@@ -201,6 +204,7 @@ TEXT: dict[str, str] = {
     "email_passwords_region": "文档密码",
     "forgot_username_password": "忘记用户名或密码？",
     "forgot_username_help": "如果您不知道自己的用户名，请联系诊所。",
+    "filters": "筛选条件",
     "future": "未来功能",
     "health_card_number": "健康卡号（HCN/HIN）",
     "help": "帮助",
@@ -247,7 +251,9 @@ TEXT: dict[str, str] = {
     "next": "下一页",
     "no_email_passwords": "没有文档密码",
     "no_matching_email_passwords": "没有符合条件的文档密码",
+    "of": "/",
     "open_reset_page": "打开重置页面",
+    "page": "页码",
     "password_label": "密码",
     "password_hidden": "已隐藏",
     "password_for": "{subject} 的密码",
@@ -277,7 +283,7 @@ TEXT: dict[str, str] = {
     "resend_phone_confirmation": "重新发送验证码",
     "previous": "上一页",
     "provider": "医疗人员",
-    "provider_options_truncated": "仅列出最近的医疗人员。请使用搜索框缩小结果范围。",
+    "provider_options_truncated": "仅列出部分医疗人员。请使用搜索框缩小结果范围。",
     "reveal": "显示",
     "reveal_failed": "无法显示密码。请重试。",
     "reveal_password_hint": "显示文档密码前，请输入您当前的账户密码。",
