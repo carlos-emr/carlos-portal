@@ -210,12 +210,16 @@ def validate_password(password: str, *, context_values: tuple[str, ...] = ()) ->
         "abcdefghijklmnopqrstuvwxyz" * 2,
         "zyxwvutsrqponmlkjihgfedcba" * 2,
     )
-    if any(
-        skeleton == common
-        or (skeleton.startswith(common) and len(skeleton) - len(common) <= 8)
-        or (skeleton.endswith(common) and len(skeleton) - len(common) <= 8)
-        for common in COMMON_PASSWORD_BASES
-    ) or repeated_short_unit or any(compact in sequence for sequence in predictable_sequences):
+    if (
+        any(
+            skeleton == common
+            or (skeleton.startswith(common) and len(skeleton) - len(common) <= 8)
+            or (skeleton.endswith(common) and len(skeleton) - len(common) <= 8)
+            for common in COMMON_PASSWORD_BASES
+        )
+        or repeated_short_unit
+        or (bool(compact) and any(compact in sequence for sequence in predictable_sequences))
+    ):
         raise ValueError("password is too common or easily guessed")
     for context_value in context_values:
         context_skeleton = _password_skeleton(context_value)

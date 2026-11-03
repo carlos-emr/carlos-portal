@@ -71,6 +71,22 @@ TEXT: dict[str, str] = {
     "activation_reenter_password": (
         "Vos autres renseignements sont conservés : saisissez de nouveau votre mot de passe."
     ),
+    "back_to_sign_in": "Retour à la connexion",
+    "clinic_help": "Aide de la clinique",
+    "clinic_help_message": (
+        "Contactez la clinique si vous ne pouvez pas accéder à votre compte ou à votre "
+        "méthode de vérification."
+    ),
+    "modal_close": "OK",
+    "provider_options_truncated": (
+        "Seuls certains professionnels de la santé sont affichés. Utilisez le champ de "
+        "recherche pour affiner les résultats."
+    ),
+    "service_maintenance_details": (
+        "Le portail est temporairement indisponible pour cause d’entretien. Réessayez sous "
+        "peu ou contactez la clinique si vous avez besoin d’aide maintenant."
+    ),
+    "service_maintenance_heading": "Portail indisponible",
 }
 
 # The pages that link the myCarlos app to this portal.

@@ -68,6 +68,22 @@ TEXT: dict[str, str] = {
         "não inclua seu nome de usuário, e-mail, data de nascimento nem número do cartão de saúde."
     ),
     "activation_reenter_password": "Seus outros dados foram mantidos: digite sua senha novamente.",
+    "back_to_sign_in": "Voltar para o login",
+    "clinic_help": "Ajuda da clínica",
+    "clinic_help_message": (
+        "Entre em contato com a clínica se você não conseguir acessar sua conta ou seu método"
+        " de verificação."
+    ),
+    "modal_close": "OK",
+    "provider_options_truncated": (
+        "Somente alguns profissionais de saúde são exibidos. Use o campo de pesquisa para "
+        "refinar os resultados."
+    ),
+    "service_maintenance_details": (
+        "O portal está temporariamente indisponível para manutenção. Tente novamente em "
+        "instantes ou entre em contato com a clínica se precisar de ajuda agora."
+    ),
+    "service_maintenance_heading": "Portal indisponível",
 }
 
 # The pages that link the myCarlos app to this portal.

@@ -21,7 +21,7 @@ complete in tests/test_i18n_catalog.py so the parity test keeps it complete.
 
 TEXT: dict[str, str] = {
     "hide_password": "Ukryj hasło",
-    "show_password": "Pokaż hasło",
+    "show_password": "Proszę pokazać hasło",
     "booking_month_1": "stycznia",
     "booking_month_2": "lutego",
     "booking_month_3": "marca",
@@ -69,6 +69,45 @@ TEXT: dict[str, str] = {
         "karty zdrowia."
     ),
     "activation_reenter_password": "Pozostałe dane zostały zachowane: wpisz ponownie hasło.",
+    "account": "Konto",
+    "back_to_sign_in": "Powrót do logowania",
+    "clinic_help": "Pomoc przychodni",
+    "clinic_help_message": (
+        "W razie braku dostępu do konta lub metody weryfikacji proszę skontaktować się z "
+        "przychodnią."
+    ),
+    "current_password": "Obecne hasło",
+    "dashboard": "Panel główny",
+    "date_from": "Data od",
+    "date_to": "Data do",
+    "email_password": "Hasło dokumentu",
+    "email_password_pages": "Strony haseł dokumentów",
+    "email_passwords": "Hasła dokumentów",
+    "email_passwords_region": "Hasła dokumentów",
+    "logout": "Wylogowanie",
+    "messages": "Wiadomości",
+    "modal_close": "OK",
+    "no_email_passwords": "Brak haseł dokumentów",
+    "no_matching_email_passwords": "Brak pasujących haseł dokumentów",
+    "password_hidden": "Ukryte",
+    "password_label": "Hasło",
+    "provider_options_truncated": (
+        "Wyświetlani są tylko niektórzy pracownicy medyczni. Proszę skorzystać z pola "
+        "wyszukiwania, aby zawęzić wyniki."
+    ),
+    "reveal": "Proszę pokazać",
+    "reveal_password_hint": (
+        "Przed wyświetleniem hasła dokumentu proszę wpisać obecne hasło do konta."
+    ),
+    "search": "Proszę szukać",
+    "sent": "Wysłano",
+    "service_maintenance_details": (
+        "Portal jest tymczasowo niedostępny z powodu prac konserwacyjnych. Proszę spróbować "
+        "ponownie za chwilę lub skontaktować się z przychodnią, jeśli pomoc jest potrzebna "
+        "teraz."
+    ),
+    "service_maintenance_heading": "Portal niedostępny",
+    "subject": "Temat",
 }
 
 # The pages that link the myCarlos app to this portal.

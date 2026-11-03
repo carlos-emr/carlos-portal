@@ -43,6 +43,9 @@ ACTIVATION_EMAIL = "activation.patient@example.com"
 ACTIVATION_DATE_OF_BIRTH = date(1975, 9, 14)
 ACTIVATION_HEALTH_CARD_NUMBER = "EFGH 9876-5432"
 ACTIVATION_USERNAME = "PlaywrightActivate"
+NON_LATIN_ACTIVATION_PASSWORD = "松雲海竹星河雨石山鳥風林月湖雪花"
+NON_LATIN_ACTIVATION_EMAIL = "nonlatin.activation.patient@example.com"
+NON_LATIN_ACTIVATION_USERNAME = "PlaywrightNonLatin"
 RESET_OLD_PASSWORD = "-".join(("Willow", "Harbour", "Flint", "38!"))
 RESET_NEW_PASSWORD = "-".join(("Maple", "Voyage", "Star", "74!"))
 RESET_EMAIL = "reset.patient@example.com"
@@ -210,6 +213,19 @@ def main() -> None:
                     ),
                     proof_secret=settings.identity_proof_secret.get_secret_value(),
                 )
+                _, non_latin_activation_invite_token = create_invite(
+                    session,
+                    5679,
+                    "CI browser non-Latin activation",
+                    clinic_id=settings.clinic_id,
+                    actor_id="ci-seed",
+                    identity_proof=IdentityProof(
+                        email=NON_LATIN_ACTIVATION_EMAIL,
+                        date_of_birth=ACTIVATION_DATE_OF_BIRTH,
+                        health_card_number="MNOP 8642-9753",
+                    ),
+                    proof_secret=settings.identity_proof_secret.get_secret_value(),
+                )
                 _, reset_invite_token = create_invite(
                     session,
                     9012,
@@ -263,6 +279,14 @@ def main() -> None:
                     "healthCardNumber": ACTIVATION_HEALTH_CARD_NUMBER,
                     "username": ACTIVATION_USERNAME,
                     "password": ACTIVATION_PASSWORD,
+                },
+                "nonLatinActivation": {
+                    "inviteCode": non_latin_activation_invite_token,
+                    "email": NON_LATIN_ACTIVATION_EMAIL,
+                    "dateOfBirth": ACTIVATION_DATE_OF_BIRTH.isoformat(),
+                    "healthCardNumber": "MNOP 8642-9753",
+                    "username": NON_LATIN_ACTIVATION_USERNAME,
+                    "password": NON_LATIN_ACTIVATION_PASSWORD,
                 },
                 "passwordReset": {
                     "email": RESET_EMAIL,

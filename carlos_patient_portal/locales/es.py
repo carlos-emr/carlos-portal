@@ -70,6 +70,21 @@ TEXT: dict[str, str] = {
         "tarjeta de salud."
     ),
     "activation_reenter_password": "Sus demás datos se conservan: vuelva a escribir su contraseña.",
+    "back_to_sign_in": "Volver al inicio de sesión",
+    "clinic_help": "Ayuda de la clínica",
+    "clinic_help_message": (
+        "Contacte con la clínica si no puede acceder a su cuenta o a su método de verificación."
+    ),
+    "modal_close": "Aceptar",
+    "provider_options_truncated": (
+        "Solo se muestran algunos profesionales de la salud. Use el campo de búsqueda para "
+        "acotar los resultados."
+    ),
+    "service_maintenance_details": (
+        "El portal no está disponible temporalmente por mantenimiento. Inténtelo de nuevo en "
+        "unos momentos o contacte con la clínica si necesita ayuda ahora."
+    ),
+    "service_maintenance_heading": "Portal no disponible",
 }
 
 # The pages that link the myCarlos app to this portal.

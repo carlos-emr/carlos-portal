@@ -121,6 +121,7 @@ class InMemoryRateLimiter:
         self.max_requests = max_requests
         self.max_buckets = max_buckets
         self.buckets: OrderedDict[str, RateLimitBucket] = OrderedDict()
+        self._earliest_window_start = float("inf")
         self.lock = Lock()
 
     def consume(self, key: str, *, now: float | None = None) -> int | None:
@@ -135,12 +136,30 @@ class InMemoryRateLimiter:
             self.prune_expired_buckets(current_time)
             bucket = self.buckets.get(key)
             if bucket is None:
+                if (
+                    len(self.buckets) >= self.max_buckets
+                    and current_time - self._earliest_window_start >= self.window_seconds
+                ):
+                    # LRU order differs from expiry order. A stale lower bound may trigger
+                    # an extra scan, but cannot hide an expired bucket behind a live one.
+                    expired_keys = [
+                        existing_key
+                        for existing_key, existing_bucket in self.buckets.items()
+                        if current_time - existing_bucket.window_started_at >= self.window_seconds
+                    ]
+                    for expired_key in expired_keys:
+                        del self.buckets[expired_key]
+                    self._earliest_window_start = min(
+                        (bucket.window_started_at for bucket in self.buckets.values()),
+                        default=float("inf"),
+                    )
                 if len(self.buckets) >= self.max_buckets:
                     self.buckets.popitem(last=False)
                 self.buckets[key] = RateLimitBucket(
                     window_started_at=current_time,
                     request_count=1,
                 )
+                self._earliest_window_start = min(self._earliest_window_start, current_time)
                 return None
             self.buckets.move_to_end(key)
 

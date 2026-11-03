@@ -793,6 +793,16 @@ class Settings(BaseSettings):
                 "credentials, query, or fragment"
             )
         normalized_path = parsed_url.path.rstrip("/")
+        if ";" in normalized_path:
+            raise ValueError(
+                "PATIENT_PORTAL_PUBLIC_BASE_URL deployment path must not contain literal "
+                "semicolons; use %3B instead"
+            )
+        if any(ord(char) < 0x20 or ord(char) == 0x7F for char in normalized_path):
+            raise ValueError(
+                "PATIENT_PORTAL_PUBLIC_BASE_URL deployment path must not contain literal "
+                "control characters; use percent-encoded bytes instead"
+            )
         return urlunsplit(
             (
                 parsed_url.scheme,

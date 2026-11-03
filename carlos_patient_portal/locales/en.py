@@ -231,11 +231,11 @@ TEXT: dict[str, str] = {
     "documents": "Documents",
     "email": "Email",
     "email_codes_rate": "Email codes can be resent once per minute.",
-    "email_password": "Email password",
+    "email_password": "Document password",
     "email_password_page_indicator": "Page {page} of {total_pages}",
-    "email_password_pages": "Email password pages",
-    "email_passwords": "Email passwords",
-    "email_passwords_region": "Email passwords",
+    "email_password_pages": "Document password pages",
+    "email_passwords": "Document passwords",
+    "email_passwords_region": "Document passwords",
     "forgot_username_password": "Forgot username or password?",
     "forgot_username_help": "If you do not know your username, contact the clinic.",
     "future": "Future",
@@ -286,8 +286,8 @@ TEXT: dict[str, str] = {
     "new_password": "New password",
     "new_password_confirmation": "Confirm new password",
     "next": "Next",
-    "no_email_passwords": "No email passwords",
-    "no_matching_email_passwords": "No matching email passwords",
+    "no_email_passwords": "No document passwords",
+    "no_matching_email_passwords": "No matching document passwords",
     "open_reset_page": "Open reset page",
     "password_label": "Password",
     "password_hidden": "Hidden",  # NOSONAR - translation label, not a credential
@@ -324,11 +324,11 @@ TEXT: dict[str, str] = {
     "previous": "Previous",
     "provider": "Provider",
     "provider_options_truncated": (
-        "Only the most recent providers are listed. Use the search box to narrow your results."
+        "Only some providers are listed. Use the search box to narrow your results."
     ),
     "reveal": "Reveal",
     "reveal_failed": "Password could not be revealed. Try again.",
-    "reveal_password_hint": "Enter your current password before revealing a passphrase.",
+    "reveal_password_hint": "Enter your current password before revealing a document password.",
     "password_reset_temporarily_unavailable": (
         "Password reset is temporarily unavailable. Please try again shortly."
     ),
@@ -380,6 +380,9 @@ TEXT: dict[str, str] = {
     "username_unavailable": "That username is unavailable.",
     "verification_delivery_failed": "Verification code could not be sent. Please try again.",
     "view_module": "Open",
+    "filters": "Filters",
+    "of": "of",
+    "page": "Page",
 }
 
 # The pages that link the myCarlos app to this portal.

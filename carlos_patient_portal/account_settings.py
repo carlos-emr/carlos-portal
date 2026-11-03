@@ -14,7 +14,8 @@
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from math import ceil
 from secrets import compare_digest, token_urlsafe
 
 from sqlalchemy import func, select
@@ -515,9 +516,15 @@ def resend_phone_change_code(
     ):
         raise PhoneChangeCodeInvalidError()
     if request.phone_code_sent_at is not None:
-        retry_at = request.phone_code_sent_at + resend_cooldown
+        # SQLite hands timestamps back without their zone; is_past() allows for that, and the
+        # arithmetic below must too, or a resend inside the cooldown is a 500 instead of the
+        # rate-limited notice.
+        sent_at = request.phone_code_sent_at
+        if sent_at.tzinfo is None:
+            sent_at = sent_at.replace(tzinfo=UTC)
+        retry_at = sent_at + resend_cooldown
         if not is_past(retry_at, now):
-            remaining = max(1, int((retry_at - now).total_seconds()))
+            remaining = max(1, ceil((retry_at - now).total_seconds()))
             raise PhoneChangeRateLimitedError(remaining)
     code = create_mfa_code()
     request.phone_code_hash = hash_auth_token(token_secret, "phone_change", code)
