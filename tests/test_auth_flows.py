@@ -1,15 +1,17 @@
 """Login, MFA, sessions, lockout, and password reset."""
 
+import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, timedelta
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.orm import Session
 
 from carlos_patient_portal import auth, credentials, main, web_support
 from carlos_patient_portal.account_settings import update_account_mfa_method
@@ -281,6 +283,108 @@ def test_login_mfa_session_and_logout_happy_path() -> None:
         assert audit_events[-1].reason == "authentication_failed"
 
 
+def test_failed_mfa_grant_commit_does_not_release_a_cookie_or_consume_the_code(monkeypatch) -> None:
+    sender = RecordingPortalEmailSender()
+    app = migrated_development_app(email_sender=sender)
+    client = TestClient(app)
+    try:
+        account_id = activate_seeded_patient_account(app, client)
+        login = client.post(
+            "/auth/login",
+            data={
+                "csrf_token": get_csrf_token(client),
+                "username": "patient.user",
+                "password": STRONG_PASSWORD,
+            },
+        )
+        assert login.status_code == 200
+        challenge = MFA_CHALLENGE_TOKEN_PATTERN.search(login.text)
+        code = DEVELOPMENT_MFA_CODE_PATTERN.search(login.text)
+        csrf = CSRF_TOKEN_PATTERN.search(login.text)
+        assert challenge is not None and code is not None and csrf is not None
+        verification = {
+            "mfa_challenge_token": challenge.group(1),
+            "code": code.group(1),
+            "csrf_token": csrf.group(1),
+        }
+        assert len(sender.messages) == 1
+        reached_grant_commit = []
+
+        def fail_grant_commit(session):
+            # Prove the valid code reached credential creation before the finalizer fails.
+            created = session.scalar(
+                select(PatientPortalSession).where(PatientPortalSession.account_id == account_id)
+            )
+            assert created is not None
+            assert (
+                session.scalar(
+                    select(PatientPortalMfaChallenge.status).where(
+                        PatientPortalMfaChallenge.account_id == account_id
+                    )
+                )
+                == "verified"
+            )
+            reached_grant_commit.append(created.id)
+            raise OperationalError(
+                "FAKE grant commit", {}, RuntimeError("FAKE database unavailable")
+            )
+
+        with monkeypatch.context() as failure:
+            failure.setattr(Session, "commit", fail_grant_commit)
+            unavailable = client.post("/auth/mfa/verify", data=verification, follow_redirects=False)
+
+        assert reached_grant_commit
+        assert unavailable.status_code == 503
+        assert unavailable.json() == {"detail": "service temporarily unavailable"}
+        assert "location" not in unavailable.headers
+        assert web_support.PORTAL_SESSION_COOKIE_NAME not in unavailable.cookies
+        assert web_support.PORTAL_SESSION_COOKIE_NAME not in client.cookies
+        with app.state.session_factory() as session:
+            assert (
+                session.scalar(
+                    select(PatientPortalSession.id).where(
+                        PatientPortalSession.account_id == account_id
+                    )
+                )
+                is None
+            )
+            assert (
+                session.scalar(
+                    select(PatientPortalMfaChallenge.status).where(
+                        PatientPortalMfaChallenge.account_id == account_id
+                    )
+                )
+                == "pending"
+            )
+
+        recovered = client.post("/auth/mfa/verify", data=verification, follow_redirects=False)
+
+        assert recovered.status_code == 303
+        assert recovered.headers["location"] == "/portal"
+        assert recovered.cookies.get(web_support.PORTAL_SESSION_COOKIE_NAME)
+        assert len(sender.messages) == 1, "verification retry must not send another MFA code"
+        with app.state.session_factory() as session:
+            sessions = list(
+                session.scalars(
+                    select(PatientPortalSession).where(
+                        PatientPortalSession.account_id == account_id
+                    )
+                )
+            )
+            assert len(sessions) == 1
+            assert (
+                session.scalar(
+                    select(PatientPortalMfaChallenge.status).where(
+                        PatientPortalMfaChallenge.account_id == account_id
+                    )
+                )
+                == "verified"
+            )
+    finally:
+        client.close()
+        app.state.database_engine.dispose()
+
+
 def test_login_sends_mfa_email_after_committing_challenge() -> None:
     sender = RecordingPortalEmailSender()
     app = migrated_development_app(email_sender=sender)
@@ -306,6 +410,89 @@ def test_login_sends_mfa_email_after_committing_challenge() -> None:
         challenge = session.scalar(select(PatientPortalMfaChallenge))
         assert challenge is not None
         assert challenge.last_email_sent_at is not None
+
+
+def test_failed_challenge_commit_sends_no_mfa_and_allows_a_clean_retry(monkeypatch, caplog) -> None:
+    sender = RecordingPortalEmailSender()
+    app = migrated_development_app(email_sender=sender)
+    client = TestClient(app)
+    try:
+        account_id = activate_seeded_patient_account(app, client)
+        private_markers = (
+            "FAKE_PRIVATE_SQL_STATEMENT",
+            "FAKE_PRIVATE_PARAMETER",
+            "FAKE_PRIVATE_DRIVER_DETAIL",
+        )
+        database_error = OperationalError(
+            "INSERT INTO FAKE_PRIVATE_SQL_STATEMENT VALUES (:actor)",
+            {"actor": private_markers[1]},
+            RuntimeError(private_markers[2]),
+        )
+        assert all(marker in str(database_error) for marker in private_markers)
+        commit_attempts = []
+
+        def fail_commit(session):
+            commit_attempts.append(session)
+            raise database_error
+
+        caplog.set_level(logging.WARNING, logger="carlos_patient_portal.main")
+        caplog.clear()
+        with monkeypatch.context() as failure:
+            failure.setattr(Session, "commit", fail_commit)
+            unavailable = client.post(
+                "/auth/login",
+                json={"username": "patient.user", "password": STRONG_PASSWORD},
+            )
+
+        assert commit_attempts, "the database fault must occur at the commit boundary"
+        assert unavailable.status_code == 503
+        assert unavailable.json() == {"detail": "service temporarily unavailable"}
+        assert unavailable.headers["retry-after"] == "1"
+        assert web_support.PORTAL_SESSION_COOKIE_NAME not in unavailable.cookies
+        assert sender.messages == []
+        assert all(marker not in unavailable.text for marker in private_markers)
+        assert "RuntimeError" in caplog.text
+        assert all(marker not in caplog.text for marker in private_markers)
+        assert app.state.operational_metrics.snapshot()["failures"]["database"] == 1
+        with app.state.session_factory() as session:
+            assert (
+                session.scalar(
+                    select(PatientPortalMfaChallenge.id).where(
+                        PatientPortalMfaChallenge.account_id == account_id
+                    )
+                )
+                is None
+            )
+            assert (
+                session.scalar(
+                    select(PatientPortalSession.id).where(
+                        PatientPortalSession.account_id == account_id
+                    )
+                )
+                is None
+            )
+            assert session.get(PatientPortalAccount, account_id).last_mfa_email_sent_at is None
+
+        recovered = client.post(
+            "/auth/login",
+            json={"username": "patient.user", "password": STRONG_PASSWORD},
+        )
+
+        assert recovered.status_code == 200
+        assert len(sender.messages) == 1
+        assert sender.messages[0]["code"] == recovered.json()["development_mfa_code"]
+        with app.state.session_factory() as session:
+            assert (
+                session.scalar(
+                    select(PatientPortalMfaChallenge.id).where(
+                        PatientPortalMfaChallenge.account_id == account_id
+                    )
+                )
+                is not None
+            )
+    finally:
+        client.close()
+        app.state.database_engine.dispose()
 
 
 def test_login_mfa_delivery_failure_is_generic_and_audited() -> None:
@@ -742,7 +929,7 @@ def test_dashboard_shell_navigation_and_cookie_logout() -> None:
     assert "selected" in email_passwords_link
     assert 'data-active-module="account"' not in email_passwords_response.text
     assert '<th scope="col">Subject</th>' in email_passwords_response.text
-    assert "No email passwords" in email_passwords_response.text
+    assert "No document passwords" in email_passwords_response.text
     assert help_response.status_code == 200
     assert 'data-active-module="help"' in help_response.text
     assert "Your clinic" in help_response.text
@@ -2356,3 +2543,207 @@ def test_a_reset_token_cannot_be_used_against_another_account() -> None:
         ).status_code
         == 401
     )
+
+
+@pytest.mark.parametrize("browser_form", [True, False], ids=["browser", "json"])
+def test_expired_mfa_resend_requires_new_sign_in_without_sending(browser_form: bool) -> None:
+    """A stale MFA screen must not send a new code or create an authenticated session."""
+    sender = RecordingPortalEmailSender()
+    app = migrated_development_app(email_sender=sender)
+    with TestClient(app) as client:
+        activate_seeded_patient_account(app, client)
+        login = client.post(
+            "/auth/login", json={"username": "patient.user", "password": STRONG_PASSWORD}
+        )
+        assert login.status_code == 200
+        token = login.json()["mfa_challenge_token"]
+        with app.state.session_factory() as session:
+            challenge = session.scalars(select(PatientPortalMfaChallenge)).one()
+            # Age a valid whole challenge lifetime, preserving expires_after_created.
+            challenge.created_at = utc_now() - timedelta(
+                seconds=app.state.settings.mfa_code_ttl_seconds + 1
+            )
+            challenge.expires_at = challenge.created_at + timedelta(
+                seconds=app.state.settings.mfa_code_ttl_seconds
+            )
+            session.commit()
+        payload = {"mfa_challenge_token": token, "mfa_delivery_method": "email"}
+        if browser_form:
+            response = client.post(
+                "/auth/mfa/resend", data={**payload, "csrf_token": get_csrf_token(client)}
+            )
+            assert response.headers["content-type"].startswith("text/html")
+            assert "Sign in again to request a new verification code." in response.text
+            assert 'name="username"' in response.text
+            assert 'name="mfa_challenge_token"' not in response.text
+        else:
+            response = client.post("/auth/mfa/resend", json=payload)
+            assert response.json() == {"detail": "MFA could not be verified"}
+        assert response.status_code == 400
+        assert len(sender.messages) == 1
+        assert web_support.PORTAL_SESSION_COOKIE_NAME not in client.cookies
+        with app.state.session_factory() as session:
+            challenge = session.scalars(select(PatientPortalMfaChallenge)).one()
+            assert challenge.status == MFA_CHALLENGE_STATUS_CANCELLED
+            assert session.scalar(select(PatientPortalSession)) is None
+            event = session.scalars(
+                select(PatientPortalAuditEvent).where(
+                    PatientPortalAuditEvent.event_type == AUDIT_EVENT_MFA_RESEND
+                )
+            ).one()
+            assert (event.outcome, event.reason) == (AUDIT_OUTCOME_FAILURE, "mfa_expired")
+
+
+@pytest.mark.parametrize("provider_failure", [False, True], ids=["no-phone", "failed-sms"])
+def test_browser_mfa_switch_failure_keeps_the_delivered_email_code(
+    provider_failure: bool,
+) -> None:
+    """An unavailable channel must leave the patient able to use their delivered email code."""
+    email_sender = RecordingPortalEmailSender()
+    sms_sender = RecordingPortalSmsSender(fail=True)
+    app = migrated_development_app(email_sender=email_sender, sms_sender=sms_sender)
+    with TestClient(app) as client:
+        account_id = activate_seeded_patient_account(app, client)
+        if provider_failure:
+            with app.state.session_factory() as session, session.begin():
+                session.get(PatientPortalAccount, account_id).phone_number = "+16135550199"
+        login = client.post(
+            "/auth/login", json={"username": "patient.user", "password": STRONG_PASSWORD}
+        )
+        assert login.status_code == 200
+        token = login.json()["mfa_challenge_token"]
+        original_code = email_sender.messages[0]["code"]
+        switched = client.post(
+            "/auth/mfa/resend",
+            data={
+                "csrf_token": get_csrf_token(client),
+                "mfa_challenge_token": token,
+                "mfa_delivery_method": "sms",
+            },
+        )
+        assert switched.status_code == (503 if provider_failure else 400)
+        assert switched.headers["content-type"].startswith("text/html")
+        expected_message = (
+            "Verification code could not be sent. Please try again."
+            if provider_failure
+            else "That delivery method is unavailable."
+        )
+        assert expected_message in switched.text
+        retained = MFA_CHALLENGE_TOKEN_PATTERN.search(switched.text)
+        assert retained is not None and retained.group(1) == token
+        assert len(email_sender.messages) == 1
+        assert len(sms_sender.messages) == int(provider_failure)
+        assert web_support.PORTAL_SESSION_COOKIE_NAME not in client.cookies
+        with app.state.session_factory() as session:
+            challenge = session.scalars(select(PatientPortalMfaChallenge)).one()
+            assert challenge.delivery_method == "email"
+            assert challenge.status == "pending"
+            assert session.scalar(select(PatientPortalSession)) is None
+            failures = list(
+                session.scalars(
+                    select(PatientPortalAuditEvent).where(
+                        PatientPortalAuditEvent.outcome == AUDIT_OUTCOME_FAILURE,
+                        PatientPortalAuditEvent.event_type.in_(
+                            [AUDIT_EVENT_MFA_RESEND, AUDIT_EVENT_MFA_DELIVERY]
+                        ),
+                    )
+                )
+            )
+            assert len(failures) == 1
+            assert failures[0].event_type == (
+                AUDIT_EVENT_MFA_DELIVERY if provider_failure else AUDIT_EVENT_MFA_RESEND
+            )
+        if provider_failure:
+            assert app.state.operational_metrics.snapshot()["failures"]["mfa_delivery"] == 1
+        verified = client.post(
+            "/auth/mfa/verify",
+            data={
+                "csrf_token": csrf_token_from_response(switched),
+                "mfa_challenge_token": token,
+                "code": original_code,
+            },
+            follow_redirects=False,
+        )
+        assert verified.status_code == 303
+        assert verified.headers["location"] == "/portal"
+        assert client.cookies.get(web_support.PORTAL_SESSION_COOKIE_NAME)
+        assert client.get("/portal").status_code == 200
+
+
+def test_password_reset_eagerly_cancels_a_delivered_live_mfa_before_replay() -> None:
+    """Recovery must kill a code issued with the old password before its next use."""
+    sender = RecordingPortalEmailSender()
+    app = migrated_development_app(email_sender=sender)
+    with TestClient(app) as client:
+        account_id = activate_seeded_patient_account(app, client)
+        login = client.post(
+            "/auth/login", json={"username": "patient.user", "password": STRONG_PASSWORD}
+        )
+        assert login.status_code == 200
+        old_token = login.json()["mfa_challenge_token"]
+        old_code = sender.messages[-1]["code"]
+        reset = client.post(
+            "/auth/password-reset/request",
+            json={"username": "patient.user", "email": SEEDED_INVITE_EMAIL},
+        )
+        assert reset.status_code == 202
+        completed = client.post(
+            "/auth/password-reset/complete",
+            json={
+                "reset_token": reset.json()["development_reset_token"],
+                "new_password": STRONG_RESET_PASSWORD,
+            },
+        )
+        assert completed.status_code == 200
+        # Inspect BEFORE replay: expiry or a lazy reset-required guard must not mask
+        # a missing recovery-time cancellation of the still-live credential.
+        with app.state.session_factory() as session:
+            challenge = session.scalars(select(PatientPortalMfaChallenge)).one()
+            old_challenge_id = challenge.id
+            assert challenge.expires_at.replace(tzinfo=UTC) > utc_now()
+            assert challenge.status == MFA_CHALLENGE_STATUS_CANCELLED
+            assert session.get(PatientPortalAccount, account_id).force_password_reset is False
+            assert session.scalars(select(PatientPortalPasswordResetToken)).one().status == "used"
+            assert session.scalar(select(PatientPortalSession)) is None
+        sent_before_replay = list(sender.messages)
+        stale_verify = client.post(
+            "/auth/mfa/verify", json={"mfa_challenge_token": old_token, "code": old_code}
+        )
+        stale_resend = client.post(
+            "/auth/mfa/resend",
+            json={"mfa_challenge_token": old_token, "mfa_delivery_method": "email"},
+        )
+        assert stale_verify.status_code == stale_resend.status_code == 400
+        assert stale_verify.json() == stale_resend.json() == {"detail": "MFA could not be verified"}
+        assert sender.messages == sent_before_replay
+        with app.state.session_factory() as session:
+            assert session.scalar(select(PatientPortalSession)) is None
+        old_password = client.post(
+            "/auth/login", json={"username": "patient.user", "password": STRONG_PASSWORD}
+        )
+        assert old_password.status_code == 401
+        expire_email_mfa_cooldown(app)
+        fresh = client.post(
+            "/auth/login", json={"username": "patient.user", "password": STRONG_RESET_PASSWORD}
+        )
+        assert fresh.status_code == 200
+        assert fresh.json()["mfa_challenge_token"] != old_token
+        assert len([message for message in sender.messages if "code" in message]) == 2
+        verified = client.post(
+            "/auth/mfa/verify",
+            json={
+                "mfa_challenge_token": fresh.json()["mfa_challenge_token"],
+                "code": sender.messages[-1]["code"],
+            },
+        )
+        assert verified.status_code == 200
+        assert (
+            client.get(
+                "/auth/session", headers=bearer_headers(verified.json()["session_token"])
+            ).status_code
+            == 200
+        )
+        with app.state.session_factory() as session:
+            assert session.get(PatientPortalMfaChallenge, old_challenge_id).status == "cancelled"
+            authenticated = session.scalars(select(PatientPortalSession)).one()
+            assert authenticated.account_id == account_id and authenticated.revoked_at is None

@@ -59,6 +59,10 @@
  *   npm run test:patient-portal-session-playwright
  *
  * PORTAL_SESSION_STEPS=locales (or any comma list of sms,phone,locales,idle,notices) runs a subset.
+ * maintenance is explicit-only and requires its own configured maintenance instance. Set
+ * PORTAL_SESSION_STEPS=maintenance for both the seed and browser commands: the seed then writes
+ * only a private locale fixture, without a database, accounts, MFA codes or SMS capture. Keep
+ * the normal server settings; maintenance does not need the short idle/high throttle recipe.
  *
  * Every 4xx the check provokes is declared before it happens; any other 4xx/5xx fails the run.
  */
@@ -80,7 +84,7 @@ const smsCaptureFile = process.env.PORTAL_SMS_CAPTURE_FILE || '';
 const screenshotDir = path.resolve(process.env.PORTAL_SCREENSHOT_DIR || os.tmpdir());
 const chromePath = process.env.PORTAL_CHROME_PATH || process.env.CHROME_PATH || '';
 // PORTAL_SESSION_STEPS=sms,phone,locales,idle,notices runs only those steps (default: all).
-const STEP_NAMES = ['sms', 'phone', 'locales', 'idle', 'notices'];
+const STEP_NAMES = ['sms', 'phone', 'locales', 'idle', 'notices', 'maintenance'];
 const selectedSteps = (process.env.PORTAL_SESSION_STEPS || '').split(',').map((name) => name.trim()).filter(Boolean);
 
 const fixtures = readFixtures(fixturePath);
@@ -88,27 +92,33 @@ const settings = fixtures.settings;
 const accounts = fixtures.accounts;
 const locales = fixtures.locales;
 
-assert(useDevelopmentMfaCode, 'this check reads email codes from the page: set PORTAL_USE_DEVELOPMENT_MFA_CODE=true');
-assert(smsCaptureFile, 'PORTAL_SMS_CAPTURE_FILE must name the SMS capture file');
-for (const role of ['sms', 'phone', 'locale', 'throttle', 'idle']) {
-  assert(accounts[role] && accounts[role].username && accounts[role].password && accounts[role].email,
-    `${role} account fixture is incomplete in ${fixturePath}`);
-}
-assert(accounts.sms.phone && fixtures.newPhone, 'the SMS account needs a phone number and the fixture a new one');
 assert(Array.isArray(locales) && locales.length >= 2 && locales.some((locale) => locale.code === settings.defaultLocale),
   'the fixture must list the portal locales including the default');
 for (const name of selectedSteps) {
   assert(STEP_NAMES.includes(name), `PORTAL_SESSION_STEPS names an unknown step ${name}; known: ${STEP_NAMES.join(', ')}`);
 }
+assert(!selectedSteps.includes('maintenance') || selectedSteps.length === 1,
+  'maintenance must run alone on its separate configured instance');
 const runs = (name) => selectedSteps.length === 0 || selectedSteps.includes(name);
-// The sign-in budget is one bucket per client: every POST /auth/login of this run counts. The
-// steps below spend at most this many before the throttle step empties the bucket on purpose.
-const plannedSignInRequests = 1 + 1 + 2 + (locales.length - 1) + 1 + 1;
-assert(settings.authRateLimitMaxRequests > plannedSignInRequests,
-  `PATIENT_PORTAL_AUTH_RATE_LIMIT_MAX_REQUESTS is ${settings.authRateLimitMaxRequests}; it must exceed the `
-    + `${plannedSignInRequests} sign-ins the steps before the throttle step make (the recipe uses 30)`);
-assert(settings.idleTimeoutSeconds <= 120,
-  `PATIENT_PORTAL_SESSION_IDLE_TIMEOUT_SECONDS is ${settings.idleTimeoutSeconds}; the idle step waits it out, keep it at the 60 s minimum`);
+// Maintenance uses only the public notice and language preference, with no patient sign-in.
+if (!selectedSteps.includes('maintenance')) {
+  assert(useDevelopmentMfaCode, 'this check reads email codes from the page: set PORTAL_USE_DEVELOPMENT_MFA_CODE=true');
+  assert(smsCaptureFile, 'PORTAL_SMS_CAPTURE_FILE must name the SMS capture file');
+  for (const role of ['sms', 'phone', 'locale', 'throttle', 'idle']) {
+    assert(accounts[role] && accounts[role].username && accounts[role].password && accounts[role].email,
+      `${role} account fixture is incomplete in ${fixturePath}`);
+  }
+  assert(accounts.sms.phone && fixtures.newPhone, 'the SMS account needs a phone number and the fixture a new one');
+  // The sign-in budget is one bucket per client: every POST /auth/login of this run counts.
+  // Before deliberate throttling: SMS/email 3, phone 4, non-default locales one each,
+  // idle 1, and the stale-CSRF notice 1 (even a rejected CSRF request spends the budget).
+  const plannedSignInRequests = 3 + 4 + (locales.length - 1) + 1 + 1;
+  assert(settings.authRateLimitMaxRequests > plannedSignInRequests,
+    `PATIENT_PORTAL_AUTH_RATE_LIMIT_MAX_REQUESTS is ${settings.authRateLimitMaxRequests}; it must exceed the `
+      + `${plannedSignInRequests} sign-ins the steps before the throttle step make (the recipe uses 30)`);
+  assert(settings.idleTimeoutSeconds <= 120,
+    `PATIENT_PORTAL_SESSION_IDLE_TIMEOUT_SECONDS is ${settings.idleTimeoutSeconds}; the idle step waits it out, keep it at the 60 s minimum`);
+}
 
 function readFixtures(filePath) {
   // The fixture holds generated test passwords and a one-time confirmation token.
@@ -587,6 +597,17 @@ async function checkPhoneChange(page, context) {
   assert(await page.locator('form[action$="/portal/account/mfa"] select[name="preferred_mfa_method"]').inputValue() === 'sms',
     'the account page does not show SMS as the chosen method');
   await signOut(page, context);
+
+  // The confirmed number must work for this patient's next sign-in.
+  const nextSignInSince = Date.now();
+  await startSignIn(page, account);
+  const destination = (await page.locator('.mfa-destination').innerText()).trim();
+  assert(destination.includes(t('mfa_sms')),
+    'the next sign-in did not send its code by SMS');
+  assert(!destination.includes(newPhone),
+    'the next sign-in shows the full confirmed phone number');
+  await verifyCode(page, await smsCode(page, newPhone, nextSignInSince));
+  await signOut(page, context);
 }
 
 // ---- Step 3: every locale on the signed-in pages ----
@@ -638,6 +659,101 @@ async function checkLocales(page, context) {
   await page.getByRole('heading', { name: t('sign_in_heading'), exact: true }).waitFor();
 }
 
+// Explicit-only: the normal default five steps still run on a non-maintenance instance.
+async function checkMaintenanceLocale(page, context) {
+  await page.setViewportSize({ width: 360, height: 800 });
+  const polish = locales.find((locale) => locale.code === 'pl');
+  const translated = (key) => {
+    const value = polish?.text[key];
+    assert(typeof value === 'string' && value.length > 0, 'the Polish notice fixture is incomplete');
+    return value;
+  };
+  assert(translated('service_maintenance_heading') !== t('service_maintenance_heading'),
+    'the Polish maintenance heading must differ from English');
+  function assertUnavailable(response) {
+    assert(response && response.status() === 503, 'maintenance did not keep the portal unavailable');
+    assert(/^[0-9]+$/.test(response.headers()['retry-after'] || ''), 'the notice lost Retry-After');
+    assert((response.headers()['cache-control'] || '').includes('no-store'), 'the notice became cacheable');
+  }
+  expectHttpError(503, portalPathname('/'));
+  const landing = await page.goto(portalUrl('/'), { waitUntil: 'load', timeout: 30000 });
+  assertUnavailable(landing);
+  await page.getByRole('heading', { name: t('service_maintenance_heading'), exact: true }).waitFor();
+  assert(await page.locator('input[name="password"]').count() === 0, 'maintenance still offers sign-in');
+
+  expectHttpError(503, portalPathname('/'));
+  const choicePromise = page.waitForResponse((response) => response.request().method() === 'GET'
+    && new URL(response.url()).pathname === portalPathname('/locale/pl'));
+  const noticePromise = page.waitForResponse((response) => response.request().isNavigationRequest()
+    && new URL(response.url()).pathname === portalPathname('/') && response.status() === 503);
+  choicePromise.catch(() => {});
+  noticePromise.catch(() => {});
+  await page.locator('.language-switch a[lang="pl"]').click();
+  assert((await choicePromise).status() === 303, 'language selection did not redirect locally');
+  assertUnavailable(await noticePromise);
+  await page.getByRole('heading', { name: translated('service_maintenance_heading'), exact: true }).waitFor();
+  assert(await page.locator('html').getAttribute('lang') === 'pl', 'the notice did not select Polish');
+  await page.getByRole('alert').filter({ hasText: translated('service_maintenance_details') }).waitFor();
+  assert((await context.cookies()).some((cookie) => cookie.name === settings.localeCookieName
+    && cookie.value === 'pl' && cookie.path === '/'), 'the real locale cookie was not kept');
+  assert(await page.locator('.language-switch span.text-tab.selected[lang="pl"][aria-current="true"]').count() === 1,
+    'Polish is not the selected language');
+
+  expectHttpError(503, portalPathname('/'));
+  assertUnavailable(await page.reload({ waitUntil: 'load' }));
+  await page.getByRole('heading', { name: translated('service_maintenance_heading'), exact: true }).waitFor();
+  assert(await page.locator('html').getAttribute('lang') === 'pl', 'reload lost the selected language');
+  assert(await page.locator('.brand-logo').evaluate((image) => image instanceof HTMLImageElement
+    && image.complete && image.naturalWidth > 0), 'the maintenance logo did not load');
+  await assertNoHorizontalOverflow(page, 'Polish maintenance notice');
+  await page.getByRole('button', { name: translated('clinic_help'), exact: true }).click();
+  const help = page.getByRole('dialog');
+  await help.getByRole('heading', { name: translated('clinic_help'), exact: true }).waitFor();
+  await help.getByText(translated('clinic_help_message'), { exact: true }).waitFor();
+  await help.getByRole('button', { name: translated('modal_close'), exact: true }).click();
+  await help.waitFor({ state: 'hidden' });
+  // Keep the pointer open/close check above, then use its restored focus to reopen with the
+  // keyboard. The real production modal must trap both Tab directions and restore its opener.
+  const helpTrigger = page.getByRole('button', { name: translated('clinic_help'), exact: true });
+  assert(await helpTrigger.evaluate((element) => element === document.activeElement),
+    'closing maintenance Help did not restore focus to its trigger');
+  await page.keyboard.press('Enter');
+  await help.waitFor({ state: 'visible' });
+  await help.getByRole('heading', { name: translated('clinic_help'), exact: true }).waitFor();
+  await help.getByText(translated('clinic_help_message'), { exact: true }).waitFor();
+  assert(await help.getByRole('button', { name: translated('modal_close'), exact: true })
+    .evaluate((element) => element === document.activeElement),
+  'keyboard-opened maintenance Help did not focus Close');
+  for (const key of ['Tab', 'Shift+Tab']) {
+    await page.keyboard.press(key);
+    assert(await help.evaluate((dialog) => dialog.contains(document.activeElement)),
+      `${key} moved focus outside maintenance Help`);
+  }
+  await assertNoHorizontalOverflow(page, 'Polish maintenance Help');
+  const helpBox = await help.boundingBox();
+  assert(helpBox && helpBox.x >= -1 && helpBox.x + helpBox.width <= 361,
+    'maintenance Help extends outside the 360px viewport');
+  await page.screenshot({
+    path: screenshotPath('patient-portal-maintenance-pl-help-keyboard-mobile'), fullPage: true,
+  });
+  await page.keyboard.press('Escape');
+  await help.waitFor({ state: 'hidden' });
+  assert(await helpTrigger.evaluate((element) => element === document.activeElement),
+    'Escape did not restore focus to the maintenance Help trigger');
+  await page.screenshot({ path: screenshotPath('patient-portal-maintenance-pl-prefixed'), fullPage: true });
+
+  expectHttpError(503, portalPathname('/portal/account'));
+  assertUnavailable(await page.goto(portalUrl('/portal/account'), { waitUntil: 'load', timeout: 30000 }));
+  await page.getByRole('heading', { name: translated('service_maintenance_heading'), exact: true }).waitFor();
+  assert(await page.locator('form input[name="current_password"]').count() === 0,
+    'language selection bypassed the maintenance restriction');
+  assert(await page.locator('html').getAttribute('lang') === 'pl'
+    && (await context.cookies()).some((cookie) => cookie.name === settings.localeCookieName
+      && cookie.value === 'pl' && cookie.path === '/'),
+  'keyboard Help or protected-page navigation lost the Polish locale');
+  await assertNoHorizontalOverflow(page, 'Protected Polish maintenance notice');
+}
+
 // ---- Step 4: the notice pages a browser gets ----
 async function checkNoticePages(page) {
   // An unknown route: the notice page, not JSON.
@@ -687,31 +803,77 @@ async function checkNoticePages(page) {
 }
 
 // ---- Step 5: idle session expiry ----
-// The portal ends a session `idle limit` after its last recorded activity. (It records activity at
-// most once per SESSION_LAST_SEEN_UPDATE_INTERVAL, 5 minutes, so with a limit below that a page
-// opened halfway does not extend the session; the step waits the full limit after that page, so
-// it holds whether or not the page counted.)
+// Activity within the idle window must keep the same session alive beyond its original idle
+// deadline. A full quiet window must still expire it and reject the copied old credential.
 async function checkIdleExpiry(page, context) {
   const account = accounts.idle;
   const limitMs = settings.idleTimeoutSeconds * 1000;
+  const verifiedPromise = page.waitForResponse((response) => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === portalPathname('/auth/mfa/verify'));
+  verifiedPromise.catch(() => {});
   await signInWithEmailCode(page, account);
+  const verified = await verifiedPromise;
+  assert(verified.status() === 303, 'idle test did not establish its session through actual MFA');
+  // This timestamp is AFTER the session cookie was issued and the dashboard loaded, so waiting
+  // a whole limit from here conservatively crosses the session's original idle deadline.
+  const signedInAt = Date.now();
+  function serverDate(response) {
+    const value = Date.parse(response.headers()['date'] || '');
+    assert(Number.isFinite(value), 'idle test response has no real server Date header');
+    return value;
+  }
+  const issuedServerAt = serverDate(verified);
   const cookie = (await context.cookies()).find((candidate) => candidate.name === settings.sessionCookieName);
   assert(cookie, 'no session cookie while signed in');
   // Halfway through the limit the session is alive.
   await wait(limitMs * 0.5);
-  await open(page, '/portal/account');
+  const midpoint = await open(page, '/portal/account');
   assert(atPath(page, portalPathname('/portal/account')), 'the session ended before the idle limit');
+  assert(midpoint.status() === 200, 'midpoint account activity did not succeed');
+  const midpointAt = Date.now();
+  const midpointServerAt = serverDate(midpoint);
+  console.log(JSON.stringify({ check: 'idle midpoint', sinceDashboardMs: midpointAt - signedInAt }));
+  await wait(Math.max(0, signedInAt + limitMs + 5000 - Date.now()));
+  const activeRequestAt = Date.now();
+  assert(activeRequestAt - midpointAt < limitMs,
+    'the test waited an idle window before its active-session request');
+  const active = await open(page, '/portal');
+  const activeServerAt = serverDate(active);
+  assert(active.status() === 200 && !active.request().redirectedFrom()
+    && atPath(page, portalPathname('/portal')),
+  'normal activity did not keep the session alive beyond its original idle deadline');
+  assert(activeServerAt - issuedServerAt > limitMs
+    && activeServerAt - midpointServerAt < limitMs,
+  'real server timing did not cross the original deadline inside the renewed idle window');
+  assert((await page.locator('.signed-in-user').innerText()).trim() === account.username.toLowerCase()
+    && (await context.cookies()).some((candidate) => candidate.name === settings.sessionCookieName
+      && candidate.value === cookie.value), 'activity did not retain the same account and session');
+  console.log(JSON.stringify({ check: 'active session beyond original idle deadline',
+    sinceDashboardMs: activeRequestAt - signedInAt,
+    sinceMidpointMs: activeRequestAt - midpointAt,
+    serverSinceMfaMs: activeServerAt - issuedServerAt,
+    serverSinceMidpointMs: activeServerAt - midpointServerAt, sameAccountAndCookie: true }));
+  await page.screenshot({ path: screenshotPath('patient-portal-session-active-renewal'), fullPage: true });
   const lastPageAt = Date.now();
   // Idle for the whole limit after that page: the next request lands on sign-in and the old
   // cookie is dead.
   console.log(`Waiting ${Math.ceil(limitMs / 1000) + 5}s for the idle limit`);
   await wait(Math.max(0, lastPageAt + limitMs + 5000 - Date.now()));
-  await open(page, '/portal');
+  const expired = await open(page, '/portal');
   assert(atPath(page, portalPathname('/')), 'an idle session was not ended');
   await page.getByRole('heading', { name: t('sign_in_heading'), exact: true }).waitFor();
+  assert(serverDate(expired) - activeServerAt >= limitMs,
+    'the test did not leave a full quiet interval before checking expiry');
+  assert(!(await context.cookies()).some((candidate) => candidate.name === settings.sessionCookieName),
+    'quiet expiry did not clear the session cookie');
+  await page.screenshot({ path: screenshotPath('patient-portal-session-expired-after-renewal'), fullPage: true });
   await context.addCookies([cookie]);
   await open(page, '/portal/account');
   assert(atPath(page, portalPathname('/')), 'the expired session cookie still opens the account page');
+  assert(!(await context.cookies()).some((candidate) => candidate.name === settings.sessionCookieName),
+    'the rejected expired replay cookie was not cleared');
+  console.log(JSON.stringify({ check: 'renewed session quiet expiry and replay rejected',
+    serverQuietMs: serverDate(expired) - activeServerAt, cookieCleared: true }));
 }
 
 (async () => {
@@ -725,6 +887,7 @@ async function checkIdleExpiry(page, context) {
   const page = await context.newPage();
   watchPage(page, 'main');
   try {
+    if (selectedSteps.includes('maintenance')) await checkMaintenanceLocale(page, context);
     if (runs('sms')) await checkSmsSignInAndResend(page, context);
     if (runs('phone')) await checkPhoneChange(page, context);
     if (runs('locales')) await checkLocales(page, context);

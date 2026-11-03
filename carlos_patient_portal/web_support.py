@@ -34,7 +34,7 @@ from pathlib import Path as FilePath
 from secrets import compare_digest, token_urlsafe
 from time import time
 from typing import TypeVar
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 from fastapi import HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
@@ -531,7 +531,8 @@ def clear_portal_session_cookie(response: Response, *, settings: Settings) -> No
 def deployment_cookie_path(settings: Settings, application_path: str) -> str:
     """Translate an application route path to the browser-visible deployment path."""
     deployment_path = f"{settings.root_path}{application_path}"
-    return deployment_path or "/"
+    # Cookie headers need ASCII; retain existing ASCII syntax and percent escapes.
+    return quote(deployment_path, safe=bytes(range(128))) or "/"
 
 
 def logout_browser_session_cookie_token(
@@ -592,8 +593,16 @@ def is_rate_limited_path(path: str) -> bool:
     )
 
 
-def is_maintenance_exempt_path(path: str) -> bool:
-    return path in {
+def is_maintenance_exempt_path(path: str, *, method: str = "GET") -> bool:
+    # The notice's public assets are read-only; other maintenance requests stay blocked.
+    if method in {"GET", "HEAD"} and path in {
+        "/static/styles.css",
+        "/static/portal.js",
+        "/static/carlos-birdman.png",
+    }:
+        return True
+    # Language selection changes only the display-preference cookie.
+    return (method in {"GET", "HEAD"} and path.startswith("/locale/")) or path in {
         "/health",
         "/internal/health/db",
         "/internal/readiness",

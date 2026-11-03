@@ -122,7 +122,7 @@ assert(
 // email-change account's two sign-ins; and the myCarlos account's sign-in plus, without a mail
 // server, a second one.
 const plannedSignInRequests = 1 + settings.lockThreshold + settings.lockThreshold + 2 + 2
-  + (settings.stepUpEmailAvailable ? 1 : 2);
+  + (settings.stepUpEmailAvailable ? 1 : 2) + 3;
 assert(
   settings.authRateLimitMaxRequests >= plannedSignInRequests,
   `this check sends ${plannedSignInRequests} sign-in requests but the portal allows `
@@ -823,7 +823,8 @@ async function checkLinkedDevices(page) {
     `/portal/account/mycarlos/devices/${encodeURIComponent(markupDevice.deviceKeyId)}/remove`
   );
   const removePath = portalPathname(removePortalPath);
-  assert((await removeLink(markupDevice).getAttribute('href') || '').endsWith(removePath),
+  const removeHref = await removeLink(markupDevice).getAttribute('href');
+  assert(removeHref && new URL(removeHref, page.url()).href === portalUrl(removePortalPath),
     'the remove link does not name the device');
 
   async function openRemovalConfirmation() {
@@ -834,7 +835,7 @@ async function checkLinkedDevices(page) {
     assert((await page.locator('.mycarlos-device-name strong').innerText()).trim()
       === markupDevice.name, 'the confirmation page names the wrong device');
     await page.getByText(t('mycarlos_remove_effect'), { exact: true }).waitFor();
-    assert(await page.locator(`form[action$="${removePath}"]`).count() === 1,
+    assert(await page.locator(`form[action$="${removePortalPath}"]`).count() === 1,
       'the confirmation page has no removal form for this device');
     assert(await page.locator('.mycarlos-code, .mycarlos-portal-address').count() === 0,
       'the confirmation page must not show linking details');
@@ -1010,7 +1011,7 @@ async function checkMfaProofGate(page, context) {
   assert(!(await proofCookie(context)), 'the MFA proof cookie could not be cleared');
 
   const verifyButton = page.getByRole('button', { name: t('mycarlos_verify'), exact: true });
-  const mfaForm = page.locator(`form[action$="${portalPathname('/portal/mycarlos/mfa')}"]`);
+  const mfaForm = page.locator('form[action$="/portal/mycarlos/mfa"]');
   expectHttpError(403, portalPathname('/portal/mycarlos/code'));
   const refused = await submit(page, createCodeButton(page, 'mycarlos_create'), {
     pathname: portalPathname('/portal/mycarlos/code'),
@@ -1157,6 +1158,136 @@ async function checkDeclineOfferedTimes(page) {
   await assertDeclinedPage('a refused pick on a declined offer');
 }
 
+
+// Strong non-Latin credentials and an actual cached Reveal after a normal logout.
+async function checkNonLatinPasswordAndCachedReveal(page, context) {
+  const password = fixtures.nonLatinPassword;
+  assert(typeof password === 'string' && password.length > 0,
+    'the public non-Latin policy specimen is missing');
+  assert(Number.isInteger(linkAccount.emailPasswordId) && linkAccount.emailPasswordId > 0,
+    'the cached Reveal fixture is missing');
+  const expectedPortalPath = portalPathname('/portal');
+  const expectedAuthPath = portalPathname('/auth');
+  async function assertCookiePaths({ requireProof = true } = {}) {
+    const cookies = await context.cookies();
+    assert(cookies.some((cookie) => cookie.name === settings.csrfCookieName
+      && cookie.path === expectedAuthPath), 'the auth CSRF cookie has the wrong browser path');
+    assert(cookies.some((cookie) => cookie.name === settings.csrfCookieName
+      && cookie.path === expectedPortalPath), 'the portal CSRF cookie has the wrong browser path');
+    assert(cookies.some((cookie) => cookie.name === settings.sessionCookieName
+      && cookie.path === expectedPortalPath), 'the session cookie has the wrong browser path');
+    const proof = cookies.find((cookie) => cookie.name === settings.proofCookieName);
+    assert((!requireProof || proof) && (!proof || proof.path === expectedPortalPath),
+      'the MFA proof cookie has the wrong browser path');
+  }
+
+  await signIn(page, linkAccount);
+  await assertCookiePaths();
+  await openModule(page, 'account', '/portal/account');
+  const previousSession = (await context.cookies()).find(
+    (cookie) => cookie.name === settings.sessionCookieName
+  );
+  assert(previousSession, 'the initial browser session is missing');
+  const previousProof = await proofCookie(context);
+  assert(previousProof, 'password rotation must start with the real sign-in MFA proof cookie');
+  const form = page.locator('form[action$="/portal/account/password"]');
+  await form.locator('input[name="current_password"]').fill(linkAccount.password);
+  await form.locator('input[name="new_password"]').fill(password);
+  await form.locator('input[name="new_password_confirmation"]').fill(password);
+  const changed = await submit(page,
+    form.getByRole('button', { name: t('update_password'), exact: true }),
+    { pathname: portalPathname('/portal/account/password') });
+  assert(changed.status() === 303, 'the non-Latin password change was refused');
+  await page.waitForURL((url) => url.pathname === portalPathname('/portal/account')
+    && url.searchParams.get('status') === 'password-updated');
+  await page.getByRole('status').filter({ hasText: t('account_status_password_updated') }).waitFor();
+  const cookieHeaders = (await changed.headersArray()).filter(
+    (header) => header.name.toLowerCase() === 'set-cookie'
+  );
+  assert(cookieHeaders.length > 0 && cookieHeaders.every((header) => /^[\x00-\x7f]*$/.test(header.value)),
+    'the password-change cookie headers must be ASCII');
+  const replacement = (await context.cookies()).find(
+    (cookie) => cookie.name === settings.sessionCookieName
+  );
+  assert(replacement && replacement.value !== previousSession.value,
+    'the password change did not replace the browser session');
+  const proofAfterRotation = await proofCookie(context);
+  assert(!proofAfterRotation, 'password rotation retained an MFA proof cookie');
+  console.log(JSON.stringify({ check: 'password rotation clears existing MFA proof',
+    proofPresentBefore: Boolean(previousProof), proofPresentAfter: Boolean(proofAfterRotation),
+    sessionReplaced: replacement.value !== previousSession.value }));
+  await assertCookiePaths({ requireProof: false });
+  await open(page, '/portal');
+  assert(atPath(page, portalPathname('/portal')), 'the replacement session did not open the dashboard');
+  await signOut(page, context);
+
+  await fillSignIn(page, linkAccount.username, linkAccount.password);
+  expectHttpError(401, portalPathname('/auth/login'));
+  const oldPassword = await submit(page, signInButton(page), {
+    pathname: portalPathname('/auth/login'),
+  });
+  assert(oldPassword.status() === 401, 'the old password still signed the patient in');
+  await page.getByRole('alert').filter({ hasText: t('incorrect_username_or_password') }).waitFor();
+  const updatedAccount = { ...linkAccount, password };
+  await signIn(page, updatedAccount);
+  assert(atPath(page, portalPathname('/portal')), 'the new password and MFA did not open the dashboard');
+  await page.locator('.signed-in-user').filter({ hasText: linkAccount.username }).waitFor();
+  await assertCookiePaths();
+  await page.screenshot({ path: screenshotPath('patient-portal-account-nonlatin-dashboard'), fullPage: true });
+
+  await open(page, '/portal/email-passwords');
+  const revealPath = portalPathname('/portal/email-passwords/' + linkAccount.emailPasswordId + '/reveal');
+  const reveal = page.locator('button[data-reveal-url$="/' + linkAccount.emailPasswordId + '/reveal"]');
+  assert(await reveal.count() === 1, 'the real cached Reveal control is missing');
+  const beforeLogout = (await context.cookies()).find((cookie) => cookie.name === settings.csrfCookieName
+    && cookie.path === expectedPortalPath);
+  assert(beforeLogout, 'the real portal CSRF cookie is missing');
+  // Submit the genuine current form into another tab. A new signed-in GET would
+  // rotate CSRF and test403 instead; only the navigation target changes here.
+  const logout = page.getByRole('button', { name: t('logout'), exact: true });
+  await logout.evaluate((button) => { button.form.target = '_blank'; });
+  const popupPromise = context.waitForEvent('page');
+  const logoutResponsePromise = context.waitForEvent('response', {
+    predicate: (response) => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === portalPathname('/portal/logout'),
+  });
+  popupPromise.catch(() => {});
+  logoutResponsePromise.catch(() => {});
+  await logout.click();
+  const popup = await popupPromise;
+  watchPage(popup, 'unicode-logout');
+  const loggedOut = await logoutResponsePromise;
+  assert(loggedOut.status() === 303, 'the second-tab logout was refused');
+  await popup.waitForURL((url) => url.pathname === portalPathname('/'));
+  await popup.getByRole('heading', { name: t('sign_in_heading'), exact: true }).waitFor();
+  const afterLogout = await context.cookies();
+  assert(!afterLogout.some((cookie) => cookie.name === settings.sessionCookieName),
+    'normal second-tab logout left the browser session cookie behind');
+  assert(afterLogout.some((cookie) => cookie.name === settings.csrfCookieName
+    && cookie.path === expectedPortalPath && cookie.value === beforeLogout.value),
+    'normal logout changed the cached page CSRF cookie');
+  assert(atPath(page, portalPathname('/portal/email-passwords')), 'the cached Reveal page navigated during logout');
+
+  await page.locator('[data-reveal-password]').fill(password);
+  expectHttpError(401, revealPath);
+  const refusedPromise = page.waitForResponse((response) => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === revealPath);
+  refusedPromise.catch(() => {});
+  await reveal.click();
+  const refused = await refusedPromise;
+  assert(refused.status() === 401, 'cached Reveal did not report the ended session');
+  const location = refused.headers()['location'];
+  assert(typeof location === 'string' && /^[\x00-\x7f]+$/.test(location)
+    && location === portalPathname('/'), 'cached Reveal returned an unusable prefixed sign-in Location');
+  // portal.js navigates on 401, so Chromium can discard the response body.
+  // tests/test_unicode_reveal_location.py covers the JSON/privacy contract;
+  // this browser case follows the real redirect to the usable sign-in page.
+  await page.waitForURL((url) => url.pathname === portalPathname('/'));
+  await page.getByRole('heading', { name: t('sign_in_heading'), exact: true }).waitFor();
+  await page.screenshot({ path: screenshotPath('patient-portal-account-unicode-reveal-signin'), fullPage: true });
+  await popup.close();
+}
+
 (async () => {
   const browser = await chromium.launch({
     headless: true,
@@ -1224,6 +1355,8 @@ async function checkDeclineOfferedTimes(page) {
       await checkProofRestoredBySignIn(link.page, link.context);
       await signOut(link.page, link.context);
     }
+
+    await checkNonLatinPasswordAndCachedReveal(link.page, link.context);
 
     const unmet = expectedErrors.filter((expected) => !expected.seen);
     assert(unmet.length === 0,
