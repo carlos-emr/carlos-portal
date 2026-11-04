@@ -387,10 +387,20 @@ def test_reference_proxy_omits_raw_request_target_and_limits_expensive_routes() 
         "/auth/password-reset/request",
         "/auth/activate",
         "/auth/mfa/",
+        "/auth/sign-up",
         "/api/mycarlos/link",
     ):
         assert route in configuration
-    assert configuration.count("limit_req zone=") == 10
+    assert configuration.count("limit_req zone=") == 12
+    # The sign-up page is limited on submission only, so reloading the form costs nothing.
+    signup_key_map = configuration.split("map $request_method $portal_signup_limit_key {", 1)[1]
+    signup_key_map = signup_key_map.split("}", 1)[0]
+    assert "POST $binary_remote_addr;" in signup_key_map
+    assert 'default "";' in signup_key_map
+    assert (
+        "limit_req_zone $portal_signup_limit_key zone=portal_signup:10m rate=3r/m;"
+        in configuration
+    )
     assert "location ^~ /internal/carlos/" in configuration
     assert "allow 10.0.0.0/8" not in configuration
     assert "allow 127.0.0.1/32" in configuration

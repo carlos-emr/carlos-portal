@@ -254,6 +254,27 @@ def _seed(label: str) -> bytes:
     return hashlib.sha256(seed_text(label).encode("utf-8")).digest()
 
 
+def private_key_from_seed_text(
+    text: str, kind: str
+) -> Ed25519PrivateKey | X25519PrivateKey | ec.EllipticCurvePrivateKey:
+    """The FAKE private key a contract fixture names only by its seed text (rule above).
+
+    Fixtures carry seed text and public values, never private key bytes, so tests derive the
+    private half here at run time.
+    """
+    if not text.startswith(SEED_PREFIX):
+        raise ValueError("not a FAKE contract seed text")
+    seed = hashlib.sha256(text.encode("utf-8")).digest()
+    if kind == "ed25519":
+        return Ed25519PrivateKey.from_private_bytes(seed)
+    if kind == "x25519":
+        return X25519PrivateKey.from_private_bytes(seed)
+    if kind == "p256":
+        scalar = int.from_bytes(seed, "big") % (P256_ORDER - 1) + 1
+        return ec.derive_private_key(scalar, ec.SECP256R1())
+    raise ValueError("unknown FAKE key kind")
+
+
 class ClinicKey:
     """A FAKE clinic P-256 signing key (carlos-emr/carlos#4691 in production)."""
 
