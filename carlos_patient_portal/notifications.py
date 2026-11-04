@@ -37,15 +37,19 @@ from carlos_patient_portal.email_delivery import PortalEmailDeliveryError
 from carlos_patient_portal.models import (
     MFA_DELIVERY_METHOD_EMAIL,
 )
+from carlos_patient_portal.outbound_messages import sender_locale_kwargs
 from carlos_patient_portal.runtime import PortalRuntime
 from carlos_patient_portal.sms_delivery import PortalSmsDeliveryError
 
 logger = logging.getLogger(__name__)
 
+
 EMAIL_CHANGE_DELIVERY_NOT_CONFIGURED = "email-change confirmation delivery is not configured"
 
 
-def send_mfa_challenge(runtime: PortalRuntime, delivery: MfaChallengeDelivery) -> None:
+def send_mfa_challenge(
+    runtime: PortalRuntime, delivery: MfaChallengeDelivery, locale: str | None = None
+) -> None:
     if delivery.delivery_method == MFA_DELIVERY_METHOD_EMAIL:
         if runtime.email_sender is None:
             if runtime.settings.is_development:
@@ -55,6 +59,7 @@ def send_mfa_challenge(runtime: PortalRuntime, delivery: MfaChallengeDelivery) -
             recipient=delivery.destination,
             code=delivery.code,
             expires_in_seconds=runtime.settings.mfa_code_ttl_seconds,
+            **sender_locale_kwargs(locale),
         )
         return
 
@@ -66,6 +71,7 @@ def send_mfa_challenge(runtime: PortalRuntime, delivery: MfaChallengeDelivery) -
         recipient=delivery.destination,
         code=delivery.code,
         expires_in_seconds=runtime.settings.mfa_code_ttl_seconds,
+        **sender_locale_kwargs(locale),
     )
 
 
@@ -90,6 +96,7 @@ def send_password_reset_email(
     *,
     recipient: str,
     reset_url: str,
+    locale: str | None = None,
 ) -> None:
     if runtime.email_sender is None:
         if runtime.settings.is_development:
@@ -99,9 +106,8 @@ def send_password_reset_email(
         recipient=recipient,
         reset_url=reset_url,
         expires_in_seconds=runtime.settings.password_reset_token_ttl_seconds,
+        **sender_locale_kwargs(locale),
     )
-
-
 
 
 def build_email_change_confirmation_url(
@@ -129,6 +135,7 @@ def send_email_change_confirmation(
     *,
     recipient: str,
     confirmation_url: str,
+    locale: str | None = None,
 ) -> None:
     if runtime.email_sender is None:
         if runtime.settings.is_development:
@@ -145,10 +152,13 @@ def send_email_change_confirmation(
         recipient=recipient,
         confirmation_url=confirmation_url,
         expires_in_seconds=runtime.settings.email_change_token_ttl_seconds,
+        **sender_locale_kwargs(locale),
     )
 
 
-def send_email_change_requested_notice(runtime: PortalRuntime, *, recipient: str) -> None:
+def send_email_change_requested_notice(
+    runtime: PortalRuntime, *, recipient: str, locale: str | None = None
+) -> None:
     if runtime.email_sender is None:
         if runtime.settings.is_development:
             return
@@ -160,10 +170,12 @@ def send_email_change_requested_notice(runtime: PortalRuntime, *, recipient: str
         if runtime.settings.is_development:
             return
         raise PortalEmailDeliveryError("email-change notice delivery is not configured")
-    sender(recipient=recipient)
+    sender(recipient=recipient, **sender_locale_kwargs(locale))
 
 
-def send_contact_change_notice(runtime: PortalRuntime, *, recipient: str) -> None:
+def send_contact_change_notice(
+    runtime: PortalRuntime, *, recipient: str, locale: str | None = None
+) -> None:
     if runtime.email_sender is None:
         if runtime.settings.is_development:
             return
@@ -173,7 +185,7 @@ def send_contact_change_notice(runtime: PortalRuntime, *, recipient: str) -> Non
         if runtime.settings.is_development:
             return
         raise PortalEmailDeliveryError("contact-change email delivery is not configured")
-    sender(recipient=recipient)
+    sender(recipient=recipient, **sender_locale_kwargs(locale))
 
 
 def record_mfa_delivery_and_commit(

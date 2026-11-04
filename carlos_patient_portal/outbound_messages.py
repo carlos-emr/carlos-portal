@@ -20,6 +20,24 @@ DEFAULT_OUTBOUND_LOCALE = DEFAULT_LOCALE
 _OUTBOUND_LOCALES = frozenset(option.code for option in SUPPORTED_LOCALES)
 
 
+def sender_locale_kwargs(locale: str | None) -> dict[str, str]:
+    """Pass `locale` to a sender only when it is not the default.
+
+    Injected senders that predate the language option keep their old signature, and the default
+    language needs no argument.
+    """
+    if locale is None or locale == DEFAULT_OUTBOUND_LOCALE:
+        return {}
+    return {"locale": locale}
+
+
+def stored_outbound_locale(value: object) -> str:
+    """The language kept with a queued message, or the default when it is missing or unknown."""
+    if isinstance(value, str) and value in _OUTBOUND_LOCALES:
+        return value
+    return DEFAULT_OUTBOUND_LOCALE
+
+
 @dataclass(frozen=True)
 class OutboundMessage:
     subject: str

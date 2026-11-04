@@ -309,7 +309,7 @@ TEXT: dict[str, str] = {
         "Kod został niedawno wysłany. Proszę spróbować ponownie za {seconds} sekundę."
     ),
     "mfa_resend": "Proszę wysłać kod ponownie",
-    "mfa_sign_in_again": "Proszę zalogować się ponownie, aby poprosić o nowy kod weryfikacyjny.",
+    "mfa_sign_in_again": "Proszę zalogować się ponownie, aby poprosić o nowy kod logowania.",
     "mfa_send_by": "Proszę wysłać kod przez",
     "mfa_settings": "Ustawienia weryfikacji dwuetapowej",
     "mfa_sms": "SMS",
@@ -423,7 +423,7 @@ TEXT: dict[str, str] = {
     "username_placeholder": "nazwa użytkownika",
     "username_unavailable": "Ta nazwa użytkownika jest niedostępna.",
     "verification_delivery_failed": (
-        "Nie udało się wysłać kodu weryfikacyjnego. Proszę spróbować ponownie."
+        "Nie udało się wysłać kodu logowania. Proszę spróbować ponownie."
     ),
     "view_module": "Proszę otworzyć",
 }
