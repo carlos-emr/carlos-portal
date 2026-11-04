@@ -407,6 +407,37 @@ TEXT: dict[str, str] = {
     "filters": "Filtros",
     "of": "de",
     "page": "Página",
+    # Self sign-up (carlos-portal#15).
+    "sign_up_contact_clinic": (
+        "Si su clínica no tiene su correo electrónico, o tiene uno antiguo, comuníquese con la "
+        "clínica antes de solicitar una cuenta."
+    ),
+    "sign_up_details_invalid": (
+        "Revise sus datos: introduzca su número de tarjeta de salud, una fecha de nacimiento real "
+        "y un correo electrónico válido."
+    ),
+    "sign_up_email": "Correo electrónico registrado en su clínica",
+    "sign_up_email_hint": (
+        "Solo se usa para comprobar sus datos. El enlace se envía únicamente al correo electrónico "
+        "que ya figura en los registros de su clínica."
+    ),
+    "sign_up_heading": "Solicitar una cuenta del portal",
+    "sign_up_intro": (
+        "Introduzca su número de tarjeta de salud, su fecha de nacimiento y el correo electrónico "
+        "que su clínica tiene registrado. Si coinciden con los registros de la clínica, recibirá "
+        "por correo electrónico un enlace para terminar de configurar su cuenta."
+    ),
+    "sign_up_result": (
+        "Si sus datos coinciden con nuestros registros, le hemos enviado por correo electrónico un "
+        "enlace para terminar de configurar su cuenta. Si no recibe nada, comuníquese con la "
+        "clínica."
+    ),
+    "sign_up_result_heading": "Solicitud recibida",
+    "sign_up_submit": "Solicitar cuenta",
+    "sign_up_unavailable": (
+        "Las solicitudes de cuenta no están disponibles por el momento. Inténtelo de nuevo más "
+        "tarde o comuníquese con la clínica."
+    ),
 }
 
 # The pages that link the myCarlos app to this portal.

@@ -426,6 +426,36 @@ TEXT: dict[str, str] = {
         "Nie udało się wysłać kodu weryfikacyjnego. Proszę spróbować ponownie."
     ),
     "view_module": "Proszę otworzyć",
+    # Self sign-up (carlos-portal#15).
+    "sign_up_contact_clinic": (
+        "Jeśli przychodnia nie ma Twojego adresu e-mail albo ma nieaktualny, skontaktuj się z "
+        "przychodnią, zanim poprosisz o założenie konta."
+    ),
+    "sign_up_details_invalid": (
+        "Sprawdź swoje dane: wpisz numer karty zdrowia, poprawną datę urodzenia i prawidłowy adres "
+        "e-mail."
+    ),
+    "sign_up_email": "Adres e-mail zapisany w przychodni",
+    "sign_up_email_hint": (
+        "Służy tylko do sprawdzenia Twoich danych. Link jest wysyłany wyłącznie na adres e-mail, "
+        "który przychodnia ma już w dokumentacji."
+    ),
+    "sign_up_heading": "Poproś o założenie konta w portalu",
+    "sign_up_intro": (
+        "Wpisz numer karty zdrowia, datę urodzenia i adres e-mail, który przychodnia ma w Twojej "
+        "dokumentacji. Jeśli dane zgadzają się z dokumentacją przychodni, otrzymasz e-mailem link "
+        "do dokończenia konfiguracji konta."
+    ),
+    "sign_up_result": (
+        "Jeśli Twoje dane zgadzają się z naszą dokumentacją, wysłaliśmy Ci e-mailem link do "
+        "dokończenia konfiguracji konta. Jeśli nic nie dotrze, skontaktuj się z przychodnią."
+    ),
+    "sign_up_result_heading": "Prośba otrzymana",
+    "sign_up_submit": "Wyślij prośbę",
+    "sign_up_unavailable": (
+        "Chwilowo nie można wysłać prośby o założenie konta. Spróbuj ponownie później lub "
+        "skontaktuj się z przychodnią."
+    ),
 }
 
 # The pages that link the myCarlos app to this portal.
