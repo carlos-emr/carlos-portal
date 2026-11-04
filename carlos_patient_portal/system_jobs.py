@@ -34,6 +34,7 @@ JOB_BOOKING_SYNC = "booking-sync"
 JOB_SIGNUP_POLL = "signup-poll"
 JOB_KEY_PUBLISH = "key-publish"
 JOB_DELIVERY_SYNC = "delivery-sync"
+JOB_DEVICE_APPROVAL_SYNC = "device-approval-sync"
 
 # Spelled out rather than imported from internal_routes, which imports this module.
 PERMISSION_BOOKING_PROMPT_SYNC = "portal.booking_prompt.sync"
@@ -43,6 +44,26 @@ PERMISSION_CLINIC_KEYS_PUBLISH = "portal.mycarlos.clinic_keys.publish"
 PERMISSION_DELIVERY_UPLOAD = "portal.mycarlos.delivery.upload"
 PERMISSION_DELIVERY_EVENTS_READ = "portal.mycarlos.delivery.events.read"
 PERMISSION_DELIVERY_EVENTS_ACK = "portal.mycarlos.delivery.events.ack"
+
+PERMISSION_APPROVAL_REQUESTS_READ = "portal.mycarlos.device_approval.requests.read"
+PERMISSION_APPROVAL_CHALLENGES_PUBLISH = "portal.mycarlos.device_approval.challenges.publish"
+PERMISSION_APPROVAL_PROOFS_READ = "portal.mycarlos.device_approval.approvals.read"
+PERMISSION_APPROVAL_DECISIONS_PUBLISH = "portal.mycarlos.device_approval.decisions.publish"
+PERMISSION_APPROVAL_DEVICES_REMOVE = "portal.mycarlos.device_approval.devices.remove"
+# Clinic code v1 (mycarlos#141): CARLOS reads and consumes the codes devices submit.
+PERMISSION_APPROVAL_CODES_READ = "portal.mycarlos.device_approval.codes.read"
+PERMISSION_APPROVAL_CODES_CONSUME = "portal.mycarlos.device_approval.codes.consume"
+APPROVAL_PERMISSIONS = frozenset(
+    {
+        PERMISSION_APPROVAL_REQUESTS_READ,
+        PERMISSION_APPROVAL_CHALLENGES_PUBLISH,
+        PERMISSION_APPROVAL_PROOFS_READ,
+        PERMISSION_APPROVAL_DECISIONS_PUBLISH,
+        PERMISSION_APPROVAL_DEVICES_REMOVE,
+        PERMISSION_APPROVAL_CODES_READ,
+        PERMISSION_APPROVAL_CODES_CONSUME,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -79,6 +100,11 @@ SYSTEM_JOBS: Mapping[str, SystemJob] = MappingProxyType(
             display_name="Clinic signing keys",
             permissions=frozenset({PERMISSION_CLINIC_KEYS_PUBLISH}),
         ),
+        JOB_DEVICE_APPROVAL_SYNC: SystemJob(
+            name=JOB_DEVICE_APPROVAL_SYNC,
+            display_name="Clinic device approval",
+            permissions=APPROVAL_PERMISSIONS,
+        ),
         JOB_DELIVERY_SYNC: SystemJob(
             name=JOB_DELIVERY_SYNC,
             display_name="Clinic document delivery",
@@ -95,7 +121,7 @@ SYSTEM_JOBS: Mapping[str, SystemJob] = MappingProxyType(
 
 # Permissions only a job may hold. A staff assertion carrying one is refused on every route, so a
 # job's right can never ride on a person's login.
-JOB_ONLY_PERMISSIONS = frozenset(
+JOB_ONLY_PERMISSIONS = APPROVAL_PERMISSIONS | frozenset(
     {
         PERMISSION_BOOKING_PROMPT_SYNC,
         PERMISSION_CLINIC_KEYS_PUBLISH,
