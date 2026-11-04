@@ -418,6 +418,11 @@ def test_reference_proxy_omits_raw_request_target_and_limits_expensive_routes() 
     assert configuration.count("proxy_set_header Host $host") == 2
     assert "location ^~ /patient/" in configuration
     assert "proxy_pass http://carlos_patient_portal/;" in configuration
+    # Changing the MFA page's language sends no code, so it stays out of the MFA rate zone.
+    language_block = configuration.split("location = /patient/auth/mfa/language {", 1)[1]
+    language_block = language_block.split("\n  }", 1)[0]
+    assert "proxy_pass http://carlos_patient_portal/auth/mfa/language;" in language_block
+    assert "limit_req" not in language_block
 
 
 def test_reference_proxy_restricts_every_internal_prefix_not_just_the_carlos_one() -> None:

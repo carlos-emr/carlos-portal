@@ -228,12 +228,36 @@ first, then the best supported match from `Accept-Language`, then English. `GET 
 records the choice and redirects back to a validated local path; it takes no CSRF token because the
 cookie selects strings and a date format only, and carries no identity or authorization.
 
-`SUPPORTED_LOCALES` advertises EN, FR, ES, PL, and PT-BR, and every one of them is selectable and
-persists. **No translations are written yet**: `TEXT_CATALOG` holds an entry per locale, and
-`portal_text()` merges the selected locale over English key by key, so an untranslated locale
-renders English rather than failing. Adding a language therefore means adding keys to
-`TEXT_CATALOG["<code>"]` and a date format to `DATETIME_FORMATS` — no route, template, or context
-change — and a partially translated catalog renders correctly for the keys it does define.
+`SUPPORTED_LOCALES` advertises EN, FR, ES, PL, PT-BR, 简体中文 (zh-CN), and 繁體中文 (zh-TW), each
+named in its own language, and every one of them is selectable and persists. Chinese tags resolve
+by script, then region: `Hant`, `TW`, `HK`, and `MO` mean zh-TW; `Hans`, `CN`, `SG`, and a bare `zh`
+mean zh-CN. Mandarin (`cmn`) defaults to zh-CN and Cantonese (`yue`) to zh-TW.
+
+**Translations are partial.** The strings live one file per locale in
+`carlos_patient_portal/locales/` (`en.py` is the source), and `portal_text()` merges the selected
+locale over English key by key, so an untranslated key renders English rather than failing.
+Translating is therefore only a matter of adding keys to that locale's file; a partially translated
+catalog renders correctly for the keys it does define. A counted message is one key per plural form
+(`<key>_one`/`<key>_other`; Polish `_one`/`_few`/`_many`; Chinese `_other` only), read through
+`plural_text()`. Each language's date-and-time stamp is one line in `DATETIME_FORMATS`; appointment
+times are catalog strings (`booking_slot_date`, `booking_slot_time`) that a translator sets.
+`tests/test_i18n_catalog.py` checks every locale's placeholders against English, and every key for
+the locales listed in its `COMPLETE_LOCALES`; a translation that completes a language adds it there.
+
+The MFA page is only ever rendered in answer to a POST, so its language buttons post the challenge
+to `POST /auth/mfa/language` (CSRF-checked), which renders the same page in the chosen language
+without sending a code. Other pages link back to a page that serves GET: their own path when it
+does, else the signed-in module's page or the front page. A 404 or 405 page links to the front
+page, and so does a page answering the form of an emailed-link page (password reset, email change),
+whose token only that link carries. On the emailed-link pages themselves, a click on a language
+link makes `portal.js` add the token as a fragment, which the browser keeps across the redirect and
+never sends; the links themselves never hold it.
+
+Errors are answered in the medium the caller uses. A browser gets a page in its language for a
+failed request, a throttled or unavailable portal, or an unexpected fault. A caller gets the JSON
+`{"detail": ...}` body (FHIR: an OperationOutcome) when it is on `/api/`, `/fhir/`, `/internal/`
+or `/dev/admin/`, sent a JSON body, asked only for JSON in `Accept`, or authenticated with a bearer
+token.
 
 `PATIENT_PORTAL_PUBLIC_BASE_URL` is used to build password-reset email links and is required when
 SMTP is configured outside development. It must use HTTPS outside development.
@@ -338,6 +362,32 @@ Override `PORTAL_BASE_URL`, `PORTAL_TEST_USER`, `PORTAL_TEST_PASSWORD`, `PORTAL_
 `PORTAL_SCREENSHOT_DIR` when the local setup differs from the defaults. Set `PORTAL_CHROME_PATH` to
 use a particular Chrome or Chromium executable. The test refuses public hosts unless
 `PORTAL_ALLOW_NON_LOCAL_BASE_URL=true` is deliberately set.
+
+A second live browser check covers the account flows the smoke test does not drive: confirming an
+email change from the emailed link, creating Link myCarlos codes (with the MFA-proof step-up),
+listing and removing linked devices, a wrong current password on the account forms and the locked
+page, and declining offered appointment times. Its fixtures are single-use, so it needs a fresh
+database, its own seed and a handful of settings (myCarlos delivery on, an https public address,
+a raised sign-in rate limit); the full recipe is at the top of
+`scripts/patient-portal-account-playwright-checks.js`:
+
+```bash
+python tests/seed_browser_account.py
+npm run test:patient-portal-account-playwright
+```
+
+A third live check covers the sign-in and session flows the smoke test does not drive: a code sent
+by SMS (captured by `scripts/patient-portal-sms-capture.js`, a loopback webhook the portal posts to,
+so no SMS provider is needed), Resend after the cooldown, a phone change confirmed by SMS, the
+signed-in pages in every locale, the notice pages a browser gets for an unknown route, a stale form
+token and the sign-in throttle, and idle session expiry. It needs its own fresh database, seed and
+short cooldown/idle settings; the full recipe is at the top of
+`scripts/patient-portal-session-playwright-checks.js`:
+
+```bash
+python tests/seed_browser_session.py
+npm run test:patient-portal-session-playwright
+```
 
 `PATIENT_PORTAL_CLINIC_ID` and `PATIENT_PORTAL_CLINIC_NAME` have development placeholders.
 Non-development startup rejects those placeholders. The configured clinic is enforced on login
