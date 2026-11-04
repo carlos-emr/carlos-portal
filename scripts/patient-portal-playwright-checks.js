@@ -743,7 +743,7 @@ function screenshotPath(name) {
     await page.locator('input[name="username"]').fill(nonLatin.username);
     await page.locator('input[name="password"]').fill(nonLatin.password);
     await page.locator('input[name="password"]').press('Enter');
-    await page.getByRole('heading', { name: 'Verification code' }).waitFor();
+    await page.getByRole('heading', { name: 'Sign-in code' }).waitFor();
     assert(
       !(await context.cookies()).some((cookie) => cookie.name === 'carlos_portal_session'),
       'non-Latin sign-in established a session before MFA'
