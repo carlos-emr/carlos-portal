@@ -21,6 +21,7 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.pool import StaticPool
 
 from carlos_patient_portal import auth
+from carlos_patient_portal.approval_models import ApprovalBase
 from carlos_patient_portal.auth import (
     AUTH_LOCKED_BY_AUTOMATION,
     MfaChallengeDelivery,
@@ -35,6 +36,7 @@ from carlos_patient_portal.delivery_outbox import (
     process_one_delivery,
 )
 from carlos_patient_portal.email_delivery import PortalEmailDeliveryError
+from carlos_patient_portal.mailbox_models import MailboxBase
 from carlos_patient_portal.models import (
     AUDIT_EVENT_ACCOUNT_CONTACT_UPDATE,
     AUDIT_EVENT_ACCOUNT_UNLOCK,
@@ -74,7 +76,7 @@ ALEMBIC_VERSION_NUM_LENGTH = 32
 
 
 def test_migrated_schema_matches_the_models_exactly() -> None:
-    """Fail the build when a migration and `models.py` drift apart.
+    """Fail the build when a migration and the complete model metadata drift apart.
 
     The suite used to build its schema with `create_all` and then *stamp* the Alembic head, so no
     test ever executed migrations 0003+ and a migration that forgot a column would pass pytest,
@@ -85,7 +87,10 @@ def test_migrated_schema_matches_the_models_exactly() -> None:
     try:
         upgrade_to_head(engine)
         with engine.connect() as connection:
-            differences = compare_metadata(MigrationContext.configure(connection), Base.metadata)
+            differences = compare_metadata(
+                MigrationContext.configure(connection),
+                [Base.metadata, MailboxBase.metadata, ApprovalBase.metadata],
+            )
     finally:
         engine.dispose()
 
