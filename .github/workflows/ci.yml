@@ -177,6 +177,7 @@ jobs:
           tests/test_mycarlos_postgresql.py
           tests/test_mycarlos_mailbox_postgresql.py
           tests/test_approval_postgresql.py
+          tests/test_signup_history_migration.py
 
       - name: Run patient portal Playwright browser checks
         if: matrix.python-version == '3.12'
