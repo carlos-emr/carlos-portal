@@ -236,11 +236,6 @@ def test_the_reviewer_role_set_is_closed_and_the_notice_tag_names_the_language()
     )
 
 
-@pytest.mark.parametrize("example", CONTRACT["portal"]["stage"])
-def test_carlos_stages_an_aid_only_for_a_link_that_accepts_the_kind(example):
-    assert aid.carlos_may_stage_aid(example["accepts"]) is example["carlos_may_stage_aid"]
-
-
 def test_the_delivery_contract_fixture_is_untouched():
     # This addendum adds a second copy kind; the v1 original contract must not change with it.
     assert ref.FIXTURE_PATH.read_text(encoding="utf-8") == ref.render()

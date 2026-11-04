@@ -178,21 +178,6 @@
         "accepts": [
           "reading-aid/1"
         ]
-      },
-      {
-        "name": "link from an older myCarlos build",
-        "device": "device",
-        "clinic_id": "clinic-a",
-        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
-        "clinic_keys": [
-          {
-            "clinic_id": "clinic-a",
-            "kid": "opVXT3byX9TTRh_4R8FJ3TxeWzT0itR6IbwRyRrhlCY",
-            "spki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE0se2VJ-mUufNkzHWmIxlfy34aetQ7EqS87BaW0pwslyf6BBnvI1NcgPBxIhJc4DRl8CZDFB8P2uv5kDQDa6g_w",
-            "status": "active"
-          }
-        ],
-        "accepts": []
       }
     ],
     "package_link": "link to clinic-a",
@@ -349,7 +334,7 @@
         "blob": "dwH3eKRCS0mWr5A4zFBlNYOn_Drx3EaR_Qzign9P5zIFQcbx6CnFX7aQQBMAbzufihbDnMEX-n9Ky7iqq--0mVpAcDXYbRw5RX_fCQz57TMjwoD-M2GFi875jUrV4BKKmpW7HakPJh1vHmkwKBsu8IpjQJugJWHme7_sj4a2MjjxxuUnq5TIHkdakqj62EtcbgqBaeT0rU2ulkUiitnB2V4r5RkArFIRmko0loqAe9r1P1_7tJid8P-GDf-eRPnc_ePIOn9hIE-M2Tx2M19DYd0qfUaSONgWZDItFTj88Vj4mlbbPSy_u7Ph5icXAFT3SJHatOngruhJuOXZOxornGm8wTuPB57v-bbLnAr_9GcpW8EzHGs6j_zhXJOaCuWS3DpLQ9bBHLXbfZWCuU_Vq23vGdpGA901k85R3lKGhwN4tHTDNoQuvOWJ-j08al_GQRKydXto2n0Ckmoh3oMoj5gDJF5h-aEFGM7WW8h-RbSS57rdml3Haooc58Uyjni3YdL_n0FLoGtgrmWfM1ewKCbMCkjYFa9r30O54lnDX-84tVIsJ6kYpO6dyBgFBb2P7t5LsTCtV2Hr9ub2PWinIRjJd7v3cBpG6icRufIk811PigbbaZJ6uCKNxBldCNFj7-sr2HccvA_bs9Fls7WkYyV-GxoRjvJWTy96hD5nw72s3IHYTi7F3JIHw3MqJWtossQSIycZjqkvs50d4Sp6CLKtWkuFtrkh44e-VJpAgk9nrVgASL00BHDvUaP-n4AweNKanLGSUuPLNIg7ea9FIcWgCclyZEj-XUGES3pZxB7oeoSN-iDjrnM9JZQ5arMWthBdzFOT7bW_5qf8vip4w4kV0P_-pxlMTtYPl5U7FdAPRaGCp3LS7Uy7pqcHxQV45MqB0hX_aS1-Q-zGDpvb82sy1U9_85rQyclGLbhuYl4SddgXKO5QEwZdUw_WZnaMeJxKp8CBZSBzwjB4qldIdcI7e_wgiSoW17w70cCdIvJry6EdEeLnIXQjpcfhLQckvM25VIZCqDqSCNTDGgULuq81nEO5Jvz_XEbf6rsavrQtCqHBlTzCuDm0_fRDqzRagtIQIC1-k1wRp-S2yHlBZxzOtL_3KiV-intg-Lm1BPAV4n9sGxYLEjrr1A7tCCB-MSBp-oF_0NdlciOFpFa3og49ZYH6uThZ6ICncKTjkdPq9KAww5Ix0sE5OMjNuPl-0j-yul6Lv2u5ug7ckE5bcNxP4000Kt0LbK1UkGa7IhG-Tr0HZRYs41YBe0OtmSq9BVtnykjsTtN8IRNNEzrFYw9CDTe9xo6mdkWzL6EngIUzUUbbtSK4NtxS4hKYCRBBVHhTTIfA8Ucb_oOV0OL2FSIh3_AUmdqVZrITTTqcRrR-7rWBSHh2vLnFd47kXuZAaGT6DRUiBV8Xj_lkZVb6MLoVEOkkfIHdtqsJcLmYCaTMr0lAxEeBy5Fy3XW2tGKf_5h1mHZKN-fznv55hgVK4tnUXGS4guEVqfqAYSlqVhp_DMjJe3mHbtJwPS5hHYjMJJRCreCczHxi_E4rVdljNvGRTxMiBFveOOnQ0AD5R1_2iYQ2oAPGHuTlOAG870OZPBAsVJVjt4lNoqkg5295Qv5HD21n13ttZdqJegMorohg2_BQ-P1AHG1lYBlykkQLSrHHl3JCUQllxnGV5AUAM1PjQSUJZHelh5iijH_Vavtza7um-YomuGhv9cT-xoI48vKD10uPrjHRMr36T3RGHsTvIr7dv0hhdiBrrdIwWeAHa0jzXd0Vr8ZaStfvTUiBwhleLTizN7F8Z-d2ipqoiAf9grkp70ZJvVdxn6N_VDnQBwi97dMu6JTKzHeJYASyE-1nEHQ8nPgMPJZWcPUcxaagNqDzlIZafPvxuydNiu-f70fc4lpGU4TLt9yeU7FtXPXXcjC754Vh0AbmzVh3Be-OIHWrh9Rxsh4l0QU_Deig1aKpzbHtK6ZSTMPCBeCSxpJF2_yWvr42fM6ej8qgoE9FsqgNHIsjIdRFCw5LSwU4B-wCUdiL6Lz8Js8-KDTsweYu7YEdTzNfg-GnZZD7MVn2yPmPGZV1WGXCkmr2vL8IRPt0IoBCPkwxUkjhBRpWpXkh2AR4NPVEMKR-sXFGMB0vT4CiRuZdo78uWKfThUQ5AJAEgHeR6mxnfnevbLkrVizJjZ-a9qNKex3k4EPsqAENlRQI_9uYNEaoyOUXhLnQVDeCLoUagvcgq9VdQk3IF9bS9VUCRM71knaIT0XEOh74B4rgo5A_QGSNIvbf2ogCxqyeCmzmNmGWg22C1QNzeXnNDpli4FxlqdZnxyBIh5LtrYoAp9pC-lqN8UawSn4rFDRdLR2kNXdmcZA-R7GKcWI-OpdwYApNN3KNOiIuqDI6Xis_sDkSPITgCdDyKRzjSv9D-y3AOMKAgGh0RwWgl5POmmtA11VnR_AzshhBO6VzXRH4guEpD65L9FBowO-jzSuIx6TINbyP0SUVDd_6_3Ew3KPMYSnnka1Vrlk9FtBM7VO9Ib8ectoT8vtKIDAk1DfD3-eaW-_UM5paLZeBBM89Beky2dOlyRmBdH883E-fCkVmIEwNf8FOnv4_8fLINCQ9g5mkrGQbtLHUMVwwlDVKrBn-5MMS3u8j6EpsnUZ_Z133jBd8eGJEeCJhRiz0vz5sqmOICD045B2sfivj7WUHblnG3HDK2heiZLBDt06lZU1ytiPf1LulkrFU99jGFVgMwBDOb-__lx6PXpjcsqVm2EVXL6mhS3_xLmcLjJCPqU2Mg_Uix-sdGVdSE0z754EsrXi44EOM4MFGMUXW3ftOgZn1Peu1AtsZfwVJQU3UHybQ3Gl7dokZ7yR1gf0DnAkKqV5hJOgjQTaIb2ZqZtAuglerwH_ayxKGz6IeXw3hf10M3iU2PZ2vRN5wCe3hu0TYK6XimRLNjpOYMIs8sxHd0xwPVSMPEZsNlgIB2p3VOFgTFLcERoloW9Z3znPm8TpsT7ynxJQr_65eCkK_av4NUwh-vpMb93s6MFkwbqL9q8E0wzcRJVWI9F9b18vxo0_-BcHb_LxFLNMGHXZyycmek0A_qupR5DWnLyPoctlhMAUom2IqLp3dLZSemO4X9qe3njnrI6KSL_cMTkcUcgXkazL22o4i",
         "now": 1792454400,
         "expect": "waiting_for_original",
-        "note": "kept by delivery ID and ciphertext hash, checked again after each original is filed until it expires; the same listing hash is not downloaded again"
+        "note": "the two copies travel on their own, so the aid may be listed first: kept by delivery ID and ciphertext hash, checked again after each original is filed until it expires; the same listing hash is not downloaded again"
       }
     ],
     "refuse": [
@@ -988,20 +973,6 @@
           "reading-aid/1"
         ],
         "served": false
-      }
-    ],
-    "stage": [
-      {
-        "link": "link to clinic-a",
-        "accepts": [
-          "reading-aid/1"
-        ],
-        "carlos_may_stage_aid": true
-      },
-      {
-        "link": "link from an older myCarlos build",
-        "accepts": [],
-        "carlos_may_stage_aid": false
       }
     ],
     "kind": [

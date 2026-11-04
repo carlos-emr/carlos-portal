@@ -276,23 +276,28 @@ aid. This section is the contract for milestones P1 to P7 of the delivery plan; 
   carries none, so a receiver records `pair_id` but cannot verify it. The binding a receiver
   checks is the original's delivery ID, PDF hash and lifetime. Delivery IDs form one space:
   an aid never reuses an original's, or the other way round.
-- **Both or neither.** CARLOS stages the original and the aid in one transaction, re-sends the
-  same retained bytes after a lost response, and fences both when either is fenced. It never
-  re-signs an aid: if the original changes after approval, the pair is dropped and a new review is
-  needed (decision D1).
+- **The original is never held back by the aid.** CARLOS stages, sends and retries the two copies
+  on their own: a lost response re-sends that copy's exact retained bytes, and a failure part-way
+  leaves the original on its way and the aid to follow. The device files the aid when its original
+  is present, whichever arrives first ("waiting_for_original" below). An aid is never re-signed:
+  if the original changes after approval, CARLOS fences the aid (and the device would refuse it as
+  `pair_mismatch`), and a new review is needed (maintainer answer 1).
 - **Approved means exact.** An aid is staged only when a persisted clinician approval names the
   exact original (`original_document_sha256`) and the exact summary (`summary_version`) being sent
-  (decision D2). The approval record is referenced by an opaque `approval.id`, not derived from
+  (maintainer answer 2). The approval record is referenced by an opaque `approval.id`, not derived from
   the reviewer's provider number or name; the `approval` claim carries a role, never a name.
   (`provider_name`, copied from the original's manifest, is the document's provider, who is often
   the reviewing clinician too: the "no reviewer name" promise is about the approval claim.)
-- **The original always goes.** The aid is an optional addition the sending staff member ticks.
-  When it cannot be staged (no matching approval, no capable device, a limit), the original is sent
-  alone and the status says so. Once ticked, the pair is atomic (decision D3).
+- **Original plus aid by default.** When an approved summary exists for the exact original being
+  sent, the send includes the aid unless the sending staff member ticks "leave the reading aid
+  out". When the aid cannot be staged (no matching approval, a limit), the original is sent alone
+  and the status says so (maintainer answer 3).
 - **Signed JSON for now.** The aid is canonical JSON (RFC 8785) that the clinic key signs through
-  the manifest; a PDF rendering is a later decision (D4) and would be a new `media_type`, not a
-  change to this one.
-- **Older devices never receive an aid** (decision D6): see "Who receives a reading aid".
+  the manifest; a PDF rendering may come later as a new `media_type`, not a change to this one
+  (maintainer answer 4).
+- **Reading aids are part of the myCarlos baseline** (maintainer answer 6): there is no production
+  use of myCarlos yet, so no device without reading-aid support has to be served. The `kind` and
+  `accept` handshake below is kept only as a format-version guard, not as an old-device rule.
 - **Never shown alone.** A device shows an aid only from the original it reads, under the notice,
   and never files one whose original it does not hold (see "Showing a reading aid").
 
@@ -303,22 +308,19 @@ The portal cannot see what a copy holds, so the kind of a copy is written on its
   `kind`. On upload the portal accepts `kind` only as printable ASCII of at most 64 characters
   matching `name/version` (`[a-z0-9-]+/[0-9]+`), else `invalid_delivery`; it stores and echoes
   it unchanged and never interprets it.
-- A pickup (`GET /api/mycarlos/deliveries`) declares the kinds the device accepts, `accept`, as a
-  repeated query parameter (`?accept=reading-aid/1`). The portal serves a copy with a `kind` only
-  to a pickup that accepts that kind, and serves a copy without a `kind` to every pickup. A device
-  built before this section sends no `accept` and is never served an aid. The portal stores and
-  echoes `accept` values, so it bounds them: at most 8 per pickup, each a valid kind as above,
-  no duplicates, else `invalid_request`. A listing may also show a copy's `size`, and a device
-  may refuse a reading aid above its 1 MiB limit as `too_large` from the listing, before any
-  download.
-- The portal records, per link, the kinds its latest pickup accepted, and shows them to CARLOS as
-  `accepts` on the link in its device list. **CARLOS stages an aid only for a link whose
-  `accepts` holds `reading-aid/1`**; other links get the original alone, and the send status says
-  "reading aid not sent: device too old".
+- A pickup (`GET /api/mycarlos/deliveries`) declares the kinds the device implements, `accept`,
+  as a repeated query parameter (`?accept=reading-aid/1`); every myCarlos build names
+  `reading-aid/1`. The portal serves a copy with a `kind` only to a pickup that accepts that kind,
+  and serves a copy without a `kind` to every pickup. This is a format-version guard, so that a
+  later `reading-aid/2` reaches only devices that implement it; it is not an old-device rule, and
+  CARLOS stages an aid for every link. The portal stores and echoes `accept` values, so it bounds
+  them: at most 8 per pickup, each a valid kind as above, no duplicates, else `invalid_request`.
+  A listing may also show a copy's `size`, and a device may refuse a reading aid above its 1 MiB
+  limit as `too_large` from the listing, before any download.
 - A copy with a `kind` the portal has never seen is still stored and served to pickups that name
   it; the portal does not interpret kinds.
 
-The vectors `portal.serve` and `portal.stage` fix both rules.
+The vectors `portal.serve` fix the serve rule.
 
 ### The aid's manifest
 
@@ -332,7 +334,7 @@ these claims:
 | `delivery_id`, `recipient_id`, `device_key_id` | As for an original. They equal the outer record's. `delivery_id` is the aid's own and differs from the original's. |
 | `clinic_id`, `clinic_name`, `provider_name`, `patient` | Copied from the original's manifest |
 | `pair` | `{"pair_id", "original_delivery_id", "original_document_sha256"}`. `pair_id` is a UUID v4 shared by the two copies; `original_delivery_id` is the original's; `original_document_sha256` equals the original manifest's `document.sha256`. |
-| `reading_aid` | `{"media_type", "size", "sha256", "language", "summary_version", "generated_at", "revised_at", "notice_version"}`. `media_type` is `application/vnd.carlos.reading-aid+json`; `size` and `sha256` cover the exact JSON bytes; `language` is a BCP 47 tag and equals the JSON's; `summary_version` is CARLOS's 64-hex fingerprint of the exact approved content; `generated_at` and `revised_at` (or `null`) are when the model draft was made and last corrected; `notice_version` names the patient notice carried in the JSON, `carlos-5537-<language>-<n>` (`carlos-5537-en-1` today), and its language tag must equal `language`'s primary subtag. |
+| `reading_aid` | `{"media_type", "size", "sha256", "language", "summary_version", "generated_at", "revised_at", "notice_version"}`. `media_type` is `application/vnd.carlos.reading-aid+json`; `size` and `sha256` cover the exact JSON bytes; `language` is a BCP 47 tag and equals the JSON's; `summary_version` is CARLOS's 64-hex fingerprint of the exact approved content; `generated_at` and `revised_at` (or `null`) are when the model draft was made and last corrected; `notice_version` names the patient notice carried in the JSON, `<scheme>-<language>-<n>` matched by shape (`[a-z0-9-]+-[a-z]{2,3}-[0-9]+`; `carlos-5537-en-1` today), and its language tag must equal `language`'s primary subtag. |
 | `approval` | `{"id", "reviewer_role", "reviewed_at"}`. `id` is opaque (CARLOS's persisted approval record), never derived from the reviewer's provider number or name; `reviewer_role` is one of a closed set, today only `clinician`. |
 | `created_at`, `expires_at` | The original's values: a pair shares one lifetime |
 | `kid` | The clinic key that signed it |
@@ -389,7 +391,7 @@ any download. Then:
       `delivery_id` and `ciphertext_sha256`, send no receipt, and check it again after each
       original is filed. A later listing with the same hash is not downloaded again; a different
       hash under that ID is `replayed`. A waiting aid that passes its expiry (with the skew) is
-      deleted silently: no receipt, nothing shown. (Both copies are staged together, but the
+      deleted silently: no receipt, nothing shown. (The two copies travel on their own, so the
       portal may list the aid first.)
     - filed, with `document.sha256` equal to `pair.original_document_sha256` and `created_at`
       and `expires_at` equal to the original's: the outcome is `file`;
@@ -408,15 +410,18 @@ its aid.
 - `notice.heading` and `notice.body` are shown above the overview and points every time, in the
   aid's language, with a link that opens the original.
 - Evidence strings are shown with their points, as the clinician saw them.
-- Whether the aid may be shown before the original has been opened once is decision D5; until it
-  is taken, the original opens first.
+- The aid may be opened before the original (maintainer answer 5): the notice comes first every
+  time, with the link to the original.
 
 ### What CARLOS must hold (for P2 to P4)
 
 - A persisted approval: document ID, `original_document_sha256`, `summary_version`, the content
   hash of the approved JSON, reviewer, `reviewed_at`, `notice_version`.
-- A pair relation in its outbox: both rows share `pair_id`; retry re-sends both exact copies;
-  fencing one fences both.
+- A pair relation in its outbox: both rows share `pair_id`, but each row is staged, sent and
+  retried on its own with its exact retained bytes; fencing the original (its source changed)
+  fences the aid too, and fencing the aid alone leaves the original. The send includes the aid by
+  default when an approval matches the original; the "leave the reading aid out" tick is recorded
+  with the send.
 - The original it sends must be byte-identical to the source the clinician reviewed (the aid's
   `pair.original_document_sha256` is that source's hash): the sender never re-renders, stamps or
   re-signs the PDF after approval, or the pair will not file.

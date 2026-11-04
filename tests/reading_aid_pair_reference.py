@@ -55,7 +55,7 @@ MAX_READING_AID_CIPHERTEXT_BYTES = 1024 * 1024  # the sealed copy
 MAX_POINTS = 50
 MAX_EVIDENCE_PER_POINT = 5
 NOTICE_VERSION_EN = "carlos-5537-en-1"
-NOTICE_VERSION_RE = re.compile(r"^carlos-5537-([a-z]{2,3})-[0-9]+$")  # the tag names the language
+NOTICE_VERSION_RE = re.compile(r"^[a-z0-9-]+-([a-z]{2,3})-[0-9]+$")  # <scheme>-<language>-<n>
 KIND_RE = re.compile(
     r"^[a-z0-9-]+/[0-9]+$"
 )  # an outer record's `kind` and a pickup's `accept` value
@@ -213,11 +213,6 @@ def accept_ok(accepts: object) -> bool:
         and len(set(accepts)) == len(accepts)
         and all(kind_ok(value) for value in accepts)
     )
-
-
-def carlos_may_stage_aid(link_accepts: list[str]) -> bool:
-    """CARLOS stages a reading aid only for a link whose last pickup accepted the kind."""
-    return READING_AID_KIND in link_accepts
 
 
 # --- The receiver's checks (spec: "Opening a reading aid") ---------------------------------------
@@ -519,14 +514,6 @@ def build_contract() -> dict[str, object]:
         "clinic_keys": [key_entry(clinic_a, "active"), key_entry(clinic_a_revoked, "revoked")],
         "accepts": [READING_AID_KIND],
     }
-    older_link = {
-        "name": "link from an older myCarlos build",
-        "device": "device",
-        "clinic_id": ref.CLINIC_A,
-        "recipient_id": ref.RECIPIENT_ID,
-        "clinic_keys": [key_entry(clinic_a, "active")],
-        "accepts": [],
-    }
 
     # The original this aid reads: the same claims as the delivery contract's first package.
     original_claims = ref.manifest_claims(
@@ -656,8 +643,9 @@ def build_contract() -> dict[str, object]:
             waiting_copy,
             "waiting_for_original",
             note=(
-                "kept by delivery ID and ciphertext hash, checked again after each original is "
-                "filed until it expires; the same listing hash is not downloaded again"
+                "the two copies travel on their own, so the aid may be listed first: kept by "
+                "delivery ID and ciphertext hash, checked again after each original is filed "
+                "until it expires; the same listing hash is not downloaded again"
             ),
         ),
     ]
@@ -892,14 +880,6 @@ def build_contract() -> dict[str, object]:
         {"outer_kind": None, "accepts": [READING_AID_KIND], "served": True},
         {"outer_kind": "reading-aid/2", "accepts": [READING_AID_KIND], "served": False},
     ]
-    stage_examples = [
-        {"link": link_a["name"], "accepts": link_a["accepts"], "carlos_may_stage_aid": True},
-        {
-            "link": older_link["name"],
-            "accepts": older_link["accepts"],
-            "carlos_may_stage_aid": False,
-        },
-    ]
 
     return {
         "description": (
@@ -955,7 +935,7 @@ def build_contract() -> dict[str, object]:
         },
         "receiver": {
             "device": "device",
-            "links": [link_a, older_link],
+            "links": [link_a],
             "package_link": link_a["name"],
             "filed_originals": filed_originals,
             "filed_aids": filed_aids,
@@ -965,7 +945,6 @@ def build_contract() -> dict[str, object]:
         "packages": {"accept": accepted, "refuse": refused},
         "portal": {
             "serve": serve_examples,
-            "stage": stage_examples,
             "kind": kind_examples,
             "accept": accept_examples,
         },
