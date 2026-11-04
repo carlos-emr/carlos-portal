@@ -18,10 +18,10 @@ from xml.etree import ElementTree
 
 from carlos_patient_portal import notification_transports as nt
 from carlos_patient_portal.mycarlos_availability import (
-    MAX_HINT_BYTES,
     CurrentAvailability,
     DispatchLease,
     GenericNotice,
+    NoticeKeys,
     OutboxIntent,
     Owner,
     ProviderResult,
@@ -30,6 +30,7 @@ from carlos_patient_portal.mycarlos_availability import (
     Subscription,
     TransportFailure,
     dispatch,
+    notice_token,
 )
 from tests import notification_transports_support as sup  # noqa: E402
 
@@ -38,7 +39,8 @@ DESTINATION = UUID("00000000-0000-4000-8000-0000000000d1")
 SUBSCRIPTION_ID = UUID("00000000-0000-4000-8000-0000000000a1")
 EPOCH = UUID("00000000-0000-4000-8000-0000000000e1")
 HINT = ReadyHint(SUBSCRIPTION_ID, EPOCH, 42)
-NOTICE = GenericNotice(HINT)
+KEYS = NoticeKeys(b"k" * 32)
+NOTICE = GenericNotice(notice_token(KEYS, HINT))
 COLLAPSE = "c" * 64
 FCM_TOKEN = "fake-fcm-registration-token:APA91b" + "x" * 40
 APNS_TOKEN = "ab" * 32
@@ -71,11 +73,7 @@ def wns(*responses, handle=WNS_CHANNEL):
 
 
 def _hint(hint):
-    return nt._hint_text(GenericNotice(hint))
-
-
-def hint_from(text):
-    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+    return notice_token(KEYS, hint)
 
 
 class RequestShapes(unittest.TestCase):
@@ -94,9 +92,9 @@ class RequestShapes(unittest.TestCase):
         self.assertEqual(set(message), {"token", "notification", "data", "android"})
         self.assertEqual(message["token"], FCM_TOKEN)
         self.assertEqual(message["notification"], {"title": "myCarlos", "body": NOTICE.body})
-        self.assertEqual(set(message["data"]), {"h"})
-        self.assertEqual(hint_from(message["data"]["h"]), HINT.encode())
-        self.assertLessEqual(len(HINT.encode()), MAX_HINT_BYTES)
+        self.assertEqual(set(message["data"]), {"n"})
+        self.assertEqual(message["data"]["n"], NOTICE.token)
+        self.assertEqual(len(NOTICE.token), 22)
         self.assertEqual(
             message["android"], {"collapse_key": COLLAPSE, "ttl": "600s", "priority": "HIGH"}
         )
@@ -120,11 +118,11 @@ class RequestShapes(unittest.TestCase):
             },
         )
         payload = json.loads(request.body)
-        self.assertEqual(set(payload), {"aps", "h"})
+        self.assertEqual(set(payload), {"aps", "n"})
         self.assertEqual(
             payload["aps"], {"alert": {"title": "myCarlos", "body": NOTICE.body}}
         )
-        self.assertEqual(hint_from(payload["h"]), HINT.encode())
+        self.assertEqual(payload["n"], NOTICE.token)
 
     def test_apns_serves_macos_too_and_uses_the_sandbox_host_only_when_configured(self):
         sandbox = nt.ApnsConfig("FAKETEAM01", "FAKEKEYID1", Path("/x.p8"), "ca.example.fake", True)
@@ -153,8 +151,7 @@ class RequestShapes(unittest.TestCase):
         toast = ElementTree.fromstring(request.body)  # noqa: S314 (our own generated XML)
         self.assertEqual(toast.tag, "toast")
         self.assertEqual(set(toast.attrib), {"launch"})
-        self.assertTrue(toast.attrib["launch"].startswith("h="))
-        self.assertEqual(hint_from(toast.attrib["launch"][2:]), HINT.encode())
+        self.assertEqual(toast.attrib["launch"], "n=" + NOTICE.token)
         texts = [node.text for node in toast.iter("text")]
         self.assertEqual(texts, ["myCarlos", NOTICE.body])
         self.assertEqual(len(list(toast.iter())), 5)  # toast, visual, binding, two texts
@@ -181,41 +178,40 @@ class NoPhiAndNoDocumentContent(unittest.TestCase):
             for forbidden in (str(DESTINATION), DESTINATION.hex):
                 self.assertNotIn(forbidden, blob)
 
-    def test_the_hint_is_encoded_not_hidden_and_holds_exactly_the_five_v1_fields(self):
-        """A provider can decode ``h``: subscription UUID, epoch UUID and the waiting count.
+    def test_the_provider_cannot_read_the_hint_fields(self):
+        """The token is a keyed hash: no subscription UUID, epoch UUID or waiting count in it.
 
-        Hiding those (a per-epoch hash and an offset) is the policy module's follow-up and must
-        land before the adapters are wired. This pins what is exposed today so a change is seen.
+        Whatever a provider does with a message body (decode base64 or hex, search for the
+        ids or the count), nothing of the five v1 fields is there; only the portal's key
+        and ``resolve_notice_token`` turn the token back into a sequence.
         """
-        decoded = []
+        needles = [str(SUBSCRIPTION_ID), SUBSCRIPTION_ID.hex, str(EPOCH), EPOCH.hex,
+                   "documents_ready", "subscription", "epoch", "sequence", "version"]
         for request in self.requests():
-            body = request.body.decode("utf-8")
-            if request.body.startswith(b"<toast"):
-                encoded = ElementTree.fromstring(request.body).attrib["launch"][2:]  # noqa: S314
-            else:
-                encoded = json.loads(body)["message"]["data"]["h"] if "message" in body[:12] else (
-                    json.loads(body)["h"]
-                )
-            decoded.append(json.loads(hint_from(encoded)))
-        self.assertEqual(len(decoded), 3)
-        for fields in decoded:
-            self.assertEqual(
-                fields,
-                {
-                    "version": 1,
-                    "kind": "documents_ready",
-                    "subscription_id": str(SUBSCRIPTION_ID),
-                    "epoch": str(EPOCH),
-                    "sequence": 42,
-                },
+            blob = request.body.decode("utf-8") + request.url + " ".join(
+                f"{k}={v}" for k, v in request.headers.items()
             )
+            for needle in needles:
+                self.assertNotIn(needle, blob)
+            self.assertIn(NOTICE.token, blob)
+        raw = base64.urlsafe_b64decode(NOTICE.token + "==")
+        self.assertEqual(len(raw), 16)
+        for needle in (SUBSCRIPTION_ID.bytes, EPOCH.bytes, b"documents_ready"):
+            self.assertNotIn(needle, raw)
+        self.assertNotIn((42).to_bytes(2, "big"), raw[:2])
+        # Same hint, same token; the next sequence is a different, unrelated-looking token.
+        self.assertEqual(notice_token(KEYS, HINT), NOTICE.token)
+        nxt = notice_token(KEYS, ReadyHint(SUBSCRIPTION_ID, EPOCH, 43))
+        self.assertNotEqual(nxt, NOTICE.token)
+        common = sum(a == b for a, b in zip(nxt, NOTICE.token, strict=True))
+        self.assertLess(common, 8)
 
     def test_the_only_words_in_a_message_are_the_fixed_generic_notice(self):
         for request in self.requests():
             text = request.body.decode("utf-8")
             # The recipient handle, the stable collapse identity and the opaque hint are the
             # variable parts; everything else must be fixed words.
-            for variable in (FCM_TOKEN, COLLAPSE, _hint(HINT)):
+            for variable in (FCM_TOKEN, COLLAPSE, NOTICE.token):
                 text = text.replace(variable, "")
             words = set(re.findall(r"[A-Za-z]{4,}", text))
             allowed = {
@@ -235,12 +231,13 @@ class NoPhiAndNoDocumentContent(unittest.TestCase):
         ):
             send(transport, platform)
             transport.send(
-                destination_id=DESTINATION, platform=platform, notice=GenericNotice(other),
+                destination_id=DESTINATION, platform=platform,
+                notice=GenericNotice(notice_token(KEYS, other)),
                 ttl_seconds=600, collapse_key=COLLAPSE,
             )
             first, second = (r.body.decode() for r in transport.requests)
             self.assertNotEqual(first, second)
-            self.assertEqual(first.replace(_hint(HINT), "H"), second.replace(_hint(other), "H"))
+            self.assertEqual(first.replace(NOTICE.token, "H"), second.replace(_hint(other), "H"))
 
     def test_configs_never_print_their_secrets(self):
         for config in (FCM, APNS, WNS):
@@ -317,14 +314,16 @@ class RetryClassification(unittest.TestCase):
         intent = OutboxIntent(OWNER, DESTINATION, PushPlatform.ANDROID_FCM, HINT, NOW + 600)
         lease = DispatchLease(intent, UUID(int=5), NOW + 60, 1)
         current = CurrentAvailability(subscription, True, True, HINT.sequence)
-        retried = dispatch(lease, current, fcm(503), now=NOW, server_enabled=True)
+        retried = dispatch(lease, current, fcm(503), now=NOW, server_enabled=True, notice_keys=KEYS)
         self.assertEqual(retried.status, "retry")
         self.assertEqual(retried.retry_at, NOW + 30)
-        gone = dispatch(lease, current, fcm(404), now=NOW, server_enabled=True)
+        gone = dispatch(lease, current, fcm(404), now=NOW, server_enabled=True, notice_keys=KEYS)
         self.assertTrue(gone.revoke_destination)
-        accepted = dispatch(lease, current, fcm(200), now=NOW, server_enabled=True)
+        accepted = dispatch(lease, current, fcm(200), now=NOW,
+            server_enabled=True, notice_keys=KEYS)
         self.assertEqual(accepted.status, "provider_accepted")
-        permanent = dispatch(lease, current, fcm(403), now=NOW, server_enabled=True)
+        permanent = dispatch(lease, current, fcm(403), now=NOW,
+            server_enabled=True, notice_keys=KEYS)
         self.assertEqual(permanent.status, "permanent_failure")
         self.assertIsNone(permanent.retry_at)
 
@@ -391,7 +390,7 @@ class DestinationAndInputGuards(unittest.TestCase):
         decision = dispatch(
             DispatchLease(intent, UUID(int=5), NOW + 60, 1),
             CurrentAvailability(subscription, True, True, HINT.sequence),
-            fcm(200), now=NOW, server_enabled=True,
+            fcm(200), now=NOW, server_enabled=True, notice_keys=KEYS,
         )
         self.assertEqual(decision.status, "transport_error:TypeError")
         self.assertIsNone(decision.retry_at)

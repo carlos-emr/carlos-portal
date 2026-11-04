@@ -4,13 +4,13 @@
 """Provider adapters for the opaque "documents ready" hint (FCM v1, APNs, WNS).
 
 Each adapter implements ``AvailabilityTransport.send`` and nothing else. The request carries only
-the generic notice and the v1 hint (at most 256 bytes, no text, no document content, no patient
-identifier), never the portal's own destination id.
+the generic notice and one opaque notice token (22 characters, a keyed hash made in the policy
+module), never the portal's own destination id.
 
-The hint is encoded, not hidden: it is base64url of the five-field JSON ``ReadyHint.encode()``
-produces, so a provider can read the portal subscription UUID, the epoch UUID and the sequence
-(the per-device count of waiting documents). Hiding those (for example a per-epoch hash and an
-offset) is a follow-up in the policy module and must land before anything is wired.
+The provider learns nothing from the token beyond "something is waiting" for a destination it
+already knows: no subscription UUID, no epoch UUID, no waiting count. The five-field v1 hint stays
+on the portal side; the device reconciles through its authenticated fetch, where the portal
+resolves the token (``resolve_notice_token``).
 
 All HTTP goes through one injected
 ``HttpClient``; credentials come from injected sources; nothing here reads settings, the
@@ -30,7 +30,6 @@ a decision):
 
 from __future__ import annotations
 
-import base64
 import json
 import re
 from collections.abc import Callable, Mapping
@@ -177,9 +176,8 @@ class WnsConfig(_SecretRepr):
 
 
 def _hint_text(notice: GenericNotice) -> str:
-    """The opaque hint as unpadded base64url: all a provider message may carry besides the
-    generic notice text."""
-    return base64.urlsafe_b64encode(notice.hint.encode()).rstrip(b"=").decode("ascii")
+    """The opaque notice token: all a provider message may carry besides the generic notice."""
+    return notice.token
 
 
 def _check_send(
@@ -243,7 +241,7 @@ class FcmV1Transport:
             "message": {
                 "token": handle,
                 "notification": {"title": notice.title, "body": notice.body},
-                "data": {"h": _hint_text(notice)},
+                "data": {"n": _hint_text(notice)},
                 "android": {
                     "collapse_key": collapse_key,
                     "ttl": f"{ttl_seconds}s",
@@ -297,7 +295,7 @@ class ApnsTokenTransport:
         host = APNS_SANDBOX_HOST if self._config.sandbox else APNS_PRODUCTION_HOST
         payload = {
             "aps": {"alert": {"title": notice.title, "body": notice.body}},
-            "h": _hint_text(notice),
+            "n": _hint_text(notice),
         }
         return HttpRequest(
             method="POST",
@@ -369,7 +367,7 @@ class WnsTransport:
         self, *, handle: str, notice: GenericNotice, ttl_seconds: int, collapse_key: str
     ) -> HttpRequest:
         toast = (
-            f"<toast launch={quoteattr('h=' + _hint_text(notice))}><visual>"
+            f"<toast launch={quoteattr('n=' + _hint_text(notice))}><visual>"
             '<binding template="ToastGeneric">'
             f"<text>{escape(notice.title)}</text><text>{escape(notice.body)}</text>"
             "</binding></visual></toast>"

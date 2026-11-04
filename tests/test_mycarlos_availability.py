@@ -20,7 +20,9 @@ from carlos_patient_portal.mycarlos_availability import (
     AvailabilityError,
     CurrentAvailability,
     DispatchLease,
+    GenericNotice,
     MailboxReady,
+    NoticeKeys,
     Owner,
     ProviderResult,
     PushPlatform,
@@ -29,9 +31,12 @@ from carlos_patient_portal.mycarlos_availability import (
     TransportFailure,
     coalesce_pending,
     dispatch,
+    notice_token,
     queue_new_copy,
+    resolve_notice_token,
 )
 
+KEYS = NoticeKeys(b"k" * 32)
 NOW = 1_800_000_000
 OWNER = Owner(7, 11)
 SUBSCRIPTION = Subscription(
@@ -196,7 +201,9 @@ class TransactionContractTests(unittest.TestCase):
         provider = Provider()
         job = next(iter(transaction.committed.values()))
         self.assertEqual(dispatch(lease(job), current(), provider, now=NOW,
-                                  server_enabled=True).status, "provider_accepted")
+
+                                      server_enabled=True, notice_keys=KEYS).status,
+                             "provider_accepted")
         self.assertEqual(len(provider.calls), 1)
 
     def test_upload_200_retry_and_same_sequence_never_duplicate(self):
@@ -272,7 +279,7 @@ class DispatchContractTests(unittest.TestCase):
         ]
         for snapshot in snapshots:
             self.assertEqual(dispatch(lease(), snapshot, provider, now=NOW,
-                                      server_enabled=True).status, "suppressed")
+                                      server_enabled=True, notice_keys=KEYS).status, "suppressed")
         self.assertFalse(provider.calls)
 
     def test_no_send_after_expiry_lease_loss_or_attempt_limit(self):
@@ -285,7 +292,7 @@ class DispatchContractTests(unittest.TestCase):
             (lease(attempt=MAX_ATTEMPTS + 1), "attempts_exhausted"),
         ]:
             self.assertEqual(dispatch(claim, current(), provider, now=NOW,
-                                      server_enabled=True).status, expected)
+                                      server_enabled=True, notice_keys=KEYS).status, expected)
         self.assertFalse(provider.calls)
 
     def test_all_supported_platforms_receive_only_opaque_hint_and_fixed_notice(self):
@@ -294,7 +301,7 @@ class DispatchContractTests(unittest.TestCase):
             job = replace(intent(), platform=platform)
             provider = Provider()
             decision = dispatch(lease(job), current(subscription), provider, now=NOW,
-                                server_enabled=True)
+                                server_enabled=True, notice_keys=KEYS)
             self.assertEqual(decision.status, "provider_accepted")
             self.assertEqual(set(provider.calls[0]), {
                 "destination_id", "platform", "notice", "ttl_seconds", "collapse_key"
@@ -302,26 +309,30 @@ class DispatchContractTests(unittest.TestCase):
             notice = provider.calls[0]["notice"]
             self.assertEqual(notice.title, "myCarlos")
             self.assertEqual(notice.body, "A new document is available in myCarlos.")
-            self.assertEqual(notice.hint.encode(), job.hint.encode())
+            self.assertEqual(notice.token, notice_token(KEYS, job.hint))
             self.assertEqual(provider.calls[0]["ttl_seconds"], HINT_TTL_SECONDS)
 
     def test_transient_exception_retry_bounded_without_echoing_provider_data(self):
         for result in [ProviderResult.TRANSIENT_FAILURE, TransportFailure("SYNTHETIC-TOKEN")]:
             provider = Provider(result)
-            decision = dispatch(lease(), current(), provider, now=NOW, server_enabled=True)
+            decision = dispatch(lease(), current(), provider, now=NOW,
+                server_enabled=True, notice_keys=KEYS)
             self.assertEqual((decision.status, decision.retry_at), ("retry", NOW + 30))
             self.assertNotIn("SYNTHETIC", repr(decision))
         self.assertEqual(dispatch(lease(attempt=MAX_ATTEMPTS), current(), provider, now=NOW,
-                                  server_enabled=True).status, "attempts_exhausted")
+
+                                      server_enabled=True, notice_keys=KEYS).status,
+                             "attempts_exhausted")
         short = replace(intent(), expires_at=NOW + 30)
         self.assertEqual(dispatch(lease(short), current(), provider, now=NOW,
-                                  server_enabled=True).status, "expired")
+                                  server_enabled=True, notice_keys=KEYS).status, "expired")
 
     def test_mis_wired_transport_is_a_fault_not_an_outage(self):
         for failure in [TypeError("SYNTHETIC-TOKEN"), AttributeError("SYNTHETIC-TOKEN"),
                         RuntimeError("SYNTHETIC-TOKEN")]:
             provider = Provider(failure)
-            decision = dispatch(lease(), current(), provider, now=NOW, server_enabled=True)
+            decision = dispatch(lease(), current(), provider, now=NOW,
+                server_enabled=True, notice_keys=KEYS)
             self.assertEqual(decision.status, "transport_error:" + type(failure).__name__)
             self.assertIsNone(decision.retry_at)
             self.assertFalse(decision.revoke_destination)
@@ -332,7 +343,7 @@ class DispatchContractTests(unittest.TestCase):
             pass
 
         decision = dispatch(lease(), current(), Provider(SyntheticProviderSdkError("x")), now=NOW,
-                            server_enabled=True)
+                            server_enabled=True, notice_keys=KEYS)
         self.assertEqual(decision.status, "transport_error:SyntheticProviderSdkError")
         self.assertLessEqual(len(decision.status), 96)
 
@@ -341,11 +352,13 @@ class DispatchContractTests(unittest.TestCase):
             (ProviderResult.INVALID_DESTINATION, "invalid_destination", True),
             (ProviderResult.PERMANENT_FAILURE, "permanent_failure", False),
         ]:
-            decision = dispatch(lease(), current(), Provider(result), now=NOW, server_enabled=True)
+            decision = dispatch(lease(), current(), Provider(result), now=NOW,
+                server_enabled=True, notice_keys=KEYS)
             self.assertEqual((decision.status, decision.revoke_destination), (status, revoke))
             self.assertIsNone(decision.retry_at)
         with self.assertRaisesRegex(AvailabilityError, "^invalid_provider_result$"):
-            dispatch(lease(), current(), Provider("accepted"), now=NOW, server_enabled=True)
+            dispatch(lease(), current(), Provider("accepted"), now=NOW,
+                server_enabled=True, notice_keys=KEYS)
 
     def test_retry_and_new_sequence_share_bounded_epoch_scoped_collapse_identity(self):
         job = intent()
@@ -355,6 +368,75 @@ class DispatchContractTests(unittest.TestCase):
         self.assertNotEqual(job.idempotency_key, newer.idempotency_key)
         self.assertNotEqual(job.collapse_key, rotated.collapse_key)
         self.assertEqual(len(job.collapse_key.encode("ascii")), 64)
+
+
+class OpaqueNoticeTokenTests(unittest.TestCase):
+    """D23: a provider learns nothing from the notice beyond "something is waiting"."""
+
+    hint = ReadyHint(UUID(int=1), UUID(int=2), 42)
+
+    def test_the_token_is_22_url_safe_characters_and_deterministic(self):
+        token = notice_token(KEYS, self.hint)
+        self.assertEqual(len(token), 22)
+        self.assertRegex(token, r"^[A-Za-z0-9_-]{22}$")
+        self.assertEqual(notice_token(KEYS, self.hint), token)
+
+    def test_it_carries_no_field_and_depends_on_every_field_and_the_key(self):
+        token = notice_token(KEYS, self.hint)
+        for needle in ("0000", "42", "documents_ready", str(self.hint.subscription_id)):
+            self.assertNotIn(needle, token)
+        other_key = NoticeKeys(b"j" * 32)
+        variants = {
+            notice_token(other_key, self.hint),
+            notice_token(KEYS, replace(self.hint, sequence=43)),
+            notice_token(KEYS, replace(self.hint, epoch=UUID(int=3))),
+            notice_token(KEYS, replace(self.hint, subscription_id=UUID(int=9))),
+        }
+        self.assertNotIn(token, variants)
+        self.assertEqual(len(variants), 4)
+
+    def test_the_portal_resolves_its_own_recent_tokens_only(self):
+        sub, epoch = self.hint.subscription_id, self.hint.epoch
+        token = notice_token(KEYS, self.hint)
+        self.assertEqual(resolve_notice_token(KEYS, token, sub, epoch, 42), 42)
+        self.assertEqual(resolve_notice_token(KEYS, token, sub, epoch, 50), 42)
+        self.assertIsNone(resolve_notice_token(KEYS, token, sub, epoch, 41))   # not sent yet
+        self.assertIsNone(resolve_notice_token(KEYS, token, sub, epoch, 42 + 65))  # too old
+        self.assertIsNone(resolve_notice_token(KEYS, token, UUID(int=9), epoch, 42))
+        self.assertIsNone(resolve_notice_token(KEYS, token, sub, UUID(int=3), 42))
+        self.assertIsNone(resolve_notice_token(NoticeKeys(b"j" * 32), token, sub, epoch, 42))
+        for bad in (None, 7, "", "short", token + "A", b"x" * 22):
+            self.assertIsNone(resolve_notice_token(KEYS, bad, sub, epoch, 42))
+
+    def test_key_rotation_keeps_in_flight_tokens_resolvable(self):
+        old = NoticeKeys(b"o" * 32)
+        in_flight = notice_token(old, self.hint)
+        rotated = NoticeKeys(b"n" * 32, previous=(b"o" * 32,))
+        sub, epoch = self.hint.subscription_id, self.hint.epoch
+        self.assertEqual(resolve_notice_token(rotated, in_flight, sub, epoch, 42), 42)
+        self.assertNotEqual(notice_token(rotated, self.hint), in_flight)
+        self.assertIsNone(resolve_notice_token(NoticeKeys(b"n" * 32), in_flight, sub, epoch, 42))
+
+    def test_keys_are_validated_and_never_printed(self):
+        for bad in (b"short", "not-bytes", None):
+            with self.assertRaises(AvailabilityError):
+                NoticeKeys(bad)
+        with self.assertRaises(AvailabilityError):
+            NoticeKeys(b"k" * 32, previous=(b"k" * 32,))
+        with self.assertRaises(AvailabilityError):
+            NoticeKeys(b"k" * 32, previous=(b"a" * 32, b"b" * 32, b"c" * 32, b"d" * 32))
+        self.assertEqual(repr(KEYS), "NoticeKeys[REDACTED]")
+        self.assertNotIn("kkkk", str(KEYS))
+
+    def test_no_key_means_no_send_and_the_notice_holds_only_a_token(self):
+        provider = Provider()
+        decision = dispatch(lease(), current(), provider, now=NOW, server_enabled=True)
+        self.assertEqual(decision.status, "no_notice_key")
+        self.assertFalse(provider.calls)
+        for bad in ("", "x" * 21, "x" * 23, "\u00e9" * 22):
+            with self.assertRaises(AvailabilityError):
+                GenericNotice(bad)
+        self.assertFalse(hasattr(GenericNotice(notice_token(KEYS, self.hint)), "hint"))
 
 
 if __name__ == "__main__":

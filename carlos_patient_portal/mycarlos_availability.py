@@ -11,6 +11,8 @@ updates with the claim's lease token. An already provider-accepted alert cannot 
 
 from __future__ import annotations
 
+import base64
+import hmac
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -26,6 +28,9 @@ MAX_ATTEMPTS = 5
 HINT_TTL_SECONDS = 900
 MAX_LEASE_SECONDS = 120
 MAX_STATUS_LENGTH = 96
+NOTICE_TOKEN_BYTES = 16
+NOTICE_KEY_MIN_BYTES = 32
+MAX_TOKEN_LOOKBACK = 64
 REMOTE_CONSENT_VERSION = 1
 
 
@@ -63,7 +68,9 @@ class ReadyHint:
             raise AvailabilityError("invalid_hint")
 
     def encode(self) -> bytes:
-        # Same five-field v1 wire contract as native document_notifications::ReadyHint.
+        # The portal-side five-field v1 shape (outbox identity, coalescing). It is NEVER sent to a
+        # push provider: providers get ``notice_token`` only. The native document_notifications
+        # ReadyHint decode must not be wired to provider messages (M1 follows the token contract).
         return json.dumps(
             {
                 "version": 1,
@@ -318,8 +325,85 @@ class ProviderResult(StrEnum):
 
 
 @dataclass(frozen=True, repr=False)
+class NoticeKeys:
+    """Portal-side secret keys for the provider-facing notice token. Never leave the portal.
+
+    ``primary`` signs new notices; ``previous`` keys still resolve tokens already in flight
+    during a rotation. Each is at least 32 random bytes; nothing here is read from settings.
+    """
+
+    primary: bytes
+    previous: tuple[bytes, ...] = ()
+
+    def __post_init__(self) -> None:
+        keys = (self.primary, *self.previous)
+        if not all(type(k) is bytes and len(k) >= NOTICE_KEY_MIN_BYTES for k in keys):
+            raise AvailabilityError("invalid_notice_key")
+        if len(set(keys)) != len(keys) or len(self.previous) > 3:
+            raise AvailabilityError("invalid_notice_key")
+
+    def __repr__(self) -> str:
+        return "NoticeKeys[REDACTED]"
+
+
+def _token_for(key: bytes, hint: ReadyHint) -> str:
+    message = (
+        b"mycarlos-notice-v1\0" + hint.subscription_id.bytes + hint.epoch.bytes
+        + hint.sequence.to_bytes(8, "big")
+    )
+    digest = hmac.new(key, message, "sha256").digest()[:NOTICE_TOKEN_BYTES]
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+def notice_token(keys: NoticeKeys, hint: ReadyHint) -> str:
+    """The only thing a push provider learns from a notice besides its fixed words.
+
+    A keyed PRF of the five-field hint, truncated to 16 bytes: it reveals no subscription id,
+    epoch or waiting count, and it cannot be linked to them without the portal's key. The same
+    hint always gives the same token (so a retry replaces, never duplicates). The device is not
+    told the fields; it reconciles through its authenticated fetch and the portal resolves the
+    token there with ``resolve_notice_token``.
+    """
+    if not isinstance(keys, NoticeKeys) or not isinstance(hint, ReadyHint):
+        raise AvailabilityError("invalid_notice")
+    return _token_for(keys.primary, hint)
+
+
+def resolve_notice_token(
+    keys: NoticeKeys, token: object, subscription_id: UUID, epoch: UUID, latest_sequence: int,
+    lookback: int = MAX_TOKEN_LOOKBACK,
+) -> int | None:
+    """The sequence a device-presented token stands for, or None when it is stale or foreign.
+
+    Called on the authenticated fetch, with the device's own current subscription and epoch and
+    the latest waiting sequence. Candidates are the latest sequence and up to ``lookback`` before
+    it, compared in constant time under every key; a token from another subscription, an earlier
+    epoch, an unknown key or too far back resolves to None (the app then just reconciles).
+    """
+    if (
+        not isinstance(keys, NoticeKeys) or type(token) is not str
+        or len(token) != 22 or not _integer(latest_sequence)
+        or not _integer(lookback) or lookback > MAX_TOKEN_LOOKBACK
+    ):
+        return None
+    found: int | None = None
+    for candidate in range(latest_sequence, max(latest_sequence - lookback, 1) - 1, -1):
+        hint = ReadyHint(subscription_id, epoch, candidate)
+        for key in (keys.primary, *keys.previous):
+            if hmac.compare_digest(_token_for(key, hint), token) and found is None:
+                found = candidate
+    return found
+
+
+@dataclass(frozen=True, repr=False)
 class GenericNotice:
-    hint: ReadyHint
+    """Fixed words plus one opaque token; the portal's hint fields are not on it."""
+
+    token: str
+
+    def __post_init__(self) -> None:
+        if type(self.token) is not str or len(self.token) != 22 or not self.token.isascii():
+            raise AvailabilityError("invalid_notice")
 
     @property
     def title(self) -> str:
@@ -364,6 +448,7 @@ def dispatch(
     *,
     now: int,
     server_enabled: bool = False,
+    notice_keys: NoticeKeys | None = None,
 ) -> DispatchDecision:
     """Called outside the enqueue/claim transaction, after fresh ownership/consent read.
 
@@ -398,10 +483,14 @@ def dispatch(
         or current.latest_waiting_sequence < intent.hint.sequence
     ):
         return DispatchDecision("suppressed")
+    if not isinstance(notice_keys, NoticeKeys):
+        # No key, no send: the provider message must never fall back to readable fields.
+        return DispatchDecision("no_notice_key")
     try:
         result = transport.send(
             destination_id=intent.destination_id, platform=intent.platform,
-            notice=GenericNotice(intent.hint), ttl_seconds=intent.expires_at - now,
+            notice=GenericNotice(notice_token(notice_keys, intent.hint)),
+            ttl_seconds=intent.expires_at - now,
             collapse_key=intent.collapse_key,
         )
     except TransportFailure:
