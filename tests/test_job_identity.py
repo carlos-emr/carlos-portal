@@ -145,7 +145,13 @@ def payload_of(assertion: str) -> dict[str, object]:
 
 
 def test_registered_jobs_have_well_formed_names_display_names_and_permissions() -> None:
-    assert set(SYSTEM_JOBS) == {"booking-sync", "delivery-sync", "key-publish", "signup-poll"}
+    assert set(SYSTEM_JOBS) == {
+        "booking-sync",
+        "delivery-sync",
+        "device-approval-sync",
+        "key-publish",
+        "signup-poll",
+    }
     for name, job in SYSTEM_JOBS.items():
         assert job.name == name
         assert JOB_NAME_PATTERN.fullmatch(name)
@@ -169,6 +175,11 @@ def test_registered_jobs_have_well_formed_names_display_names_and_permissions() 
         "portal.mycarlos.delivery.upload",
         "portal.mycarlos.delivery.events.read",
         "portal.mycarlos.delivery.events.ack",
+        "portal.mycarlos.device_approval.requests.read",
+        "portal.mycarlos.device_approval.challenges.publish",
+        "portal.mycarlos.device_approval.approvals.read",
+        "portal.mycarlos.device_approval.decisions.publish",
+        "portal.mycarlos.device_approval.devices.remove",
     }
 
 

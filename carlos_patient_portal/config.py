@@ -23,7 +23,7 @@ from typing import Literal
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
@@ -346,9 +346,11 @@ class Settings(BaseSettings):
     # Send to myCarlos (carlos-portal#41). Off by default; while off, none of its pages or routes
     # exist. The schema is there either way, so turning it on needs no migration.
     mycarlos_delivery_enabled: bool = False
-    # Private M4 source is separately gated while its migration/security holds remain.
-    # Enabling M2 linking alone never assumes these new tables already exist.
+    # The device mailbox (M4) and device approval (M3) have their own switches, also off by
+    # default. Their tables come from migration 0018 either way; approval also needs delivery and
+    # the mailbox on (checked in reject_unsafe_runtime_policy).
     mycarlos_mailbox_enabled: bool = False
+    mycarlos_approval_enabled: bool = False
     # myCarlos document-availability notifications (carlos-portal#78, myCarlos#192). Off by
     # default and read nowhere yet: the policy core in mycarlos_availability takes this value
     # as its server_enabled argument once a route, worker and provider adapter are wired.
@@ -771,6 +773,15 @@ class Settings(BaseSettings):
                     "PATIENT_PORTAL_PROBE_ALLOWED_HOSTS must list literal hostnames; "
                     "a wildcard entry disables Host validation entirely"
                 )
+        return value
+
+    @field_validator("public_base_url", mode="before")
+    @classmethod
+    def validate_raw_approval_public_base(cls, value: object, info: ValidationInfo) -> object:
+        if info.data.get("mycarlos_approval_enabled"):
+            from carlos_patient_portal.public_portal_base import normalize_portal
+
+            normalize_portal(value)
         return value
 
     @field_validator("public_base_url")
@@ -1354,6 +1365,12 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def reject_unsafe_runtime_policy(self) -> "Settings":
+        if self.mycarlos_approval_enabled:
+            if not self.mycarlos_delivery_enabled or not self.mycarlos_mailbox_enabled:
+                raise ValueError("myCarlos approval requires delivery and mailbox to be enabled")
+            from carlos_patient_portal.public_portal_base import normalize_portal
+
+            normalize_portal(self.public_base_url)
         self.validate_audit_retention_policy()
         self.validate_secret_policy()
         self.validate_required_production_services()
