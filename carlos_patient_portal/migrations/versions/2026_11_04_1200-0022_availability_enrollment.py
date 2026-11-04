@@ -24,14 +24,14 @@ sent; this revision gives it durable storage, with no worker and no provider yet
 Neither table holds a document id, any text, or a provider token. Both stay unused while
 `PATIENT_PORTAL_MYCARLOS_AVAILABILITY_ENABLED` is off.
 
-It revises 0017, main's head. Merge order (decided): this PR (carlos-portal#81) merges after
-the #35/#55 chain, whose 0018 also revises 0017 and whose 0021_merge_signup_and_codes joins
-0019 and 0020; when it lands, this revision's down_revision becomes 0021, so main keeps one
-head. Only remote consent version 1 exists, so the column is checked to be 1; a later
-version rewrites that check and keeps older rows as their history.
+It follows 0019_self_signup_requests (carlos-portal#35), main's head, in one line from 0017:
+0017 -> 0018 -> 0020 -> 0019 -> 0022. Written before that chain merged, it revised 0017 too,
+which would have left two heads. It leaves the audit event-type CHECK alone (0019 owns it). Only
+remote consent version 1 exists, so the column is checked to be 1; a later version rewrites that
+check and keeps older rows as their history.
 
 Revision ID: 0022_availability_enrollment
-Revises: 0017_mycarlos_linking
+Revises: 0019_self_signup_requests
 Create Date: 2026-11-04 12:00:00+00:00
 """
 
@@ -42,7 +42,7 @@ from alembic import context, op
 
 _ALEMBIC_REVISION_IDENTIFIERS: dict[str, str | Sequence[str] | None] = {
     "revision": "0022_availability_enrollment",
-    "down_revision": "0017_mycarlos_linking",
+    "down_revision": "0019_self_signup_requests",
     "branch_labels": None,
     "depends_on": None,
 }

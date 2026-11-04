@@ -49,6 +49,9 @@ from tests.support import alembic_config_for_tests
 NOW = 1_793_800_000
 SUBSCRIPTIONS = "patient_portal_mycarlos_availability_subscriptions"
 OUTBOX = "patient_portal_mycarlos_availability_outbox"
+REVISION = "0022_availability_enrollment"
+# 0022 follows #35's sign-up in one line from 0017 (0017 -> 0018 -> 0020 -> 0019 -> 0022).
+SIGNUP = "0019_self_signup_requests"
 
 
 @pytest.fixture
@@ -129,13 +132,14 @@ def outbox_rows(session: Session) -> list[PatientPortalMyCarlosAvailabilityOutbo
 # --- The migration -----------------------------------------------------------------------------
 
 
-def test_the_revision_follows_main_and_is_its_only_head() -> None:
+def test_the_revision_follows_signup_on_the_one_line_to_the_head() -> None:
     script = ScriptDirectory.from_config(alembic_config_for_tests())
-    assert script.get_heads() == ["0022_availability_enrollment"]
-    revision = script.get_revision("0022_availability_enrollment")
-    assert revision.down_revision == "0017_mycarlos_linking"
+    (head,) = script.get_heads()
+    # Enrollment is on the one line to the head, whatever later revision tops it.
+    assert REVISION in {revision.revision for revision in script.iterate_revisions(head, "base")}
+    assert script.get_revision(REVISION).down_revision == SIGNUP
     # alembic_version.version_num is VARCHAR(32) on PostgreSQL.
-    assert len(revision.revision) <= 32
+    assert len(REVISION) <= 32
 
 
 def test_the_migration_creates_both_tables_with_their_unique_indexes(migrated) -> None:
@@ -164,15 +168,15 @@ def test_the_downgrade_is_refused_while_enrollments_exist_and_drops_the_tables_o
         row, _ = enroll(session, owner, consent())
         subscription_id = row.subscription_id
     with pytest.raises(RuntimeError, match="availability enrollments exist"):
-        command.downgrade(config, "0017_mycarlos_linking")
+        command.downgrade(config, SIGNUP)
     # A tombstone counts: forgetting it would let a revoked destination enroll again.
     with Session(engine) as session, session.begin():
         revoke(session, owner, subscription_id)
     with pytest.raises(RuntimeError, match="availability enrollments exist"):
-        command.downgrade(config, "0017_mycarlos_linking")
+        command.downgrade(config, SIGNUP)
     with engine.begin() as connection:
         connection.execute(text(f"delete from {SUBSCRIPTIONS}"))  # noqa: S608
-    command.downgrade(config, "0017_mycarlos_linking")
+    command.downgrade(config, SIGNUP)
     assert not {SUBSCRIPTIONS, OUTBOX} & set(inspect(engine).get_table_names())
     command.upgrade(config, "head")
     assert {SUBSCRIPTIONS, OUTBOX} <= set(inspect(engine).get_table_names())
