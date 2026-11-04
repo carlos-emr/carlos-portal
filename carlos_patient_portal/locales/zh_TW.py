@@ -332,41 +332,6 @@ TEXT: dict[str, str] = {
     "username_unavailable": "該使用者名稱無法使用。",
     "verification_delivery_failed": "無法傳送驗證碼。請再試一次。",
     "view_module": "開啟",
-}
-
-# The pages that link the myCarlos app to this portal.
-MYCARLOS_TEXT: dict[str, str] = {
-    "mycarlos_mfa_rate_limited": "最近已傳送過登入驗證碼。請稍候再重新申請。",
-    "mycarlos_link": "連結 myCarlos",
-    "mycarlos_devices": "已連結的裝置",
-    "mycarlos_instruction": (
-        "在 myCarlos 中選擇「連結診所」以連結您的診所入口網站，然後輸入此連結碼。"
-    ),
-    "mycarlos_code_label": "連結碼",
-    "mycarlos_lifetime": "此連結碼只能使用一次，有效期限 10 分鐘。請保持登入此入口網站。",
-    "mycarlos_approval": "裝置還必須經過核准，才能接收文件。",
-    "mycarlos_create": "建立連結碼",
-    "mycarlos_another": "建立另一組連結碼",
-    "mycarlos_linked": "連結時間",
-    "mycarlos_last_seen": "最後連線時間",
-    "mycarlos_empty": "沒有已連結的裝置。請選擇「連結 myCarlos」來新增裝置。",
-    "mycarlos_remove_question": "要移除此裝置嗎？",
-    "mycarlos_remove_effect": (
-        "此裝置將不再接收新文件。若要再次使用，請重新連結。已儲存在 myCarlos 中的文件會保留。"
-    ),
-    "mycarlos_remove": "移除裝置",
-    "mycarlos_remove_named": "移除裝置：{name}",
-    "mycarlos_keep": "保留裝置",
-    "mycarlos_paused": "由於輸入錯誤的連結碼次數過多，連結功能已暫停。請稍後再試。",
-    "mycarlos_unavailable": "無法使用連結功能。請聯絡您的診所。",
-    "mycarlos_removed": "裝置已移除。",
-    "mycarlos_not_seen": "尚未連線",
-    "mycarlos_mfa_required": "連結或移除裝置之前，請先驗證您的登入。",
-    "mycarlos_verify": "驗證登入",
-    "mycarlos_portal_address": "入口網站網址",
-    "mycarlos_qr_label": "在 myCarlos 中掃描",
-    "mycarlos_qr_alt": "用於將 myCarlos 連結至此入口網站的 QR 碼。",
-    "mycarlos_qr_unavailable": "無法提供 QR 碼。如果您無法使用此入口網站網址，請聯絡您的診所。",
     "outbound_mfa_email_subject": "您的 {service_name} 登入驗證碼",
     "outbound_mfa_email_intro": "您的 {service_name} 登入驗證碼是：",
     "outbound_mfa_email_expiry_other": (
@@ -411,4 +376,39 @@ MYCARLOS_TEXT: dict[str, str] = {
         "您的 {service_name} 登入驗證碼是 {code}，{minutes} 分鐘後失效。請勿告訴他人。如非本人要"
         "求，請聯絡 {clinic_name}。"
     ),
+}
+
+# The pages that link the myCarlos app to this portal.
+MYCARLOS_TEXT: dict[str, str] = {
+    "mycarlos_mfa_rate_limited": "最近已傳送過登入驗證碼。請稍候再重新申請。",
+    "mycarlos_link": "連結 myCarlos",
+    "mycarlos_devices": "已連結的裝置",
+    "mycarlos_instruction": (
+        "在 myCarlos 中選擇「連結診所」以連結您的診所入口網站，然後輸入此連結碼。"
+    ),
+    "mycarlos_code_label": "連結碼",
+    "mycarlos_lifetime": "此連結碼只能使用一次，有效期限 10 分鐘。請保持登入此入口網站。",
+    "mycarlos_approval": "裝置還必須經過核准，才能接收文件。",
+    "mycarlos_create": "建立連結碼",
+    "mycarlos_another": "建立另一組連結碼",
+    "mycarlos_linked": "連結時間",
+    "mycarlos_last_seen": "最後連線時間",
+    "mycarlos_empty": "沒有已連結的裝置。請選擇「連結 myCarlos」來新增裝置。",
+    "mycarlos_remove_question": "要移除此裝置嗎？",
+    "mycarlos_remove_effect": (
+        "此裝置將不再接收新文件。若要再次使用，請重新連結。已儲存在 myCarlos 中的文件會保留。"
+    ),
+    "mycarlos_remove": "移除裝置",
+    "mycarlos_remove_named": "移除裝置：{name}",
+    "mycarlos_keep": "保留裝置",
+    "mycarlos_paused": "由於輸入錯誤的連結碼次數過多，連結功能已暫停。請稍後再試。",
+    "mycarlos_unavailable": "無法使用連結功能。請聯絡您的診所。",
+    "mycarlos_removed": "裝置已移除。",
+    "mycarlos_not_seen": "尚未連線",
+    "mycarlos_mfa_required": "連結或移除裝置之前，請先驗證您的登入。",
+    "mycarlos_verify": "驗證登入",
+    "mycarlos_portal_address": "入口網站網址",
+    "mycarlos_qr_label": "在 myCarlos 中掃描",
+    "mycarlos_qr_alt": "用於將 myCarlos 連結至此入口網站的 QR 碼。",
+    "mycarlos_qr_unavailable": "無法提供 QR 碼。如果您無法使用此入口網站網址，請聯絡您的診所。",
 }

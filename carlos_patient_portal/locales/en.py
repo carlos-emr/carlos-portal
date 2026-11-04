@@ -381,46 +381,6 @@ TEXT: dict[str, str] = {
     "filters": "Filters",
     "of": "of",
     "page": "Page",
-}
-
-# The pages that link the myCarlos app to this portal.
-MYCARLOS_TEXT: dict[str, str] = {
-    "mycarlos_mfa_rate_limited": (
-        "A sign-in code was sent recently. Please wait before requesting another."
-    ),
-    "mycarlos_link": "Link myCarlos",
-    "mycarlos_devices": "Linked devices",
-    "mycarlos_instruction": (
-        "In myCarlos, choose the option to link to your clinic’s portal, then enter this code."
-    ),
-    "mycarlos_code_label": "Linking code",
-    "mycarlos_lifetime": "This code works once, for 10 minutes. Stay signed in to this portal.",
-    "mycarlos_approval": "The device must also be approved before it can receive documents.",
-    "mycarlos_create": "Create a code",
-    "mycarlos_another": "Create another code",
-    "mycarlos_linked": "Linked",
-    "mycarlos_last_seen": "Last seen",
-    "mycarlos_empty": "No linked devices. Choose Link myCarlos to add one.",
-    "mycarlos_remove_question": "Remove this device?",
-    "mycarlos_remove_effect": (
-        "This device will stop receiving new documents. To use it again, link it "
-        "again. Documents already saved in myCarlos stay there."
-    ),
-    "mycarlos_remove": "Remove device",
-    "mycarlos_remove_named": "Remove device: {name}",
-    "mycarlos_keep": "Keep device",
-    "mycarlos_paused": "Linking is paused because of too many incorrect codes. Try again later.",
-    "mycarlos_unavailable": "Linking is unavailable. Contact your clinic.",
-    "mycarlos_removed": "Device removed.",
-    "mycarlos_not_seen": "Not yet seen",
-    "mycarlos_mfa_required": "Verify your sign-in before linking or removing a device.",
-    "mycarlos_verify": "Verify sign-in",
-    "mycarlos_portal_address": "Portal address",
-    "mycarlos_qr_label": "Scan in myCarlos",
-    "mycarlos_qr_alt": "QR code for linking myCarlos to this portal.",
-    "mycarlos_qr_unavailable": (
-        "QR code unavailable. Contact your clinic if you cannot use this portal address."
-    ),
     "outbound_mfa_email_subject": "Your {service_name} sign-in code",
     "outbound_mfa_email_intro": "Your sign-in code for {service_name} is:",
     "outbound_mfa_email_expiry_one": (
@@ -490,5 +450,45 @@ MYCARLOS_TEXT: dict[str, str] = {
     "outbound_mfa_sms_other": (
         "Your {service_name} sign-in code is {code}. It expires in {minutes} minutes. Do not "
         "share it. Contact {clinic_name} if you did not request it."
+    ),
+}
+
+# The pages that link the myCarlos app to this portal.
+MYCARLOS_TEXT: dict[str, str] = {
+    "mycarlos_mfa_rate_limited": (
+        "A sign-in code was sent recently. Please wait before requesting another."
+    ),
+    "mycarlos_link": "Link myCarlos",
+    "mycarlos_devices": "Linked devices",
+    "mycarlos_instruction": (
+        "In myCarlos, choose the option to link to your clinic’s portal, then enter this code."
+    ),
+    "mycarlos_code_label": "Linking code",
+    "mycarlos_lifetime": "This code works once, for 10 minutes. Stay signed in to this portal.",
+    "mycarlos_approval": "The device must also be approved before it can receive documents.",
+    "mycarlos_create": "Create a code",
+    "mycarlos_another": "Create another code",
+    "mycarlos_linked": "Linked",
+    "mycarlos_last_seen": "Last seen",
+    "mycarlos_empty": "No linked devices. Choose Link myCarlos to add one.",
+    "mycarlos_remove_question": "Remove this device?",
+    "mycarlos_remove_effect": (
+        "This device will stop receiving new documents. To use it again, link it "
+        "again. Documents already saved in myCarlos stay there."
+    ),
+    "mycarlos_remove": "Remove device",
+    "mycarlos_remove_named": "Remove device: {name}",
+    "mycarlos_keep": "Keep device",
+    "mycarlos_paused": "Linking is paused because of too many incorrect codes. Try again later.",
+    "mycarlos_unavailable": "Linking is unavailable. Contact your clinic.",
+    "mycarlos_removed": "Device removed.",
+    "mycarlos_not_seen": "Not yet seen",
+    "mycarlos_mfa_required": "Verify your sign-in before linking or removing a device.",
+    "mycarlos_verify": "Verify sign-in",
+    "mycarlos_portal_address": "Portal address",
+    "mycarlos_qr_label": "Scan in myCarlos",
+    "mycarlos_qr_alt": "QR code for linking myCarlos to this portal.",
+    "mycarlos_qr_unavailable": (
+        "QR code unavailable. Contact your clinic if you cannot use this portal address."
     ),
 }

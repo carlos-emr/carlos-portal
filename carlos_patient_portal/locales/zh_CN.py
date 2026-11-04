@@ -327,41 +327,6 @@ TEXT: dict[str, str] = {
     "username_unavailable": "该用户名不可用。",
     "verification_delivery_failed": "无法发送验证码。请重试。",
     "view_module": "打开",
-}
-
-# The pages that link the myCarlos app to this portal.
-MYCARLOS_TEXT: dict[str, str] = {
-    "mycarlos_mfa_rate_limited": "登录验证码刚刚已发送。请稍候再重新获取。",
-    "mycarlos_link": "关联 myCarlos",
-    "mycarlos_devices": "已关联的设备",
-    "mycarlos_instruction": (
-        "请在 myCarlos 中选择「关联诊所」以关联到您的诊所门户网站，然后输入此关联码。"
-    ),
-    "mycarlos_code_label": "关联码",
-    "mycarlos_lifetime": "此关联码仅可使用一次，有效期 10 分钟。请保持登录此门户网站。",
-    "mycarlos_approval": "该设备还必须获得批准，才能接收文档。",
-    "mycarlos_create": "创建关联码",
-    "mycarlos_another": "再创建一个关联码",
-    "mycarlos_linked": "关联时间",
-    "mycarlos_last_seen": "上次连接",
-    "mycarlos_empty": "没有已关联的设备。请选择「关联 myCarlos」添加设备。",
-    "mycarlos_remove_question": "要移除此设备吗？",
-    "mycarlos_remove_effect": (
-        "此设备将不再接收新文档。如需再次使用，请重新关联。已保存在 myCarlos 中的文档会保留在那里。"
-    ),
-    "mycarlos_remove": "移除设备",
-    "mycarlos_remove_named": "移除设备：{name}",
-    "mycarlos_keep": "保留设备",
-    "mycarlos_paused": "由于错误关联码次数过多，关联已暂停。请稍后再试。",
-    "mycarlos_unavailable": "关联功能不可用。请联系您的诊所。",
-    "mycarlos_removed": "设备已移除。",
-    "mycarlos_not_seen": "尚未连接",
-    "mycarlos_mfa_required": "关联或移除设备前，请先验证您的登录。",
-    "mycarlos_verify": "验证登录",
-    "mycarlos_portal_address": "门户网站网址",
-    "mycarlos_qr_label": "在 myCarlos 中扫描",
-    "mycarlos_qr_alt": "用于将 myCarlos 关联到此门户网站的二维码。",
-    "mycarlos_qr_unavailable": "二维码不可用。如果您无法使用此门户网站网址，请联系您的诊所。",
     "outbound_mfa_email_subject": "您的 {service_name} 登录验证码",
     "outbound_mfa_email_intro": "您的 {service_name} 登录验证码是：",
     "outbound_mfa_email_expiry_other": (
@@ -406,4 +371,39 @@ MYCARLOS_TEXT: dict[str, str] = {
         "您的 {service_name} 登录验证码是 {code}，{minutes} 分钟后失效。请勿告诉他人。如非本人请"
         "求，请联系 {clinic_name}。"
     ),
+}
+
+# The pages that link the myCarlos app to this portal.
+MYCARLOS_TEXT: dict[str, str] = {
+    "mycarlos_mfa_rate_limited": "登录验证码刚刚已发送。请稍候再重新获取。",
+    "mycarlos_link": "关联 myCarlos",
+    "mycarlos_devices": "已关联的设备",
+    "mycarlos_instruction": (
+        "请在 myCarlos 中选择「关联诊所」以关联到您的诊所门户网站，然后输入此关联码。"
+    ),
+    "mycarlos_code_label": "关联码",
+    "mycarlos_lifetime": "此关联码仅可使用一次，有效期 10 分钟。请保持登录此门户网站。",
+    "mycarlos_approval": "该设备还必须获得批准，才能接收文档。",
+    "mycarlos_create": "创建关联码",
+    "mycarlos_another": "再创建一个关联码",
+    "mycarlos_linked": "关联时间",
+    "mycarlos_last_seen": "上次连接",
+    "mycarlos_empty": "没有已关联的设备。请选择「关联 myCarlos」添加设备。",
+    "mycarlos_remove_question": "要移除此设备吗？",
+    "mycarlos_remove_effect": (
+        "此设备将不再接收新文档。如需再次使用，请重新关联。已保存在 myCarlos 中的文档会保留在那里。"
+    ),
+    "mycarlos_remove": "移除设备",
+    "mycarlos_remove_named": "移除设备：{name}",
+    "mycarlos_keep": "保留设备",
+    "mycarlos_paused": "由于错误关联码次数过多，关联已暂停。请稍后再试。",
+    "mycarlos_unavailable": "关联功能不可用。请联系您的诊所。",
+    "mycarlos_removed": "设备已移除。",
+    "mycarlos_not_seen": "尚未连接",
+    "mycarlos_mfa_required": "关联或移除设备前，请先验证您的登录。",
+    "mycarlos_verify": "验证登录",
+    "mycarlos_portal_address": "门户网站网址",
+    "mycarlos_qr_label": "在 myCarlos 中扫描",
+    "mycarlos_qr_alt": "用于将 myCarlos 关联到此门户网站的二维码。",
+    "mycarlos_qr_unavailable": "二维码不可用。如果您无法使用此门户网站网址，请联系您的诊所。",
 }

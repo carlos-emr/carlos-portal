@@ -426,59 +426,6 @@ TEXT: dict[str, str] = {
         "Nie udało się wysłać kodu logowania. Proszę spróbować ponownie."
     ),
     "view_module": "Proszę otworzyć",
-}
-
-# The pages that link the myCarlos app to this portal.
-MYCARLOS_TEXT: dict[str, str] = {
-    "mycarlos_mfa_rate_limited": (
-        "Kod logowania został niedawno wysłany. Proszę odczekać przed poproszeniem o kolejny."
-    ),
-    "mycarlos_link": "Proszę połączyć myCarlos",
-    "mycarlos_devices": "Połączone urządzenia",
-    "mycarlos_instruction": (
-        "W myCarlos proszę wybrać opcję połączenia z portalem swojej przychodni, a następnie "
-        "proszę wpisać ten kod."
-    ),
-    "mycarlos_code_label": "Kod połączenia",
-    "mycarlos_lifetime": (
-        "Kod jest jednorazowy i ważny przez 10 minut. Proszę nie wylogowywać się z tego portalu."
-    ),
-    "mycarlos_approval": (
-        "Urządzenie musi też zostać zatwierdzone, zanim będzie mogło odbierać dokumenty."
-    ),
-    "mycarlos_create": "Proszę utworzyć kod",
-    "mycarlos_another": "Proszę utworzyć kolejny kod",
-    "mycarlos_linked": "Połączono",
-    "mycarlos_last_seen": "Ostatnia aktywność",
-    "mycarlos_empty": (
-        "Brak połączonych urządzeń. Aby dodać urządzenie, proszę wybrać „Proszę połączyć myCarlos”."
-    ),
-    "mycarlos_remove_question": "Usunąć to urządzenie?",
-    "mycarlos_remove_effect": (
-        "To urządzenie przestanie otrzymywać nowe dokumenty. Aby znów z niego korzystać, "
-        "proszę połączyć je ponownie. Dokumenty już zapisane w myCarlos pozostaną w aplikacji."
-    ),
-    "mycarlos_remove": "Proszę usunąć urządzenie",
-    "mycarlos_remove_named": "Proszę usunąć urządzenie: {name}",
-    "mycarlos_keep": "Proszę zachować urządzenie",
-    "mycarlos_paused": (
-        "Łączenie zostało wstrzymane z powodu zbyt wielu nieprawidłowych kodów. Proszę "
-        "spróbować ponownie później."
-    ),
-    "mycarlos_unavailable": "Łączenie jest niedostępne. Proszę skontaktować się z przychodnią.",
-    "mycarlos_removed": "Urządzenie usunięte z listy.",
-    "mycarlos_not_seen": "Brak aktywności",
-    "mycarlos_mfa_required": (
-        "Proszę potwierdzić logowanie przed połączeniem lub usunięciem urządzenia."
-    ),
-    "mycarlos_verify": "Proszę potwierdzić logowanie",
-    "mycarlos_portal_address": "Adres portalu",
-    "mycarlos_qr_label": "Proszę zeskanować w myCarlos",
-    "mycarlos_qr_alt": "Kod QR do połączenia myCarlos z tym portalem.",
-    "mycarlos_qr_unavailable": (
-        "Kod QR jest niedostępny. W razie problemów z użyciem tego adresu portalu proszę "
-        "skontaktować się z przychodnią."
-    ),
     "outbound_mfa_email_subject": "Twój kod logowania do {service_name}",
     "outbound_mfa_email_intro": "Twój kod logowania do {service_name}:",
     "outbound_mfa_email_expiry_one": (
@@ -567,5 +514,58 @@ MYCARLOS_TEXT: dict[str, str] = {
     "outbound_mfa_sms_many": (
         "Twój kod logowania do {service_name}: {code}. Wygasa za {minutes} minut. Nie "
         "udostępniaj go. Jeśli nie prosisz o ten kod, skontaktuj się z: {clinic_name}."
+    ),
+}
+
+# The pages that link the myCarlos app to this portal.
+MYCARLOS_TEXT: dict[str, str] = {
+    "mycarlos_mfa_rate_limited": (
+        "Kod logowania został niedawno wysłany. Proszę odczekać przed poproszeniem o kolejny."
+    ),
+    "mycarlos_link": "Proszę połączyć myCarlos",
+    "mycarlos_devices": "Połączone urządzenia",
+    "mycarlos_instruction": (
+        "W myCarlos proszę wybrać opcję połączenia z portalem swojej przychodni, a następnie "
+        "proszę wpisać ten kod."
+    ),
+    "mycarlos_code_label": "Kod połączenia",
+    "mycarlos_lifetime": (
+        "Kod jest jednorazowy i ważny przez 10 minut. Proszę nie wylogowywać się z tego portalu."
+    ),
+    "mycarlos_approval": (
+        "Urządzenie musi też zostać zatwierdzone, zanim będzie mogło odbierać dokumenty."
+    ),
+    "mycarlos_create": "Proszę utworzyć kod",
+    "mycarlos_another": "Proszę utworzyć kolejny kod",
+    "mycarlos_linked": "Połączono",
+    "mycarlos_last_seen": "Ostatnia aktywność",
+    "mycarlos_empty": (
+        "Brak połączonych urządzeń. Aby dodać urządzenie, proszę wybrać „Proszę połączyć myCarlos”."
+    ),
+    "mycarlos_remove_question": "Usunąć to urządzenie?",
+    "mycarlos_remove_effect": (
+        "To urządzenie przestanie otrzymywać nowe dokumenty. Aby znów z niego korzystać, "
+        "proszę połączyć je ponownie. Dokumenty już zapisane w myCarlos pozostaną w aplikacji."
+    ),
+    "mycarlos_remove": "Proszę usunąć urządzenie",
+    "mycarlos_remove_named": "Proszę usunąć urządzenie: {name}",
+    "mycarlos_keep": "Proszę zachować urządzenie",
+    "mycarlos_paused": (
+        "Łączenie zostało wstrzymane z powodu zbyt wielu nieprawidłowych kodów. Proszę "
+        "spróbować ponownie później."
+    ),
+    "mycarlos_unavailable": "Łączenie jest niedostępne. Proszę skontaktować się z przychodnią.",
+    "mycarlos_removed": "Urządzenie usunięte z listy.",
+    "mycarlos_not_seen": "Brak aktywności",
+    "mycarlos_mfa_required": (
+        "Proszę potwierdzić logowanie przed połączeniem lub usunięciem urządzenia."
+    ),
+    "mycarlos_verify": "Proszę potwierdzić logowanie",
+    "mycarlos_portal_address": "Adres portalu",
+    "mycarlos_qr_label": "Proszę zeskanować w myCarlos",
+    "mycarlos_qr_alt": "Kod QR do połączenia myCarlos z tym portalem.",
+    "mycarlos_qr_unavailable": (
+        "Kod QR jest niedostępny. W razie problemów z użyciem tego adresu portalu proszę "
+        "skontaktować się z przychodnią."
     ),
 }
