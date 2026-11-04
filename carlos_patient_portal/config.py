@@ -349,6 +349,10 @@ class Settings(BaseSettings):
     # Private M4 source is separately gated while its migration/security holds remain.
     # Enabling M2 linking alone never assumes these new tables already exist.
     mycarlos_mailbox_enabled: bool = False
+    # myCarlos document-availability notifications (carlos-portal#78, myCarlos#192). Off by
+    # default and read nowhere yet: the policy core in mycarlos_availability takes this value
+    # as its server_enabled argument once a route, worker and provider adapter are wired.
+    mycarlos_availability_enabled: bool = False
     mycarlos_mailbox_device_bytes: int = Field(default=268435456, ge=20971520)
     mycarlos_mailbox_account_bytes: int = Field(default=1073741824, ge=20971520)
     mycarlos_mailbox_clinic_bytes: int = Field(default=21474836480, ge=20971520)
