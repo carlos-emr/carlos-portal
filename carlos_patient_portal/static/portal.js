@@ -1,3 +1,59 @@
+// A revealed password must not outlive the page's session or its visibility (carlos-emr/mycarlos#194).
+// `revealGeneration` counts the times the page concealed what it showed: a Reveal answer that was
+// already on its way when that happened belongs to an older generation and is dropped, so a late
+// answer can neither put a password on a page that was hidden or whose session ended, nor leave it
+// there.
+let revealGeneration = 0;
+const concealRevealed = () => {
+  revealGeneration += 1;
+  for (const button of document.querySelectorAll("[data-reveal-target]")) {
+    if (!(button instanceof HTMLButtonElement)) {
+      continue;
+    }
+    const target = document.getElementById(button.dataset.revealTarget || "");
+    if (target instanceof HTMLElement) {
+      target.textContent = "";
+      const copyButton = target.parentElement?.querySelector("[data-copy-target]");
+      if (copyButton instanceof HTMLButtonElement) {
+        copyButton.hidden = true;
+      }
+    }
+    button.hidden = false;
+    button.disabled = false;
+    button.textContent = button.dataset.revealLabel || "Reveal";
+  }
+};
+// Another tab of this browser ended the session: this page keeps no password either.
+const sessionChannel = typeof BroadcastChannel === "function"
+  ? new BroadcastChannel("carlos-portal-session")
+  : null;
+if (sessionChannel) {
+  sessionChannel.onmessage = (message) => {
+    if (message.data === "ended") {
+      concealRevealed();
+    }
+  };
+}
+window.addEventListener("pagehide", concealRevealed);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") {
+    concealRevealed();
+  }
+});
+document.addEventListener(
+  "submit",
+  (event) => {
+    if (
+      event.target instanceof HTMLFormElement
+      && (event.target.getAttribute("action") || "").endsWith("/portal/logout")
+    ) {
+      concealRevealed();
+      sessionChannel?.postMessage("ended");
+    }
+  },
+  true
+);
+
 document.addEventListener("click", (event) => {
   if (!(event.target instanceof Element)) {
     return;
@@ -26,6 +82,7 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  const generation = revealGeneration;
   revealButton.disabled = true;
   revealButton.textContent = revealButton.dataset.revealingLabel || "Revealing...";
   const requestBody = new URLSearchParams({
@@ -64,6 +121,12 @@ document.addEventListener("click", (event) => {
         || typeof payload.passphrase !== "string"
       ) {
         throw new Error("invalid reveal response");
+      }
+      if (generation !== revealGeneration || document.visibilityState === "hidden") {
+        // The page was hidden, or its session ended, while this answer was on its way.
+        revealButton.textContent = revealButton.dataset.revealLabel || "Reveal";
+        revealButton.disabled = false;
+        return;
       }
       target.textContent = payload.passphrase;
       const copyButton = target.parentElement?.querySelector("[data-copy-target]");
@@ -138,6 +201,8 @@ window.addEventListener("pageshow", () => {
   for (const toggle of passwordToggles) {
     setPasswordsShown(toggle, false);
   }
+  // A page restored from the back/forward cache never shows what it had revealed.
+  concealRevealed();
 });
 
 document.addEventListener("click", (event) => {

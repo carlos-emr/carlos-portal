@@ -1291,8 +1291,8 @@ async function checkNonLatinPasswordAndCachedReveal(page, context) {
 }
 
 // While true, step 6 is a known failure: the check must fail, and the run reports the finding
-// instead. The commit that fixes portal.js sets it to false, and the check then has to pass.
-const revealRaceKnownFailure = true;
+// instead. It is false now that portal.js drops a late Reveal answer: the check has to pass.
+const revealRaceKnownFailure = false;
 
 // A Reveal that already succeeded on the server can reach the page after the session ended in
 // another tab or after the page was hidden. The password must not render then, must not stay in
