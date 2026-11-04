@@ -2107,7 +2107,7 @@ class PatientPortalMyCarlosAvailabilitySubscription(Base):
             name="ck_pp_mycarlos_avail_subs_ids",
         ),
         CheckConstraint(
-            "remote_consent_version >= 0",
+            "remote_consent_version = 1",
             name="ck_pp_mycarlos_avail_subs_consent",
         ),
         CheckConstraint(
@@ -2142,7 +2142,9 @@ class PatientPortalMyCarlosAvailabilitySubscription(Base):
     destination_id: Mapped[str] = mapped_column(String(UUID_TEXT_LENGTH), nullable=False)
     platform: Mapped[str] = mapped_column(String(16), nullable=False)
     remote_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    remote_consent_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Only consent version 1 exists; a later version rewrites this check and keeps
+    # older rows as their history.
+    remote_consent_version: Mapped[int] = mapped_column(Integer, nullable=False)
     permission_observed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

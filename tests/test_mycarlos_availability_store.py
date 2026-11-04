@@ -183,7 +183,8 @@ def test_the_downgrade_is_refused_while_enrollments_exist_and_drops_the_tables_o
     [
         {"platform": "FAKE_push"},
         {"destination_id": "not-a-uuid"},
-        {"remote_consent_version": -1},
+        {"remote_consent_version": 0},
+        {"remote_consent_version": 2},
         {"revoked_at": datetime.fromtimestamp(NOW, tz=UTC), "revoked_by": None},
         {"revoked_at": datetime.fromtimestamp(NOW, tz=UTC), "revoked_by": "device"},
         {"revoked_by": "FAKE"},
@@ -345,6 +346,39 @@ def test_the_same_destination_enrolls_once_per_device_and_never_after_revocation
         with pytest.raises(EnrollmentRefusal) as foreign:
             revoke(session, other, first.subscription_id)
         assert foreign.value.code == "not_found"
+
+
+def test_a_race_for_one_destination_is_lost_as_taken_and_leaves_the_transaction_usable(
+    migrated, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from carlos_patient_portal import mycarlos_availability_store as store
+
+    engine, _config = migrated
+    destination = uuid4()
+    with Session(engine) as session, session.begin():
+        owner = add_owner(session, "a")
+        other = add_owner(session, "b")
+        enroll(session, owner, consent(destination))
+        real = store._destination_row
+        misses = iter([True])
+
+        def racing(session: Session, destination_id: str):  # noqa: ANN202
+            # The other device's row is not seen by this device's lookup, as when both
+            # enrol at the same moment; the unique index then decides.
+            if next(misses, False):
+                return None
+            return real(session, destination_id)
+
+        monkeypatch.setattr(store, "_destination_row", racing)
+        with pytest.raises(EnrollmentRefusal) as lost:
+            enroll(session, other, consent(destination))
+        assert lost.value.code == "destination_taken"
+        # The savepoint rolled back only the losing insert: the same transaction goes on.
+        row, created = enroll(session, other, consent())
+        assert created and row.device_id == other.device_id
+    with Session(engine) as session:
+        assert len(subscriptions_for_owner(session, owner)) == 1
+        assert len(subscriptions_for_owner(session, other)) == 1
 
 
 def test_a_device_holds_at_most_sixteen_live_destinations(migrated) -> None:

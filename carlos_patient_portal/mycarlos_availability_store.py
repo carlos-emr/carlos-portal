@@ -22,6 +22,7 @@ from time import time
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from carlos_patient_portal.models import (
@@ -151,11 +152,7 @@ def enroll(
     if type(request.remote_enabled) is not bool:
         raise EnrollmentRefusal("invalid_enrollment")
     _lock_active_device(session, owner)
-    existing = session.scalars(
-        select(PatientPortalMyCarlosAvailabilitySubscription).where(
-            PatientPortalMyCarlosAvailabilitySubscription.destination_id == destination_id
-        )
-    ).first()
+    existing = _destination_row(session, destination_id)
     if existing is not None:
         if existing.revoked_at is not None:
             raise EnrollmentRefusal("destination_revoked")
@@ -190,9 +187,29 @@ def enroll(
         permission_observed=True,
         created_at=now or datetime.now(UTC),
     )
-    session.add(row)
-    session.flush()
+    # Two devices enrolling one destination at the same moment both pass the lookup
+    # above (each holds only its own device row): the unique index decides, and the
+    # loser is told the destination is taken, inside a savepoint so its transaction
+    # stays usable.
+    try:
+        with session.begin_nested():
+            session.add(row)
+            session.flush()
+    except IntegrityError:
+        if _destination_row(session, destination_id) is None:
+            raise
+        raise EnrollmentRefusal("destination_taken") from None
     return row, True
+
+
+def _destination_row(
+    session: Session, destination_id: str
+) -> PatientPortalMyCarlosAvailabilitySubscription | None:
+    return session.scalars(
+        select(PatientPortalMyCarlosAvailabilitySubscription).where(
+            PatientPortalMyCarlosAvailabilitySubscription.destination_id == destination_id
+        )
+    ).first()
 
 
 def revoke(

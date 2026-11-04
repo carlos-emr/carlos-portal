@@ -24,8 +24,11 @@ sent; this revision gives it durable storage, with no worker and no provider yet
 Neither table holds a document id, any text, or a provider token. Both stay unused while
 `PATIENT_PORTAL_MYCARLOS_AVAILABILITY_ENABLED` is off.
 
-It revises 0017, main's head. The open 0018 branch (carlos-portal#35 and #55) also revises
-0017: whichever of the two lands second needs a merge revision.
+It revises 0017, main's head. Merge order (decided): this PR (carlos-portal#81) merges after
+the #35/#55 chain, whose 0018 also revises 0017 and whose 0021_merge_signup_and_codes joins
+0019 and 0020; when it lands, this revision's down_revision becomes 0021, so main keeps one
+head. Only remote consent version 1 exists, so the column is checked to be 1; a later
+version rewrites that check and keeps older rows as their history.
 
 Revision ID: 0022_availability_enrollment
 Revises: 0017_mycarlos_linking
@@ -86,7 +89,7 @@ def upgrade() -> None:
             name="ck_pp_mycarlos_avail_subs_ids",
         ),
         sa.CheckConstraint(
-            "remote_consent_version >= 0",
+            "remote_consent_version = 1",
             name="ck_pp_mycarlos_avail_subs_consent",
         ),
         sa.CheckConstraint(
