@@ -31,6 +31,7 @@ from pydantic import (
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
+from starlette._utils import get_route_path
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import Response
 
@@ -949,13 +950,14 @@ def register_internal_failure_audit(app: FastAPI, runtime: InternalRuntime) -> N
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
+        path = get_route_path(request.scope)
         try:
             response = await call_next(request)
         except Exception:
-            if request.url.path.startswith("/internal/carlos/"):
+            if path.startswith("/internal/carlos/"):
                 await run_in_threadpool(record_failed_internal_action, request, 500)
             raise
-        if request.url.path.startswith("/internal/carlos/") and response.status_code >= 400:
+        if path.startswith("/internal/carlos/") and response.status_code >= 400:
             await run_in_threadpool(
                 record_failed_internal_action,
                 request,
