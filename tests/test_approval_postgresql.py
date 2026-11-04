@@ -19,7 +19,9 @@ from tests.support import alembic_config_for_tests
 
 @pytest.fixture
 def owned_approval_pg():
-    url = os.environ.get("MYCARLOS_APPROVAL_PG_TEST_URL")
+    url = os.environ.get("MYCARLOS_APPROVAL_PG_TEST_URL") or os.environ.get(
+        "PORTAL_TEST_POSTGRES_URL"
+    )
     if not url:
         pytest.skip("requires an explicitly owned PostgreSQL test connection")
     schema = "a3_approval_" + uuid4().hex
