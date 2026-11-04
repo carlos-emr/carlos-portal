@@ -18,8 +18,14 @@ A patient asks for a portal account on a public page with their health card numb
 and email address (carlos-portal#15). The portal stores the request encrypted until CARLOS collects
 it (carlos-portal#16) or it expires, and audits each one with keyed hashes only.
 
+It follows 0020_mycarlos_approval_codes (carlos-portal#55), in one line from 0017: written before
+0020, it revised 0018 too, which would have left two heads. No database has 0019 yet; the demo
+database, at 0020, upgrades to it normally. It is the only revision so far that rewrites the audit
+event-type CHECK after 0017 (0018, 0020 and #81's 0022 leave it alone); a later rewriter must
+start from this list.
+
 Revision ID: 0019_self_signup_requests
-Revises: 0018_mycarlos_mailbox_approval
+Revises: 0020_mycarlos_approval_codes
 Create Date: 2026-10-27 12:00:00+00:00
 """
 
@@ -30,7 +36,7 @@ from alembic import context, op
 
 _ALEMBIC_REVISION_IDENTIFIERS: dict[str, str | Sequence[str] | None] = {
     "revision": "0019_self_signup_requests",
-    "down_revision": "0018_mycarlos_mailbox_approval",
+    "down_revision": "0020_mycarlos_approval_codes",
     "branch_labels": None,
     "depends_on": None,
 }
@@ -39,7 +45,7 @@ globals().update(_ALEMBIC_REVISION_IDENTIFIERS)
 _AUDIT_TABLE = "patient_portal_audit_events"
 _SIGNUP_TABLE = "patient_portal_signup_requests"
 
-# The exact 47-type policy left by 0017 and unchanged by 0018.
+# The exact 47-type policy left by 0017 and unchanged by 0018 and 0020.
 _OLD_EVENT_TYPES = (
     "'activation', 'account.contact_update', 'account.disable', "
     "'account.email_change_confirm', 'account.email_change_request', "

@@ -47,6 +47,8 @@ SIGNUP = "0019_self_signup_requests"
 JOB = "0016_job_assertion_audit"
 LINK = "0017_mycarlos_linking"
 APPROVAL = "0018_mycarlos_mailbox_approval"
+# Sign-up follows #55's approval codes in one line from 0017 (0017 -> 0018 -> 0020 -> 0019).
+CODES = "0020_mycarlos_approval_codes"
 SCRIPT = ScriptDirectory.from_config(alembic_config_for_tests())
 EVENTS = frozenset(
     re.findall(
@@ -336,7 +338,8 @@ def test_should_preserve_canonical_data_when_signup_follows_approval(lineage_eng
             "0015": "0015_booking_offered_slots",
             "job": JOB,
             "link": LINK,
-            "approval": APPROVAL,
+            # A database holding approval rows before sign-up is at 0020 (the demo database is).
+            "approval": CODES,
         }[state]
         migrate(engine, revision)
         seed(
@@ -352,7 +355,8 @@ def test_should_preserve_canonical_data_when_signup_follows_approval(lineage_eng
     with engine.connect() as connection:
         assert MigrationContext.configure(connection).get_current_heads() == (SIGNUP,)
     assert SCRIPT.get_heads() == [SIGNUP]
-    assert SCRIPT.get_revision(SIGNUP).down_revision == APPROVAL
+    assert SCRIPT.get_revision(SIGNUP).down_revision == CODES
+    assert SCRIPT.get_revision(CODES).down_revision == APPROVAL
     assert SCRIPT.get_revision(APPROVAL).down_revision == LINK
     assert SCRIPT.get_revision(LINK).down_revision == JOB
     after = snapshot(engine, versions=True)
@@ -393,7 +397,7 @@ def test_should_preserve_unrelated_retained_data_when_empty_signup_is_rolled_bac
     seed(engine, job=True, link=True, mailbox=True)
     before = snapshot(engine)
     assert before.pop("patient_portal_signup_requests")[1] == []
-    migrate(engine, APPROVAL, "downgrade")
+    migrate(engine, CODES, "downgrade")
     assert "patient_portal_signup_requests" not in sa.inspect(engine).get_table_names()
     assert_preserved(engine, before)
     check = next(
@@ -405,7 +409,7 @@ def test_should_preserve_unrelated_retained_data_when_empty_signup_is_rolled_bac
         "signup.request"
     }
     with engine.connect() as connection:
-        assert MigrationContext.configure(connection).get_current_heads() == (APPROVAL,)
+        assert MigrationContext.configure(connection).get_current_heads() == (CODES,)
     migrate(engine, "head")
     assert_preserved(engine, before)
     assert_schema_and_sequences(engine)
@@ -450,7 +454,7 @@ def test_should_refuse_signup_rollback_before_writes_when_either_record_exists(
         with pytest.raises(
             RuntimeError, match="sign-up audit events exist|stored sign-up requests exist"
         ):
-            migrate(engine, APPROVAL, "downgrade")
+            migrate(engine, CODES, "downgrade")
     finally:
         sa.event.remove(engine, "before_cursor_execute", record_write)
     assert writes == []
@@ -472,7 +476,7 @@ def test_should_hold_retention_decision_against_concurrent_inserts(lineage_engin
     sa.event.listen(engine, "before_cursor_execute", pause_before_request_count)
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
-            result = executor.submit(migrate, engine, APPROVAL, "downgrade")
+            result = executor.submit(migrate, engine, CODES, "downgrade")
             try:
                 assert locked.wait(10), "migration never reached its locked retention check"
                 with pytest.raises(sa.exc.OperationalError) as failure:
@@ -516,4 +520,4 @@ def test_should_hold_retention_decision_against_concurrent_inserts(lineage_engin
     finally:
         sa.event.remove(engine, "before_cursor_execute", pause_before_request_count)
     with engine.connect() as connection:
-        assert MigrationContext.configure(connection).get_current_heads() == (APPROVAL,)
+        assert MigrationContext.configure(connection).get_current_heads() == (CODES,)
