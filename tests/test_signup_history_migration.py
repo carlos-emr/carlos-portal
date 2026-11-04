@@ -395,7 +395,9 @@ def test_should_roundtrip_empty_database_through_base_and_head(lineage_engine):
 
 def test_should_preserve_unrelated_retained_data_when_empty_signup_is_rolled_back(lineage_engine):
     engine = lineage_engine
-    migrate(engine, "head")
+    # Start at sign-up, not the head: from the head a later revision's own downgrade (#81's
+    # 0022) runs first, and this checks only what sign-up's downgrade keeps and refuses.
+    migrate(engine, SIGNUP)
     seed(engine, job=True, link=True, mailbox=True)
     before = snapshot(engine)
     assert before.pop("patient_portal_signup_requests")[1] == []
@@ -422,7 +424,9 @@ def test_should_refuse_signup_rollback_before_writes_when_either_record_exists(
     lineage_engine, retained
 ):
     engine = lineage_engine
-    migrate(engine, "head")
+    # Start at sign-up, not the head: from the head a later revision's own downgrade (#81's
+    # 0022) runs first, and this checks only what sign-up's downgrade keeps and refuses.
+    migrate(engine, SIGNUP)
     if retained == "request":
         # Deliberately no signup audit: a missing companion must not permit data loss.
         seed(engine, signup=True, signup_audit=False)
