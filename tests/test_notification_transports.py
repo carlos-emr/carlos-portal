@@ -31,6 +31,7 @@ from carlos_patient_portal.mycarlos_availability import (
     TransportFailure,
     dispatch,
 )
+from tests import notification_transports_support as sup  # noqa: E402
 
 NOW = 1_800_000_000
 DESTINATION = UUID("00000000-0000-4000-8000-0000000000d1")
@@ -58,15 +59,15 @@ def send(transport, platform, **kw):
 
 
 def fcm(*responses, handle=FCM_TOKEN):
-    return nt.RecordingFcmTransport(FCM, nt.FixedHandles({DESTINATION: handle}), *responses)
+    return sup.RecordingFcmTransport(FCM, sup.FixedHandles({DESTINATION: handle}), *responses)
 
 
 def apns(*responses, handle=APNS_TOKEN, config=APNS):
-    return nt.RecordingApnsTransport(config, nt.FixedHandles({DESTINATION: handle}), *responses)
+    return sup.RecordingApnsTransport(config, sup.FixedHandles({DESTINATION: handle}), *responses)
 
 
 def wns(*responses, handle=WNS_CHANNEL):
-    return nt.RecordingWnsTransport(WNS, nt.FixedHandles({DESTINATION: handle}), *responses)
+    return sup.RecordingWnsTransport(WNS, sup.FixedHandles({DESTINATION: handle}), *responses)
 
 
 def _hint(hint):
@@ -172,13 +173,42 @@ class NoPhiAndNoDocumentContent(unittest.TestCase):
             send(transport, platform)
             yield transport.requests[0]
 
-    def test_no_request_carries_the_portal_destination_id_or_subscription_text(self):
+    def test_no_request_carries_the_portal_destination_id(self):
         for request in self.requests():
             blob = request.body.decode("utf-8") + " ".join(
                 f"{k}={v}" for k, v in request.headers.items()
             ) + request.url
-            for forbidden in (str(DESTINATION), DESTINATION.hex, str(SUBSCRIPTION_ID), str(EPOCH)):
+            for forbidden in (str(DESTINATION), DESTINATION.hex):
                 self.assertNotIn(forbidden, blob)
+
+    def test_the_hint_is_encoded_not_hidden_and_holds_exactly_the_five_v1_fields(self):
+        """A provider can decode ``h``: subscription UUID, epoch UUID and the waiting count.
+
+        Hiding those (a per-epoch hash and an offset) is the policy module's follow-up and must
+        land before the adapters are wired. This pins what is exposed today so a change is seen.
+        """
+        decoded = []
+        for request in self.requests():
+            body = request.body.decode("utf-8")
+            if request.body.startswith(b"<toast"):
+                encoded = ElementTree.fromstring(request.body).attrib["launch"][2:]  # noqa: S314
+            else:
+                encoded = json.loads(body)["message"]["data"]["h"] if "message" in body[:12] else (
+                    json.loads(body)["h"]
+                )
+            decoded.append(json.loads(hint_from(encoded)))
+        self.assertEqual(len(decoded), 3)
+        for fields in decoded:
+            self.assertEqual(
+                fields,
+                {
+                    "version": 1,
+                    "kind": "documents_ready",
+                    "subscription_id": str(SUBSCRIPTION_ID),
+                    "epoch": str(EPOCH),
+                    "sequence": 42,
+                },
+            )
 
     def test_the_only_words_in_a_message_are_the_fixed_generic_notice(self):
         for request in self.requests():
@@ -255,6 +285,12 @@ class RetryClassification(unittest.TestCase):
                 self.assertIsNone(caught.exception.__cause__)
                 self.assertTrue(caught.exception.__suppress_context__)
 
+    def test_a_redirect_is_permanent_and_never_followed(self):
+        for status in (301, 302, 307, 308):
+            for transport, platform in self.transports(status):
+                self.assertIs(send(transport, platform), ProviderResult.PERMANENT_FAILURE)
+                self.assertEqual(len(transport.requests), 1)
+
     def test_other_4xx_are_permanent_and_never_retried(self):
         for status in (400, 401, 403, 405, 413, 422):
             for transport, platform in self.transports(status):
@@ -310,7 +346,15 @@ class DestinationAndInputGuards(unittest.TestCase):
         for transport, platform in cases:
             self.assertIs(send(transport, platform), ProviderResult.INVALID_DESTINATION)
             self.assertEqual(transport.requests, [])
-        unknown = nt.RecordingFcmTransport(FCM, nt.FixedHandles({}))
+        idn = "https://db5.notify.windows.com\u2024evil.example/x"
+        for transport, platform in (
+            (wns(200, handle=idn), PushPlatform.WINDOWS_WNS),
+            (wns(200, handle="https://xn--db5-notify.windows.com.evil.example/x"),
+             PushPlatform.WINDOWS_WNS),
+        ):
+            self.assertIs(send(transport, platform), ProviderResult.INVALID_DESTINATION)
+            self.assertEqual(transport.requests, [])
+        unknown = sup.RecordingFcmTransport(FCM, sup.FixedHandles({}))
         self.assertIs(send(unknown, PushPlatform.ANDROID_FCM), ProviderResult.INVALID_DESTINATION)
 
     def test_a_wrong_platform_ttl_or_collapse_key_is_a_wiring_fault_not_a_provider_outage(self):
@@ -318,7 +362,7 @@ class DestinationAndInputGuards(unittest.TestCase):
             send(fcm(200), PushPlatform.IOS_APNS)
         with self.assertRaises(ValueError):
             send(fcm(200), PushPlatform.ANDROID_FCM, ttl_seconds=0)
-        for key in ("", "x" * 65):
+        for key in ("", "x" * 65, "caf\u00e9" * 4, "\u2603"):
             with self.assertRaises(ValueError):
                 fcm(200).send(
                     destination_id=DESTINATION, platform=PushPlatform.ANDROID_FCM,

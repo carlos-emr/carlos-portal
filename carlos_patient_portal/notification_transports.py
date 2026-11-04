@@ -4,8 +4,15 @@
 """Provider adapters for the opaque "documents ready" hint (FCM v1, APNs, WNS).
 
 Each adapter implements ``AvailabilityTransport.send`` and nothing else. The request carries only
-the generic notice and the opaque, content-free hint (at most 256 bytes, no text, no document or
-patient identifier), never the portal's own destination id. All HTTP goes through one injected
+the generic notice and the v1 hint (at most 256 bytes, no text, no document content, no patient
+identifier), never the portal's own destination id.
+
+The hint is encoded, not hidden: it is base64url of the five-field JSON ``ReadyHint.encode()``
+produces, so a provider can read the portal subscription UUID, the epoch UUID and the sequence
+(the per-device count of waiting documents). Hiding those (for example a per-epoch hash and an
+offset) is a follow-up in the policy module and must land before anything is wired.
+
+All HTTP goes through one injected
 ``HttpClient``; credentials come from injected sources; nothing here reads settings, the
 environment or a file, opens a socket, or logs. Default off and not wired: no route, worker or
 setting constructs these classes yet.
@@ -97,7 +104,11 @@ class DestinationHandles(Protocol):
 
 
 class BearerTokenSource(Protocol):
-    """Short-lived OAuth access token (FCM) or channel token (WNS). Never logged or persisted."""
+    """Short-lived OAuth access token (FCM) or channel token (WNS). Never logged or persisted.
+
+    An implementation must not hand out a token with under a minute left: a 401 is a permanent
+    failure here and is never retried, so an expiring token would drop the hint.
+    """
 
     def bearer_token(self) -> str: ...
 
@@ -178,10 +189,13 @@ def _check_send(
         raise TypeError("wrong_platform_for_transport")
     if not isinstance(ttl_seconds, int) or isinstance(ttl_seconds, bool) or ttl_seconds < 1:
         raise ValueError("invalid_ttl")
-    if (
-        not isinstance(collapse_key, str)
-        or not 1 <= len(collapse_key.encode("ascii", "strict")) <= MAX_COLLAPSE_KEY_BYTES
-    ):
+    try:
+        valid_key = isinstance(collapse_key, str) and (
+            1 <= len(collapse_key.encode("ascii")) <= MAX_COLLAPSE_KEY_BYTES
+        )
+    except UnicodeEncodeError:
+        valid_key = False
+    if not valid_key:
         raise ValueError("invalid_collapse_key")
 
 
@@ -292,6 +306,8 @@ class ApnsTokenTransport:
                 "authorization": f"bearer {self._jwts.provider_token()}",
                 "apns-topic": self._config.bundle_id,
                 "apns-push-type": "alert",
+                # Priority 10 is correct only with push type "alert" (a visible notice): the
+                # pair is required together; never send priority 10 with a background push.
                 "apns-priority": "10",
                 "apns-expiration": str(self._clock() + ttl_seconds),
                 "apns-collapse-id": collapse_key,
@@ -368,6 +384,8 @@ class WnsTransport:
                 "X-WNS-TTL": str(ttl_seconds),
                 # WNS tags are at most 16 characters: the head of the stable collapse identity.
                 "X-WNS-Tag": collapse_key[:16],
+                # The provider keeps the newest toast while the device is offline (one per tag),
+                # for at most the TTL above; the hint is not recalled once accepted.
                 "X-WNS-Cache-Policy": "cache",
             },
             body=toast.encode("utf-8"),
@@ -385,87 +403,3 @@ class WnsTransport:
             handle=handle, notice=notice, ttl_seconds=ttl_seconds, collapse_key=collapse_key
         )
         return _classify(_post(self._http, request).status, frozenset({404, 410}))
-
-
-# --- Recording fakes (tests and local rehearsals; no network) ---------------------------------
-
-
-class RecordingHttpClient:
-    """Records every request and answers from a scripted list of statuses (or exceptions)."""
-
-    def __init__(self, *responses: int | BaseException) -> None:
-        self.requests: list[HttpRequest] = []
-        self._responses = list(responses) or [200]
-
-    def send(self, request: HttpRequest, *, timeout: float) -> HttpResponse:
-        self.requests.append(request)
-        item = self._responses.pop(0) if len(self._responses) > 1 else self._responses[0]
-        if isinstance(item, BaseException):
-            raise item
-        return HttpResponse(item)
-
-
-class FixedHandles:
-    """A fixed destination-id -> handle table; unknown ids are None."""
-
-    def __init__(self, table: Mapping[UUID, str]) -> None:
-        self._table = dict(table)
-
-    def handle_for(self, destination_id: UUID) -> str | None:
-        return self._table.get(destination_id)
-
-
-class FixedToken:
-    """A fake token source for both token protocols."""
-
-    def __init__(self, token: str = "fake-token") -> None:  # noqa: S107 (a fake, not a secret)
-        self._token = token
-
-    def bearer_token(self) -> str:
-        return self._token
-
-    def provider_token(self) -> str:
-        return self._token
-
-
-class RecordingFcmTransport(FcmV1Transport):
-    """``FcmV1Transport`` over a recording client: ``.requests`` is what would have been sent."""
-
-    def __init__(
-        self, config: FcmConfig, handles: DestinationHandles, *responses: int | BaseException
-    ) -> None:
-        self.http = RecordingHttpClient(*responses)
-        super().__init__(config, self.http, handles, FixedToken())
-
-    @property
-    def requests(self) -> list[HttpRequest]:
-        return self.http.requests
-
-
-class RecordingApnsTransport(ApnsTokenTransport):
-    """``ApnsTokenTransport`` over a recording client and a fixed clock."""
-
-    def __init__(
-        self, config: ApnsConfig, handles: DestinationHandles, *responses: int | BaseException,
-        now: int = 1_800_000_000,
-    ) -> None:
-        self.http = RecordingHttpClient(*responses)
-        super().__init__(config, self.http, handles, FixedToken(), lambda: now)
-
-    @property
-    def requests(self) -> list[HttpRequest]:
-        return self.http.requests
-
-
-class RecordingWnsTransport(WnsTransport):
-    """``WnsTransport`` over a recording client."""
-
-    def __init__(
-        self, config: WnsConfig, handles: DestinationHandles, *responses: int | BaseException
-    ) -> None:
-        self.http = RecordingHttpClient(*responses)
-        super().__init__(config, self.http, handles, FixedToken())
-
-    @property
-    def requests(self) -> list[HttpRequest]:
-        return self.http.requests
