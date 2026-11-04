@@ -26,6 +26,7 @@ from carlos_patient_portal.mycarlos_availability import (
     PushPlatform,
     ReadyHint,
     Subscription,
+    TransportFailure,
     coalesce_pending,
     dispatch,
     queue_new_copy,
@@ -242,6 +243,15 @@ class TransactionContractTests(unittest.TestCase):
         with self.assertRaisesRegex(AvailabilityError, "^coalescing_binding_mismatch$"):
             coalesce_pending(job, replace(job, destination_id=UUID(int=82)), now=NOW)
 
+    def test_expired_newer_intent_never_replaces_or_shortens_a_live_slot(self):
+        live = intent()
+        dead = replace(live, hint=replace(live.hint, sequence=18), expires_at=NOW)
+        self.assertIs(coalesce_pending(live, dead, now=NOW), live)
+        self.assertIs(coalesce_pending(replace(live, expires_at=NOW), dead, now=NOW).hint,
+                      live.hint)
+        fresh = replace(live, hint=replace(live.hint, sequence=18), expires_at=NOW + 5)
+        self.assertEqual(coalesce_pending(live, fresh, now=NOW).expires_at, NOW + 5)
+
 
 class DispatchContractTests(unittest.TestCase):
     def test_default_off_and_revocation_owner_rotation_or_no_waiting_content_suppress(self):
@@ -296,7 +306,7 @@ class DispatchContractTests(unittest.TestCase):
             self.assertEqual(provider.calls[0]["ttl_seconds"], HINT_TTL_SECONDS)
 
     def test_transient_exception_retry_bounded_without_echoing_provider_data(self):
-        for result in [ProviderResult.TRANSIENT_FAILURE, RuntimeError("SYNTHETIC-TOKEN")]:
+        for result in [ProviderResult.TRANSIENT_FAILURE, TransportFailure("SYNTHETIC-TOKEN")]:
             provider = Provider(result)
             decision = dispatch(lease(), current(), provider, now=NOW, server_enabled=True)
             self.assertEqual((decision.status, decision.retry_at), ("retry", NOW + 30))
@@ -306,6 +316,25 @@ class DispatchContractTests(unittest.TestCase):
         short = replace(intent(), expires_at=NOW + 30)
         self.assertEqual(dispatch(lease(short), current(), provider, now=NOW,
                                   server_enabled=True).status, "expired")
+
+    def test_mis_wired_transport_is_a_fault_not_an_outage(self):
+        for failure in [TypeError("SYNTHETIC-TOKEN"), AttributeError("SYNTHETIC-TOKEN"),
+                        RuntimeError("SYNTHETIC-TOKEN")]:
+            provider = Provider(failure)
+            decision = dispatch(lease(), current(), provider, now=NOW, server_enabled=True)
+            self.assertEqual(decision.status, "transport_error:" + type(failure).__name__)
+            self.assertIsNone(decision.retry_at)
+            self.assertFalse(decision.revoke_destination)
+            self.assertNotIn("SYNTHETIC", repr(decision))
+            self.assertEqual(len(provider.calls), 1)
+
+        class SyntheticProviderSdkError(Exception):
+            pass
+
+        decision = dispatch(lease(), current(), Provider(SyntheticProviderSdkError("x")), now=NOW,
+                            server_enabled=True)
+        self.assertEqual(decision.status, "transport_error:SyntheticProviderSdkError")
+        self.assertLessEqual(len(decision.status), 96)
 
     def test_invalid_destination_and_permanent_failure_do_not_retry(self):
         for result, status, revoke in [

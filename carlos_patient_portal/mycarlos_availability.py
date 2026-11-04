@@ -25,11 +25,20 @@ MAX_DESTINATIONS = 16
 MAX_ATTEMPTS = 5
 HINT_TTL_SECONDS = 900
 MAX_LEASE_SECONDS = 120
+MAX_STATUS_LENGTH = 96
 REMOTE_CONSENT_VERSION = 1
 
 
 class AvailabilityError(ValueError):
     """Fixed, content-free refusal; never include payload, tokens or provider exception text."""
+
+
+class TransportFailure(Exception):
+    """The one exception a transport may raise for a provider-side failure worth retrying.
+
+    Anything else a transport raises is a wiring or programming fault, not a provider outage,
+    and dispatch() reports it as a content-free transport_error decision instead of retrying.
+    """
 
 
 def _integer(value: object, minimum: int = 0) -> bool:
@@ -224,6 +233,9 @@ def coalesce_pending(existing: OutboxIntent, incoming: OutboxIntent, *, now: int
         raise AvailabilityError("coalescing_binding_mismatch")
     if incoming.hint.sequence <= existing.hint.sequence:
         return existing
+    if incoming.expires_at <= now:
+        # An already-expired newer intent never replaces or shortens a live slot.
+        return existing
     if existing.expires_at <= now:
         return incoming
     return replace(incoming, expires_at=min(existing.expires_at, incoming.expires_at))
@@ -319,6 +331,9 @@ class GenericNotice:
 
 
 class AvailabilityTransport(Protocol):
+    """send() reports provider outcomes as ProviderResult and raises TransportFailure for a
+    provider-side failure (timeout, connection loss) that dispatch() may retry."""
+
     def send(
         self, *, destination_id: UUID, platform: PushPlatform, notice: GenericNotice,
         ttl_seconds: int, collapse_key: str,
@@ -337,6 +352,10 @@ class DispatchDecision:
     retry_at: int | None = None
     revoke_destination: bool = False
 
+    def __post_init__(self) -> None:
+        if type(self.status) is not str or not 0 < len(self.status) <= MAX_STATUS_LENGTH:
+            raise AvailabilityError("invalid_decision")
+
 
 def dispatch(
     lease: DispatchLease,
@@ -351,6 +370,8 @@ def dispatch(
     The persistence adapter owns bounded claim/lease heartbeat/CAS. Sending may race opt-out or
     lease expiry: duplicate provider acceptance is possible; stable collapse identity helps, but
     does not promise exactly-once OS display. No token, owner or document data enters the notice.
+    A TransportFailure from the transport is retried; any other exception ends the attempt with
+    a "transport_error:<ExceptionClass>" decision for the adapter to persist as a fault.
     """
     if not _integer(now):
         raise AvailabilityError("invalid_time")
@@ -383,10 +404,15 @@ def dispatch(
             notice=GenericNotice(intent.hint), ttl_seconds=intent.expires_at - now,
             collapse_key=intent.collapse_key,
         )
-    except Exception:
+    except TransportFailure:
         # A timeout may follow provider acceptance. Retry same replacement identity, boundedly;
         # neither exception text nor provider response bodies enter a decision/log here.
         result = ProviderResult.TRANSIENT_FAILURE
+    except Exception as failure:
+        # A mis-wired adapter (TypeError, AttributeError, a provider SDK's own exception) is a
+        # fault to fix, not an outage to retry. Only the exception class name is reported, never
+        # its text, so the decision stays content-free and an operator can tell bug from outage.
+        return DispatchDecision(f"transport_error:{type(failure).__name__[:64]}")
     if result is ProviderResult.ACCEPTED:
         return DispatchDecision("provider_accepted")
     if result is ProviderResult.INVALID_DESTINATION:
