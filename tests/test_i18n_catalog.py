@@ -25,13 +25,13 @@ import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from string import Formatter
-from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 from markupsafe import escape
 from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
+from starlette.requests import Request
 from starlette.responses import Response
 
 from carlos_patient_portal import i18n, main, web_support
@@ -987,7 +987,21 @@ def test_every_500_answer_gets_the_shared_response_headers(
 def test_the_shared_response_headers_add_hsts_only_in_production() -> None:
     def headers_for(settings: object) -> dict[str, str]:
         response = Response()
-        request = SimpleNamespace(url=SimpleNamespace(path="/portal"))
+        request = Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "GET",
+                "scheme": "https",
+                "path": "/portal",
+                "root_path": "",
+                "query_string": b"",
+                "headers": [],
+                "server": ("testserver", 443),
+                "client": ("testclient", 50000),
+                "state": {},
+            }
+        )
         main.apply_standard_response_headers(request, response, settings)  # type: ignore[arg-type]
         return dict(response.headers)
 

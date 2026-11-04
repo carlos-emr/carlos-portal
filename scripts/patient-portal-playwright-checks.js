@@ -48,6 +48,7 @@ const fixturePath = process.env.PORTAL_BROWSER_FIXTURE_FILE
   || path.join(os.tmpdir(), 'patient-portal-browser-fixtures.json');
 const browserFixtures = JSON.parse(readFileSync(fixturePath, 'utf8'));
 const activationFixture = browserFixtures.activation;
+const nonLatinActivationFixture = browserFixtures.nonLatinActivation;
 const passwordResetFixture = browserFixtures.passwordReset;
 
 mkdirSync(screenshotDir, { recursive: true });
@@ -61,6 +62,16 @@ assert(
     && activationFixture.username
     && activationFixture.password,
   `activation fixture is incomplete in ${fixturePath}`
+);
+assert(
+  nonLatinActivationFixture
+    && nonLatinActivationFixture.inviteCode
+    && nonLatinActivationFixture.email
+    && nonLatinActivationFixture.dateOfBirth
+    && nonLatinActivationFixture.healthCardNumber
+    && nonLatinActivationFixture.username
+    && nonLatinActivationFixture.password === '松雲海竹星河雨石山鳥風林月湖雪花',
+  `non-Latin activation fixture is incomplete in ${fixturePath}`
 );
 assert(
   passwordResetFixture
@@ -658,6 +669,114 @@ function screenshotPath(name) {
       page.getByRole('button', { name: 'Logout' }).click(),
     ]);
     await page.getByRole('heading', { name: 'Sign in' }).waitFor();
+
+    // A separate invite keeps the ASCII activation above as a control. A long, repeated Han
+    // password must still fail strength screening; a strong Han password must survive the
+    // actual phone-sized activation form and then authenticate through normal sign-in and MFA.
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.getByRole('link', { name: 'Activate account' }).click();
+    await page.getByRole('heading', { name: 'Activate your account' }).waitFor();
+    const nonLatin = nonLatinActivationFixture;
+    const [nonLatinBirthYear, nonLatinBirthMonth, nonLatinBirthDay] = nonLatin.dateOfBirth.split('-');
+    for (const [name, value] of Object.entries({
+      invite_code: nonLatin.inviteCode,
+      email: nonLatin.email,
+      health_card_number: nonLatin.healthCardNumber,
+      username: nonLatin.username,
+      password: '松'.repeat(16),
+      password_confirmation: '松'.repeat(16),
+    })) {
+      await page.locator(`input[name="${name}"]`).fill(value);
+    }
+    await page.getByRole('textbox', { name: 'Day', exact: true }).fill(String(Number(nonLatinBirthDay)));
+    await page.getByRole('combobox', { name: 'Month', exact: true }).selectOption(String(Number(nonLatinBirthMonth)));
+    await page.getByRole('textbox', { name: 'Year', exact: true }).fill(nonLatinBirthYear);
+    expectedActivationFailures += 1;
+    expectedActivationConsoleErrors += 1;
+    const weakNonLatinResponsePromise = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === portalPathname('/auth/activate')
+        && response.request().method() === 'POST'
+    );
+    await page.locator('input[name="password_confirmation"]').press('Enter');
+    assert((await weakNonLatinResponsePromise).status() === 400,
+      'a repeated non-Latin password bypassed activation strength screening');
+    await page.getByRole('alert').filter({ hasText: 'Choose a different password:' }).waitFor();
+    assert(
+      await page.locator('input[name="invite_code"]').inputValue() === nonLatin.inviteCode
+        && await page.locator('input[name="username"]').inputValue() === nonLatin.username
+        && await page.locator('input[name="password"]').inputValue() === ''
+        && await page.locator('input[name="password_confirmation"]').inputValue() === '',
+      'non-Latin activation retry lost the invite/username or retained a password'
+    );
+    await page.locator('input[name="password"]').fill(nonLatin.password);
+    await page.locator('input[name="password_confirmation"]').fill(nonLatin.password);
+    const nonLatinActivationResponsePromise = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === portalPathname('/auth/activate')
+        && response.request().method() === 'POST'
+    );
+    await page.locator('input[name="password_confirmation"]').press('Enter');
+    assert((await nonLatinActivationResponsePromise).status() === 201,
+      'a strong non-Latin password did not activate the same invite after a refused attempt');
+    await page.getByRole('heading', { name: 'Account activated' }).waitFor();
+    const nonLatinActivationText = await page.locator('body').innerText();
+    assert(
+      !nonLatinActivationText.includes(nonLatin.password)
+        && !nonLatinActivationText.includes(nonLatin.inviteCode)
+        && !nonLatinActivationText.includes(nonLatin.healthCardNumber),
+      'non-Latin activation result echoed a credential or identity proof'
+    );
+    await page.getByRole('link', { name: 'Sign in' }).click();
+    await page.locator('input[name="username"]').fill(nonLatin.username);
+    await page.locator('input[name="password"]').fill('松'.repeat(16));
+    expectedAuthFailures += 1;
+    expectedAuthConsoleErrors += 1;
+    const wrongNonLatinLoginPromise = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === portalPathname('/auth/login')
+        && response.request().method() === 'POST'
+    );
+    await page.locator('input[name="password"]').press('Enter');
+    assert((await wrongNonLatinLoginPromise).status() === 401,
+      'non-Latin activation account accepted a different password');
+    await page.getByRole('alert').filter({ hasText: 'Incorrect Username or Password' }).waitFor();
+    assert(await page.locator('input[name="password"]').inputValue() === '',
+      'failed non-Latin sign-in retained the attempted password');
+    await page.locator('input[name="username"]').fill(nonLatin.username);
+    await page.locator('input[name="password"]').fill(nonLatin.password);
+    await page.locator('input[name="password"]').press('Enter');
+    await page.getByRole('heading', { name: 'Verification code' }).waitFor();
+    assert(
+      !(await context.cookies()).some((cookie) => cookie.name === 'carlos_portal_session'),
+      'non-Latin sign-in established a session before MFA'
+    );
+    const nonLatinMfaCode = await readBrowserMfaCode(page, nonLatin.email);
+    await page.locator('input[name="code"]').fill(nonLatinMfaCode);
+    await page.locator('input[name="code"]').press('Enter');
+    await page.getByRole('heading', { name: 'Patient portal' }).waitFor();
+    assert(
+      new URL(page.url()).pathname === portalPathname('/portal')
+        && (await page.locator('.signed-in-user').innerText()).trim() === nonLatin.username.toLowerCase()
+        && (await context.cookies()).some((cookie) => cookie.name === 'carlos_portal_session'),
+      'the newly activated non-Latin credential did not establish its own authenticated dashboard'
+    );
+    const nonLatinLayout = await page.evaluate(() => ({
+      viewport: window.innerWidth,
+      document: document.documentElement.scrollWidth,
+    }));
+    assert(nonLatinLayout.document <= nonLatinLayout.viewport + 1,
+      'the newly activated account dashboard overflows at 360px');
+    await page.screenshot({
+      path: screenshotPath('patient-portal-nonlatin-activation-dashboard-mobile'),
+      fullPage: true,
+    });
+    await page.getByRole('button', { name: 'Logout' }).click();
+    await page.getByRole('heading', { name: 'Sign in' }).waitFor();
+    assert(!(await context.cookies()).some((cookie) => cookie.name === 'carlos_portal_session'),
+      'non-Latin activation account logout left a session cookie');
+    await page.goto(portalUrl('/portal/account'), { waitUntil: 'networkidle' });
+    await page.getByRole('heading', { name: 'Sign in' }).waitFor();
+    assert(new URL(page.url()).pathname === portalPathname('/'),
+      'signed-out non-Latin activation account could reopen protected account details');
+    await page.setViewportSize({ width: 390, height: 844 });
 
     await page.getByRole('link', { name: 'Forgot username or password?' }).click();
     await page.getByRole('heading', { name: 'Reset your password' }).waitFor();

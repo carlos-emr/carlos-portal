@@ -17,6 +17,7 @@ import os
 import sqlite3
 import stat
 import tempfile
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -572,7 +573,10 @@ def require_regular_file(path: Path, *, description: str) -> None:
 def validate_sqlite_database(path: Path) -> None:
     require_regular_file(path, description="SQLite database")
     try:
-        with sqlite3.connect(sqlite_read_only_uri(path), uri=True) as connection:
+        with (
+            closing(sqlite3.connect(sqlite_read_only_uri(path), uri=True)) as connection,
+            connection,
+        ):
             integrity_result = connection.execute("PRAGMA integrity_check").fetchone()
     except sqlite3.DatabaseError as exc:
         raise BackupUnavailableError(f"SQLite database is invalid: {path}") from exc
@@ -613,8 +617,16 @@ def atomic_sqlite_copy(source_path: Path, destination_path: Path) -> Path:
         os.fchmod(temporary_descriptor, stat.S_IRUSR | stat.S_IWUSR)
         os.close(temporary_descriptor)
         temporary_descriptor = -1
-        with sqlite3.connect(sqlite_read_only_uri(source_path), uri=True) as source_connection:
-            with sqlite3.connect(temporary_path) as destination_connection:
+        with (
+            closing(
+                sqlite3.connect(sqlite_read_only_uri(source_path), uri=True)
+            ) as source_connection,
+            source_connection,
+        ):
+            with (
+                closing(sqlite3.connect(temporary_path)) as destination_connection,
+                destination_connection,
+            ):
                 source_connection.backup(destination_connection)
                 integrity_result = destination_connection.execute(
                     "PRAGMA integrity_check"

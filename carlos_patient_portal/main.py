@@ -37,9 +37,11 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import Engine
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette._utils import get_route_path
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import Response
+from starlette.types import Scope
 
 from carlos_patient_portal.accounts import ActivationRateLimit
 from carlos_patient_portal.audit import hash_sensitive_reference, record_audit_event
@@ -148,6 +150,21 @@ from carlos_patient_portal.web_support import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+_STATIC_MOUNT_PATH = "/static"
+
+
+class _PortalStaticFiles(StaticFiles):
+    def get_path(self, scope: Scope) -> str:
+        # Use the application path captured before Mount extends root_path. A stripping
+        # proxy leaves scope.path without the deployment prefix, unlike the mount root.
+        # This lookup-only copy preserves the original URI and security classification;
+        # StaticFiles still normalizes the name and enforces filesystem containment.
+        asset_scope = dict(scope)
+        asset_scope["path"] = scope["state"]["_portal_application_path"]
+        asset_scope["root_path"] = _STATIC_MOUNT_PATH
+        return super().get_path(asset_scope)
 
 
 def build_portal_runtime(
@@ -308,19 +325,27 @@ def build_lifespan(
     return lifespan
 
 
+def _request_application_path(request: Request) -> str:
+    """Keep the portal boundary path when child mounts change root_path during dispatch."""
+    path = getattr(request.state, "_portal_application_path", None)
+    return request.url.path if path is None else path
+
+
 def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(
         request: Request,
         exc: RequestValidationError,
     ) -> Response:
-        if request.url.path.startswith(FHIR_PATH_PREFIX):
+        if _request_application_path(request).startswith(FHIR_PATH_PREFIX):
             return fhir_operation_outcome_response(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 code="invalid",
                 diagnostics="request parameters are invalid",
             )
-        if request.url.path == "/auth/login" and is_urlencoded_form_request(request):
+        if _request_application_path(request) == "/auth/login" and is_urlencoded_form_request(
+            request
+        ):
             csrf_token = create_csrf_token(runtime.token_keys.csrf)
             response = templates.TemplateResponse(
                 request=request,
@@ -404,7 +429,7 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
         60-minute CSRF token TTL and then submitted got that JSON in their browser window,
         with no way back to the portal - the most reachable instance of a broad gap.
         """
-        if request.url.path.startswith(FHIR_PATH_PREFIX):
+        if _request_application_path(request).startswith(FHIR_PATH_PREFIX):
             return fhir_operation_outcome_response(
                 status_code=exc.status_code,
                 code="processing",
@@ -428,6 +453,7 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
             headers=getattr(exc, "headers", None) or {},
         )
 
+    @app.exception_handler(SQLAlchemyError)
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(
         request: Request,
@@ -446,7 +472,7 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
         # a sink whose redaction policy is outside this process.
         logger.error("Unhandled portal error: %s", type(exc).__name__)
         response: Response | None = None
-        if request.url.path.startswith(FHIR_PATH_PREFIX):
+        if _request_application_path(request).startswith(FHIR_PATH_PREFIX):
             response = fhir_operation_outcome_response(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 code="exception",
@@ -485,7 +511,7 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
     ) -> Response:
         request.app.state.operational_metrics.record_failure("database")
         logger.warning("Portal database operation unavailable: %s", type(exc.orig).__name__)
-        if request.url.path.startswith(FHIR_PATH_PREFIX):
+        if _request_application_path(request).startswith(FHIR_PATH_PREFIX):
             return fhir_operation_outcome_response(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 code="transient",
@@ -517,7 +543,7 @@ def apply_standard_response_headers(
     The middleware applies them to every response. The 500 handler runs outside the middleware,
     so it applies them to its error page itself.
     """
-    path = request.url.path
+    path = _request_application_path(request)
     for header, value in SECURITY_HEADERS.items():
         response.headers.setdefault(header, value)
     if not path.startswith("/api/"):
@@ -589,8 +615,12 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
-        if settings.maintenance_mode and not is_maintenance_exempt_path(request.url.path):
-            if request.url.path.startswith(FHIR_PATH_PREFIX):
+        path = get_route_path(request.scope)
+        request.state._portal_application_path = path
+        if settings.maintenance_mode and not is_maintenance_exempt_path(
+            path, method=request.method
+        ):
+            if path.startswith(FHIR_PATH_PREFIX):
                 response = fhir_operation_outcome_response(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     code="transient",
@@ -612,11 +642,11 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
                     content={"detail": SERVICE_UNAVAILABLE_DETAIL},
                 )
             response.headers["Retry-After"] = str(settings.maintenance_retry_after_seconds)
-        elif is_rate_limited_path(request.url.path):
-            is_login = request.url.path == "/auth/login"
+        elif is_rate_limited_path(path):
+            is_login = path == "/auth/login"
             # Linking a device checks a one-time code, so it gets the login limiter's stricter
             # budget, in its own bucket.
-            is_mycarlos_link = request.url.path == MYCARLOS_LINK_PATH
+            is_mycarlos_link = path == MYCARLOS_LINK_PATH
             limiter = (
                 runtime.auth_rate_limiter if is_login or is_mycarlos_link else runtime.rate_limiter
             )
@@ -630,7 +660,7 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
             retry_after_seconds = limiter.consume(bucket)
             if retry_after_seconds is None:
                 response = await call_next(request)
-            elif request.url.path.startswith(FHIR_PATH_PREFIX):
+            elif path.startswith(FHIR_PATH_PREFIX):
                 response = fhir_operation_outcome_response(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     code="throttled",
@@ -802,7 +832,7 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
                     "fhir_client",
                     get_request_client_reference(request, settings),
                 ),
-                resource_type=request.url.path.split("/")[2][:64],
+                resource_type=_request_application_path(request).split("/")[2][:64],
                 reason="authentication_failed",
             )
             session.commit()
@@ -829,7 +859,7 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
                     "fhir_client",
                     get_request_client_reference(request, settings),
                 ),
-                resource_type=request.url.path.split("/")[2][:64],
+                resource_type=_request_application_path(request).split("/")[2][:64],
                 reason="authentication_failed",
             )
             session.commit()
@@ -1060,8 +1090,8 @@ def create_app(
     app.state.unlock_secret_encryption_secret = runtime.unlock_secret_encryption_secret
     logging.getLogger("uvicorn.access").disabled = not settings.is_development
     app.mount(
-        "/static",
-        StaticFiles(directory=str(PACKAGE_DIR / "static")),
+        _STATIC_MOUNT_PATH,
+        _PortalStaticFiles(directory=str(PACKAGE_DIR / "static")),
         name="static",
     )
     register_exception_handlers(app, runtime)
