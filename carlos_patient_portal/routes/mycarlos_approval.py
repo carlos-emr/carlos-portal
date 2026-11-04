@@ -20,20 +20,25 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import Response
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from carlos_patient_portal.approval_codec import compact_hash, invalid, verify_approval
-from carlos_patient_portal.approval_models import ApprovalRequest
+from carlos_patient_portal.approval_models import ApprovalCode, ApprovalRequest
 from carlos_patient_portal.approvals import (
+    MAX_CODE_ATTEMPTS,
     approval_clinic,
     candidate_request,
+    consume_code,
+    erase_stale_codes,
     publish_challenge,
     publish_decision,
     request_row,
     scope,
     status_payload,
+    submit_code,
+    valid_code_r,
 )
 from carlos_patient_portal.device_identity import (
     DEVICE_ASSERTION_HEADER,
@@ -72,10 +77,16 @@ from carlos_patient_portal.staff_identity import staff_request_hash
 from carlos_patient_portal.system_jobs import (
     JOB_DEVICE_APPROVAL_SYNC,
     PERMISSION_APPROVAL_CHALLENGES_PUBLISH,
+    PERMISSION_APPROVAL_CODES_CONSUME,
+    PERMISSION_APPROVAL_CODES_READ,
     PERMISSION_APPROVAL_DECISIONS_PUBLISH,
     PERMISSION_APPROVAL_PROOFS_READ,
     PERMISSION_APPROVAL_REQUESTS_READ,
 )
+
+# Clinic code v1 (mycarlos#141): the device's body is exactly {"code_r": "<6 digits>"}.
+CODE_BODY_LIMIT = 256
+CODE_ATTEMPT_TEXT = frozenset(str(n) for n in range(1, MAX_CODE_ATTEMPTS + 1))
 
 
 def body_object(raw: bytes, fields: set[str], limit: int = 32768) -> dict:
@@ -278,6 +289,24 @@ def register_device_approval_routes(app: FastAPI, runtime: PortalRuntime) -> Non
 
         return await call(request, 16384, operation)
 
+    @app.post("/api/mycarlos/device-approvals/{request_id}/code")
+    async def submit(request: Request, request_id: str) -> Response:
+        """Clinic code v1: store the code the patient entered, for CARLOS to compare."""
+
+        def operation(session: Session, m: LockedMailbox, raw: bytes) -> Response:
+            if request.scope.get("query_string", b""):
+                raise invalid()
+            value = body_object(raw, {"code_r"}, CODE_BODY_LIMIT)
+            if not valid_code_r(value["code_r"]):
+                raise invalid()
+            if not uuid_text(request_id, version4=True):
+                raise invalid("approval_not_found", 404)
+            row = request_row(session, m, request_id)
+            submit_code(session, m, row, code_r=value["code_r"], now=int(time()))
+            return response({"status": "submitted"}, 202)
+
+        return await call(request, CODE_BODY_LIMIT, operation)
+
 
 def register_internal_approval_routes(
     app: FastAPI, runtime: InternalRuntime, deps: InternalRouteDependencies
@@ -424,6 +453,95 @@ def register_internal_approval_routes(
                         session, m, row, value=value, body=raw, public_base=public_base
                     )
             return response({"status": "stored"})
+        except MailboxRefusal as exc:
+            return refusal_response(exc)
+
+    @app.get("/internal/carlos/mycarlos/device-approval-codes", dependencies=[Depends(guard(0))])
+    def codes(
+        request: Request,
+        principal: Annotated[
+            JobPrincipal,
+            Depends(
+                deps.job_principal_requiring(
+                    JOB_DEVICE_APPROVAL_SYNC, PERMISSION_APPROVAL_CODES_READ
+                )
+            ),
+        ],
+    ) -> Response:
+        """Clinic code v1: submitted codes after a per-clinic cursor, for CARLOS to compare."""
+        try:
+            after, limit, _ = query_values(request, {"after", "limit"}, maximum=20, default=10)
+            with runtime.session_factory() as session, session.begin():
+                clinic_lock(session, principal.clinic_id)
+                if after > approval_clinic(session, principal.clinic_id).code_sequence:
+                    raise invalid("invalid_cursor")
+                erase_stale_codes(session, principal.clinic_id, int(time()))
+                rows = list(
+                    session.execute(
+                        select(ApprovalCode, ApprovalRequest.challenge_id)
+                        .join(
+                            ApprovalRequest,
+                            and_(
+                                ApprovalRequest.clinic_id == ApprovalCode.clinic_id,
+                                ApprovalRequest.request_id == ApprovalCode.request_id,
+                            ),
+                        )
+                        .where(
+                            ApprovalCode.clinic_id == principal.clinic_id,
+                            ApprovalCode.code_sequence > after,
+                        )
+                        .order_by(ApprovalCode.code_sequence)
+                        .limit(limit + 1)
+                    )
+                )
+                more = len(rows) > limit
+                rows = rows[:limit]
+                last = rows[-1][0].code_sequence if rows else after
+                content = {
+                    "codes": [
+                        {
+                            "sequence": str(code.code_sequence),
+                            "request_id": code.request_id,
+                            "challenge_id": challenge_id,
+                            "attempt": code.attempt,
+                            "code_r": code.code_r,
+                            "submitted_at": code.submitted_at,
+                        }
+                        for code, challenge_id in rows
+                    ],
+                    "last_sequence": str(last),
+                    "next_cursor": str(last) if more else None,
+                }
+            return response(content)
+        except MailboxRefusal as exc:
+            return refusal_response(exc)
+
+    @app.put(
+        "/internal/carlos/mycarlos/device-approval-requests/{request_id}/codes/{attempt}/consumed",
+        dependencies=[Depends(guard(0))],
+    )
+    def consumed(
+        request: Request,
+        request_id: str,
+        attempt: str,
+        principal: Annotated[
+            JobPrincipal,
+            Depends(
+                deps.job_principal_requiring(
+                    JOB_DEVICE_APPROVAL_SYNC, PERMISSION_APPROVAL_CODES_CONSUME
+                )
+            ),
+        ],
+    ) -> Response:
+        """Clinic code v1: CARLOS has compared this code; erase it (idempotent)."""
+        try:
+            if request.scope.get("query_string", b""):
+                raise invalid()
+            if not uuid_text(request_id, version4=True) or attempt not in CODE_ATTEMPT_TEXT:
+                raise invalid("approval_not_found", 404)
+            with runtime.session_factory() as session, session.begin():
+                consume_code(session, principal.clinic_id, request_id, int(attempt), int(time()))
+            return response({"status": "consumed"})
         except MailboxRefusal as exc:
             return refusal_response(exc)
 

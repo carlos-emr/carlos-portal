@@ -343,8 +343,9 @@ class Settings(BaseSettings):
     # Send to myCarlos (carlos-portal#41). Off by default; while off, none of its pages or routes
     # exist. The schema is there either way, so turning it on needs no migration.
     mycarlos_delivery_enabled: bool = False
-    # Private M4 source is separately gated while its migration/security holds remain.
-    # Enabling M2 linking alone never assumes these new tables already exist.
+    # The device mailbox (M4) and device approval (M3) have their own switches, also off by
+    # default. Their tables come from migration 0018 either way; approval also needs delivery and
+    # the mailbox on (checked in reject_unsafe_runtime_policy).
     mycarlos_mailbox_enabled: bool = False
     mycarlos_approval_enabled: bool = False
     mycarlos_mailbox_device_bytes: int = Field(default=268435456, ge=20971520)
