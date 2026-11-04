@@ -36,7 +36,6 @@ the `signup.claim` and `signup.result` audit event types.
 """
 
 import json
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -51,7 +50,7 @@ from sqlalchemy.orm import Session
 
 from carlos_patient_portal.audit import hash_sensitive_reference, record_audit_event
 from carlos_patient_portal.config import Settings
-from carlos_patient_portal.identity import MIN_HEALTH_CARD_NUMBER_LENGTH
+from carlos_patient_portal.identity import MIN_HEALTH_CARD_NUMBER_LENGTH, TRAILING_VERSION_CODE
 from carlos_patient_portal.models import (
     AUDIT_ACTOR_TYPE_PATIENT,
     AUDIT_EVENT_SIGNUP_REQUEST,
@@ -85,8 +84,6 @@ SIGNUP_ADMISSION_LOCK_ID = 0x43505349474E5550
 # Each submission also deletes up to this many expired requests, so a TTL is kept even between
 # cleanup-transient-auth runs. The work does not depend on what was typed.
 SIGNUP_PURGE_BATCH_SIZE = 100
-# Ontario cards print a one- or two-letter version code after the number.
-_TRAILING_VERSION_CODE = re.compile(r"(?P<number>.*[0-9])[A-Z]{1,2}")
 
 
 class SignupQueueFullError(Exception):
@@ -161,7 +158,7 @@ def health_card_rate_key(normalized_health_card_number: str) -> str:
     does not start a fresh count. Two cards share a count only when their numbers are the same
     apart from those letters, which makes the limit stricter, never looser.
     """
-    match = _TRAILING_VERSION_CODE.fullmatch(normalized_health_card_number)
+    match = TRAILING_VERSION_CODE.fullmatch(normalized_health_card_number)
     if match is None or len(match.group("number")) < MIN_HEALTH_CARD_NUMBER_LENGTH:
         return normalized_health_card_number
     return match.group("number")

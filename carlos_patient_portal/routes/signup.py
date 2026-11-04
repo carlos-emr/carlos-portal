@@ -16,8 +16,10 @@
 
 Every request that passes the form checks gets the same page, status and headers, and takes at
 least `PATIENT_PORTAL_SELF_SIGNUP_RESPONSE_FLOOR_MS`, whether it was stored or refused by a rate
-limit. The handler never looks a patient up and never waits on CARLOS, so nothing it returns can
-say whether the details match a chart. Browser form only: there is no JSON variant.
+limit. The one exception is a full backlog: that 503 returns at once, and since the backlog is
+global it is the same for every patient and says nothing about one. The handler never looks a
+patient up and never waits on CARLOS, so nothing it returns can say whether the details match a
+chart. Browser form only: there is no JSON variant.
 """
 
 import asyncio
