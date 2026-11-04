@@ -401,18 +401,22 @@ any download. Then:
 
 13. **A second aid for the same original** (amendment, 4 Nov; default pending the maintainer). An
     original holds at most one aid. When the outcome is `file` and the original already holds an
-    aid with another `delivery_id`, compare the two aids' `approval.reviewed_at` (the summary
-    version is an opaque hash, so it cannot be ordered):
-    - the new aid's `reviewed_at` is strictly later: it replaces the held aid. One vault commit
-      records the new aid on the original and drops the held one; the vault history entry says it
-      replaced an earlier aid. The new aid's receipt is sent as for any filed aid.
-    - the new aid's `reviewed_at` is earlier or equal: the aid is not filed. The device signs a
-      receipt for it as for any aid (`document_sha256` is its JSON's SHA-256) and sends it once,
-      without keeping it, so the portal marks that delivery picked up and stops offering it. If
-      the send fails, the next listing offers the aid again and the same rule applies.
-    - the held aid's own receipt, if still unsent, stays pending and is sent as usual; a replaced
-      aid that the portal still offers meets this rule on its next listing (an earlier review than
-      the held aid) and is acknowledged the same way.
+    aid with another `delivery_id`, compare the two aids by `(approval.reviewed_at, approval.id)`,
+    the review time first and, for the same second, the larger `approval.id` compared byte by
+    byte, so that two devices always pick the same aid. (The summary version is an opaque hash
+    and cannot be ordered.)
+    - the new aid is greater: it replaces the held aid. One vault commit records the new aid on
+      the original and drops the held one, and the vault history entry says it replaced an earlier
+      aid. The new aid's receipt is sent as for any filed aid.
+    - the new aid is not greater (earlier, or the same approval under another delivery ID): the aid
+      is not filed. The device signs a receipt for it as for any aid (`document_sha256` is its
+      JSON's SHA-256) and sends it once, without keeping it, so the portal marks that delivery
+      picked up and stops offering it. If the send fails, the next listing offers the aid again
+      and the same rule applies.
+    - the replaced aid's own receipt, if it was still unsent, is dropped with its custody: the
+      device keeps no receipt for an aid it no longer holds. The portal may still offer the
+      replaced aid; at the next listing the device downloads it, finds it is less than the held
+      aid and acknowledges it by the rule above, so the portal stops offering it.
     The pair check of step 12 applies first: a second aid that does not name the filed original's
     document hash and lifetime is `pair_mismatch`, as before.
 
@@ -439,10 +443,12 @@ its aid.
   fences the aid too, and fencing the aid alone leaves the original. The send includes the aid by
   default when an approval matches the original; the "leave the reading aid out" tick is recorded
   with the send.
-- At most one aid per original is staged for a device unless a newer review replaces it: the
-  sender refuses a second aid for the same original (same clinic, device and original delivery)
-  unless the first is fenced, errored or removed, or the new aid's `approval.reviewed_at` is
-  strictly later (step 13). The outbox's `(original, kind)` uniqueness in P4b enforces it.
+- The sender stages at most one live aid for an original and device with the same content: a
+  second aid with identical content under a fresh delivery ID is refused while the first is live
+  (not fenced, errored, removed or expired). A changed aid is staged, and the device judges it by
+  step 13, because the sender cannot read the `approval.reviewed_at` of an aid it already sealed.
+  If P4b's outbox gets a `(original, kind)` uniqueness key, the sender will have to fence the
+  earlier live aid before staging a changed one; that is decided with P4b.
 - The original it sends must be byte-identical to the source the clinician reviewed (the aid's
   `pair.original_document_sha256` is that source's hash): the sender never re-renders, stamps or
   re-signs the PDF after approval, or the pair will not file.
