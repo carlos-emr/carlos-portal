@@ -130,6 +130,36 @@ class ActivationRequest(BaseModel):
         return self
 
 
+class SignupRequest(BaseModel):
+    """The public self sign-up form (carlos-portal#15). Normalized as activation normalizes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    health_card_number: str = Field(
+        min_length=MIN_HEALTH_CARD_NUMBER_LENGTH,
+        max_length=MAX_HEALTH_CARD_NUMBER_LENGTH,
+        repr=False,
+    )
+    date_of_birth: date = Field(repr=False)
+    email: str = Field(min_length=1, max_length=MAX_EMAIL_LENGTH, repr=False)
+
+    @field_validator("health_card_number")
+    @classmethod
+    def validate_health_card_number(cls, value: str) -> str:
+        return normalize_health_card_number(value)
+
+    @field_validator("date_of_birth")
+    @classmethod
+    def validate_date_of_birth(cls, value: date) -> date:
+        normalize_date_of_birth(value)
+        return value
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        return normalize_email(value)
+
+
 class ActivationResponse(BaseModel):
     status: str
     username: str

@@ -178,6 +178,31 @@ This amendment does not make the portal a scheduler: it cannot cancel or move a 
 shows no times CARLOS did not push. A later change that stores more appointment data than this,
 or keeps it longer, should amend this section rather than extend it silently.
 
+## Amendment: self sign-up requests (carlos-portal#15)
+
+**Recorded:** 2026-10-15.
+
+A patient can ask for a portal account on a public page, off by default, with their health card
+number, date of birth, and email address. Until now the portal held a health card number and a date
+of birth only as salted keyed hashes on an invite. A sign-up request holds them, with the typed
+email, as data CARLOS can read back, so it is accepted narrowly, on these terms.
+
+The direction of the contract does not change. The portal looks nothing up and never calls CARLOS:
+it stores the request, and a CARLOS job polls for it (carlos-portal#16), matches it against a chart,
+and sends a normal invite to the email already on file. Nothing typed on the page is ever used as a
+destination, so the portal never learns whether a request matched.
+
+What is stored, per request (`patient_portal_signup_requests`): the three details inside one
+AES-256-GCM payload under the outbox keyring, a keyed hash of the health card number (the same one
+the audit events carry), and the time it arrived and expires. Nothing else: no client address, no
+name, no chart number. Audit events carry keyed hashes only.
+
+When it is deleted: when CARLOS reports a result, or at the first sign-up submission or
+`cleanup-transient-auth` run after its TTL (one day by default) passes, whichever comes first. As
+with offered times, deleted requests remain in database backups and point-in-time recovery until
+those age out. A later change that keeps these details longer, or stores more of them, should amend
+this section.
+
 ## Open items owned by the author
 
 These belong in this document but cannot be reconstructed from the code:

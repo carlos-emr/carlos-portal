@@ -908,6 +908,8 @@ def index_template_context(
         "supported_locales": supported_locale_options(locale),
         "locale_switch_target": locale_switch_targets(request),
         "text": text,
+        # The sign-in page links the self sign-up page only while that page exists.
+        "self_signup_enabled": settings.self_signup_enabled,
     }
 
 
