@@ -31,17 +31,17 @@ from carlos_patient_portal.database import (
     check_database,
     check_database_schema_current,
 )
-from carlos_patient_portal.i18n import (
-    LOCALE_COOKIE_MAX_AGE_SECONDS,
-    LOCALE_COOKIE_NAME,
-    normalize_locale,
-)
+from carlos_patient_portal.i18n import normalize_locale
 from carlos_patient_portal.runtime import (
     PortalRuntime,
     RouteDependencies,
     function_scoped_database_dependency,
 )
-from carlos_patient_portal.web_support import NOT_FOUND_DETAIL, is_safe_local_redirect
+from carlos_patient_portal.web_support import (
+    NOT_FOUND_DETAIL,
+    is_safe_local_redirect,
+    set_locale_cookie,
+)
 
 
 def register_public_routes(
@@ -78,18 +78,7 @@ def register_public_routes(
         # or a backslash variant would turn a language link into an open redirect.
         destination = next if is_safe_local_redirect(next) else request.url_for("index").path
         response = RedirectResponse(url=destination, status_code=status.HTTP_303_SEE_OTHER)
-        # HttpOnly even though this is only a display preference: nothing on the page reads it
-        # from script, so withholding it from JavaScript costs nothing and keeps every cookie the
-        # portal sets consistent.
-        response.set_cookie(
-            LOCALE_COOKIE_NAME,
-            resolved_locale,
-            max_age=LOCALE_COOKIE_MAX_AGE_SECONDS,
-            httponly=True,
-            samesite="lax",
-            secure=not settings.is_development,
-            path="/",
-        )
+        set_locale_cookie(response, resolved_locale, settings=settings)
         return response
 
     @app.get("/health")

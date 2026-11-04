@@ -33,6 +33,12 @@ document.addEventListener("click", (event) => {
     current_password: passwordInput.value,
   });
   passwordInput.value = "";
+  // This box has no form, so nothing else hides it again once it is sent.
+  for (const toggle of passwordToggles) {
+    if (passwordToggleInputs(toggle).includes(passwordInput)) {
+      setPasswordsShown(toggle, false);
+    }
+  }
   void fetch(revealUrl, {
     method: "POST",
     credentials: "same-origin",
@@ -78,6 +84,30 @@ document.addEventListener("click", (event) => {
     });
 });
 
+// "Show password" controls (#29). Each button names the boxes it controls in aria-controls. The
+// buttons are hidden in the HTML and revealed here, so without JavaScript the boxes just stay hidden.
+const passwordToggles = Array.from(document.querySelectorAll("[data-password-toggle]")).filter(
+  (toggle) => toggle instanceof HTMLButtonElement
+);
+const passwordToggleInputs = (toggle) => (toggle.getAttribute("aria-controls") || "")
+  .split(/\s+/)
+  .map((id) => document.getElementById(id))
+  .filter((input) => input instanceof HTMLInputElement);
+// The boxes themselves say whether they are shown; the button's words say what it does next
+// ("Show password" / "Hide password"), with no aria-pressed (D133, as GOV.UK does it).
+const passwordsShown = (toggle) =>
+  passwordToggleInputs(toggle).some((input) => input.type === "text");
+const setPasswordsShown = (toggle, shown) => {
+  for (const input of passwordToggleInputs(toggle)) {
+    input.type = shown ? "text" : "password";
+  }
+  toggle.textContent = shown
+    ? toggle.dataset.hideLabel || "Hide password"
+    : toggle.dataset.showLabel || "Show password";
+};
+for (const toggle of passwordToggles) {
+  toggle.hidden = false;
+}
 document.addEventListener("click", (event) => {
   if (!(event.target instanceof Element)) {
     return;
@@ -86,17 +116,28 @@ document.addEventListener("click", (event) => {
   if (!(toggle instanceof HTMLButtonElement)) {
     return;
   }
-  const input = document.querySelector("[data-password-input]");
-  if (!(input instanceof HTMLInputElement)) {
-    return;
+  setPasswordsShown(toggle, !passwordsShown(toggle));
+});
+// Hide the boxes again when their form is sent and when the page comes back from the
+// back/forward cache, so a password is not left showing on a shared screen.
+document.addEventListener(
+  "submit",
+  (event) => {
+    if (!(event.target instanceof HTMLFormElement)) {
+      return;
+    }
+    for (const toggle of passwordToggles) {
+      if (passwordToggleInputs(toggle).some((input) => event.target.contains(input))) {
+        setPasswordsShown(toggle, false);
+      }
+    }
+  },
+  true
+);
+window.addEventListener("pageshow", () => {
+  for (const toggle of passwordToggles) {
+    setPasswordsShown(toggle, false);
   }
-  const shouldShow = input.type === "password";
-  input.type = shouldShow ? "text" : "password";
-  toggle.textContent = shouldShow
-    ? toggle.dataset.hideLabel || "Hide password"
-    : toggle.dataset.showLabel || "Show password";
-  toggle.setAttribute("aria-pressed", shouldShow ? "true" : "false");
-  input.focus();
 });
 
 document.addEventListener("click", (event) => {
@@ -168,6 +209,40 @@ if (
   if (!resetToken && resetTokenError instanceof HTMLElement) {
     resetTokenError.hidden = false;
   }
+  // A language link reloads this page through a redirect, and the token must not reach the
+  // server. So on the click it rides in the fragment, which the browser keeps across a redirect
+  // whose Location has none, and the code above moves it into the form again. Only a plain click
+  // on a link that comes back to this same page carries it, and the links themselves never hold
+  // it, so it is not shown on hover, copied with the link, or sent anywhere else.
+  document.querySelectorAll(".language-switch a[href]").forEach((link) => {
+    if (!(link instanceof HTMLAnchorElement)) {
+      return;
+    }
+    link.addEventListener("click", (event) => {
+      const currentToken = resetTokenInput.value;
+      if (
+        !currentToken
+        || event.defaultPrevented
+        || event.button !== 0
+        || event.metaKey
+        || event.ctrlKey
+        || event.shiftKey
+        || event.altKey
+      ) {
+        return;
+      }
+      const target = new URL(link.href, window.location.href);
+      const thisPage = `${window.location.pathname}${window.location.search}`;
+      if (target.origin !== window.location.origin || target.searchParams.get("next") !== thisPage) {
+        return;
+      }
+      event.preventDefault();
+      target.hash = new URLSearchParams({ token: currentToken }).toString();
+      // Replace, not assign: Back should not return to this page, whose URL no longer holds the
+      // token, as an empty form.
+      window.location.replace(target.toString());
+    });
+  });
   resetTokenForm.addEventListener("submit", (event) => {
     if (!resetTokenInput.value) {
       event.preventDefault();

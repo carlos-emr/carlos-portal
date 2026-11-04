@@ -1,14 +1,14 @@
 import json
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import timedelta
-from threading import Event
+from threading import Event, Thread
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import StatementError
 
 from carlos_patient_portal import delivery_outbox
 from carlos_patient_portal.auth import PasswordResetRequestResult
@@ -50,6 +50,7 @@ from tests.support import (
     activate_seeded_patient_account,
     activation_request,
     carlos_staff_headers,
+    csrf_token_from_response,
     development_settings,
     migrated_development_app,
     migrated_staging_app,
@@ -145,6 +146,95 @@ def test_outbox_encrypts_and_delivers_reset_with_stable_message_id() -> None:
         ) is not None
 
 
+@pytest.mark.parametrize("tamper_mode", ["corrupt-ciphertext", "swap-encrypted-rows"])
+def test_authenticated_outbox_tampering_is_isolated_without_disclosing_recipients(
+    tamper_mode: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    sender = RecordingPortalEmailSender()
+    app = migrated_development_app(outbox_encryption_secret=OUTBOX_ENCRYPTION_SECRET)
+    client = TestClient(app)
+    recipients = ["fake-previous@example.test", "fake-next@example.test"]
+    try:
+        account_id = activate_seeded_patient_account(app, client)
+        with app.state.session_factory() as session, session.begin():
+            damaged = enqueue_contact_change_delivery(
+                session,
+                account_id=account_id,
+                recipient=recipients[0],
+                encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+            )
+            intact = enqueue_contact_change_delivery(
+                session,
+                account_id=account_id,
+                recipient=recipients[1],
+                encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+            )
+            damaged_id, intact_id = damaged.id, intact.id
+            intact_message_id = intact.message_id
+            if tamper_mode == "corrupt-ciphertext":
+                corrupted = bytearray(damaged.encrypted_payload)
+                corrupted[0] ^= 1
+                damaged.encrypted_payload = bytes(corrupted)
+            else:
+                # This is valid ciphertext under the same key, account and kind.
+                # Its row identity differs: accepting it would send the wrong recipient.
+                damaged.encrypted_payload = intact.encrypted_payload
+                damaged.encryption_nonce = intact.encryption_nonce
+
+        caplog.set_level(logging.ERROR, logger="carlos_patient_portal.delivery_outbox")
+        caplog.clear()
+        rejected = process_one_delivery(
+            app.state.session_factory,
+            email_sender=sender,
+            encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+            max_attempts=1,
+            lease_seconds=60,
+            delivery_id=damaged_id,
+        )
+
+        assert rejected is not None
+        assert rejected.status == OUTBOX_STATUS_FAILED
+        assert sender.messages == []
+        with app.state.session_factory() as session:
+            failed = session.get(PatientPortalOutboundDelivery, damaged_id)
+            assert failed.last_failure_code == "payload_invalid"
+            assert failed.attempt_count == 1
+            assert failed.delivered_at is None
+            assert (
+                session.get(PatientPortalOutboundDelivery, intact_id).status
+                == OUTBOX_STATUS_PENDING
+            )
+            audit = session.scalar(
+                select(PatientPortalAuditEvent).where(
+                    PatientPortalAuditEvent.event_type == AUDIT_EVENT_ACCOUNT_CONTACT_UPDATE,
+                    PatientPortalAuditEvent.outcome == AUDIT_OUTCOME_FAILURE,
+                    PatientPortalAuditEvent.account_id == account_id,
+                )
+            )
+            assert audit is not None
+            assert audit.reason == "delivery_unavailable"
+        assert "payload_invalid" in caplog.text
+        assert all(recipient not in caplog.text for recipient in recipients)
+
+        delivered = process_one_delivery(
+            app.state.session_factory,
+            email_sender=sender,
+            encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+            max_attempts=1,
+            lease_seconds=60,
+            delivery_id=intact_id,
+        )
+
+        assert delivered is not None
+        assert delivered.status == OUTBOX_STATUS_DELIVERED
+        assert len(sender.messages) == 1
+        assert sender.messages[0]["recipient"] == recipients[1]
+        assert sender.messages[0]["message_id"] == intact_message_id
+    finally:
+        client.close()
+        app.state.database_engine.dispose()
+
+
 def test_outbox_rotation_retains_the_old_key_for_queued_delivery() -> None:
     old_secret = "v" * 32
     active_secret = "n" * 32
@@ -180,6 +270,7 @@ def test_outbox_rotation_retains_the_old_key_for_queued_delivery() -> None:
 
 def test_delivery_retries_when_its_audit_row_cannot_be_written(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """An unwritable audit row must send the delivery back, not close it as delivered.
 
@@ -194,15 +285,30 @@ def test_delivery_retries_when_its_audit_row_cannot_be_written(
     )
     account_id = activate_seeded_patient_account(app, TestClient(app))
     delivery_id, reset_id = queue_reset(app, account_id)
+    private_markers = (
+        "FAKE_PRIVATE_SQL_STATEMENT",
+        "FAKE_PRIVATE_PARAMETER",
+        "FAKE_PRIVATE_DRIVER_DETAIL",
+    )
+    driver_error = RuntimeError(private_markers[2])
+    audit_error = StatementError(
+        str(driver_error),
+        "INSERT INTO FAKE_PRIVATE_SQL_STATEMENT (actor) VALUES (:actor)",
+        {"actor": private_markers[1]},
+        driver_error,
+    )
+    assert all(marker in str(audit_error) for marker in private_markers)
 
     def fail_audit(*args: object, **kwargs: object) -> None:
-        raise SQLAlchemyError("audit unavailable")
+        raise audit_error
 
     monkeypatch.setattr(
         delivery_outbox,
         "record_password_reset_delivery_outcome",
         fail_audit,
     )
+    caplog.set_level(logging.ERROR, logger="carlos_patient_portal.delivery_outbox")
+    caplog.clear()
     result = process_one_delivery(
         app.state.session_factory,
         email_sender=sender,
@@ -213,10 +319,15 @@ def test_delivery_retries_when_its_audit_row_cannot_be_written(
 
     assert result is not None
     assert result.status == OUTBOX_STATUS_PENDING
+    assert len(sender.messages) == 1, "the provider succeeded before the audit failed"
+    assert "StatementError" in caplog.text
+    assert f"delivery {delivery_id}" in caplog.text
+    assert all(marker not in caplog.text for marker in private_markers)
     with app.state.session_factory() as session:
         delivery = session.get(PatientPortalOutboundDelivery, delivery_id)
         assert delivery.status == OUTBOX_STATUS_PENDING
         assert delivery.delivered_at is None
+        assert delivery.last_failure_code == delivery_outbox.OUTBOX_FAILURE_AUDIT_UNAVAILABLE
         # The token stays usable: the message did go out, and the patient must still be able
         # to complete the reset while the row is retried.
         assert session.get(PatientPortalPasswordResetToken, reset_id).status == (
@@ -340,6 +451,128 @@ def test_active_delivery_renews_its_lease_during_a_slow_provider_call(tmp_path) 
     assert second_worker is None
     assert first_result is not None
     assert first_result.status == OUTBOX_STATUS_DELIVERED
+
+
+@pytest.mark.parametrize("old_send_fails", [False, True])
+def test_stale_worker_cannot_complete_a_reclaimed_delivery_while_its_new_owner_sends(
+    tmp_path, old_send_fails: bool
+) -> None:
+    old_entered, new_entered = Event(), Event()
+    release_old, release_new = Event(), Event()
+    workers = []
+
+    class GatedSender:
+        def __init__(self, entered, release, fail=False):
+            self.entered, self.release, self.fail = entered, release, fail
+            self.calls = []
+
+        def send_contact_change_notice(self, *, recipient, message_id):
+            self.calls.append((recipient, message_id))
+            self.entered.set()
+            assert self.release.wait(timeout=15), "provider gate was not released"
+            if self.fail:
+                raise PortalEmailDeliveryError("FAKE old provider failure")
+
+    app = migrated_development_app(
+        database_url=f"sqlite+pysqlite:///{tmp_path / 'lease-owner.db'}",
+        email_sender=RecordingPortalEmailSender(),
+        outbox_encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+    )
+    client = TestClient(app)
+    try:
+        account_id = activate_seeded_patient_account(app, client)
+        with app.state.session_factory() as session, session.begin():
+            queued = enqueue_contact_change_delivery(
+                session,
+                account_id=account_id,
+                recipient="fake-recipient@example.test",
+                encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+            )
+            delivery_id, message_id = queued.id, queued.message_id
+
+        def start_worker(sender):
+            completion = Future()
+
+            def run():
+                try:
+                    completion.set_result(
+                        process_one_delivery(
+                            app.state.session_factory,
+                            email_sender=sender,
+                            encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+                            max_attempts=2,
+                            lease_seconds=90,
+                            delivery_id=delivery_id,
+                        )
+                    )
+                except Exception as error:
+                    completion.set_exception(error)
+
+            worker = Thread(target=run, daemon=True)
+            workers.append(worker)
+            worker.start()
+            return completion
+
+        old_sender = GatedSender(old_entered, release_old, old_send_fails)
+        old = start_worker(old_sender)
+        assert old_entered.wait(timeout=5)
+        with app.state.session_factory() as session, session.begin():
+            # Model a lease expiring while the provider call is still in flight.
+            row = session.get(PatientPortalOutboundDelivery, delivery_id)
+            assert row.attempt_count == 1
+            row.lease_expires_at = utc_now() - timedelta(seconds=1)
+
+        new_sender = GatedSender(new_entered, release_new)
+        newer = start_worker(new_sender)
+        assert new_entered.wait(timeout=5)
+        with app.state.session_factory() as session:
+            new_lease = session.get(PatientPortalOutboundDelivery, delivery_id).lease_expires_at
+
+        release_old.set()
+        old_result = old.result(timeout=10)
+        assert old_result is not None
+        assert old_result.status == OUTBOX_STATUS_PROCESSING
+        with app.state.session_factory() as session:
+            owned = session.get(PatientPortalOutboundDelivery, delivery_id)
+            assert owned.status == OUTBOX_STATUS_PROCESSING
+            assert owned.attempt_count == 2
+            assert owned.lease_expires_at == new_lease
+            assert owned.delivered_at is None
+            assert owned.last_failure_code is None
+            assert (
+                session.scalar(
+                    select(PatientPortalAuditEvent.id).where(
+                        PatientPortalAuditEvent.event_type == AUDIT_EVENT_ACCOUNT_CONTACT_UPDATE,
+                        PatientPortalAuditEvent.outcome == AUDIT_OUTCOME_FAILURE,
+                        PatientPortalAuditEvent.account_id == account_id,
+                    )
+                )
+                is None
+            )
+
+        release_new.set()
+        new_result = newer.result(timeout=10)
+        assert new_result is not None
+        assert new_result.status == OUTBOX_STATUS_DELIVERED
+        with app.state.session_factory() as session:
+            delivered = session.get(PatientPortalOutboundDelivery, delivery_id)
+            assert delivered.attempt_count == 2
+            assert delivered.delivered_at is not None
+            assert delivered.lease_expires_at is None
+        # Reclaimed leases can invoke a provider twice; both use the same Message-ID.
+        expected = [("fake-recipient@example.test", message_id)]
+        assert old_sender.calls == expected
+        assert new_sender.calls == expected
+    finally:
+        release_old.set()
+        release_new.set()
+        try:
+            for worker in workers:
+                worker.join(timeout=15)
+            assert all(not worker.is_alive() for worker in workers)
+        finally:
+            client.close()
+            app.state.database_engine.dispose()
 
 
 def test_terminal_delivery_failure_revokes_reset_token() -> None:
@@ -1007,6 +1240,125 @@ def test_password_reset_queue_applies_account_neutral_durable_backpressure() -> 
         commands = session.scalars(select(PatientPortalOutboundDelivery)).all()
     assert len(commands) == 10
     assert all(command.kind == OUTBOX_KIND_PASSWORD_RESET_REQUEST for command in commands)
+    assert app.state.operational_metrics.snapshot()["failures"] == {
+        "password_reset_queue_full": 1
+    }
+
+
+def test_browser_password_reset_recovers_after_public_worker_frees_queue_capacity() -> None:
+    sender = RecordingPortalEmailSender()
+    app = migrated_staging_app(
+        email_sender=sender,
+        password_reset_queue_max_pending=10,
+        password_reset_queue_retry_after_seconds=45,
+    )
+    client = TestClient(app, base_url="https://portal.example.test")
+    for index in range(10):
+        admitted = client.post(
+            "/auth/password-reset/request",
+            json={
+                "username": f"missing.patient{index}",
+                "email": f"missing{index}@example.test",
+            },
+        )
+        assert admitted.status_code == 202
+
+    page = client.get("/auth/password-reset")
+    assert page.status_code == 200
+    form_values = {"username": "missing.retry.patient", "email": "missing.retry@example.test"}
+    full = client.post(
+        "/auth/password-reset/request",
+        data={**form_values, "csrf_token": csrf_token_from_response(page)},
+    )
+    assert full.status_code == 503
+    assert full.headers["content-type"].startswith("text/html")
+    assert full.headers["retry-after"] == "45"
+    assert 'role="alert"' in full.text
+    assert "Password reset is temporarily unavailable. Please try again shortly." in full.text
+    assert 'action="https://portal.example.test/auth/password-reset/request"' in full.text
+    assert app.state.operational_metrics.snapshot()["failures"] == {
+        "password_reset_queue_full": 1
+    }
+    with app.state.session_factory() as session:
+        commands = session.scalars(
+            select(PatientPortalOutboundDelivery).order_by(PatientPortalOutboundDelivery.id)
+        ).all()
+        original_ids = {command.id for command in commands}
+        assert len(original_ids) == 10
+        assert all(command.kind == OUTBOX_KIND_PASSWORD_RESET_REQUEST for command in commands)
+        assert all(command.status == OUTBOX_STATUS_PENDING for command in commands)
+        assert all(command.account_id is None for command in commands)
+        assert session.scalars(select(PatientPortalPasswordResetToken)).all() == []
+    assert sender.messages == []
+
+    settings = app.state.settings
+    assert settings.session_secret is not None
+    assert settings.public_base_url is not None
+    processed = process_one_delivery(
+        app.state.session_factory,
+        email_sender=sender,
+        encryption_secret=settings.resolved_outbox_keyring[settings.outbox_active_key_id],
+        encryption_keys=settings.resolved_outbox_keyring,
+        max_attempts=settings.outbox_max_attempts,
+        lease_seconds=settings.outbox_lease_seconds,
+        password_reset_request_context=PasswordResetRequestContext(
+            policy=auth_policy_from_settings(settings),
+            reset_token_secret=PortalTokenKeys.derive(
+                settings.session_secret.get_secret_value()
+            ).password_reset,
+            clinic_id=settings.clinic_id,
+            public_base_url=settings.public_base_url,
+            token_ttl_seconds=settings.password_reset_token_ttl_seconds,
+            outbox_active_key_id=settings.outbox_active_key_id,
+        ),
+    )
+    assert processed is not None
+    assert processed.status == OUTBOX_STATUS_DELIVERED
+    with app.state.session_factory() as session:
+        commands = session.scalars(select(PatientPortalOutboundDelivery)).all()
+        assert {command.id for command in commands} == original_ids
+        assert sum(command.status == OUTBOX_STATUS_DELIVERED for command in commands) == 1
+        assert sum(
+            command.status in {OUTBOX_STATUS_PENDING, OUTBOX_STATUS_PROCESSING}
+            for command in commands
+        ) == 9
+        assert session.scalars(select(PatientPortalPasswordResetToken)).all() == []
+    assert sender.messages == []
+
+    # Retry the real form returned by the full-queue response, including its fresh CSRF token.
+    retry = client.post(
+        "/auth/password-reset/request",
+        data={**form_values, "csrf_token": csrf_token_from_response(full)},
+    )
+    assert retry.status_code == 202
+    assert retry.headers["content-type"].startswith("text/html")
+    assert "retry-after" not in retry.headers
+    assert 'role="status"' in retry.text
+    assert (
+        "If the account details match, a password reset link has been sent by email." in retry.text
+    )
+    assert "Open reset page" not in full.text
+    assert "Open reset page" not in retry.text
+    assert "/auth/password-reset/complete#token=" not in retry.text
+    with app.state.session_factory() as session:
+        commands = session.scalars(select(PatientPortalOutboundDelivery)).all()
+        assert len(commands) == 11
+        assert sum(
+            command.status in {OUTBOX_STATUS_PENDING, OUTBOX_STATUS_PROCESSING}
+            for command in commands
+        ) == 10
+        new_commands = [command for command in commands if command.id not in original_ids]
+        assert len(new_commands) == 1
+        command = new_commands[0]
+        assert command.kind == OUTBOX_KIND_PASSWORD_RESET_REQUEST
+        assert command.status == OUTBOX_STATUS_PENDING
+        assert command.account_id is None
+        assert command.reset_token_id is None
+        assert command.encrypted_payload
+        assert form_values["username"].encode() not in command.encrypted_payload
+        assert form_values["email"].encode() not in command.encrypted_payload
+        assert session.scalars(select(PatientPortalPasswordResetToken)).all() == []
+    assert sender.messages == []
     assert app.state.operational_metrics.snapshot()["failures"] == {
         "password_reset_queue_full": 1
     }

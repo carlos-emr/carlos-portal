@@ -81,6 +81,7 @@ from carlos_patient_portal.models import (
     AUDIT_EVENT_UNLOCK_SECRET_READ,
     AUDIT_OUTCOME_FAILURE,
     AUDIT_OUTCOME_SUCCESS,
+    EMAIL_CHANGE_STATUS_PENDING,
     EMAIL_CHANGE_STATUS_REVOKED,
     UNLOCK_SECRET_TYPE_EMAIL,
     PatientPortalAccount,
@@ -618,7 +619,13 @@ def register_portal_routes(
             runtime.operational_metrics.record_failure("email_change_delivery")
             logger.error("Email-change confirmation delivery failed")
             if contact_update.email_change_request is not None:
-                contact_update.email_change_request.status = EMAIL_CHANGE_STATUS_REVOKED
+                await run_in_threadpool(
+                    session.refresh,
+                    contact_update.email_change_request,
+                    with_for_update=True,
+                )
+                if contact_update.email_change_request.status == EMAIL_CHANGE_STATUS_PENDING:
+                    contact_update.email_change_request.status = EMAIL_CHANGE_STATUS_REVOKED
             await run_in_threadpool(
                 record_account_settings_audit_event,
                 session,
@@ -874,7 +881,7 @@ def register_portal_routes(
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 content={"detail": AUTHENTICATION_REQUIRED_DETAIL},
-                headers={"Location": request.url_for("index").path},
+                headers={"Location": authenticated_session.headers["location"]},
             )
         account = authenticated_session.account
         try:
