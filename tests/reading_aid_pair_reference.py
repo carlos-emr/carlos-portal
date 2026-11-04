@@ -55,6 +55,13 @@ MAX_READING_AID_CIPHERTEXT_BYTES = 1024 * 1024  # the sealed copy
 MAX_POINTS = 50
 MAX_EVIDENCE_PER_POINT = 5
 NOTICE_VERSION_EN = "carlos-5537-en-1"
+NOTICE_VERSION_RE = re.compile(r"^carlos-5537-([a-z]{2,3})-[0-9]+$")  # the tag names the language
+KIND_RE = re.compile(
+    r"^[a-z0-9-]+/[0-9]+$"
+)  # an outer record's `kind` and a pickup's `accept` value
+MAX_KIND_LENGTH = 64
+MAX_ACCEPT_VALUES = 8
+REVIEWER_ROLES = frozenset({"clinician"})
 NOTICE_HEADING_EN = "AI-generated reading aid — open the original document"
 NOTICE_BODY_EN = (
     "FAKE notice body: this reading aid was produced by software and checked by a clinician. "
@@ -191,6 +198,23 @@ def portal_serves(outer: dict[str, object], accepts: list[str]) -> bool:
     return kind is None or kind in accepts
 
 
+def kind_ok(kind: object) -> bool:
+    """An outer record's optional `kind`: printable ASCII, at most 64 characters, `name/version`."""
+    return (
+        isinstance(kind, str) and len(kind) <= MAX_KIND_LENGTH and KIND_RE.match(kind) is not None
+    )
+
+
+def accept_ok(accepts: object) -> bool:
+    """A pickup's `accept` values, stored and echoed by the portal: at most 8, each a valid kind."""
+    return (
+        isinstance(accepts, list)
+        and len(accepts) <= MAX_ACCEPT_VALUES
+        and len(set(accepts)) == len(accepts)
+        and all(kind_ok(value) for value in accepts)
+    )
+
+
 def carlos_may_stage_aid(link_accepts: list[str]) -> bool:
     """CARLOS stages a reading aid only for a link whose last pickup accepted the kind."""
     return READING_AID_KIND in link_accepts
@@ -276,13 +300,14 @@ def _aid_manifest_shape_ok(claims: dict[str, object]) -> bool:
         and _is_int(aid["generated_at"])
         and (aid["revised_at"] is None or _is_int(aid["revised_at"]))
         and isinstance(aid["notice_version"], str)
-        and bool(aid["notice_version"])
+        and NOTICE_VERSION_RE.match(aid["notice_version"]) is not None
+        and NOTICE_VERSION_RE.match(aid["notice_version"]).group(1)
+        == aid["language"].split("-", 1)[0]
         and isinstance(approval, dict)
         and set(approval) == {"id", "reviewer_role", "reviewed_at"}
         and isinstance(approval["id"], str)
         and bool(approval["id"])
-        and isinstance(approval["reviewer_role"], str)
-        and bool(approval["reviewer_role"])
+        and approval["reviewer_role"] in REVIEWER_ROLES
         and _is_int(approval["reviewed_at"])
     )
 
@@ -332,16 +357,20 @@ def open_reading_aid(
     device: DeviceKeys,
     link: dict[str, object],
     all_links: list[dict[str, object]],
-    filed_originals: dict[str, dict[str, str]],
+    filed_originals: dict[str, dict[str, object]],
     filed_aids: dict[str, str],
     now: int,
+    waiting_aids: dict[str, str] | None = None,
 ) -> tuple[str, dict[str, object]]:
     """Returns ("file", claims), ("already_filed", claims) or ("waiting_for_original", claims).
 
-    `filed_originals` maps each filed original's delivery ID to its `ciphertext_sha256` and
-    `document_sha256`; `filed_aids` maps each filed reading aid's delivery ID to its ciphertext
-    hash. A package whose plaintext is an original (`mycarlos-delivery/…`) goes to the v1 receiver.
+    `filed_originals` maps each filed original's delivery ID to its `ciphertext_sha256`,
+    `document_sha256`, `created_at` and `expires_at`; `filed_aids` maps each filed reading aid's
+    delivery ID to its ciphertext hash; `waiting_aids` maps each aid kept while its original is not
+    filed to the ciphertext hash it was kept with. A package whose plaintext is an original
+    (`mycarlos-delivery/…`) goes to the v1 receiver.
     """
+    waiting_aids = waiting_aids or {}
     outer, blob = package["outer"], b64url_decode(package["blob"])
     if outer["v"] != ref.FORMAT_VERSION or outer["suite"] != {
         "kem_id": ref.KEM_ID,
@@ -349,7 +378,8 @@ def open_reading_aid(
         "aead_id": ref.AEAD_ID,
     }:
         raise Refused("unsupported_version")
-    if len(blob) > MAX_READING_AID_CIPHERTEXT_BYTES and outer.get("kind") == READING_AID_KIND:
+    # From the listing alone, before any download: a reading aid larger than its limit.
+    if outer.get("kind") == READING_AID_KIND and outer["size"] > MAX_READING_AID_CIPHERTEXT_BYTES:
         raise Refused("too_large")
     if outer["size"] != len(blob) or outer["ciphertext_sha256"] != sha256_hex(blob):
         raise Refused("hash_mismatch")
@@ -443,15 +473,29 @@ def open_reading_aid(
         raise Refused("bad_reading_aid")
     if now > claims["expires_at"] + ref.DEVICE_EXPIRY_SKEW_SECONDS:
         raise Refused("expired")
+    # One delivery-ID space: an aid under an original's ID, or a different copy under an ID
+    # already filed or kept waiting, is a replay.
+    if claims["delivery_id"] in filed_originals:
+        raise Refused("replayed")
     if claims["delivery_id"] in filed_aids:
         if filed_aids[claims["delivery_id"]] != outer["ciphertext_sha256"]:
             raise Refused("replayed")
         return "already_filed", claims
+    if (
+        claims["delivery_id"] in waiting_aids
+        and waiting_aids[claims["delivery_id"]] != outer["ciphertext_sha256"]
+    ):
+        raise Refused("replayed")
     pair = claims["pair"]
     original = filed_originals.get(pair["original_delivery_id"])
     if original is None:
         return "waiting_for_original", claims
     if original["document_sha256"] != pair["original_document_sha256"]:
+        raise Refused("pair_mismatch")
+    if (original["created_at"], original["expires_at"]) != (
+        claims["created_at"],
+        claims["expires_at"],
+    ):
         raise Refused("pair_mismatch")
     return "file", claims
 
@@ -565,12 +609,28 @@ def build_contract() -> dict[str, object]:
         ref.DELIVERY_ID: {
             "ciphertext_sha256": original_package["outer"]["ciphertext_sha256"],
             "document_sha256": sha256_hex(ref.FAKE_PDF),
+            "created_at": ref.CREATED_AT,
+            "expires_at": ref.EXPIRES_AT,
         },
         ref.OTHER_DELIVERY_ID: {
             "ciphertext_sha256": sha256_hex(b"FAKE another original's sealed copy"),
             "document_sha256": sha256_hex(b"FAKE another original's PDF"),
+            "created_at": ref.CREATED_AT,
+            "expires_at": ref.EXPIRES_AT,
         },
     }
+    waiting_copy = package(
+        "an aid kept waiting, seen again in a later listing",
+        manifest=manifest(
+            delivery_id=OTHER_AID_DELIVERY_ID,
+            pair={
+                "original_delivery_id": UNFILED_ORIGINAL_DELIVERY_ID,
+                "original_document_sha256": sha256_hex(b"FAKE a PDF still on its way"),
+            },
+        ),
+        outer_delivery_id=OTHER_AID_DELIVERY_ID,
+    )
+    waiting_aids = {OTHER_AID_DELIVERY_ID: waiting_copy["outer"]["ciphertext_sha256"]}
     filed_aids = {
         ref.SEEN_DELIVERY_ID: sha256_hex(b"FAKE an earlier, different aid copy"),
         FILED_AID_DELIVERY_ID: filed_again["outer"]["ciphertext_sha256"],
@@ -593,19 +653,12 @@ def build_contract() -> dict[str, object]:
             note="the receipt was lost after filing; send it again and file nothing",
         ),
         vector(
-            package(
-                "an aid whose original is not filed yet",
-                manifest=manifest(
-                    delivery_id=OTHER_AID_DELIVERY_ID,
-                    pair={
-                        "original_delivery_id": UNFILED_ORIGINAL_DELIVERY_ID,
-                        "original_document_sha256": sha256_hex(b"FAKE a PDF still on its way"),
-                    },
-                ),
-                outer_delivery_id=OTHER_AID_DELIVERY_ID,
-            ),
+            waiting_copy,
             "waiting_for_original",
-            note="kept, checked again after the next original is filed, until it expires",
+            note=(
+                "kept by delivery ID and ciphertext hash, checked again after each original is "
+                "filed until it expires; the same listing hash is not downloaded again"
+            ),
         ),
     ]
 
@@ -707,7 +760,9 @@ def build_contract() -> dict[str, object]:
         vector(
             package(
                 "the aid's language is not the manifest's",
-                manifest=manifest(language="fr"),
+                manifest=manifest(
+                    language="fr", reading_aid={"notice_version": "carlos-5537-fr-1"}
+                ),
             ),
             "bad_reading_aid",
         ),
@@ -738,6 +793,59 @@ def build_contract() -> dict[str, object]:
         ),
         vector(
             package(
+                "a different copy under a waiting aid's delivery ID",
+                manifest=manifest(
+                    delivery_id=OTHER_AID_DELIVERY_ID,
+                    aid_bytes=wrong_aid_bytes,
+                    pair={
+                        "original_delivery_id": UNFILED_ORIGINAL_DELIVERY_ID,
+                        "original_document_sha256": sha256_hex(b"FAKE a PDF still on its way"),
+                    },
+                ),
+                aid=wrong_aid_bytes,
+                outer_delivery_id=OTHER_AID_DELIVERY_ID,
+            ),
+            "replayed",
+        ),
+        vector(
+            package(
+                "an aid under a filed original's delivery ID",
+                manifest=manifest(
+                    delivery_id=ref.DELIVERY_ID,
+                    pair={
+                        "original_delivery_id": ref.OTHER_DELIVERY_ID,
+                        "original_document_sha256": sha256_hex(b"FAKE another original's PDF"),
+                    },
+                ),
+                outer_delivery_id=ref.DELIVERY_ID,
+            ),
+            "replayed",
+            note="one delivery-ID space across originals and aids",
+        ),
+        vector(
+            package(
+                "a reviewer role outside the closed set",
+                manifest=manifest(approval={"reviewer_role": "nurse"}),
+            ),
+            "bad_manifest",
+        ),
+        vector(
+            package(
+                "a notice version whose language tag is not the aid's language",
+                manifest=manifest(reading_aid={"notice_version": "carlos-5537-fr-1"}),
+            ),
+            "bad_manifest",
+        ),
+        vector(
+            package(
+                "an aid whose lifetime is not its original's",
+                manifest=manifest(created_at=ref.CREATED_AT + 1),
+            ),
+            "pair_mismatch",
+            note="created_at and expires_at must equal the filed original's; no receipt is sent",
+        ),
+        vector(
+            package(
                 "an aid bound to another PDF than the filed original",
                 manifest=manifest(
                     pair={"original_document_sha256": sha256_hex(b"FAKE an edited PDF")}
@@ -748,6 +856,35 @@ def build_contract() -> dict[str, object]:
         ),
     ]
 
+    oversize = package("a reading aid listed larger than its limit")
+    oversize["outer"] = {**oversize["outer"], "size": MAX_READING_AID_CIPHERTEXT_BYTES + 1}
+    refused.insert(
+        2,
+        vector(
+            oversize,
+            "too_large",
+            note="refused from the listing's outer record, before any download",
+        ),
+    )
+    kind_examples = [
+        {"kind": READING_AID_KIND, "ok": True},
+        {"kind": "reading-aid/2", "ok": True},
+        {"kind": "Reading-Aid/1", "ok": False},
+        {"kind": "reading-aid", "ok": False},
+        {"kind": "reading-aid/1 ", "ok": False},
+        {"kind": "a" * 62 + "/1", "ok": True},
+        {"kind": "a" * 63 + "/1", "ok": False},
+        {"kind": "", "ok": False},
+        {"kind": 1, "ok": False},
+    ]
+    accept_examples = [
+        {"accepts": [READING_AID_KIND], "ok": True},
+        {"accepts": [], "ok": True},
+        {"accepts": [READING_AID_KIND, "reading-aid/2"], "ok": True},
+        {"accepts": [READING_AID_KIND, READING_AID_KIND], "ok": False},
+        {"accepts": [f"reading-aid/{n}" for n in range(9)], "ok": False},
+        {"accepts": ["Reading-Aid/1"], "ok": False},
+    ]
     serve_examples = [
         {"outer_kind": READING_AID_KIND, "accepts": [READING_AID_KIND], "served": True},
         {"outer_kind": READING_AID_KIND, "accepts": [], "served": False},
@@ -782,6 +919,9 @@ def build_contract() -> dict[str, object]:
             "max_ciphertext_bytes": MAX_READING_AID_CIPHERTEXT_BYTES,
             "max_points": MAX_POINTS,
             "max_evidence_per_point": MAX_EVIDENCE_PER_POINT,
+            "max_kind_length": MAX_KIND_LENGTH,
+            "max_accept_values": MAX_ACCEPT_VALUES,
+            "reviewer_roles": sorted(REVIEWER_ROLES),
             "notice_version_en": NOTICE_VERSION_EN,
             "device_expiry_skew_seconds": ref.DEVICE_EXPIRY_SKEW_SECONDS,
         },
@@ -819,10 +959,16 @@ def build_contract() -> dict[str, object]:
             "package_link": link_a["name"],
             "filed_originals": filed_originals,
             "filed_aids": filed_aids,
+            "waiting_aids": waiting_aids,
         },
         "original_package": original_package,
         "packages": {"accept": accepted, "refuse": refused},
-        "portal": {"serve": serve_examples, "stage": stage_examples},
+        "portal": {
+            "serve": serve_examples,
+            "stage": stage_examples,
+            "kind": kind_examples,
+            "accept": accept_examples,
+        },
     }
 
 

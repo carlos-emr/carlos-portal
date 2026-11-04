@@ -59,6 +59,7 @@ def _open(vector: dict):
         filed_originals=CONTRACT["receiver"]["filed_originals"],
         filed_aids=CONTRACT["receiver"]["filed_aids"],
         now=vector["now"],
+        waiting_aids=CONTRACT["receiver"]["waiting_aids"],
     )
 
 
@@ -190,6 +191,8 @@ def test_waiting_aid_files_once_its_original_is_filed():
         claims["pair"]["original_delivery_id"]: {
             "ciphertext_sha256": sha256(b"FAKE the late original's copy").hexdigest(),
             "document_sha256": claims["pair"]["original_document_sha256"],
+            "created_at": claims["created_at"],
+            "expires_at": claims["expires_at"],
         },
     }
     outcome, _ = aid.open_reading_aid(
@@ -208,6 +211,29 @@ def test_waiting_aid_files_once_its_original_is_filed():
 def test_portal_serves_a_kind_only_to_a_pickup_that_accepts_it(example):
     outer = {} if example["outer_kind"] is None else {"kind": example["outer_kind"]}
     assert aid.portal_serves(outer, example["accepts"]) is example["served"]
+
+
+@pytest.mark.parametrize("example", CONTRACT["portal"]["kind"])
+def test_portal_bounds_the_outer_records_kind(example):
+    assert aid.kind_ok(example["kind"]) is example["ok"]
+
+
+@pytest.mark.parametrize("example", CONTRACT["portal"]["accept"])
+def test_portal_bounds_the_pickups_accept_values(example):
+    assert aid.accept_ok(example["accepts"]) is example["ok"]
+
+
+def test_the_reviewer_role_set_is_closed_and_the_notice_tag_names_the_language():
+    claims = CONTRACT["sender"]["manifest_claims"]
+    assert (
+        claims["approval"]["reviewer_role"]
+        in CONTRACT["constants"]["reviewer_roles"]
+        == ["clinician"]
+    )
+    assert (
+        aid.NOTICE_VERSION_RE.match(claims["reading_aid"]["notice_version"]).group(1)
+        == claims["reading_aid"]["language"]
+    )
 
 
 @pytest.mark.parametrize("example", CONTRACT["portal"]["stage"])
