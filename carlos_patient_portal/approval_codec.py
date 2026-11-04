@@ -115,6 +115,12 @@ FIELDS = {
         }
     ),
 }
+# Clinic code v1 (mycarlos#141) adds "code": a first device the clinic approves once the patient
+# enters the code CARLOS emailed. Like "staff_first" it has no predecessor; "accepted_device" always
+# has one.
+CODE_APPROVAL_KIND = "code"
+FIRST_DEVICE_KINDS = frozenset({"staff_first", CODE_APPROVAL_KIND})
+APPROVAL_KINDS = FIRST_DEVICE_KINDS | {"accepted_device"}
 TYPES = {
     "intent": ("mycarlos-device-approval-intent", "carlos-mycarlos-device-approval-intent"),
     "challenge": ("mycarlos-device-approval-challenge", "carlos-mycarlos-device-approval"),
@@ -199,12 +205,9 @@ def object_claims(
         raise invalid()
     if kind in {"challenge", "acceptance"}:
         approval_kind = value["approval_kind"]
-        if not isinstance(approval_kind, str) or approval_kind not in {
-            "staff_first",
-            "accepted_device",
-        }:
+        if not isinstance(approval_kind, str) or approval_kind not in APPROVAL_KINDS:
             raise invalid()
-        if (predecessor is None) != (approval_kind == "staff_first"):
+        if (predecessor is None) != (approval_kind in FIRST_DEVICE_KINDS):
             raise invalid()
     if "predecessor_version" in value:
         from carlos_patient_portal.mailbox_codec import cursor

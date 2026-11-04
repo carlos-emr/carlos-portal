@@ -50,6 +50,9 @@ PERMISSION_APPROVAL_CHALLENGES_PUBLISH = "portal.mycarlos.device_approval.challe
 PERMISSION_APPROVAL_PROOFS_READ = "portal.mycarlos.device_approval.approvals.read"
 PERMISSION_APPROVAL_DECISIONS_PUBLISH = "portal.mycarlos.device_approval.decisions.publish"
 PERMISSION_APPROVAL_DEVICES_REMOVE = "portal.mycarlos.device_approval.devices.remove"
+# Clinic code v1 (mycarlos#141): CARLOS reads and consumes the codes devices submit.
+PERMISSION_APPROVAL_CODES_READ = "portal.mycarlos.device_approval.codes.read"
+PERMISSION_APPROVAL_CODES_CONSUME = "portal.mycarlos.device_approval.codes.consume"
 APPROVAL_PERMISSIONS = frozenset(
     {
         PERMISSION_APPROVAL_REQUESTS_READ,
@@ -57,6 +60,8 @@ APPROVAL_PERMISSIONS = frozenset(
         PERMISSION_APPROVAL_PROOFS_READ,
         PERMISSION_APPROVAL_DECISIONS_PUBLISH,
         PERMISSION_APPROVAL_DEVICES_REMOVE,
+        PERMISSION_APPROVAL_CODES_READ,
+        PERMISSION_APPROVAL_CODES_CONSUME,
     }
 )
 

@@ -527,6 +527,124 @@ The portal logs the code in its audit trail, never content. On the wire:
 **Clock problems:** the portal sends a `Date` header, so myCarlos can tell the patient when its
 clock is far off.
 
+## Clinic code v1
+
+Issue carlos-emr/mycarlos#141. A patient's first device can be approved with a 9-digit code that
+CARLOS emails to the patient, instead of by clinic staff. The shared contract is the same for
+myCarlos, CARLOS and the portal; its test vectors are `tests/fixtures/clinic-code-v1.json`, copied
+unchanged from that contract. A re-link or recovery on the same device still uses the existing
+predecessor approval, with no code.
+
+### The code
+
+- `code_r`: 6 ASCII digits, uniformly random (000000–999999), made by CARLOS with a CSPRNG, one per
+  approval request.
+- `check_t`: 3 ASCII digits = (the big-endian unsigned 64-bit integer of the first 8 bytes of
+  SHA-256(input)) mod 1000, zero-padded. The input is the UTF-8 of these five fields joined by a
+  single LF (0x0A), with no trailing LF:
+  `carlos-mycarlos-clinic-code-check-v1`, `clinic_kid`, `device_key_id`, `request_id`, `code_r`.
+  - `clinic_kid`: the `kid` of the clinic signing key that signs this request's code challenge.
+  - `device_key_id`: the candidate device's key ID, as in the intent's `candidate_device_key_id`.
+  - `request_id`: the approval request ID (the lowercase UUID on the wire).
+- The code is `code_r` followed by `check_t`, shown as `ddd ddd ddd` (for example `482 193 644`).
+  myCarlos accepts it with spaces, dashes or neither, and refuses anything that isn't 9 digits.
+
+`check_t` lets myCarlos check, before sending anything, that the code was made for the clinic key
+it pinned. A code from a look-alike portal fails that check. The portal never uses `check_t`;
+`tests/test_approval_code.py` recomputes it for every shared vector to guard the contract.
+
+### The flow
+
+1. **Link and request:** unchanged. myCarlos links, then sends its signed approval intent.
+2. **Policy (CARLOS):** `code`, the default for new clinics, when the patient has a usable email
+   on file (and email consent under CARLOS's rules); `code_and_staff`, which also waits for staff;
+   or `staff_only`, also used when there is no usable email (today's staff flow, unchanged).
+3. **CARLOS:** makes `code_r`, computes `check_t` with its signing key's kid and keeps `code_r`
+   privately with the request. It emails the patient "Your <clinic name> myCarlos code is
+   482 193 644. It expires in <N> minutes. Never enter it on a website." (no health information).
+   It then publishes the challenge as today, signed with that key, with `approval_kind: "code"`.
+   The challenge never holds `code_r`, `check_t` or a hash of them.
+4. **myCarlos:** when the challenge's `approval_kind` is `code`, it asks for the code, verifies
+   the challenge with the pinned clinic key and recomputes `check_t`. On a mismatch it sends
+   nothing (after 5 local mismatches it stops taking codes for that request). On a match it sends
+   `code_r` to the portal (below).
+5. **Portal:** stores the submission for CARLOS. It never compares codes; it doesn't know them.
+6. **CARLOS:** reads submissions, compares each in constant time with its `code_r`, and publishes
+   the existing decision: `accepted` with an acceptance of kind `code` on a match, or `refused`
+   with reason `code_attempts` after 5 wrong codes. It polls the code route every few seconds
+   while any code request is open.
+7. **myCarlos:** its status checks pick up the acceptance and verify it exactly as today.
+
+### Signed objects
+
+`approval_kind` is an existing field of the challenge and the acceptance. Version 1.1 adds one
+value:
+
+| `approval_kind` | Meaning | `predecessor_device_key_id`, `predecessor_version` | Acceptance `approval_sha256` |
+|---|---|---|---|
+| `staff_first` | First device, approved by staff | `null` | `null` |
+| `accepted_device` | A later device, approved by an earlier one | set | set |
+| `code` | First device, approved by the emailed code | `null` | `null` |
+
+A code request is an intent with no predecessor. `code_and_staff` also publishes kind `code`.
+The acceptance's `approval_kind` must equal the challenge's. Decisions gain the refusal reason
+`code_attempts`.
+
+### Device route
+
+`POST /api/mycarlos/device-approvals/{request_id}/code`, with the same device assertion header,
+audience, request-hash binding and single-use rule as `POST /api/mycarlos/device-approval-requests`.
+`vault_head_link` is optional, as on every device request. There is no query string, and the body
+is exactly `{"code_r":"482193"}`: one string of 6 ASCII digits, at most 256 bytes.
+
+It is accepted only for this device's request, in status `challenge_ready`, not expired, whose
+challenge has `approval_kind: "code"`. Each accepted POST stores one attempt, numbered 1 to 5; the
+same code sent twice counts twice. The answer is `202 {"status":"submitted"}`.
+
+Refusals:
+
+| HTTP | Body | When |
+|---|---|---|
+| 413 | `{"detail":"request too large"}` | The body is over 256 bytes. As on every device route, this is checked as the body is read, before the assertion. |
+| 404 | `{"detail":"not found"}` | The assertion is missing, bad, unknown, expired, replayed or for another request |
+| 403 | `{"code":"device_removed"}` or `{"code":"recipient_mismatch"}` | As on the other device routes |
+| 400 | `{"code":"invalid_approval"}` | The body isn't exactly `{"code_r": 6 digits}`, or there is a query string |
+| 404 | `{"code":"approval_not_found"}` | The request ID isn't a v4 UUID, is unknown, or is another device's |
+| 409 | `{"code":"approval_not_code"}` | No challenge yet, or its kind isn't `code` |
+| 409 | `{"code":"approval_not_pending"}` | The request already has a decision |
+| 410 | `{"code":"approval_expired"}` | `challenge_ready`, but past its `expires_at` |
+| 429 | `{"code":"code_attempts"}` | 5 attempts are already stored. This is final for the request; the generic `Retry-After: 60` doesn't apply. |
+
+### CARLOS's job routes
+
+Both take the `device-approval-sync` job, with the permission named below in the job assertion.
+
+- `GET /internal/carlos/mycarlos/device-approval-codes?after=<seq>&limit=<1..20, default 10>`,
+  permission `portal.mycarlos.device_approval.codes.read`:
+  `200 {"codes":[{"sequence":"7","request_id":"<uuid>","challenge_id":"<id>","attempt":1,"code_r":"482193","submitted_at":1761660000}],"last_sequence":"7","next_cursor":null}`.
+  The sequence is per clinic, with the same cursor rules as `GET …/device-approval-requests`
+  (`after` beyond the latest gives 400 `invalid_cursor`). `code_r` is `null` once that attempt is
+  consumed, once the request has a decision, or once it has expired.
+- `PUT /internal/carlos/mycarlos/device-approval-requests/{request_id}/codes/{attempt}/consumed`,
+  permission `portal.mycarlos.device_approval.codes.consume`, empty body:
+  `200 {"status":"consumed"}`. Repeating it is harmless. It erases that `code_r`. An unknown
+  request or attempt gives 404 `approval_not_found`.
+- The existing `PUT …/device-approval-requests/{request_id}/decision` is unchanged: `accepted` with
+  an acceptance of kind `code`, or `refused` with reason `code_attempts`. Storing any decision
+  erases the request's remaining codes.
+
+### Storage
+
+Migration 0020 adds `patient_portal_mycarlos_approval_codes` (clinic, request, attempt 1–5,
+`code_r`, submitted and consumed times, and a per-clinic `code_sequence`) and a `code_sequence`
+counter on the approval clinic row. A plain `code_r` is kept at most until it is consumed, the
+request is decided or the request expires (a request lives about 10 minutes). The attempt rows
+stay, so the limit of 5 holds. A downgrade is refused while any attempt row exists.
+
+**What the portal can and can't do with a code:** it sees the codes devices send, briefly. It
+can't approve a device with one: an acceptance needs the clinic's signing key, and CARLOS
+compares the code only for the request and device it was made for.
+
 ## How each side is tested
 
 - **Every HPKE implementation** first reproduces RFC 9180 Appendix A.2.1, sequence 0. The

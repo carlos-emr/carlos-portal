@@ -180,6 +180,8 @@ def test_registered_jobs_have_well_formed_names_display_names_and_permissions() 
         "portal.mycarlos.device_approval.approvals.read",
         "portal.mycarlos.device_approval.decisions.publish",
         "portal.mycarlos.device_approval.devices.remove",
+        "portal.mycarlos.device_approval.codes.read",
+        "portal.mycarlos.device_approval.codes.consume",
     }
 
 

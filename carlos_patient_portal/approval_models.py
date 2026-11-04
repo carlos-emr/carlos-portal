@@ -18,7 +18,16 @@ Migration 0018 creates these tables, and deploy/postgresql-audit-roles.sql grant
 runtime role (see "Rolling out 0018" in the README).
 """
 
-from sqlalchemy import BigInteger, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from carlos_patient_portal.models import PatientPortalAccount, PatientPortalMyCarlosDevice
@@ -34,6 +43,10 @@ class ApprovalClinic(ApprovalBase):
     request_sequence: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     approval_sequence: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     challenge_sequence: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    # server_default as migration 0020 adds the column to existing rows.
+    code_sequence: Mapped[int] = mapped_column(
+        BigInteger, default=0, server_default="0", nullable=False
+    )
 
 
 class ApprovalRequest(ApprovalBase):
@@ -69,3 +82,34 @@ class ApprovalRequest(ApprovalBase):
     acceptance: Mapped[str | None] = mapped_column(Text)
     reason: Mapped[str | None] = mapped_column(String(40))
     decision_body_hash: Mapped[str | None] = mapped_column(String(64))
+
+
+class ApprovalCode(ApprovalBase):
+    """One clinic code v1 submission (mycarlos#141), attempts 1-5 per request.
+
+    The portal never compares codes; CARLOS's approval job reads and consumes them. `code_r` is
+    erased once consumed or once the request has a decision; the row stays to count attempts.
+    """
+
+    __tablename__ = "patient_portal_mycarlos_approval_codes"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["clinic_id", "request_id"],
+            [
+                "patient_portal_mycarlos_approval_requests.clinic_id",
+                "patient_portal_mycarlos_approval_requests.request_id",
+            ],
+            ondelete="RESTRICT",
+            name="fk_pp_approval_code_request",
+        ),
+        UniqueConstraint("clinic_id", "code_sequence", name="uq_pp_approval_code_sequence"),
+        CheckConstraint("attempt between 1 and 5", name="ck_pp_approval_code_attempt"),
+        CheckConstraint("code_r is null or length(code_r) = 6", name="ck_pp_approval_code_value"),
+    )
+    clinic_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    attempt: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    code_sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    code_r: Mapped[str | None] = mapped_column(String(6))
+    submitted_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    consumed_at: Mapped[int | None] = mapped_column(BigInteger)
