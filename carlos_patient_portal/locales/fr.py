@@ -148,7 +148,7 @@ TEXT: dict[str, str] = {
     "booking_slot_taken_contact": (
         "Cette plage horaire vient d’être prise. Veuillez contacter la clinique."
     ),
-    "booking_slot_time": "{hour:02d} h {minute:02d}",
+    "booking_slot_time": "{hour}\u00a0h\u00a0{minute:02d}",
     "booking_slot_when": "{date} à {time}",
     "booking_slots_legend": "Plages horaires disponibles",
     "booking_visit_mode_in_person": "En personne",
