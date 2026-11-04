@@ -362,4 +362,48 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_qr_label": "在 myCarlos 中扫描",
     "mycarlos_qr_alt": "用于将 myCarlos 关联到此门户网站的二维码。",
     "mycarlos_qr_unavailable": "二维码不可用。如果您无法使用此门户网站网址，请联系您的诊所。",
+    "outbound_mfa_email_subject": "您的 {service_name} 登录验证码",
+    "outbound_mfa_email_intro": "您的 {service_name} 登录验证码是：",
+    "outbound_mfa_email_expiry_other": (
+        "此验证码将在 {minutes} 分钟后失效。请勿将此验证码告诉任何人。"
+    ),
+    "outbound_mfa_email_contact": "如果您没有尝试登录，请联系 {clinic_name}。",
+    "outbound_reset_subject": "重置您的 {service_name} 密码",
+    "outbound_reset_intro": "有人请求重置您的 {service_name} 账户密码。",
+    "outbound_reset_link_lead": "请打开此链接以设置新密码：",
+    "outbound_reset_expiry_other": "此链接将在 {minutes} 分钟后失效，且只能使用一次。",
+    "outbound_reset_contact": "如果您没有请求重置，请联系 {clinic_name}。",
+    "outbound_contact_change_subject": "{service_name} 的联系信息已更改",
+    "outbound_contact_change_body": (
+        "您的 {service_name} 账户的联系信息已更改。新的门户联系方式现已生效。诊所工作人员可能会另"
+        "行核对 CARLOS 病历中的相应信息。"
+    ),
+    "outbound_contact_change_contact": "如果这不是您本人所做的更改，请立即联系 {clinic_name}。",
+    "outbound_booking_prompt_subject": "您在 {service_name} 中有一条新消息",
+    "outbound_booking_prompt_intro": "{clinic_name} 在 {service_name} 中给您发送了一条消息。",
+    "outbound_sign_in_lead": "请登录后查看：",
+    "outbound_booking_prompt_note": "消息仅在您登录后显示。",
+    "outbound_not_expecting_contact": "如果您没有预期收到此邮件，请联系 {clinic_name}。",
+    "outbound_booking_update_subject": "{service_name} 中有更新",
+    "outbound_booking_update_intro": "{clinic_name} 更新了 {service_name} 中的一条消息。",
+    "outbound_booking_update_note": "更新内容仅在您登录后显示。",
+    "outbound_email_confirm_subject": "请确认您的新 {service_name} 电子邮件地址",
+    "outbound_email_confirm_intro": "此地址被提供为 {service_name} 账户的新联系电子邮件。",
+    "outbound_email_confirm_link_lead": "请打开此链接以确认：",
+    "outbound_email_confirm_expiry_other": (
+        "此链接将在 {hours} 小时后失效，且只能使用一次。在使用之前，账户仍保留原来的电子邮件地址"
+        "。"
+    ),
+    "outbound_email_confirm_contact": "如果您没有预期收到此邮件，请忽略它或联系 {clinic_name}。",
+    "outbound_email_requested_subject": "有人请求更改 {service_name} 的联系方式",
+    "outbound_email_requested_intro": "有人请求更改您的 {service_name} 账户的联系方式。",
+    "outbound_email_requested_body": (
+        "目前尚未发生任何更改。只有在新的电子邮件地址确认后更改才会生效，在此之前，此地址仍会收到"
+        "您的登录验证码和密码重置链接。"
+    ),
+    "outbound_email_requested_contact": "如果这不是您本人的请求，请立即联系 {clinic_name}。",
+    "outbound_mfa_sms_other": (
+        "您的 {service_name} 登录验证码是 {code}，{minutes} 分钟后失效。请勿告诉他人。如非本人请"
+        "求，请联系 {clinic_name}。"
+    ),
 }

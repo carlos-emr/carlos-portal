@@ -479,4 +479,93 @@ MYCARLOS_TEXT: dict[str, str] = {
         "Kod QR jest niedostępny. W razie problemów z użyciem tego adresu portalu proszę "
         "skontaktować się z przychodnią."
     ),
+    "outbound_mfa_email_subject": "Twój kod logowania do {service_name}",
+    "outbound_mfa_email_intro": "Twój kod logowania do {service_name}:",
+    "outbound_mfa_email_expiry_one": (
+        "Ten kod wygasa za {minutes} minutę. Nie udostępniaj tego kodu nikomu."
+    ),
+    "outbound_mfa_email_expiry_few": (
+        "Ten kod wygasa za {minutes} minuty. Nie udostępniaj tego kodu nikomu."
+    ),
+    "outbound_mfa_email_expiry_many": (
+        "Ten kod wygasa za {minutes} minut. Nie udostępniaj tego kodu nikomu."
+    ),
+    "outbound_mfa_email_contact": (
+        "Jeśli to nie Ty próbujesz się zalogować, skontaktuj się z: {clinic_name}."
+    ),
+    "outbound_reset_subject": "Zresetuj hasło do {service_name}",
+    "outbound_reset_intro": "Poproszono o zresetowanie hasła do Twojego konta {service_name}.",
+    "outbound_reset_link_lead": "Otwórz ten link, aby wybrać nowe hasło:",
+    "outbound_reset_expiry_one": "Ten link wygasa za {minutes} minutę i można go użyć tylko raz.",
+    "outbound_reset_expiry_few": "Ten link wygasa za {minutes} minuty i można go użyć tylko raz.",
+    "outbound_reset_expiry_many": "Ten link wygasa za {minutes} minut i można go użyć tylko raz.",
+    "outbound_reset_contact": (
+        "Jeśli ta prośba o zresetowanie nie pochodzi od Ciebie, skontaktuj się z: {clinic_name}."
+    ),
+    "outbound_contact_change_subject": "Zmieniono dane kontaktowe w {service_name}",
+    "outbound_contact_change_body": (
+        "Dane kontaktowe Twojego konta {service_name} zostały zmienione. Nowe dane kontaktowe "
+        "portalu są już używane. Personel przychodni może osobno sprawdzić odpowiednie "
+        "informacje w dokumentacji CARLOS."
+    ),
+    "outbound_contact_change_contact": (
+        "Jeśli ta zmiana nie pochodzi od Ciebie, natychmiast skontaktuj się z: {clinic_name}."
+    ),
+    "outbound_booking_prompt_subject": "Masz nową wiadomość w {service_name}",
+    "outbound_booking_prompt_intro": "Masz wiadomość od {clinic_name} w {service_name}.",
+    "outbound_sign_in_lead": "Zaloguj się, aby ją przeczytać:",
+    "outbound_booking_prompt_note": "Wiadomość jest wyświetlana dopiero po zalogowaniu.",
+    "outbound_not_expecting_contact": (
+        "Jeśli ta wiadomość jest dla Ciebie nieoczekiwana, skontaktuj się z: {clinic_name}."
+    ),
+    "outbound_booking_update_subject": "Aktualizacja w {service_name}",
+    "outbound_booking_update_intro": (
+        "Wiadomość od {clinic_name} w {service_name} została zaktualizowana."
+    ),
+    "outbound_booking_update_note": "Aktualizacja jest wyświetlana dopiero po zalogowaniu.",
+    "outbound_email_confirm_subject": "Potwierdź nowy adres e-mail w {service_name}",
+    "outbound_email_confirm_intro": (
+        "Ten adres został podany jako nowy kontaktowy adres e-mail konta {service_name}."
+    ),
+    "outbound_email_confirm_link_lead": "Otwórz ten link, aby go potwierdzić:",
+    "outbound_email_confirm_expiry_one": (
+        "Ten link wygasa za {hours} godzinę i można go użyć tylko raz. Dopóki nie zostanie "
+        "użyty, konto zachowuje poprzedni adres e-mail."
+    ),
+    "outbound_email_confirm_expiry_few": (
+        "Ten link wygasa za {hours} godziny i można go użyć tylko raz. Dopóki nie zostanie "
+        "użyty, konto zachowuje poprzedni adres e-mail."
+    ),
+    "outbound_email_confirm_expiry_many": (
+        "Ten link wygasa za {hours} godzin i można go użyć tylko raz. Dopóki nie zostanie użyty, "
+        "konto zachowuje poprzedni adres e-mail."
+    ),
+    "outbound_email_confirm_contact": (
+        "Jeśli ta wiadomość jest dla Ciebie nieoczekiwana, zignoruj ją lub skontaktuj się z: "
+        "{clinic_name}."
+    ),
+    "outbound_email_requested_subject": "Poproszono o zmianę danych kontaktowych w {service_name}",
+    "outbound_email_requested_intro": (
+        "Ktoś poprosił o zmianę danych kontaktowych Twojego konta {service_name}."
+    ),
+    "outbound_email_requested_body": (
+        "Nic jeszcze się nie zmieniło. Zmiana zacznie obowiązywać dopiero po potwierdzeniu "
+        "nowego adresu e-mail, a do tego czasu ten adres nadal otrzymuje Twoje kody logowania i "
+        "linki do resetowania hasła."
+    ),
+    "outbound_email_requested_contact": (
+        "Jeśli ta prośba nie pochodzi od Ciebie, natychmiast skontaktuj się z: {clinic_name}."
+    ),
+    "outbound_mfa_sms_one": (
+        "Twój kod logowania do {service_name}: {code}. Wygasa za {minutes} minutę. Nie "
+        "udostępniaj go. Jeśli nie prosisz o ten kod, skontaktuj się z: {clinic_name}."
+    ),
+    "outbound_mfa_sms_few": (
+        "Twój kod logowania do {service_name}: {code}. Wygasa za {minutes} minuty. Nie "
+        "udostępniaj go. Jeśli nie prosisz o ten kod, skontaktuj się z: {clinic_name}."
+    ),
+    "outbound_mfa_sms_many": (
+        "Twój kod logowania do {service_name}: {code}. Wygasa za {minutes} minut. Nie "
+        "udostępniaj go. Jeśli nie prosisz o ten kod, skontaktuj się z: {clinic_name}."
+    ),
 }

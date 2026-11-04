@@ -470,4 +470,88 @@ MYCARLOS_TEXT: dict[str, str] = {
         "Code QR indisponible. Contactez votre clinique si vous ne pouvez pas utiliser cette "
         "adresse du portail."
     ),
+    "outbound_mfa_email_subject": "Votre code de connexion {service_name}",
+    "outbound_mfa_email_intro": "Votre code de connexion pour {service_name} est :",
+    "outbound_mfa_email_expiry_one": (
+        "Ce code expire dans {minutes} minute. Ne communiquez ce code à personne."
+    ),
+    "outbound_mfa_email_expiry_other": (
+        "Ce code expire dans {minutes} minutes. Ne communiquez ce code à personne."
+    ),
+    "outbound_mfa_email_contact": (
+        "Si vous n’avez pas essayé de vous connecter, communiquez avec {clinic_name}."
+    ),
+    "outbound_reset_subject": "Réinitialisez votre mot de passe {service_name}",
+    "outbound_reset_intro": (
+        "Une réinitialisation du mot de passe a été demandée pour votre compte {service_name}."
+    ),
+    "outbound_reset_link_lead": "Ouvrez ce lien pour choisir un nouveau mot de passe :",
+    "outbound_reset_expiry_one": (
+        "Ce lien expire dans {minutes} minute et ne peut être utilisé qu’une seule fois."
+    ),
+    "outbound_reset_expiry_other": (
+        "Ce lien expire dans {minutes} minutes et ne peut être utilisé qu’une seule fois."
+    ),
+    "outbound_reset_contact": (
+        "Si vous n’avez pas demandé cette réinitialisation, communiquez avec {clinic_name}."
+    ),
+    "outbound_contact_change_subject": "Les coordonnées de {service_name} ont été modifiées",
+    "outbound_contact_change_body": (
+        "Les coordonnées de votre compte {service_name} ont été modifiées. Les nouvelles "
+        "coordonnées du portail sont maintenant utilisées. Le personnel de la clinique peut "
+        "examiner séparément les renseignements correspondants du dossier CARLOS."
+    ),
+    "outbound_contact_change_contact": (
+        "Si vous n’avez pas effectué cette modification, communiquez immédiatement avec "
+        "{clinic_name}."
+    ),
+    "outbound_booking_prompt_subject": "Vous avez un nouveau message dans {service_name}",
+    "outbound_booking_prompt_intro": "{clinic_name} vous a envoyé un message dans {service_name}.",
+    "outbound_sign_in_lead": "Connectez-vous pour le lire :",
+    "outbound_booking_prompt_note": "Le message n’est affiché qu’après votre connexion.",
+    "outbound_not_expecting_contact": (
+        "Si vous n’attendiez pas ce message, communiquez avec {clinic_name}."
+    ),
+    "outbound_booking_update_subject": "Mise à jour dans {service_name}",
+    "outbound_booking_update_intro": "{clinic_name} a mis à jour un message dans {service_name}.",
+    "outbound_booking_update_note": "La mise à jour n’est affichée qu’après votre connexion.",
+    "outbound_email_confirm_subject": "Confirmez votre nouvelle adresse courriel {service_name}",
+    "outbound_email_confirm_intro": (
+        "Cette adresse a été indiquée comme nouvelle adresse courriel de contact pour un compte "
+        "{service_name}."
+    ),
+    "outbound_email_confirm_link_lead": "Ouvrez ce lien pour la confirmer :",
+    "outbound_email_confirm_expiry_one": (
+        "Ce lien expire dans {hours} heure et ne peut être utilisé qu’une seule fois. Tant qu’il "
+        "n’est pas utilisé, le compte conserve son adresse courriel précédente."
+    ),
+    "outbound_email_confirm_expiry_other": (
+        "Ce lien expire dans {hours} heures et ne peut être utilisé qu’une seule fois. Tant "
+        "qu’il n’est pas utilisé, le compte conserve son adresse courriel précédente."
+    ),
+    "outbound_email_confirm_contact": (
+        "Si vous n’attendiez pas ce message, ignorez-le ou communiquez avec {clinic_name}."
+    ),
+    "outbound_email_requested_subject": (
+        "Une modification des coordonnées de {service_name} a été demandée"
+    ),
+    "outbound_email_requested_intro": (
+        "Quelqu’un a demandé de modifier les coordonnées de votre compte {service_name}."
+    ),
+    "outbound_email_requested_body": (
+        "Rien n’a encore changé. La modification ne prend effet qu’une fois la nouvelle adresse "
+        "courriel confirmée, et cette adresse continue de recevoir vos codes de connexion et vos "
+        "liens de réinitialisation du mot de passe jusque-là."
+    ),
+    "outbound_email_requested_contact": (
+        "Si vous n’avez pas fait cette demande, communiquez immédiatement avec {clinic_name}."
+    ),
+    "outbound_mfa_sms_one": (
+        "Votre code de connexion {service_name} est {code}. Il expire dans {minutes} minute. Ne "
+        "le communiquez à personne. Communiquez avec {clinic_name} si vous ne l’avez pas demandé."
+    ),
+    "outbound_mfa_sms_other": (
+        "Votre code de connexion {service_name} est {code}. Il expire dans {minutes} minutes. Ne "
+        "le communiquez à personne. Communiquez avec {clinic_name} si vous ne l’avez pas demandé."
+    ),
 }

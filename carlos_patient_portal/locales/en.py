@@ -421,4 +421,74 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_qr_unavailable": (
         "QR code unavailable. Contact your clinic if you cannot use this portal address."
     ),
+    "outbound_mfa_email_subject": "Your {service_name} sign-in code",
+    "outbound_mfa_email_intro": "Your sign-in code for {service_name} is:",
+    "outbound_mfa_email_expiry_one": (
+        "This code expires in {minutes} minute. Do not share this code with anyone."
+    ),
+    "outbound_mfa_email_expiry_other": (
+        "This code expires in {minutes} minutes. Do not share this code with anyone."
+    ),
+    "outbound_mfa_email_contact": "If you did not try to sign in, contact {clinic_name}.",
+    "outbound_reset_subject": "Reset your {service_name} password",
+    "outbound_reset_intro": "A password reset was requested for your {service_name} account.",
+    "outbound_reset_link_lead": "Open this link to choose a new password:",
+    "outbound_reset_expiry_one": "This link expires in {minutes} minute and can only be used once.",
+    "outbound_reset_expiry_other": (
+        "This link expires in {minutes} minutes and can only be used once."
+    ),
+    "outbound_reset_contact": "If you did not request this reset, contact {clinic_name}.",
+    "outbound_contact_change_subject": "Contact information changed for {service_name}",
+    "outbound_contact_change_body": (
+        "The contact information for your {service_name} account changed. The new portal contact "
+        "details are in use now. Clinic staff may separately review the matching CARLOS chart "
+        "information."
+    ),
+    "outbound_contact_change_contact": (
+        "If you did not make this change, contact {clinic_name} immediately."
+    ),
+    "outbound_booking_prompt_subject": "You have a new message in {service_name}",
+    "outbound_booking_prompt_intro": "{clinic_name} has sent you a message in {service_name}.",
+    "outbound_sign_in_lead": "Sign in to read it:",
+    "outbound_booking_prompt_note": "The message is only shown after you sign in.",
+    "outbound_not_expecting_contact": "If you were not expecting this, contact {clinic_name}.",
+    "outbound_booking_update_subject": "There is an update in {service_name}",
+    "outbound_booking_update_intro": "{clinic_name} has updated a message in {service_name}.",
+    "outbound_booking_update_note": "The update is only shown after you sign in.",
+    "outbound_email_confirm_subject": "Confirm your new {service_name} email address",
+    "outbound_email_confirm_intro": (
+        "This address was given as the new contact email for a {service_name} account."
+    ),
+    "outbound_email_confirm_link_lead": "Open this link to confirm it:",
+    "outbound_email_confirm_expiry_one": (
+        "This link expires in {hours} hour and can only be used once. Until it is used, the "
+        "account keeps its previous email address."
+    ),
+    "outbound_email_confirm_expiry_other": (
+        "This link expires in {hours} hours and can only be used once. Until it is used, the "
+        "account keeps its previous email address."
+    ),
+    "outbound_email_confirm_contact": (
+        "If you were not expecting this, ignore this message or contact {clinic_name}."
+    ),
+    "outbound_email_requested_subject": "A contact change was requested for {service_name}",
+    "outbound_email_requested_intro": (
+        "Someone asked to change the contact details on your {service_name} account."
+    ),
+    "outbound_email_requested_body": (
+        "Nothing has changed yet. The change only takes effect once the new email address is "
+        "confirmed, and this address continues to receive your sign-in codes and password reset "
+        "links until then."
+    ),
+    "outbound_email_requested_contact": (
+        "If you did not request this, contact {clinic_name} immediately."
+    ),
+    "outbound_mfa_sms_one": (
+        "Your {service_name} sign-in code is {code}. It expires in {minutes} minute. Do not "
+        "share it. Contact {clinic_name} if you did not request it."
+    ),
+    "outbound_mfa_sms_other": (
+        "Your {service_name} sign-in code is {code}. It expires in {minutes} minutes. Do not "
+        "share it. Contact {clinic_name} if you did not request it."
+    ),
 }
