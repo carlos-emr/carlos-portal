@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pytest
 from alembic import command
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import Session
 
@@ -34,7 +35,7 @@ def owned_approval_pg():
     with engine.begin() as connection:
         config = alembic_config_for_tests()
         config.attributes["connection"] = connection
-        command.upgrade(config, "0018_mycarlos_mailbox_approval")
+        command.upgrade(config, "head")
     yield engine, schema
     # Never drop schemas. These empty/synthetic fixtures are retained for review.
     engine.dispose()
@@ -74,7 +75,7 @@ def test_actual_pg_empty_downgrade_reupgrade_and_retained_row_refusal(owned_appr
         migrate(connection, "0017_mycarlos_linking", "downgrade")
     assert not names.intersection(inspect(engine).get_table_names(schema=schema))
     with engine.begin() as connection:
-        migrate(connection, "0018_mycarlos_mailbox_approval", "upgrade")
+        migrate(connection, "head", "upgrade")
     with Session(engine) as session, session.begin():
         session.add(ApprovalClinic(clinic_id="FAKE-PG-retained-proof"))
     with pytest.raises(RuntimeError, match="retained proof/history"):
@@ -90,7 +91,7 @@ def test_actual_pg_empty_downgrade_reupgrade_and_retained_row_refusal(owned_appr
         )
         assert (
             connection.scalar(text("SELECT version_num FROM alembic_version"))
-            == "0020_mycarlos_approval_codes"
+            == ScriptDirectory.from_config(alembic_config_for_tests()).get_current_head()
         )
 
 
@@ -108,7 +109,12 @@ def test_actual_pg_empty_downgrade_fences_concurrent_new_proof_insertion(owned_a
                     outcome["migration_pid"] = connection.scalar(text("SELECT pg_backend_pid()"))
 
                     def after_lock(conn, cursor, statement, parameters, context, many):
-                        if statement.startswith("LOCK TABLE "):
+                        # Pause on the lock that covers the writer's table. From a later head,
+                        # other revisions' downgrades lock their own tables first.
+                        if (
+                            statement.startswith("LOCK TABLE ")
+                            and "patient_portal_mycarlos_approval_clinics" in statement
+                        ):
                             locked.set()
                             if not release.wait(10):
                                 raise RuntimeError("owned test release timeout")

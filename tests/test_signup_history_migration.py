@@ -352,9 +352,11 @@ def test_should_preserve_canonical_data_when_signup_follows_approval(lineage_eng
     migrate(engine, "head")
     assert_preserved(engine, before)
     assert_schema_and_sequences(engine)
+    (head,) = SCRIPT.get_heads()
     with engine.connect() as connection:
-        assert MigrationContext.configure(connection).get_current_heads() == (SIGNUP,)
-    assert SCRIPT.get_heads() == [SIGNUP]
+        assert MigrationContext.configure(connection).get_current_heads() == (head,)
+    # Sign-up is on the one line to the head, whatever later revision tops it.
+    assert SIGNUP in {script.revision for script in SCRIPT.iterate_revisions(head, "base")}
     assert SCRIPT.get_revision(SIGNUP).down_revision == CODES
     assert SCRIPT.get_revision(CODES).down_revision == APPROVAL
     assert SCRIPT.get_revision(APPROVAL).down_revision == LINK
