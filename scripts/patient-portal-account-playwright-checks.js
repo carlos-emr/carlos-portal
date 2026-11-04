@@ -9,6 +9,8 @@
  *   3. Linked devices: the list, the removal confirmation, Keep, and Remove.
  *   4. A wrong current password on the account forms, then the locked-account page.
  *   5. Offered appointment times: "None of these work".
+ *   6. A successful password-Reveal response that arrives after the session ended in another tab,
+ *      or after the page was hidden (carlos-emr/mycarlos#194).
  *
  * It is a separate script, with its own seed (tests/seed_browser_account.py), so it never edits or
  * depends on the main check's fixtures or steps.
@@ -1288,6 +1290,113 @@ async function checkNonLatinPasswordAndCachedReveal(page, context) {
   await popup.close();
 }
 
+// While true, step 6 is a known failure: the check must fail, and the run reports the finding
+// instead. The commit that fixes portal.js sets it to false, and the check then has to pass.
+const revealRaceKnownFailure = true;
+
+// A Reveal that already succeeded on the server can reach the page after the session ended in
+// another tab or after the page was hidden. The password must not render then, must not stay in
+// the DOM, and the session must stay ended. The response is held in flight by route interception
+// and is a made-up marker, so no real secret is involved.
+async function checkLateRevealResponse(page, context) {
+  assert(typeof fixtures.nonLatinPassword === 'string' && fixtures.nonLatinPassword.length > 0,
+    'the changed password is missing');
+  linkAccount.password = fixtures.nonLatinPassword;
+  const revealGlob = '**' + portalPathname('/portal/email-passwords/*/reveal');
+  const marker = 'FAKE-late-reveal-' + randomBytes(9).toString('hex');
+  const revealingLabel = 'Revealing...';
+
+  async function openRevealPage() {
+    await open(page, '/portal/email-passwords');
+    const reveal = page.locator('button[data-reveal-url$="/' + linkAccount.emailPasswordId + '/reveal"]');
+    assert(await reveal.count() === 1, 'the Reveal control is missing');
+    await page.locator('[data-reveal-password]').fill(linkAccount.password);
+    return reveal;
+  }
+
+  async function holdNextReveal() {
+    let release;
+    let seen = 0;
+    const gate = new Promise((resolve) => { release = resolve; });
+    await page.unroute(revealGlob).catch(() => {});
+    await page.route(revealGlob, async (route) => {
+      seen += 1;
+      await gate;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ passphrase: marker }),
+      });
+    });
+    return { release, seen: () => seen };
+  }
+
+  async function sent(held) {
+    for (let attempt = 0; attempt < 50 && held.seen() === 0; attempt += 1) {
+      await page.waitForTimeout(100);
+    }
+    assert(held.seen() === 1, 'the Reveal request was not sent');
+  }
+
+  async function settle(reveal) {
+    // Either the late response rendered, or the page dropped it and put the button back.
+    await page.waitForFunction((button) => button.hidden || (!button.disabled
+      && button.textContent.trim() !== ''), await reveal.elementHandle(), { timeout: 5000 })
+      .catch(() => {});
+    await page.waitForTimeout(300);
+  }
+
+  async function assertNothingRevealed(label) {
+    const shown = await page.evaluate((value) => ({
+      inText: document.body.innerText.includes(value),
+      inHtml: document.documentElement.outerHTML.includes(value),
+      inTargets: Array.from(document.querySelectorAll('[data-reveal-target]'))
+        .some((el) => (el.textContent || '').includes(value)),
+    }), marker);
+    assert(!shown.inText && !shown.inHtml && !shown.inTargets,
+      label + ': the late Reveal response put the password on the page ' + JSON.stringify(shown));
+  }
+
+  await signIn(page, linkAccount);
+
+  // 6a. The page is hidden (tab switched away, app backgrounded) while the response is in flight.
+  // Headless Chromium never reports a background tab as hidden, so the page's own view of it is
+  // replaced with what a hidden page reports, and the events a real hide sends are dispatched.
+  let reveal = await openRevealPage();
+  let held = await holdNextReveal();
+  await reveal.click();
+  await sent(held);
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+  });
+  held.release();
+  await settle(reveal);
+  await assertNothingRevealed('hidden page');
+  await page.unroute(revealGlob);
+
+  // 6b. The session ends in another tab while the response is in flight.
+  reveal = await openRevealPage();
+  held = await holdNextReveal();
+  await reveal.click();
+  await sent(held);
+  const other = await context.newPage();
+  watchPage(other, 'reveal-race-logout');
+  await open(other, '/portal');
+  await signOut(other, context);
+  held.release();
+  await settle(reveal);
+  await assertNothingRevealed('session ended in another tab');
+  assert(!(await context.cookies()).some((cookie) => cookie.name === settings.sessionCookieName),
+    'the late Reveal response brought the session back');
+  await open(page, '/portal');
+  await page.getByRole('heading', { name: t('sign_in_heading'), exact: true }).waitFor();
+  await page.unroute(revealGlob);
+  await other.close();
+}
+
 (async () => {
   const browser = await chromium.launch({
     headless: true,
@@ -1357,6 +1466,19 @@ async function checkNonLatinPasswordAndCachedReveal(page, context) {
     }
 
     await checkNonLatinPasswordAndCachedReveal(link.page, link.context);
+
+    let raceError = null;
+    try {
+      await checkLateRevealResponse(link.page, link.context);
+    } catch (error) {
+      raceError = error;
+    }
+    if (revealRaceKnownFailure) {
+      assert(raceError, 'step 6 passed: set revealRaceKnownFailure to false');
+      console.log('KNOWN FAILURE (step 6): ' + raceError.message);
+    } else if (raceError) {
+      throw raceError;
+    }
 
     const unmet = expectedErrors.filter((expected) => !expected.seen);
     assert(unmet.length === 0,
