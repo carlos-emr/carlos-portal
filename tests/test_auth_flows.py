@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
+from markupsafe import escape
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
@@ -25,6 +26,7 @@ from carlos_patient_portal.database import (
     session_scope,
 )
 from carlos_patient_portal.email_delivery import PortalEmailDeliveryError
+from carlos_patient_portal.i18n import portal_text
 from carlos_patient_portal.models import (
     AUDIT_EVENT_ACCOUNT_LOCK,
     AUDIT_EVENT_ACCOUNT_PASSWORD_CHANGE,
@@ -331,11 +333,22 @@ def test_failed_mfa_grant_commit_does_not_release_a_cookie_or_consume_the_code(m
 
         with monkeypatch.context() as failure:
             failure.setattr(Session, "commit", fail_grant_commit)
-            unavailable = client.post("/auth/mfa/verify", data=verification, follow_redirects=False)
+            unavailable = client.post(
+                "/auth/mfa/verify",
+                data=verification,
+                headers={"Accept-Language": "fr"},
+                follow_redirects=False,
+            )
 
         assert reached_grant_commit
         assert unavailable.status_code == 503
-        assert unavailable.json() == {"detail": "service temporarily unavailable"}
+        assert unavailable.headers["content-type"].startswith("text/html")
+        assert '<html lang="fr">' in unavailable.text
+        assert str(escape(portal_text("fr")["service_unavailable_heading"])) in unavailable.text
+        assert str(escape(portal_text("fr")["service_unavailable_details"])) in unavailable.text
+        assert unavailable.headers["Retry-After"] == "1"
+        assert "FAKE grant commit" not in unavailable.text
+        assert "FAKE database unavailable" not in unavailable.text
         assert "location" not in unavailable.headers
         assert web_support.PORTAL_SESSION_COOKIE_NAME not in unavailable.cookies
         assert web_support.PORTAL_SESSION_COOKIE_NAME not in client.cookies
@@ -732,7 +745,7 @@ def test_form_mfa_resend_sends_new_email_after_cooldown() -> None:
     assert challenge_token_match is not None
     assert original_code_match is not None
     assert resend_csrf_match is not None
-    assert "Code sent to ex***@example.com by EMAIL." in login_response.text
+    assert "Code sent to ex***@example.com by email." in login_response.text
     assert "Resend code" in login_response.text
     with app.state.session_factory() as session:
         challenge = session.scalar(select(PatientPortalMfaChallenge))
@@ -756,7 +769,7 @@ def test_form_mfa_resend_sends_new_email_after_cooldown() -> None:
 
     resent_code_match = DEVELOPMENT_MFA_CODE_PATTERN.search(response.text)
     assert response.status_code == 200
-    assert "A new code was sent by EMAIL." in response.text
+    assert "A new code was sent by email." in response.text
     assert resent_code_match is not None
     assert resent_code_match.group(1) != original_code_match.group(1)
     assert len(sender.messages) == 2

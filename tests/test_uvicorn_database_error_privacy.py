@@ -74,8 +74,9 @@ def test_database_error_details_stay_out_of_uvicorn_logs_after_safe_application_
 
     async def request_over_memory():
         client_protocol = h11.Connection(h11.CLIENT)
+        request_headers = [(b"host", b"testserver"), (b"accept", b"application/json")]
         request = h11.Request(
-            method=b"GET", target=path.encode(), headers=[(b"host", b"testserver")]
+            method=b"GET", target=path.encode(), headers=request_headers
         )
         wire = client_protocol.send(request) + client_protocol.send(h11.EndOfMessage())
         server_protocol = h11.Connection(h11.SERVER)
@@ -95,7 +96,7 @@ def test_database_error_details_stay_out_of_uvicorn_logs_after_safe_application_
                 "raw_path": path.encode(),
                 "root_path": "",
                 "query_string": b"",
-                "headers": [(b"host", b"testserver")],
+                "headers": request_headers,
                 "client": ("127.0.0.1", 12345),
                 "server": ("testserver", 80),
                 "state": {},
@@ -131,6 +132,7 @@ def test_database_error_details_stay_out_of_uvicorn_logs_after_safe_application_
         response_status, response_headers, body = asyncio.run(request_over_memory())
         assert failures == [exception_type.__name__]
         assert response_status == expected_status
+        assert response_headers[b"content-type"].startswith(b"application/json")
         assert json.loads(body) == {
             "detail": "the request could not be completed"
             if fault == "integrity"

@@ -97,6 +97,9 @@ MIN_AUDIT_RETENTION_DAYS = 30
 DEFAULT_PROBE_ALLOWED_HOSTS = ("127.0.0.1", "localhost")
 DEFAULT_CLINIC_ID = "default"
 DEFAULT_CLINIC_NAME = "Your clinic"
+# The product name a deployment shows unless it sets its own. Pages show it translated
+# (`service_name_default`); a configured name is the clinic's and is shown as written.
+DEFAULT_SERVICE_NAME = "CARLOS Patient Portal"
 # The upstream repository. Correct only for an unmodified portal: AGPL-3.0 section 13 requires a
 # modified portal to offer its users the modified source, so such a deployment must point
 # PATIENT_PORTAL_SOURCE_CODE_URL at that source instead.
@@ -319,7 +322,7 @@ def parse_job_assertion_public_keyring(encoded_keyring: str) -> dict[str, dict[s
 class Settings(BaseSettings):
     """Runtime configuration for the patient portal service."""
 
-    service_name: str = "CARLOS Patient Portal"
+    service_name: str = DEFAULT_SERVICE_NAME
     environment: Environment = "production"
     clinic_id: str = Field(default=DEFAULT_CLINIC_ID, max_length=MAX_CLINIC_ID_LENGTH)
     clinic_name: str = DEFAULT_CLINIC_NAME

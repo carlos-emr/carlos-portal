@@ -209,6 +209,40 @@ if (
   if (!resetToken && resetTokenError instanceof HTMLElement) {
     resetTokenError.hidden = false;
   }
+  // A language link reloads this page through a redirect, and the token must not reach the
+  // server. So on the click it rides in the fragment, which the browser keeps across a redirect
+  // whose Location has none, and the code above moves it into the form again. Only a plain click
+  // on a link that comes back to this same page carries it, and the links themselves never hold
+  // it, so it is not shown on hover, copied with the link, or sent anywhere else.
+  document.querySelectorAll(".language-switch a[href]").forEach((link) => {
+    if (!(link instanceof HTMLAnchorElement)) {
+      return;
+    }
+    link.addEventListener("click", (event) => {
+      const currentToken = resetTokenInput.value;
+      if (
+        !currentToken
+        || event.defaultPrevented
+        || event.button !== 0
+        || event.metaKey
+        || event.ctrlKey
+        || event.shiftKey
+        || event.altKey
+      ) {
+        return;
+      }
+      const target = new URL(link.href, window.location.href);
+      const thisPage = `${window.location.pathname}${window.location.search}`;
+      if (target.origin !== window.location.origin || target.searchParams.get("next") !== thisPage) {
+        return;
+      }
+      event.preventDefault();
+      target.hash = new URLSearchParams({ token: currentToken }).toString();
+      // Replace, not assign: Back should not return to this page, whose URL no longer holds the
+      // token, as an empty form.
+      window.location.replace(target.toString());
+    });
+  });
   resetTokenForm.addEventListener("submit", (event) => {
     if (!resetTokenInput.value) {
       event.preventDefault();

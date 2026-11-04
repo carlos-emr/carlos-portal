@@ -1,5 +1,8 @@
+import pytest
 from fastapi.testclient import TestClient
 
+from carlos_patient_portal.i18n import LOCALE_COOKIE_NAME, portal_text
+from carlos_patient_portal.web_support import SECURITY_HEADERS
 from tests.support import (
     RecordingPortalEmailSender,
     RecordingPortalSmsSender,
@@ -77,3 +80,67 @@ def test_fhir_method_error_uses_the_captured_portal_path_after_alias_dispatch():
         assert alias.status_code == 405
         assert alias.json() == canonical.json()
         assert alias.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize(
+    ("method", "application_path", "headers", "expected_type"),
+    [
+        ("GET", "/FAKE/error-boundary", {"Accept": "text/html"}, "text/html"),
+        ("GET", "/FAKE/error-boundary", {"Accept": "application/json"}, "application/json"),
+        (
+            "GET",
+            "/FAKE/error-boundary",
+            {"Authorization": "Bearer FAKE-not-a-session"},
+            "application/json",
+        ),
+        ("HEAD", "/FAKE/error-boundary", {"Accept": "text/html"}, "application/json"),
+        ("GET", "/fhir/FAKE/error-boundary", {"Accept": "text/html"}, "application/fhir+json"),
+    ],
+    ids=["browser", "json", "bearer", "head", "fhir"],
+)
+def test_prefixed_unhandled_errors_keep_response_contract_and_privacy(
+    method, application_path, headers, expected_type
+):
+    app = migrated_development_app(
+        email_sender=RecordingPortalEmailSender(),
+        sms_sender=RecordingPortalSmsSender(),
+        public_base_url="https://portal.example.test" + PREFIX,
+        mycarlos_delivery_enabled=False,
+        mycarlos_mailbox_enabled=False,
+    )
+    private_marker = "FAKE-private-error-value-8e5d"
+
+    def fail():
+        raise RuntimeError(private_marker)
+
+    app.add_api_route(application_path, fail, methods=["GET", "HEAD"])
+    with TestClient(
+        StrippingProxy(app),
+        base_url="https://portal.example.test",
+        raise_server_exceptions=False,
+    ) as client:
+        client.cookies.set(LOCALE_COOKIE_NAME, "pl")
+        response = client.request(
+            method,
+            PREFIX + application_path,
+            headers=headers,
+        )
+
+    assert response.status_code == 500
+    assert response.headers["content-type"].startswith(expected_type)
+    assert response.headers["cache-control"] == "no-store"
+    assert "content-security-policy" in response.headers
+    for header, value in SECURITY_HEADERS.items():
+        assert response.headers[header] == value
+    assert private_marker not in response.text
+    if method == "HEAD":
+        assert response.content == b""
+    elif expected_type == "text/html":
+        assert '<html lang="pl">' in response.text
+        assert portal_text("pl")["service_unavailable_heading"] in response.text
+        assert f'href="{PREFIX}/"' in response.text
+    elif expected_type == "application/fhir+json":
+        assert response.json()["resourceType"] == "OperationOutcome"
+        assert response.json()["issue"][0]["code"] == "exception"
+    else:
+        assert response.json() == {"detail": "the request could not be completed"}
