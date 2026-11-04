@@ -1302,6 +1302,12 @@ async function checkLateRevealResponse(page, context) {
   assert(typeof fixtures.nonLatinPassword === 'string' && fixtures.nonLatinPassword.length > 0,
     'the changed password is missing');
   linkAccount.password = fixtures.nonLatinPassword;
+  // The earlier step signed in with a copy of the account, so its MFA email cooldown is not on
+  // `linkAccount`: wait it out here, as signIn would.
+  await new Promise((resolve) => {
+    setTimeout(resolve, (settings.mfaEmailCooldownSeconds + 2) * 1000);
+  });
+  linkAccount.lastMfaSentAt = 0;
   const revealGlob = '**' + portalPathname('/portal/email-passwords/*/reveal');
   const marker = 'FAKE-late-reveal-' + randomBytes(9).toString('hex');
   const revealingLabel = 'Revealing...';
@@ -1351,7 +1357,10 @@ async function checkLateRevealResponse(page, context) {
       inText: document.body.innerText.includes(value),
       inHtml: document.documentElement.outerHTML.includes(value),
       inTargets: Array.from(document.querySelectorAll('[data-reveal-target]'))
-        .some((el) => (el.textContent || '').includes(value)),
+        .some((button) => {
+          const target = document.getElementById(button.dataset.revealTarget || '');
+          return Boolean(target) && (target.textContent || '').includes(value);
+        }),
     }), marker);
     assert(!shown.inText && !shown.inHtml && !shown.inTargets,
       label + ': the late Reveal response put the password on the page ' + JSON.stringify(shown));
@@ -1359,6 +1368,7 @@ async function checkLateRevealResponse(page, context) {
 
   await signIn(page, linkAccount);
 
+  const failures = [];
   // 6a. The page is hidden (tab switched away, app backgrounded) while the response is in flight.
   // Headless Chromium never reports a background tab as hidden, so the page's own view of it is
   // replaced with what a hidden page reports, and the events a real hide sends are dispatched.
@@ -1366,6 +1376,7 @@ async function checkLateRevealResponse(page, context) {
   let held = await holdNextReveal();
   await reveal.click();
   await sent(held);
+  try {
   await page.evaluate(() => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
     Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
@@ -1375,6 +1386,9 @@ async function checkLateRevealResponse(page, context) {
   held.release();
   await settle(reveal);
   await assertNothingRevealed('hidden page');
+  } catch (error) {
+    failures.push(error.message);
+  }
   await page.unroute(revealGlob);
 
   // 6b. The session ends in another tab while the response is in flight.
@@ -1388,13 +1402,18 @@ async function checkLateRevealResponse(page, context) {
   await signOut(other, context);
   held.release();
   await settle(reveal);
-  await assertNothingRevealed('session ended in another tab');
+  try {
+    await assertNothingRevealed('session ended in another tab');
+  } catch (error) {
+    failures.push(error.message);
+  }
   assert(!(await context.cookies()).some((cookie) => cookie.name === settings.sessionCookieName),
     'the late Reveal response brought the session back');
   await open(page, '/portal');
   await page.getByRole('heading', { name: t('sign_in_heading'), exact: true }).waitFor();
   await page.unroute(revealGlob);
   await other.close();
+  assert(failures.length === 0, failures.join(' | '));
 }
 
 (async () => {
