@@ -10,7 +10,8 @@ and `subscriptions_for_owner` serve the device's enrollment routes.
 
 What is stored is ids, the platform, the consent the device reported and counters: no document
 id, no text, no provider token (those live in separately scoped storage when P3 adds providers),
-and nothing that names the patient. Nothing here sends; no worker reads the outbox yet (P2).
+and nothing that names the patient. Nothing here sends; the worker in
+`mycarlos_availability_dispatch` reads the outbox (P2).
 """
 
 from __future__ import annotations
