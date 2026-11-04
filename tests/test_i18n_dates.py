@@ -80,21 +80,29 @@ def test_repeated_autumn_hour_keeps_the_offset_in_portal_timestamps(
 
 
 @pytest.mark.parametrize(
-    ("locale", "expected_date"),
+    ("locale", "expected_date", "expected_time"),
     [
-        ("en", "Wednesday 31 December"),
-        ("fr", "Mercredi 31 décembre"),
-        ("es", "Miércoles 31 de diciembre"),
-        ("pl", "Środa, 31 grudnia"),
-        ("pt-BR", "Quarta-feira, 31 de dezembro"),
+        ("en", "Wednesday 31 December", "19:15"),
+        # Canadian French writes the hour without a leading zero, with no-break spaces around "h".
+        ("fr", "Mercredi 31 décembre", "19\u00a0h\u00a015"),
+        ("es", "Miércoles 31 de diciembre", "19:15"),
+        ("pl", "Środa, 31 grudnia", "19:15"),
+        ("pt-BR", "Quarta-feira, 31 de dezembro", "19:15"),
     ],
 )
 def test_booking_date_and_time_cross_the_year_in_the_clinic_timezone(
-    locale: str, expected_date: str
+    locale: str, expected_date: str, expected_time: str
 ) -> None:
     # It is already January in UTC, but still December in the clinic.
     instant = datetime(2026, 1, 1, 0, 15, tzinfo=UTC)
-    assert format_booking_time(instant, locale, "America/Toronto") == (expected_date, "19:15")
+    assert format_booking_time(instant, locale, "America/Toronto") == (expected_date, expected_time)
+
+
+def test_french_time_has_no_leading_zero_and_keeps_the_minutes() -> None:
+    instant = datetime(2026, 3, 3, 12, 5, tzinfo=UTC)
+    assert format_booking_time(instant, "fr", "UTC")[1] == "12\u00a0h\u00a005"
+    early = datetime(2026, 3, 3, 7, 5, tzinfo=UTC)
+    assert format_booking_time(early, "fr", "UTC")[1] == "7\u00a0h\u00a005"
 
 
 @pytest.mark.parametrize(
