@@ -45,6 +45,8 @@ EXPECTED_TABLE_PRIVILEGES = {
     "patient_portal_email_change_requests": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_invites": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_mfa_challenges": ORDINARY_TABLE_PRIVILEGES,
+    "patient_portal_mycarlos_availability_outbox": ORDINARY_TABLE_PRIVILEGES,
+    "patient_portal_mycarlos_availability_subscriptions": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_mycarlos_devices": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_mycarlos_link_codes": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_mycarlos_link_failures": ORDINARY_TABLE_PRIVILEGES,
