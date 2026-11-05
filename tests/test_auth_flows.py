@@ -717,7 +717,7 @@ def test_form_mfa_error_keeps_retry_and_resend_screen() -> None:
     )
 
     assert response.status_code == 401
-    assert "Verification code" in response.text
+    assert "Sign-in code" in response.text
     assert "The code was not accepted. Try again or request a new code." in response.text
     assert "Resend code" in response.text
     assert 'value="email"' in response.text
@@ -806,7 +806,7 @@ def test_form_mfa_resend_shows_cooldown_without_leaving_screen() -> None:
     assert response.status_code == 429
     assert response.headers["retry-after"] == "60"
     assert "A code was sent recently. Try again in 60 seconds." in response.text
-    assert "Verification code" in response.text
+    assert "Sign-in code" in response.text
     assert "Resend code" in response.text
 
 
@@ -2586,7 +2586,7 @@ def test_expired_mfa_resend_requires_new_sign_in_without_sending(browser_form: b
                 "/auth/mfa/resend", data={**payload, "csrf_token": get_csrf_token(client)}
             )
             assert response.headers["content-type"].startswith("text/html")
-            assert "Sign in again to request a new verification code." in response.text
+            assert "Sign in again to request a new sign-in code." in response.text
             assert 'name="username"' in response.text
             assert 'name="mfa_challenge_token"' not in response.text
         else:
@@ -2637,7 +2637,7 @@ def test_browser_mfa_switch_failure_keeps_the_delivered_email_code(
         assert switched.status_code == (503 if provider_failure else 400)
         assert switched.headers["content-type"].startswith("text/html")
         expected_message = (
-            "Verification code could not be sent. Please try again."
+            "The sign-in code could not be sent. Please try again."
             if provider_failure
             else "That delivery method is unavailable."
         )
