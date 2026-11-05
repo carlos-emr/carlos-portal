@@ -1150,3 +1150,10 @@ def register_app_routes(app: FastAPI, runtime: PortalRuntime) -> None:
                 )
 
                 register_device_approval_routes(app, runtime)
+        if runtime.settings.mycarlos_availability_enabled:
+            # Enrollment only: nothing queues or sends until the worker and providers exist.
+            from carlos_patient_portal.routes.mycarlos_availability import (
+                register_mycarlos_availability_routes,
+            )
+
+            register_mycarlos_availability_routes(app, runtime)

@@ -48,6 +48,8 @@ EXPECTED_TABLE_PRIVILEGES = {
     "patient_portal_mycarlos_approval_clinics": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_mycarlos_approval_codes": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_mycarlos_approval_requests": ORDINARY_TABLE_PRIVILEGES,
+    "patient_portal_mycarlos_availability_outbox": ORDINARY_TABLE_PRIVILEGES,
+    "patient_portal_mycarlos_availability_subscriptions": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_mycarlos_mailbox_accounts": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_mycarlos_mailbox_anchors": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_mycarlos_mailbox_blobs": ORDINARY_TABLE_PRIVILEGES,
