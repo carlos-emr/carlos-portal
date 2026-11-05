@@ -278,10 +278,14 @@ def acknowledge_revocation(
     before its enrollment reached the portal, or again after a lost answer. An id the portal has
     never seen gets a tombstone of its own, so a late enrollment cannot bring it back: such a row
     was never enrolled, so its remote switch and observed permission are off (the consent version
-    column holds 1, the only version, as its check requires). An id already revoked, by anyone,
-    is answered again unchanged. For a destination this device holds, the platform is not
-    compared: stopping it is what matters. Pending intents go with it; a leased one cannot be
-    recalled, and the worker's fresh read suppresses its send (P2).
+    column holds 1, the only version, as its check requires). An id already revoked is answered
+    again unchanged, whoever revoked it and whichever device it was filed under: an app restored
+    from an OS backup, or linked again as a new device, still holds ids filed under its old
+    device, and must be able to clear them; the caller had to know the random id either way.
+    Only another device's live destination is refused (`destination_taken`). For a destination
+    this device holds, the platform is not compared: stopping it is what matters. Pending
+    intents go with it; a leased one cannot be recalled, and the worker's fresh read suppresses
+    its send (P2).
     """
     if not session.in_transaction():
         raise AvailabilityError("transaction_required")
@@ -297,6 +301,8 @@ def acknowledge_revocation(
         .with_for_update()
     ).first()
     if existing is not None:
+        if existing.revoked_at is not None:
+            return existing
         if (existing.account_id, existing.device_id) != (owner.account_id, owner.device_id):
             raise EnrollmentRefusal("destination_taken")
         return revoke(session, owner, existing.subscription_id, by="device", now=now)
@@ -316,14 +322,18 @@ def acknowledge_revocation(
         revoked_by="device",
     )
     # Only another device can race this insert (this device's row is locked): the unique index
-    # decides, as in `enroll`, and a destination enrolled elsewhere is not this device's to stop.
+    # decides, as in `enroll`. If the winner revoked it too, it is revoked, and so answered; a
+    # destination enrolled elsewhere is not this device's to stop.
     try:
         with session.begin_nested():
             session.add(row)
             session.flush()
     except IntegrityError:
-        if _destination_row(session, destination_id) is None:
+        winner = _destination_row(session, destination_id)
+        if winner is None:
             raise
+        if winner.revoked_at is not None:
+            return winner
         raise EnrollmentRefusal("destination_taken") from None
     return row
 

@@ -220,7 +220,7 @@ def test_the_platform_is_not_compared_for_the_devices_own_destination(portal) ->
     assert (rows(app)[0].platform, rows(app)[0].revoked_by) == ("ios_apns", "device")
 
 
-def test_another_devices_destination_is_not_revoked(portal) -> None:  # noqa: F811
+def test_another_devices_live_destination_is_not_revoked(portal) -> None:  # noqa: F811
     app, client = portal
     destination = str(uuid4())
     post(client, A, enrollment(destination_id=destination))
@@ -228,6 +228,32 @@ def test_another_devices_destination_is_not_revoked(portal) -> None:  # noqa: F8
     # The same answer B's enrollment of it gets.
     assert (foreign.status_code, foreign.json()) == (409, {"code": "destination_taken"})
     assert rows(app)[0].revoked_at is None
+
+
+@pytest.mark.parametrize("how", ["enrolled-then-revoked", "never-enrolled"])
+def test_a_restored_or_relinked_app_clears_ids_revoked_under_its_old_device(
+    portal,  # noqa: F811
+    how: str,
+) -> None:
+    app, client = portal
+    destination = str(uuid4())
+    if how == "enrolled-then-revoked":
+        post(client, A, enrollment(destination_id=destination))
+    assert revoke_by_id(client, A, revocation(destination)).status_code == 200
+    [before] = rows(app)
+    # B stands in for the same app restored from an OS backup onto a new phone, or linked again
+    # as a new device: its queue still holds the id the portal filed under A.
+    answer = revoke_by_id(client, B, revocation(destination))
+    assert (answer.status_code, answer.json()) == (
+        200,
+        {"destination_id": destination, "revoked": True},
+    )
+    [after] = rows(app)
+    assert (after.device_id, after.revoked_by, after.revoked_at) == (
+        before.device_id,
+        "device",
+        before.revoked_at,
+    )
 
 
 def test_a_replayed_revocation_is_not_found(portal) -> None:  # noqa: F811

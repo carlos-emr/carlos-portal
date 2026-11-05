@@ -11,6 +11,22 @@ and an OS permission it observed. A revocation names the device's own destinatio
 answered only once its tombstone is committed, so the device may then drop it from its queue
 (P4). Nothing here sends; the dispatch worker (P2) does, and only with credentials.
 Responses carry the device's own subscription ids and settings, nothing about the patient.
+
+What each revocation answer means for the device's queued entry (myCarlos
+`pending_revocations`, which shares 64 places with its active destinations, so an entry that can
+never be cleared must be dropped):
+- Final, drop the entry:
+  - 200 `{"destination_id", "revoked": true}`: the tombstone is committed, or the id was
+    already revoked, whichever device it was filed under.
+  - 409 `destination_taken`: another device's live destination; this device never enrolled it.
+  - 400 `invalid_enrollment`, `invalid_destination` or `invalid_platform`: never accepted.
+  - 403 `device_removed`: the worker never sends to a removed device.
+- Retry later, keep the entry (nothing is known to have been committed):
+  - 404: the assertion was refused (unsigned, replayed, expired, or signed for another request).
+  - 403 `device_inactive`: the device was not active when its row was locked.
+  - 403 `recipient_mismatch`: retry once the device's link is repaired.
+  - 413: a body over 1 KiB, which a well-formed entry never is.
+  - 5xx, or no answer.
 """
 
 from __future__ import annotations

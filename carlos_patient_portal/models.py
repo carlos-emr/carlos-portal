@@ -2200,7 +2200,9 @@ class PatientPortalMyCarlosAvailabilitySubscription(Base):
     platform: Mapped[str] = mapped_column(String(16), nullable=False)
     remote_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # Only consent version 1 exists; a later version rewrites this check and keeps
-    # older rows as their history.
+    # older rows as their history. A tombstone made for a revocation that overtook its
+    # enrollment (P4) also holds 1, as the check requires, with permission_observed false and
+    # created_at = revoked_at: anything that counts consent must skip such rows.
     remote_consent_version: Mapped[int] = mapped_column(Integer, nullable=False)
     permission_observed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(

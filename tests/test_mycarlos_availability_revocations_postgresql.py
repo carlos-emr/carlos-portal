@@ -157,6 +157,24 @@ def test_another_devices_enrollment_of_a_new_id_being_revoked_is_refused(pg) -> 
     assert (row.device_id, row.revoked_by) == (first.device_id, "device")
 
 
+def test_two_devices_revoking_one_new_id_are_both_answered(pg) -> None:  # noqa: F811
+    engine, factory = pg
+    first = owner_for(factory, "pg-both-a")
+    second = owner_for(factory, "pg-both-b")
+    destination = str(uuid4())
+    # The second insert waits on the destination index; the winner's row is revoked, so the
+    # second device is answered too rather than told the destination is taken.
+    result = waits_then(
+        engine,
+        factory,
+        lambda holder: acknowledge_revocation(holder, first, stop(destination)),
+        lambda session: acknowledge_revocation(session, second, stop(destination)),
+    )
+    assert result == "ok"
+    row = by_destination(factory, destination)
+    assert (row.device_id, row.revoked_by) == (first.device_id, "device")
+
+
 def test_a_revocation_of_another_devices_new_enrollment_is_refused(pg) -> None:  # noqa: F811
     engine, factory = pg
     first = owner_for(factory, "pg-race-c")
