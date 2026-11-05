@@ -332,6 +332,50 @@ TEXT: dict[str, str] = {
     "username_unavailable": "該使用者名稱無法使用。",
     "verification_delivery_failed": "無法傳送驗證碼。請再試一次。",
     "view_module": "開啟",
+    "outbound_mfa_email_subject": "您的 {service_name} 登入驗證碼",
+    "outbound_mfa_email_intro": "您的 {service_name} 登入驗證碼是：",
+    "outbound_mfa_email_expiry_other": (
+        "此驗證碼將在 {minutes} 分鐘後失效。請勿將此驗證碼告訴任何人。"
+    ),
+    "outbound_mfa_email_contact": "如果您沒有嘗試登入，請聯絡 {clinic_name}。",
+    "outbound_reset_subject": "重設您的 {service_name} 密碼",
+    "outbound_reset_intro": "有人要求重設您的 {service_name} 帳戶密碼。",
+    "outbound_reset_link_lead": "請開啟此連結以設定新密碼：",
+    "outbound_reset_expiry_other": "此連結將在 {minutes} 分鐘後失效，且只能使用一次。",
+    "outbound_reset_contact": "如果您沒有要求重設，請聯絡 {clinic_name}。",
+    "outbound_contact_change_subject": "{service_name} 的聯絡資訊已變更",
+    "outbound_contact_change_body": (
+        "您的 {service_name} 帳戶的聯絡資訊已變更。新的入口網站聯絡方式現已生效。診所工作人員可能"
+        "會另行核對 CARLOS 病歷中的相應資訊。"
+    ),
+    "outbound_contact_change_contact": "如果這不是您本人所做的變更，請立即聯絡 {clinic_name}。",
+    "outbound_booking_prompt_subject": "您在 {service_name} 中有一則新訊息",
+    "outbound_booking_prompt_intro": "{clinic_name} 在 {service_name} 中傳送了一則訊息給您。",
+    "outbound_sign_in_lead": "請登入後查看：",
+    "outbound_booking_prompt_note": "訊息僅在您登入後顯示。",
+    "outbound_not_expecting_contact": "如果您沒有預期收到此郵件，請聯絡 {clinic_name}。",
+    "outbound_booking_update_subject": "{service_name} 中有更新",
+    "outbound_booking_update_intro": "{clinic_name} 更新了 {service_name} 中的一則訊息。",
+    "outbound_booking_update_note": "更新內容僅在您登入後顯示。",
+    "outbound_email_confirm_subject": "請確認您的新 {service_name} 電子郵件地址",
+    "outbound_email_confirm_intro": "此地址被提供為 {service_name} 帳戶的新聯絡電子郵件。",
+    "outbound_email_confirm_link_lead": "請開啟此連結以確認：",
+    "outbound_email_confirm_expiry_other": (
+        "此連結將在 {hours} 小時後失效，且只能使用一次。在使用之前，帳戶仍保留原來的電子郵件地址"
+        "。"
+    ),
+    "outbound_email_confirm_contact": "如果您沒有預期收到此郵件，請忽略它或聯絡 {clinic_name}。",
+    "outbound_email_requested_subject": "有人要求變更 {service_name} 的聯絡方式",
+    "outbound_email_requested_intro": "有人要求變更您的 {service_name} 帳戶的聯絡方式。",
+    "outbound_email_requested_body": (
+        "目前尚未發生任何變更。只有在新的電子郵件地址確認後變更才會生效，在此之前，此地址仍會收到"
+        "您的登入驗證碼和密碼重設連結。"
+    ),
+    "outbound_email_requested_contact": "如果這不是您本人的要求，請立即聯絡 {clinic_name}。",
+    "outbound_mfa_sms_other": (
+        "您的 {service_name} 登入驗證碼是 {code}，{minutes} 分鐘後失效。請勿告訴他人。如非本人要"
+        "求，請聯絡 {clinic_name}。"
+    ),
     # Self sign-up (carlos-portal#15).
     "sign_up_contact_clinic": (
         "如果診所沒有您的電子郵件地址，或登記的是舊地址，請先聯絡診所，再申請帳戶。"

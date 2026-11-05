@@ -92,6 +92,7 @@ from carlos_patient_portal.notifications import (
     send_email_change_confirmation,
     send_email_change_requested_notice,
 )
+from carlos_patient_portal.outbound_messages import sender_locale_kwargs
 from carlos_patient_portal.presenters import (
     normalize_email_password_dashboard_provider,
     normalize_email_password_dashboard_search,
@@ -509,6 +510,7 @@ def register_portal_routes(
                     recipient=recipient,
                     encryption_secret=runtime.outbox_encryption_secret,
                     encryption_key_id=runtime.outbox_active_key_id,
+                    locale=request_locale(request),
                 )
                 deliveries.append(delivery)
             await run_in_threadpool(session.commit)
@@ -534,6 +536,7 @@ def register_portal_routes(
                     send_contact_change_notice,
                     runtime,
                     recipient=recipient,
+                    locale=request_locale(request),
                 )
             except PortalEmailDeliveryError:
                 notices_delivered = False
@@ -605,6 +608,7 @@ def register_portal_routes(
                     runtime,
                     recipient=contact_update.confirmation_recipient,
                     confirmation_url=confirmation_url,
+                    locale=request_locale(request),
                 )
             if contact_update.phone_confirmation_recipient is not None:
                 if runtime.sms_sender is None:
@@ -614,6 +618,7 @@ def register_portal_routes(
                     recipient=contact_update.phone_confirmation_recipient,
                     code=contact_update.phone_confirmation_code or "",
                     expires_in_seconds=settings.phone_change_code_ttl_seconds,
+                    **sender_locale_kwargs(request_locale(request)),
                 )
         except (PortalEmailDeliveryError, PortalSmsDeliveryError):
             runtime.operational_metrics.record_failure("email_change_delivery")
@@ -649,6 +654,7 @@ def register_portal_routes(
                 send_email_change_requested_notice,
                 runtime,
                 recipient=account.email,
+                locale=request_locale(request),
             )
         except PortalEmailDeliveryError:
             runtime.operational_metrics.record_failure("contact_change_delivery")
@@ -728,6 +734,7 @@ def register_portal_routes(
                 recipient=recipient,
                 code=code,
                 expires_in_seconds=settings.phone_change_code_ttl_seconds,
+                **sender_locale_kwargs(request_locale(request)),
             )
             await run_in_threadpool(session.commit)
         except PhoneChangeRateLimitedError:

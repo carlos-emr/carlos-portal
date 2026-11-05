@@ -83,7 +83,7 @@ def test_smtp_sender_delivers_plain_text_code_with_tls_and_auth(
     assert smtp.message is not None
     assert smtp.message["From"] == "portal@example.test"
     assert smtp.message["To"] == "patient@example.test"
-    assert smtp.message["Subject"] == "Your CARLOS Patient Portal verification code"
+    assert smtp.message["Subject"] == "Your CARLOS Patient Portal sign-in code"
     assert smtp.message["Auto-Submitted"] == "auto-generated"
     assert "123456" in smtp.message.get_content()
     assert "10 minutes" in smtp.message.get_content()
