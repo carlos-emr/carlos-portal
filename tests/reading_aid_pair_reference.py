@@ -55,7 +55,10 @@ MAX_READING_AID_CIPHERTEXT_BYTES = 1024 * 1024  # the sealed copy
 MAX_POINTS = 50
 MAX_EVIDENCE_PER_POINT = 5
 NOTICE_VERSION_EN = "carlos-5537-en-1"
-NOTICE_VERSION_RE = re.compile(r"^[a-z0-9-]+-([a-z]{2,3})-[0-9]+$")  # <scheme>-<language>-<n>
+# <scheme>-<language>-<n>: the language is a lower-case primary subtag, with an upper-case
+# two-letter region after it when the notice is for a region ("carlos-5537-pt-BR-1").
+# Group 1 is the primary subtag.
+NOTICE_VERSION_RE = re.compile(r"^[a-z0-9-]+-([a-z]{2,3})(?:-[A-Z]{2})?-[0-9]+$")
 KIND_RE = re.compile(
     r"^[a-z0-9-]+/[0-9]+$"
 )  # an outer record's `kind` and a pickup's `accept` value
@@ -626,6 +629,25 @@ def build_contract() -> dict[str, object]:
     def vector(pkg: dict[str, object], expect: str, now: int = ref.NOW, **extra: object) -> dict:
         return {**pkg, "now": now, "expect": expect, **extra}
 
+    def notice_aid(language: str, version: str) -> tuple[bytes, str]:
+        """An aid in `language` carrying notice `version`, and a manifest that names the same."""
+        notice = {
+            "version": version,
+            "heading": f"FAKE heading ({language})",
+            "body": f"FAKE body ({language})",
+        }
+        body = reading_aid_bytes(reading_aid(language, notice=notice))
+        claimed = manifest(
+            aid_bytes=body, language=language, reading_aid={"notice_version": version}
+        )
+        return body, claimed
+
+    notice_languages = [
+        ("fr", "carlos-5537-fr-1"),
+        ("es", "carlos-5537-es-1"),
+        ("pl", "carlos-5537-pl-1"),
+        ("pt-BR", "carlos-5537-pt-BR-1"),
+    ]
     accepted = [
         vector(package("a reading aid for a filed original"), "file"),
         vector(package("with a padding section", padding=b"\x00" * 64), "file"),
@@ -648,6 +670,17 @@ def build_contract() -> dict[str, object]:
                 "until it expires; the same listing hash is not downloaded again"
             ),
         ),
+        *[
+            vector(
+                package(
+                    f"a {language} reading aid with its own notice version",
+                    manifest=notice_aid(language, version)[1],
+                    aid=notice_aid(language, version)[0],
+                ),
+                "file",
+            )
+            for language, version in notice_languages
+        ],
     ]
 
     tampered = package("tampered ciphertext")
@@ -841,6 +874,30 @@ def build_contract() -> dict[str, object]:
             ),
             "pair_mismatch",
             note="the original changed after approval; CARLOS fences both copies, never re-signs",
+        ),
+        vector(
+            package(
+                "a pt-BR aid with the Spanish notice version",
+                manifest=notice_aid("pt-BR", "carlos-5537-es-1")[1],
+                aid=notice_aid("pt-BR", "carlos-5537-es-1")[0],
+            ),
+            "bad_manifest",
+        ),
+        vector(
+            package(
+                "a notice version whose region is not upper case",
+                manifest=notice_aid("pt-BR", "carlos-5537-pt-br-1")[1],
+                aid=notice_aid("pt-BR", "carlos-5537-pt-br-1")[0],
+            ),
+            "bad_manifest",
+        ),
+        vector(
+            package(
+                "a notice version with a three-letter region",
+                manifest=notice_aid("pt-BR", "carlos-5537-pt-BRA-1")[1],
+                aid=notice_aid("pt-BR", "carlos-5537-pt-BRA-1")[0],
+            ),
+            "bad_manifest",
         ),
     ]
 
