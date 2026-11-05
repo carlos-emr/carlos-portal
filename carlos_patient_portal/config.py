@@ -353,8 +353,9 @@ class Settings(BaseSettings):
     mycarlos_approval_enabled: bool = False
     # myCarlos document-availability notifications (carlos-portal#78, myCarlos#192). Off by
     # default. With PATIENT_PORTAL_MYCARLOS_DELIVERY_ENABLED it registers the device enrollment
-    # routes (P1); nothing queues or sends yet. The policy core in mycarlos_availability takes
-    # this value as its server_enabled argument once the worker and providers are wired.
+    # routes (P1); with _MAILBOX_ENABLED too, each new mailbox copy queues a "documents ready"
+    # intent (P2). Nothing sends unless the runtime also carries provider credentials and notice
+    # keys (mycarlos_availability_dispatch.AvailabilityDispatch), which no setting provides yet.
     mycarlos_availability_enabled: bool = False
     mycarlos_mailbox_device_bytes: int = Field(default=268435456, ge=20971520)
     mycarlos_mailbox_account_bytes: int = Field(default=1073741824, ge=20971520)

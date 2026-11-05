@@ -25,6 +25,7 @@ from datetime import timedelta
 from math import ceil
 from threading import Lock
 from time import monotonic
+from typing import TYPE_CHECKING
 
 from fastapi import Depends, Request, Response
 from fastapi.responses import RedirectResponse
@@ -37,6 +38,9 @@ from carlos_patient_portal.config import Settings
 from carlos_patient_portal.email_delivery import PortalEmailSender
 from carlos_patient_portal.sms_delivery import PortalSmsSender
 from carlos_patient_portal.token_keys import PortalTokenKeys
+
+if TYPE_CHECKING:
+    from carlos_patient_portal.mycarlos_availability_dispatch import AvailabilityDispatch
 
 MAX_PAGE_OFFSET = 100_000
 # Every primary key is a 32-bit Integer, and PostgreSQL binds an id as ::INTEGER: a larger id cannot
@@ -207,6 +211,9 @@ class PortalRuntime:
     outbox_encryption_keys: dict[str, str] | None = None
     outbox_active_key_id: str = "primary"
     operational_metrics: PortalOperationalMetrics = field(default_factory=PortalOperationalMetrics)
+    # myCarlos availability notices: credentialled transports and notice keys. Nothing builds
+    # this from settings yet, so the dispatch worker never starts in a deployment (P2).
+    availability_dispatch: "AvailabilityDispatch | None" = None
 
 
 @dataclass(frozen=True)
