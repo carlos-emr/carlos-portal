@@ -1,8 +1,13 @@
-// A revealed password must not outlive the page's session or its visibility (carlos-emr/mycarlos#194).
+// A revealed password must not outlive the page's session, nor stay on a page left hidden
+// (carlos-emr/mycarlos#194). It is cleared at once when the session ends (signing out here or in
+// another tab of this browser) and when the page itself goes (it is left, or put in the
+// back/forward cache). A brief switch to another tab or app keeps it shown; a page hidden for
+// REVEAL_HIDDEN_LIMIT_MS clears it.
 // `revealGeneration` counts the times the page concealed what it showed: a Reveal answer that was
 // already on its way when that happened belongs to an older generation and is dropped, so a late
-// answer can neither put a password on a page that was hidden or whose session ended, nor leave it
-// there.
+// answer can neither put a password on a page whose session ended, nor leave it there. An answer
+// that arrives while the page is hidden is dropped too.
+const REVEAL_HIDDEN_LIMIT_MS = 2 * 60 * 1000;
 let revealGeneration = 0;
 const concealRevealed = () => {
   revealGeneration += 1;
@@ -35,10 +40,30 @@ if (sessionChannel) {
   };
 }
 window.addEventListener("pagehide", concealRevealed);
+// Hidden: a timer clears the password after the limit. A hidden page's timers can run late or not
+// at all (the browser slows them, the computer sleeps), so on coming back the time spent hidden is
+// checked too, by the wall clock, which keeps counting while the computer sleeps.
+let hiddenSince = null;
+let hiddenTimer = null;
 document.addEventListener("visibilitychange", () => {
+  if (hiddenTimer !== null) {
+    window.clearTimeout(hiddenTimer);
+    hiddenTimer = null;
+  }
   if (document.visibilityState === "hidden") {
+    if (hiddenSince === null) {
+      hiddenSince = Date.now();
+    }
+    hiddenTimer = window.setTimeout(() => {
+      hiddenTimer = null;
+      concealRevealed();
+    }, REVEAL_HIDDEN_LIMIT_MS);
+    return;
+  }
+  if (hiddenSince !== null && Date.now() - hiddenSince >= REVEAL_HIDDEN_LIMIT_MS) {
     concealRevealed();
   }
+  hiddenSince = null;
 });
 document.addEventListener(
   "submit",

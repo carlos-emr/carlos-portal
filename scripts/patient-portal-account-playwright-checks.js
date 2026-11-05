@@ -11,6 +11,9 @@
  *   5. Offered appointment times: "None of these work".
  *   6. A successful password-Reveal response that arrives after the session ended in another tab,
  *      or after the page was hidden (carlos-emr/mycarlos#194).
+ *   7. A revealed password through a tab switch: still shown after a brief switch, cleared after
+ *      two minutes hidden (by the page's timer, or on return when the timer ran late), and cleared
+ *      at once when the session ends in another tab.
  *
  * It is a separate script, with its own seed (tests/seed_browser_account.py), so it never edits or
  * depends on the main check's fixtures or steps.
@@ -1416,6 +1419,96 @@ async function checkLateRevealResponse(page, context) {
   assert(failures.length === 0, failures.join(' | '));
 }
 
+// How long a hidden page keeps a revealed password (REVEAL_HIDDEN_LIMIT_MS in portal.js).
+const revealHiddenLimitMs = 2 * 60 * 1000;
+
+// Step 7: a revealed password survives a brief tab switch, but not two minutes hidden, nor the
+// session ending in another tab. The page's clock is Playwright's, so two minutes pass at once;
+// the Reveal answer is a made-up marker served by route interception, so no real secret is used.
+async function checkRevealThroughTabSwitch(page, context) {
+  const revealGlob = '**' + portalPathname('/portal/email-passwords/*/reveal');
+  const marker = 'FAKE-shown-reveal-' + randomBytes(9).toString('hex');
+
+  async function setHidden(hidden) {
+    await page.evaluate((isHidden) => {
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        get: () => (isHidden ? 'hidden' : 'visible'),
+      });
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => isHidden });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }, hidden);
+  }
+
+  async function shown() {
+    return page.evaluate((value) => Array.from(document.querySelectorAll('[data-reveal-target]'))
+      .some((button) => {
+        const target = document.getElementById(button.dataset.revealTarget || '');
+        return Boolean(target) && (target.textContent || '').includes(value);
+      })
+      || document.documentElement.outerHTML.includes(value), marker);
+  }
+
+  async function revealNow() {
+    const reveal = page.locator('button[data-reveal-url$="/' + linkAccount.emailPasswordId + '/reveal"]');
+    assert(await reveal.count() === 1, 'the Reveal control is missing');
+    await page.locator('[data-reveal-password]').fill(linkAccount.password);
+    await reveal.click();
+    await page.waitForFunction((value) => document.body.innerText.includes(value), marker,
+      { timeout: 5000 });
+  }
+
+  await signIn(page, linkAccount);
+  await page.route(revealGlob, (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ passphrase: marker }),
+  }));
+  // Installed before the page loads, so its timers and Date are the fake clock's from the start.
+  await page.clock.install();
+  await open(page, '/portal/email-passwords');
+
+  // 7a. A brief switch away (one minute hidden), then back: the password is still shown.
+  await revealNow();
+  await setHidden(true);
+  await page.clock.runFor(60 * 1000);
+  assert(await shown(), 'a one-minute tab switch cleared the revealed password');
+  await setHidden(false);
+  assert(await shown(), 'coming back after a brief switch cleared the revealed password');
+
+  // 7b. Hidden past the limit: the page's timer clears it while it is still hidden. The earlier
+  // minute does not count: the time hidden starts again at each switch away.
+  await setHidden(true);
+  await page.clock.runFor(revealHiddenLimitMs - 5 * 1000);
+  assert(await shown(), 'the password was cleared before the limit');
+  await page.clock.runFor(10 * 1000);
+  assert(!(await shown()), 'two minutes hidden did not clear the revealed password');
+  await setHidden(false);
+  assert(!(await shown()), 'the cleared password came back');
+
+  // 7c. The timer ran late (the browser slowed it, or the computer slept): the wall clock moved
+  // past the limit but no timer fired. On coming back the page clears it before it is seen.
+  await revealNow();
+  await setHidden(true);
+  const pageNow = await page.evaluate(() => Date.now());
+  await page.clock.setSystemTime(pageNow + revealHiddenLimitMs + 60 * 1000);
+  assert(await shown(), 'no timer has fired yet, so the password is still in the page');
+  await setHidden(false);
+  assert(!(await shown()), 'coming back after the limit, with a late timer, kept the password');
+
+  // 7d. The session ends in another tab while the password is shown: cleared at once.
+  await revealNow();
+  const other = await context.newPage();
+  watchPage(other, 'reveal-shown-logout');
+  await open(other, '/portal');
+  await signOut(other, context);
+  await page.waitForFunction((value) => !document.documentElement.outerHTML.includes(value),
+    marker, { timeout: 5000 }).catch(() => {});
+  assert(!(await shown()), 'signing out in another tab left the revealed password shown');
+  await other.close();
+  await page.unroute(revealGlob);
+}
+
 (async () => {
   const browser = await chromium.launch({
     headless: true,
@@ -1498,6 +1591,8 @@ async function checkLateRevealResponse(page, context) {
     } else if (raceError) {
       throw raceError;
     }
+
+    await checkRevealThroughTabSwitch(link.page, link.context);
 
     const unmet = expectedErrors.filter((expected) => !expected.seen);
     assert(unmet.length === 0,
