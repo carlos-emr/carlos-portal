@@ -371,6 +371,27 @@ TEXT: dict[str, str] = {
         "您的 {service_name} 登录验证码是 {code}，{minutes} 分钟后失效。请勿告诉他人。如非本人请"
         "求，请联系 {clinic_name}。"
     ),
+    # Self sign-up (carlos-portal#15).
+    "sign_up_contact_clinic": (
+        "如果诊所没有您的电子邮件地址，或登记的是旧地址，请先联系诊所，再申请账户。"
+    ),
+    "sign_up_details_invalid": (
+        "请检查您的信息：输入健康卡号码、真实的出生日期和有效的电子邮件地址。"
+    ),
+    "sign_up_email": "诊所登记的电子邮件地址",
+    "sign_up_email_hint": "仅用于核对您的信息。链接只会发送到诊所记录中已有的电子邮件地址。",
+    "sign_up_heading": "申请门户网站账户",
+    "sign_up_intro": (
+        "请输入您的健康卡号码、出生日期以及诊所登记的电子邮件地址。如果这些信息与诊所的记录相符，"
+        "您将收到一封电子邮件，其中包含完成账户设置的链接。"
+    ),
+    "sign_up_result": (
+        "如果您的信息与我们的记录相符，我们已向您发送一封电子邮件，其中包含完成账户设置的链接。"
+        "如果没有收到，请联系诊所。"
+    ),
+    "sign_up_result_heading": "已收到申请",
+    "sign_up_submit": "申请账户",
+    "sign_up_unavailable": "账户申请暂时无法使用。请稍后再试，或联系诊所。",
 }
 
 # The pages that link the myCarlos app to this portal.

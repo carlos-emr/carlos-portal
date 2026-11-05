@@ -451,6 +451,35 @@ TEXT: dict[str, str] = {
         "Your {service_name} sign-in code is {code}. It expires in {minutes} minutes. Do not "
         "share it. Contact {clinic_name} if you did not request it."
     ),
+    # Self sign-up (carlos-portal#15).
+    "sign_up_contact_clinic": (
+        "If your clinic does not have your email address, or has an old one, contact the clinic "
+        "before you request an account."
+    ),
+    "sign_up_details_invalid": (
+        "Check your details: enter your health card number, a real date of birth and a valid email "
+        "address."
+    ),
+    "sign_up_email": "Email address your clinic has for you",
+    "sign_up_email_hint": (
+        "Used only to check your details. The link is sent only to the email address already in "
+        "your clinic's records."
+    ),
+    "sign_up_heading": "Request a portal account",
+    "sign_up_intro": (
+        "Enter your health card number, your date of birth and the email address your clinic has "
+        "for you. If they match your clinic's records, you will be emailed a link to finish "
+        "setting up your account."
+    ),
+    "sign_up_result": (
+        "If your details match our records, we have emailed you a link to finish setting up your "
+        "account. If nothing arrives, contact the clinic."
+    ),
+    "sign_up_result_heading": "Request received",
+    "sign_up_submit": "Request account",
+    "sign_up_unavailable": (
+        "Account requests are temporarily unavailable. Try again later, or contact the clinic."
+    ),
 }
 
 # The pages that link the myCarlos app to this portal.

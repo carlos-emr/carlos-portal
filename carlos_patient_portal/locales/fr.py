@@ -505,6 +505,38 @@ TEXT: dict[str, str] = {
         "Votre code de connexion {service_name} est {code}. Il expire dans {minutes} minutes. Ne "
         "le communiquez à personne. Communiquez avec {clinic_name} si vous ne l’avez pas demandé."
     ),
+    # Self sign-up (carlos-portal#15).
+    "sign_up_contact_clinic": (
+        "Si votre clinique n’a pas votre adresse courriel, ou en a une ancienne, communiquez avec "
+        "la clinique avant de demander un compte."
+    ),
+    "sign_up_details_invalid": (
+        "Vérifiez vos renseignements : entrez votre numéro de carte santé, une date de naissance "
+        "réelle et une adresse courriel valide."
+    ),
+    "sign_up_email": "Adresse courriel inscrite à votre dossier à la clinique",
+    "sign_up_email_hint": (
+        "Sert seulement à vérifier vos renseignements. Le lien est envoyé uniquement à l’adresse "
+        "courriel déjà inscrite au dossier de la clinique."
+    ),
+    "sign_up_heading": "Demander un compte du portail",
+    "sign_up_intro": (
+        "Entrez votre numéro de carte santé, votre date de naissance et l’adresse courriel "
+        "inscrite à votre dossier à la clinique. Si ces renseignements correspondent au dossier de "
+        "la clinique, vous recevrez par courriel un lien pour terminer la configuration de votre "
+        "compte."
+    ),
+    "sign_up_result": (
+        "Si vos renseignements correspondent à notre dossier, nous vous avons envoyé par courriel "
+        "un lien pour terminer la configuration de votre compte. Si vous ne recevez rien, "
+        "communiquez avec la clinique."
+    ),
+    "sign_up_result_heading": "Demande reçue",
+    "sign_up_submit": "Demander un compte",
+    "sign_up_unavailable": (
+        "Les demandes de compte sont temporairement indisponibles. Réessayez plus tard ou "
+        "communiquez avec la clinique."
+    ),
 }
 
 # The pages that link the myCarlos app to this portal.
