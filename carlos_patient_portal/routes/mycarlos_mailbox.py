@@ -452,7 +452,12 @@ def register_internal_mailbox_routes(
                         removed_status=409,
                     )
                     content, status = admit_upload(
-                        session, m, value, now=int(time()), limits=limits
+                        session,
+                        m,
+                        value,
+                        now=int(time()),
+                        limits=limits,
+                        availability_enabled=runtime.settings.mycarlos_availability_enabled,
                     )
                 return response(content, status)
             except MailboxRefusal as exc:

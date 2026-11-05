@@ -3,10 +3,11 @@
 
 """Opaque availability contract and transactional-outbox policy, with no database/provider IO.
 
-Not registered by a route, lifespan or worker. A durable adapter requires separately reviewed
-schema/enrollment changes. Queueing belongs to the NEW mailbox-copy transaction; dispatch belongs
-after commit. The adapter must persist revocations, serialize enrollment/removal and fence job
-updates with the claim's lease token. An already provider-accepted alert cannot be recalled here.
+mycarlos_availability_store is the durable adapter; mycarlos_availability_dispatch holds the
+queueing hook and the worker that call this module. Queueing belongs to the NEW mailbox-copy
+transaction; dispatch belongs after commit. The adapter must persist revocations, serialize
+enrollment/removal and fence job updates with the claim's lease token. An already
+provider-accepted alert cannot be recalled here.
 """
 
 from __future__ import annotations

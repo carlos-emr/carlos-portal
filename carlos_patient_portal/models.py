@@ -15,6 +15,7 @@
 from datetime import UTC, datetime
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -2124,3 +2125,157 @@ class PatientPortalClinicKey(Base):
         LargeBinary(MAX_CLINIC_KEY_REPLACEMENT_SIGNATURE_LENGTH),
         nullable=True,
     )
+
+
+# myCarlos document-availability notifications (carlos-portal#78, myCarlos#192): the durable
+# enrollment and the outbox the policy core in mycarlos_availability needs. Unused while
+# PATIENT_PORTAL_MYCARLOS_AVAILABILITY_ENABLED is off; nothing here sends anything.
+MYCARLOS_AVAILABILITY_PLATFORMS = ("android_fcm", "ios_apns", "macos_apns", "windows_wns")
+MYCARLOS_AVAILABILITY_REVOKED_BY = ("device", "provider", "staff")
+MYCARLOS_AVAILABILITY_OUTBOX_STATUSES = ("pending", "leased", "done")
+UUID_TEXT_LENGTH = 36
+MAX_AVAILABILITY_DECISION_LENGTH = 96
+
+
+def _sql_list(values: tuple[str, ...]) -> str:
+    return ", ".join(f"'{value}'" for value in values)
+
+
+class PatientPortalMyCarlosAvailabilitySubscription(Base):
+    """One enrolled destination for a linked device's "documents ready" signal.
+
+    The owner is the account and the linked device. `destination_id` is the device's opaque
+    handle for its push registration; the provider token itself is never stored here. The
+    consent fields record what the device said at enrollment: remote consent version 1 and an
+    operating-system permission observed then. A revoked row stays as a tombstone, so a revoked
+    subscription or destination id never comes back. Nothing here names a patient or a document.
+    """
+
+    __tablename__ = "patient_portal_mycarlos_availability_subscriptions"
+    __table_args__ = (
+        CheckConstraint(
+            f"platform in ({_sql_list(MYCARLOS_AVAILABILITY_PLATFORMS)})",
+            name="ck_pp_mycarlos_avail_subs_platform",
+        ),
+        CheckConstraint(
+            f"length(subscription_id) = {UUID_TEXT_LENGTH} and "
+            f"length(epoch) = {UUID_TEXT_LENGTH} and "
+            f"length(destination_id) = {UUID_TEXT_LENGTH}",
+            name="ck_pp_mycarlos_avail_subs_ids",
+        ),
+        CheckConstraint(
+            "remote_consent_version = 1",
+            name="ck_pp_mycarlos_avail_subs_consent",
+        ),
+        CheckConstraint(
+            f"revoked_by is null or revoked_by in ({_sql_list(MYCARLOS_AVAILABILITY_REVOKED_BY)})",
+            name="ck_pp_mycarlos_avail_subs_revoked_by",
+        ),
+        CheckConstraint(
+            "(revoked_at is null) = (revoked_by is null)",
+            name="ck_pp_mycarlos_avail_subs_revoked_complete",
+        ),
+        CheckConstraint(
+            "revoked_at is null or not remote_enabled",
+            name="ck_pp_mycarlos_avail_subs_revoked_off",
+        ),
+        Index("ux_pp_mycarlos_avail_subs_subscription", "subscription_id", unique=True),
+        Index("ux_pp_mycarlos_avail_subs_destination", "destination_id", unique=True),
+        Index("ix_pp_mycarlos_avail_subs_owner", "account_id", "device_id"),
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    subscription_id: Mapped[str] = mapped_column(String(UUID_TEXT_LENGTH), nullable=False)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey(ACCOUNT_FOREIGN_KEY_TARGET, name="fk_pp_mycarlos_avail_subs_account"),
+        nullable=False,
+    )
+    device_id: Mapped[int] = mapped_column(
+        ForeignKey("patient_portal_mycarlos_devices.id", name="fk_pp_mycarlos_avail_subs_device"),
+        nullable=False,
+    )
+    epoch: Mapped[str] = mapped_column(String(UUID_TEXT_LENGTH), nullable=False)
+    destination_id: Mapped[str] = mapped_column(String(UUID_TEXT_LENGTH), nullable=False)
+    platform: Mapped[str] = mapped_column(String(16), nullable=False)
+    remote_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Only consent version 1 exists; a later version rewrites this check and keeps
+    # older rows as their history. A tombstone made for a revocation that overtook its
+    # enrollment (P4) also holds 1, as the check requires, with permission_observed false and
+    # created_at = revoked_at: anything that counts consent must skip such rows.
+    remote_consent_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    permission_observed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_by: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+
+class PatientPortalMyCarlosAvailabilityOutbox(Base):
+    """A "documents ready" intent waiting for, or held by, the dispatch worker.
+
+    One pending row per subscription and epoch at most; a newer mailbox copy coalesces into it
+    (`mycarlos_availability.coalesce_pending`). A leased row is being sent and is never edited
+    by queueing. Times are Unix seconds, as the policy core counts them. The row holds ids and
+    counters only: no document id, no text, no provider token.
+    """
+
+    __tablename__ = "patient_portal_mycarlos_availability_outbox"
+    __table_args__ = (
+        CheckConstraint(
+            f"status in ({_sql_list(MYCARLOS_AVAILABILITY_OUTBOX_STATUSES)})",
+            name="ck_pp_mycarlos_avail_outbox_status",
+        ),
+        CheckConstraint(
+            f"length(epoch) = {UUID_TEXT_LENGTH} and sequence > 0 and attempts >= 0 and "
+            "expires_at > created_at",
+            name="ck_pp_mycarlos_avail_outbox_values",
+        ),
+        CheckConstraint(
+            "(lease_token is null) = (lease_until is null)",
+            name="ck_pp_mycarlos_avail_outbox_lease_complete",
+        ),
+        CheckConstraint(
+            "(status = 'leased') = (lease_token is not null)",
+            name="ck_pp_mycarlos_avail_outbox_leased",
+        ),
+        CheckConstraint(
+            f"lease_token is null or length(lease_token) = {UUID_TEXT_LENGTH}",
+            name="ck_pp_mycarlos_avail_outbox_lease_token",
+        ),
+        Index(
+            "ux_pp_mycarlos_avail_outbox_pending",
+            "subscription_id",
+            "epoch",
+            unique=True,
+            sqlite_where=text("status = 'pending'"),
+            postgresql_where=text("status = 'pending'"),
+        ),
+        Index("ix_pp_mycarlos_avail_outbox_claim", "status", "next_attempt_at"),
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    subscription_id: Mapped[str] = mapped_column(
+        String(UUID_TEXT_LENGTH),
+        ForeignKey(
+            "patient_portal_mycarlos_availability_subscriptions.subscription_id",
+            name="fk_pp_mycarlos_avail_outbox_subscription",
+        ),
+        nullable=False,
+    )
+    epoch: Mapped[str] = mapped_column(String(UUID_TEXT_LENGTH), nullable=False)
+    sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expires_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    lease_token: Mapped[str | None] = mapped_column(String(UUID_TEXT_LENGTH), nullable=True)
+    lease_until: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    last_decision: Mapped[str | None] = mapped_column(
+        String(MAX_AVAILABILITY_DECISION_LENGTH), nullable=True
+    )
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)

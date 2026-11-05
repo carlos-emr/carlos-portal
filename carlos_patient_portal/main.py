@@ -328,9 +328,16 @@ def build_lifespan(
                 and runtime.settings.mycarlos_mailbox_enabled
             ):
                 from carlos_patient_portal.mailbox_worker import run_worker
+                from carlos_patient_portal.mycarlos_availability_dispatch import (
+                    dispatcher_for,
+                    run_dispatch_worker,
+                )
 
+                dispatcher = dispatcher_for(runtime)
                 async with anyio.create_task_group() as workers:
                     workers.start_soon(run_worker, runtime)
+                    if dispatcher is not None:
+                        workers.start_soon(run_dispatch_worker, dispatcher, runtime)
                     try:
                         yield
                     finally:
@@ -1150,3 +1157,11 @@ def register_app_routes(app: FastAPI, runtime: PortalRuntime) -> None:
                 )
 
                 register_device_approval_routes(app, runtime)
+        if runtime.settings.mycarlos_availability_enabled:
+            # Enrollment, and queueing on each new mailbox copy. Sending needs the dispatch
+            # worker, which starts only when the runtime also carries credentials.
+            from carlos_patient_portal.routes.mycarlos_availability import (
+                register_mycarlos_availability_routes,
+            )
+
+            register_mycarlos_availability_routes(app, runtime)

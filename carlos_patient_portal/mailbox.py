@@ -52,6 +52,7 @@ from carlos_patient_portal.mailbox_models import (
     MailboxRate,
 )
 from carlos_patient_portal.models import PatientPortalAccount, PatientPortalMyCarlosDevice
+from carlos_patient_portal.mycarlos_availability_dispatch import queue_documents_ready
 from carlos_patient_portal.mycarlos_devices import recipient_id_for_account
 
 TERMINAL_RESERVATION = 16384
@@ -372,7 +373,13 @@ def record_request_anchor(
 
 
 def admit_upload(
-    session: Session, m: LockedMailbox, upload: Upload, *, now: int, limits: MailboxLimits
+    session: Session,
+    m: LockedMailbox,
+    upload: Upload,
+    *,
+    now: int,
+    limits: MailboxLimits,
+    availability_enabled: bool = False,
 ) -> tuple[dict, int]:
     value = upload.outer
     if value["recipient_id"] != m.recipient or value["device_key_id"] != m.device.device_key_id:
@@ -434,6 +441,9 @@ def admit_upload(
         counter.waiting_bytes += row.size
         counter.waiting_count += 1
     m.clinic.reserved_terminal_bytes += TERMINAL_RESERVATION
+    # Same transaction, account and device rows already locked: a rollback drops the copy and
+    # its "documents ready" intents together. A repeated upload (the 200 above) queues nothing.
+    queue_documents_ready(session, row, now=now, server_enabled=availability_enabled)
     return {
         "delivery_id": row.delivery_id,
         "device_key_id": row.device_key_id,

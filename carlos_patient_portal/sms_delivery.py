@@ -19,7 +19,7 @@ from typing import Protocol
 from urllib.parse import urlsplit
 
 from carlos_patient_portal.config import Settings
-from carlos_patient_portal.outbound_messages import mfa_sms_message
+from carlos_patient_portal.outbound_messages import DEFAULT_OUTBOUND_LOCALE, mfa_sms_message
 
 MAX_SMS_GATEWAY_RESPONSE_BYTES = 4096
 
@@ -35,6 +35,7 @@ class PortalSmsSender(Protocol):
         recipient: str,
         code: str,
         expires_in_seconds: int,
+        locale: str = DEFAULT_OUTBOUND_LOCALE,
     ) -> None:
         raise NotImplementedError
 
@@ -63,6 +64,7 @@ class WebhookPortalSmsSender:
         recipient: str,
         code: str,
         expires_in_seconds: int,
+        locale: str = DEFAULT_OUTBOUND_LOCALE,
     ) -> None:
         body = json.dumps(
             {
@@ -73,6 +75,7 @@ class WebhookPortalSmsSender:
                     clinic_name=self.clinic_name,
                     code=code,
                     expires_in_seconds=expires_in_seconds,
+                    locale=locale,
                 ),
             }
         ).encode()

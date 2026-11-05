@@ -433,7 +433,8 @@ function screenshotPath(name) {
     await page.locator(
       `.language-switch a[href^="${portalPathname('/locale/fr')}"]`
     ).click();
-    await page.getByRole('heading', { name: 'Sign in' }).waitFor();
+    // The page now reads in French: the heading is the catalogue's, not the English fallback.
+    await page.getByRole('heading', { name: 'Connexion' }).waitFor();
     assert(
       await page.locator('.language-switch .text-tab.selected[lang="fr"]').count() === 1,
       'selecting a language did not persist'
@@ -756,7 +757,7 @@ function screenshotPath(name) {
       page.waitForURL((url) => url.pathname === portalPathname('/auth/login')),
       page.getByRole('button', { name: 'Sign in' }).click(),
     ]);
-    await page.getByRole('heading', { name: 'Verification code' }).waitFor();
+    await page.getByRole('heading', { name: 'Sign-in code' }).waitFor();
     await assertAccessiblePage(page, 'MFA page');
     const activationMfaCode = await readBrowserMfaCode(page, activationFixture.email);
     await page.locator('input[name="code"]').fill(activationMfaCode);
@@ -848,7 +849,7 @@ function screenshotPath(name) {
     await page.locator('input[name="username"]').fill(nonLatin.username);
     await page.locator('input[name="password"]').fill(nonLatin.password);
     await page.locator('input[name="password"]').press('Enter');
-    await page.getByRole('heading', { name: 'Verification code' }).waitFor();
+    await page.getByRole('heading', { name: 'Sign-in code' }).waitFor();
     assert(
       !(await context.cookies()).some((cookie) => cookie.name === 'carlos_portal_session'),
       'non-Latin sign-in established a session before MFA'
@@ -1081,7 +1082,7 @@ function screenshotPath(name) {
     await page.locator('input[name="username"]').fill(passwordResetFixture.username);
     await page.locator('input[name="password"]').fill(passwordResetFixture.newPassword);
     await page.getByRole('button', { name: 'Sign in' }).click();
-    await page.getByRole('heading', { name: 'Verification code' }).waitFor();
+    await page.getByRole('heading', { name: 'Sign-in code' }).waitFor();
     const resetAccountMfaCode = await readBrowserMfaCode(page, passwordResetFixture.email);
     await page.locator('input[name="code"]').fill(resetAccountMfaCode);
     await page.getByRole('button', { name: 'Verify' }).click();
@@ -1119,7 +1120,7 @@ function screenshotPath(name) {
       page.waitForURL((url) => url.pathname === portalPathname('/auth/login'), { timeout: 30000 }),
       page.getByRole('button', { name: 'Sign in' }).click(),
     ]);
-    await page.getByRole('heading', { name: 'Verification code' }).waitFor();
+    await page.getByRole('heading', { name: 'Sign-in code' }).waitFor();
 
     await page.setViewportSize({ width: 390, height: 844 });
     const mfaMobileLayout = await page.evaluate(() => ({
@@ -1171,7 +1172,7 @@ function screenshotPath(name) {
     );
     await page.locator('.language-switch button[value="en"]').click();
     await page.locator('.language-switch .text-tab.selected[lang="en"]').waitFor();
-    await page.getByRole('heading', { name: 'Verification code' }).waitFor();
+    await page.getByRole('heading', { name: 'Sign-in code' }).waitFor();
     const resendResponsePromise = page.waitForResponse(
       (response) => new URL(response.url()).pathname === portalPathname('/auth/mfa/resend')
     );
@@ -1179,7 +1180,7 @@ function screenshotPath(name) {
     const resendResponse = await resendResponsePromise;
     assert(resendResponse.status() === 429, `expected resend cooldown, got ${resendResponse.status()}`);
     await page.getByRole('alert').filter({ hasText: 'A code was sent recently.' }).waitFor();
-    await page.getByRole('heading', { name: 'Verification code' }).waitFor();
+    await page.getByRole('heading', { name: 'Sign-in code' }).waitFor();
 
     const incorrectMfaCode = mfaCode === '000000' ? '111111' : '000000';
     await page.locator('input[name="code"]').fill(incorrectMfaCode);
@@ -1198,7 +1199,7 @@ function screenshotPath(name) {
     await page.getByRole('alert').filter({
       hasText: 'The code was not accepted. Try again or request a new code.',
     }).waitFor();
-    await page.getByRole('heading', { name: 'Verification code' }).waitFor();
+    await page.getByRole('heading', { name: 'Sign-in code' }).waitFor();
 
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.locator('input[name="code"]').fill(mfaCode);
@@ -1269,9 +1270,9 @@ function screenshotPath(name) {
         url.pathname === portalPathname('/portal/account')
         && url.searchParams.get('status') === 'mfa-updated'
       )),
-      mfaSettingsForm.getByRole('button', { name: 'Update MFA' }).click(),
+      mfaSettingsForm.getByRole('button', { name: 'Update two-step verification' }).click(),
     ]);
-    await page.getByRole('status').filter({ hasText: 'MFA settings updated.' }).waitFor();
+    await page.getByRole('status').filter({ hasText: 'Two-step verification settings updated.' }).waitFor();
 
     // A contact change now has two branches, and the browser check covers both.
     //

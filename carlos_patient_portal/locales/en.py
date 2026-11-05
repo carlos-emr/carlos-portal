@@ -39,7 +39,7 @@ TEXT: dict[str, str] = {
     ),
     "account_status_email_confirmation_required": (
         "Check the new email address for a confirmation link. Your current address keeps "
-        "receiving verification codes and password reset links until you use it."
+        "receiving sign-in codes and password reset links until you use it."
     ),
     "account_status_email_confirmation_notice_failed": (
         "Confirmation could not be emailed to the new address. Your contact details were not "
@@ -59,7 +59,7 @@ TEXT: dict[str, str] = {
     "account_status_phone_confirmation_rate_limited": (
         "A phone confirmation code was sent recently. Wait before requesting another."
     ),
-    "account_status_mfa_updated": "MFA settings updated.",
+    "account_status_mfa_updated": "Two-step verification settings updated.",
     "account_status_no_change": "No account changes.",
     "account_status_password_updated": "Password updated.",
     "all_providers": "All providers",
@@ -154,8 +154,8 @@ TEXT: dict[str, str] = {
     ),
     "email_change_complete_heading": "Confirm your new email address",
     "email_change_complete_intro": (
-        "Confirming updates the email address used for sign-in verification codes and "
-        "password reset links."
+        "Confirm your new email address. If you also provided a new phone number, confirm "
+        "that number in the portal to complete the contact change."
     ),
     "email_change_success": (
         "Your email address is updated. Clinic staff will review the matching CARLOS chart details."
@@ -191,7 +191,7 @@ TEXT: dict[str, str] = {
     "dashboard_account_description": "Manage your password and contact information.",
     "dashboard_documents_description": "Documents may be available in a future release.",
     "dashboard_email_passwords_description": (
-        "Retrieve passwords for encrypted messages from your clinic."
+        "Retrieve passwords for encrypted documents from your clinic."
     ),
     "dashboard_greeting": "Patient portal",
     "dashboard_help_description": "Find clinic and account support information.",
@@ -222,7 +222,7 @@ TEXT: dict[str, str] = {
     "date_of_birth_year": "Year",
     "date_to": "To date",
     "development_mfa_code": (
-        "Development MFA code (same code as sent by email, to make testing quicker, "
+        "Development sign-in code (same code as sent by email, to make testing quicker, "
         "will be removed later):"
     ),
     "development_reset_link": (
@@ -256,7 +256,7 @@ TEXT: dict[str, str] = {
     "messages_empty": "You have no messages from your clinic.",
     "messages_new_count_one": "{count} new",
     "messages_new_count_other": "{count} new",
-    "mfa": "MFA",
+    "mfa": "Two-step verification",
     "mfa_code": "Code",
     "mfa_code_sent_email": "Code sent to {destination} by email.",
     "mfa_code_sent_email_unmasked": "Code sent to your email address.",
@@ -264,22 +264,20 @@ TEXT: dict[str, str] = {
     "mfa_code_sent_sms_unmasked": "Code sent to your mobile number.",
     "mfa_delivery_unavailable": "That delivery method is unavailable.",
     "mfa_email": "Email",
-    "mfa_heading": "Verification code",
-    "mfa_help_message": (
-        "Contact {clinic_name} if you cannot receive or use your verification code."
-    ),
+    "mfa_heading": "Sign-in code",
+    "mfa_help_message": ("Contact {clinic_name} if you cannot receive or use your sign-in code."),
     "mfa_new_code_sent_email": "A new code was sent by email.",
     "mfa_new_code_sent_sms": "A new code was sent by SMS.",
     "mfa_rate_limited_one": "A code was sent recently. Try again in {seconds} second.",
     "mfa_rate_limited_other": "A code was sent recently. Try again in {seconds} seconds.",
     "mfa_resend": "Resend code",
-    "mfa_sign_in_again": "Sign in again to request a new verification code.",
+    "mfa_sign_in_again": "Sign in again to request a new sign-in code.",
     "mfa_send_by": "Send code by",
-    "mfa_settings": "MFA settings",
+    "mfa_settings": "Two-step verification settings",
     "mfa_sms": "SMS",
     "mfa_sms_rate": "SMS codes can be resent once every five minutes.",
     "mfa_verify": "Verify",
-    "mfa_verification_failed": "MFA could not be verified.",
+    "mfa_verification_failed": "Two-step verification could not be completed.",
     "modal_close": "OK",
     "module_navigation": "Portal modules",
     "mfa_method": "Method",
@@ -372,17 +370,87 @@ TEXT: dict[str, str] = {
     "subject": "Subject",
     "unavailable": "Unavailable",
     "update_contact": "Update contact",
-    "update_mfa": "Update MFA",
+    "update_mfa": "Update two-step verification",
     "update_password": "Update password",
     "username": "Username",
     "username_label": "User Name",
     "username_placeholder": "username",
     "username_unavailable": "That username is unavailable.",
-    "verification_delivery_failed": "Verification code could not be sent. Please try again.",
+    "verification_delivery_failed": "The sign-in code could not be sent. Please try again.",
     "view_module": "Open",
     "filters": "Filters",
     "of": "of",
     "page": "Page",
+    "outbound_mfa_email_subject": "Your {service_name} sign-in code",
+    "outbound_mfa_email_intro": "Your sign-in code for {service_name} is:",
+    "outbound_mfa_email_expiry_one": (
+        "This code expires in {minutes} minute. Do not share this code with anyone."
+    ),
+    "outbound_mfa_email_expiry_other": (
+        "This code expires in {minutes} minutes. Do not share this code with anyone."
+    ),
+    "outbound_mfa_email_contact": "If you did not try to sign in, contact {clinic_name}.",
+    "outbound_reset_subject": "Reset your {service_name} password",
+    "outbound_reset_intro": "A password reset was requested for your {service_name} account.",
+    "outbound_reset_link_lead": "Open this link to choose a new password:",
+    "outbound_reset_expiry_one": "This link expires in {minutes} minute and can only be used once.",
+    "outbound_reset_expiry_other": (
+        "This link expires in {minutes} minutes and can only be used once."
+    ),
+    "outbound_reset_contact": "If you did not request this reset, contact {clinic_name}.",
+    "outbound_contact_change_subject": "Contact information changed for {service_name}",
+    "outbound_contact_change_body": (
+        "The contact information for your {service_name} account changed. The new portal contact "
+        "details are in use now. Clinic staff may separately review the matching CARLOS chart "
+        "information."
+    ),
+    "outbound_contact_change_contact": (
+        "If you did not make this change, contact {clinic_name} immediately."
+    ),
+    "outbound_booking_prompt_subject": "You have a new message in {service_name}",
+    "outbound_booking_prompt_intro": "{clinic_name} has sent you a message in {service_name}.",
+    "outbound_sign_in_lead": "Sign in to read it:",
+    "outbound_booking_prompt_note": "The message is only shown after you sign in.",
+    "outbound_not_expecting_contact": "If you were not expecting this, contact {clinic_name}.",
+    "outbound_booking_update_subject": "There is an update in {service_name}",
+    "outbound_booking_update_intro": "{clinic_name} has updated a message in {service_name}.",
+    "outbound_booking_update_note": "The update is only shown after you sign in.",
+    "outbound_email_confirm_subject": "Confirm your new {service_name} email address",
+    "outbound_email_confirm_intro": (
+        "This address was given as the new contact email for a {service_name} account."
+    ),
+    "outbound_email_confirm_link_lead": "Open this link to confirm it:",
+    "outbound_email_confirm_expiry_one": (
+        "This link expires in {hours} hour and can only be used once. Until it is used, the "
+        "account keeps its previous email address."
+    ),
+    "outbound_email_confirm_expiry_other": (
+        "This link expires in {hours} hours and can only be used once. Until it is used, the "
+        "account keeps its previous email address."
+    ),
+    "outbound_email_confirm_contact": (
+        "If you were not expecting this, ignore this message or contact {clinic_name}."
+    ),
+    "outbound_email_requested_subject": "A contact change was requested for {service_name}",
+    "outbound_email_requested_intro": (
+        "Someone asked to change the contact details on your {service_name} account."
+    ),
+    "outbound_email_requested_body": (
+        "Nothing has changed yet. The change only takes effect once the new email address is "
+        "confirmed, and this address continues to receive your sign-in codes and password reset "
+        "links until then."
+    ),
+    "outbound_email_requested_contact": (
+        "If you did not request this, contact {clinic_name} immediately."
+    ),
+    "outbound_mfa_sms_one": (
+        "Your {service_name} sign-in code is {code}. It expires in {minutes} minute. Do not "
+        "share it. Contact {clinic_name} if you did not request it."
+    ),
+    "outbound_mfa_sms_other": (
+        "Your {service_name} sign-in code is {code}. It expires in {minutes} minutes. Do not "
+        "share it. Contact {clinic_name} if you did not request it."
+    ),
     # Self sign-up (carlos-portal#15).
     "sign_up_contact_clinic": (
         "If your clinic does not have your email address, or has an old one, contact the clinic "
@@ -424,7 +492,7 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_instruction": (
         "In myCarlos, choose the option to link to your clinic’s portal, then enter this code."
     ),
-    "mycarlos_code_label": "One-time code",
+    "mycarlos_code_label": "Linking code",
     "mycarlos_lifetime": "This code works once, for 10 minutes. Stay signed in to this portal.",
     "mycarlos_approval": "The device must also be approved before it can receive documents.",
     "mycarlos_create": "Create a code",

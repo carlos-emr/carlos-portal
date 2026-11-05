@@ -223,6 +223,32 @@ def test_portal_bounds_the_pickups_accept_values(example):
     assert aid.accept_ok(example["accepts"]) is example["ok"]
 
 
+def test_the_notice_tag_may_carry_a_region_and_its_primary_subtag_names_the_language():
+    for version, tag in [
+        ("carlos-5537-en-1", "en"),
+        ("carlos-5537-fr-1", "fr"),
+        ("carlos-5537-es-1", "es"),
+        ("carlos-5537-pl-1", "pl"),
+        ("carlos-5537-pt-BR-1", "pt"),
+        # A lower-case "br" is a language of its own, not a region: with the scheme it is
+        # "carlos-5537-pt" and the tag "br", which never equals an aid in pt-BR's "pt".
+        ("carlos-5537-pt-br-1", "br"),
+        ("scheme-2-fil-12", "fil"),
+    ]:
+        match = aid.NOTICE_VERSION_RE.match(version)
+        assert match is not None and match.group(1) == tag, version
+    for version in [
+        "carlos-5537-pt-BRA-1",  # two letters only
+        "carlos-5537-pt-B-1",
+        "carlos-5537-PT-1",  # the language is lower case
+        "carlos-5537-p-1",
+        "carlos-5537-1",
+        "carlos-5537-pt-BR",
+        "carlos-5537-pt-BR-x",
+    ]:
+        assert aid.NOTICE_VERSION_RE.match(version) is None, version
+
+
 def test_the_reviewer_role_set_is_closed_and_the_notice_tag_names_the_language():
     claims = CONTRACT["sender"]["manifest_claims"]
     assert (
