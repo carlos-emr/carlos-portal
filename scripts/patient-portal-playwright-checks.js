@@ -18,6 +18,8 @@
  *   PORTAL_CHROME_PATH=/path/to/chrome-or-chromium
  *   PORTAL_PYTHON=python, run with the portal's environment to stand in for the CARLOS polling job
  *   PORTAL_ALLOW_NON_LOCAL_BASE_URL=true only for an intentional non-production test target
+ *   PORTAL_EXPECT_SELF_SIGNUP=true when the server runs with PATIENT_PORTAL_SELF_SIGNUP_ENABLED=true;
+ *     otherwise the check expects the sign-up page to be off (404, no link)
  */
 
 const { execFileSync } = require('node:child_process');
@@ -43,11 +45,13 @@ const useDevelopmentMfaCode = process.env.PORTAL_USE_DEVELOPMENT_MFA_CODE === 't
 const screenshotDir = path.resolve(process.env.PORTAL_SCREENSHOT_DIR || os.tmpdir());
 const chromePath = process.env.PORTAL_CHROME_PATH || process.env.CHROME_PATH || '';
 const pythonCommand = process.env.PORTAL_PYTHON || 'python';
+const expectSelfSignup = process.env.PORTAL_EXPECT_SELF_SIGNUP === 'true';
 const browserSeedScript = path.join(__dirname, '..', 'tests', 'seed_browser.py');
 const fixturePath = process.env.PORTAL_BROWSER_FIXTURE_FILE
   || path.join(os.tmpdir(), 'patient-portal-browser-fixtures.json');
 const browserFixtures = JSON.parse(readFileSync(fixturePath, 'utf8'));
 const activationFixture = browserFixtures.activation;
+const nonLatinActivationFixture = browserFixtures.nonLatinActivation;
 const passwordResetFixture = browserFixtures.passwordReset;
 
 mkdirSync(screenshotDir, { recursive: true });
@@ -61,6 +65,16 @@ assert(
     && activationFixture.username
     && activationFixture.password,
   `activation fixture is incomplete in ${fixturePath}`
+);
+assert(
+  nonLatinActivationFixture
+    && nonLatinActivationFixture.inviteCode
+    && nonLatinActivationFixture.email
+    && nonLatinActivationFixture.dateOfBirth
+    && nonLatinActivationFixture.healthCardNumber
+    && nonLatinActivationFixture.username
+    && nonLatinActivationFixture.password === '松雲海竹星河雨石山鳥風林月湖雪花',
+  `non-Latin activation fixture is incomplete in ${fixturePath}`
 );
 assert(
   passwordResetFixture
@@ -216,6 +230,8 @@ function screenshotPath(name) {
   let expectedResetFailures = 0;
   let expectedActivationFailures = 0;
   let expectedActivationConsoleErrors = 0;
+  let expectedSignUpFailures = 0;
+  let expectedSignUpConsoleErrors = 0;
   let expectedRevealFailures = 0;
   const browser = await chromium.launch({
     headless: true,
@@ -307,6 +323,12 @@ function screenshotPath(name) {
     if (isExpectedActivationFailure) {
       expectedActivationFailures -= 1;
     }
+    const isExpectedSignUpFailure = response.status() === 400
+      && expectedSignUpFailures > 0
+      && responsePath === portalPathname('/auth/sign-up');
+    if (isExpectedSignUpFailure) {
+      expectedSignUpFailures -= 1;
+    }
     const isExpectedRevealFailure = response.status() === 503
       && expectedRevealFailures > 0
       && responsePath.startsWith(portalPathname('/portal/email-passwords/'))
@@ -320,6 +342,7 @@ function screenshotPath(name) {
       && !isExpectedAuthFailure
       && !isExpectedResetFailure
       && !isExpectedActivationFailure
+      && !isExpectedSignUpFailure
       && !isExpectedRevealFailure
     ) {
       badResponses.push({ status: response.status(), url: response.url() });
@@ -345,6 +368,14 @@ function screenshotPath(name) {
     if (isExpectedActivationFailureConsoleError) {
       expectedActivationConsoleErrors -= 1;
     }
+    const isExpectedSignUpFailureConsoleError = !isExpectedResetFailureConsoleError
+      && !isExpectedActivationFailureConsoleError
+      && message.text().includes(
+        'Failed to load resource: the server responded with a status of 400'
+      ) && expectedSignUpConsoleErrors > 0;
+    if (isExpectedSignUpFailureConsoleError) {
+      expectedSignUpConsoleErrors -= 1;
+    }
     const isExpectedMfaCooldownConsoleError = message.text().includes(
       'Failed to load resource: the server responded with a status of 429'
     );
@@ -356,6 +387,7 @@ function screenshotPath(name) {
       && !isExpectedAuthFailureConsoleError
       && !isExpectedResetFailureConsoleError
       && !isExpectedActivationFailureConsoleError
+      && !isExpectedSignUpFailureConsoleError
       && !isExpectedMfaCooldownConsoleError
       && !isExpectedRevealFailureConsoleError
     ) {
@@ -389,14 +421,14 @@ function screenshotPath(name) {
       await page.locator('link[rel="icon"][href$="/static/carlos-birdman.png"]').count() === 1,
       'CARLOS favicon is not declared'
     );
-    // Four links plus a span for the active locale — the switcher navigates now rather than
+    // Six links plus a span for the active locale — the switcher navigates now rather than
     // opening a "language unavailable" modal, so these are no longer buttons.
-    assert(await page.locator('.language-switch .text-tab').count() === 5, 'expected five languages');
+    assert(await page.locator('.language-switch .text-tab').count() === 7, 'expected seven languages');
     assert(
       await page.locator(
         `.language-switch a[href^="${portalPathname('/locale/')}"]`
-      ).count() === 4,
-      'expected four selectable languages'
+      ).count() === 6,
+      'expected six selectable languages'
     );
     await page.locator(
       `.language-switch a[href^="${portalPathname('/locale/fr')}"]`
@@ -420,8 +452,21 @@ function screenshotPath(name) {
     assert(await signInPassword.getAttribute('type') === 'password', 'password starts visible');
     await page.getByRole('button', { name: 'Show password' }).click();
     assert(await signInPassword.getAttribute('type') === 'text', 'show-password control failed');
+    // The words change and carry the state; there is no aria-pressed (D133).
+    assert(
+      await page.getByRole('button', { name: 'Hide password' }).getAttribute('aria-pressed') === null,
+      'the show-password control must not use aria-pressed'
+    );
     await page.getByRole('button', { name: 'Hide password' }).click();
     assert(await signInPassword.getAttribute('type') === 'password', 'hide-password control failed');
+    // A page restored from the back/forward cache must not come back with the password showing.
+    await page.getByRole('button', { name: 'Show password' }).click();
+    await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
+    assert(
+      await signInPassword.getAttribute('type') === 'password'
+        && await page.getByRole('button', { name: 'Show password' }).count() === 1,
+      'a page restored from the back/forward cache kept the password showing'
+    );
 
     // The language tabs used to be this page's modal trigger. They navigate now, so the modal's
     // focus trap and focus restoration are exercised through Clinic help instead -- the assertions
@@ -450,6 +495,91 @@ function screenshotPath(name) {
       path: screenshotPath('patient-portal-sign-in-mobile'),
       fullPage: true,
     });
+
+    // Self sign-up (carlos-portal#15) is off unless the server enables it. Off, the page must not
+    // exist at all; on, every request gets the same "if your details match" page.
+    const signUpLink = page.getByRole('link', { name: 'Request a portal account' });
+    if (!expectSelfSignup) {
+      assert(await signUpLink.count() === 0, 'sign-in page links self sign-up while it is off');
+      const offResponse = await page.request.get(portalUrl('/auth/sign-up'));
+      assert(offResponse.status() === 404, `self sign-up answered ${offResponse.status()} while off`);
+    } else {
+      await signUpLink.click();
+      await page.getByRole('heading', { name: 'Request a portal account' }).waitFor();
+      await assertAccessiblePage(page, 'self sign-up page');
+      const signUpMobileLayout = await page.evaluate(() => ({
+        viewportWidth: window.innerWidth,
+        documentWidth: document.documentElement.scrollWidth,
+      }));
+      assert(
+        signUpMobileLayout.documentWidth <= signUpMobileLayout.viewportWidth + 1,
+        `mobile self sign-up page overflows horizontally: ${signUpMobileLayout.documentWidth}px > ${signUpMobileLayout.viewportWidth}px`
+      );
+      await page.screenshot({
+        path: screenshotPath('patient-portal-sign-up-mobile'),
+        fullPage: true,
+      });
+      // The Day, Month and Year boxes activation uses, never a browser date field.
+      assert(
+        await page.locator('fieldset.date-of-birth').count() === 1
+          && await page.locator('input[type="date"]').count() === 0
+          && await page.getByRole('textbox', { name: 'Day', exact: true }).count() === 1
+          && await page.getByRole('combobox', { name: 'Month', exact: true }).count() === 1
+          && await page.getByRole('textbox', { name: 'Year', exact: true }).count() === 1,
+        'self sign-up must ask for the date of birth as Day, Month and Year boxes'
+      );
+      const fillSignUpForm = async ({ day, month }) => {
+        // FAKE details: no chart has them, and the answer must not say so.
+        await page.locator('input[name="health_card_number"]').fill('9876 543 210 XY');
+        await page.getByRole('textbox', { name: 'Day', exact: true }).fill(day);
+        await page.getByRole('combobox', { name: 'Month', exact: true }).selectOption(month);
+        await page.getByRole('textbox', { name: 'Year', exact: true }).fill('1975');
+        await page.locator('input[name="email"]').fill('fake.patient@example.test');
+      };
+      // 31 February: activation's date message, every entry kept, nothing stored.
+      await fillSignUpForm({ day: '31', month: '2' });
+      expectedSignUpFailures += 1;
+      expectedSignUpConsoleErrors += 1;
+      const [badDateResponse] = await Promise.all([
+        page.waitForResponse((response) => (
+          new URL(response.url()).pathname === portalPathname('/auth/sign-up')
+          && response.request().method() === 'POST'
+        )),
+        page.getByRole('button', { name: 'Request account' }).click(),
+      ]);
+      assert(badDateResponse.status() === 400, `a bad date answered ${badDateResponse.status()}`);
+      await page.getByText('Check the date of birth: enter a real date').waitFor();
+      assert(
+        await page.locator('input[name="health_card_number"]').inputValue() === '9876 543 210 XY'
+          && await page.getByRole('textbox', { name: 'Day', exact: true }).inputValue() === '31'
+          && await page.getByRole('combobox', { name: 'Month', exact: true }).inputValue() === '2'
+          && await page.getByRole('textbox', { name: 'Year', exact: true }).inputValue() === '1975'
+          && await page.locator('input[name="email"]').inputValue() === 'fake.patient@example.test',
+        'self sign-up did not keep the entries after a bad date'
+      );
+      await fillSignUpForm({ day: '14', month: '3' });
+      const [signUpResponse] = await Promise.all([
+        page.waitForResponse((response) => (
+          new URL(response.url()).pathname === portalPathname('/auth/sign-up')
+          && response.request().method() === 'POST'
+        )),
+        page.getByRole('button', { name: 'Request account' }).click(),
+      ]);
+      assert(signUpResponse.status() === 202, `self sign-up answered ${signUpResponse.status()}`);
+      assert(
+        (await signUpResponse.headerValue('cache-control')) === 'no-store',
+        'self sign-up answer is cacheable'
+      );
+      await page.getByRole('heading', { name: 'Request received' }).waitFor();
+      await page.getByText('If your details match our records').waitFor();
+      await assertAccessiblePage(page, 'self sign-up answer');
+      await page.screenshot({
+        path: screenshotPath('patient-portal-sign-up-result-mobile'),
+        fullPage: true,
+      });
+      await page.goto(portalUrl('/'), { waitUntil: 'networkidle', timeout: 30000 }); // nosemgrep: javascript.playwright.security.audit.playwright-goto-injection.playwright-goto-injection -- portalUrl requires a root-relative path and validateBaseUrl restricts targets to local/private hosts by default
+      await page.getByRole('heading', { name: 'Sign in' }).waitFor();
+    }
     await page.getByRole('link', { name: 'Activate account' }).click();
     await page.getByRole('heading', { name: 'Activate your account' }).waitFor();
     await assertAccessiblePage(page, 'activation page');
@@ -522,6 +652,30 @@ function screenshotPath(name) {
     // 31 February: every box is filled correctly, but there is no such date. The page must say
     // to check the date of birth, and the invite must stay usable.
     await fillActivationForm({ day: '31', month: '2', year: birthYear });
+    // Show password (#29): one control shows and hides both boxes, and sending the form hides them.
+    const activationPasswordTypes = () => page
+      .locator('#activation-password, #activation-password-confirmation')
+      .evaluateAll((inputs) => inputs.map((input) => input.type).join(','));
+    assert(await activationPasswordTypes() === 'password,password', 'activation passwords start visible');
+    await page.getByRole('button', { name: 'Show password' }).click();
+    assert(
+      await activationPasswordTypes() === 'text,text',
+      'Show password did not show both activation password boxes'
+    );
+    await page.screenshot({
+      path: screenshotPath('patient-portal-activation-password-shown'),
+      fullPage: true,
+    });
+    // Recorded by a listener on the form, after the page's own capture-phase handler has run; it
+    // survives the navigation in sessionStorage.
+    await page.evaluate(() => {
+      const form = document.querySelector('form[action$="/auth/activate"]');
+      form.addEventListener('submit', () => {
+        sessionStorage.setItem('activationPasswordTypesAtSubmit', [
+          ...document.querySelectorAll('#activation-password, #activation-password-confirmation'),
+        ].map((input) => input.type).join(','));
+      });
+    });
     expectedActivationFailures += 1;
     expectedActivationConsoleErrors += 1;
     const impossibleDateResponsePromise = page.waitForResponse(
@@ -533,6 +687,10 @@ function screenshotPath(name) {
     assert(
       impossibleDateResponse.status() === 400,
       `an impossible date of birth returned ${impossibleDateResponse.status()}`
+    );
+    assert(
+      await page.evaluate(() => sessionStorage.getItem('activationPasswordTypesAtSubmit')) === 'password,password',
+      'the activation passwords were still showing when the form was sent'
     );
     const impossibleDateAlert = (await page.getByRole('alert').innerText()).trim();
     assert(
@@ -617,6 +775,114 @@ function screenshotPath(name) {
     ]);
     await page.getByRole('heading', { name: 'Sign in' }).waitFor();
 
+    // A separate invite keeps the ASCII activation above as a control. A long, repeated Han
+    // password must still fail strength screening; a strong Han password must survive the
+    // actual phone-sized activation form and then authenticate through normal sign-in and MFA.
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.getByRole('link', { name: 'Activate account' }).click();
+    await page.getByRole('heading', { name: 'Activate your account' }).waitFor();
+    const nonLatin = nonLatinActivationFixture;
+    const [nonLatinBirthYear, nonLatinBirthMonth, nonLatinBirthDay] = nonLatin.dateOfBirth.split('-');
+    for (const [name, value] of Object.entries({
+      invite_code: nonLatin.inviteCode,
+      email: nonLatin.email,
+      health_card_number: nonLatin.healthCardNumber,
+      username: nonLatin.username,
+      password: '松'.repeat(16),
+      password_confirmation: '松'.repeat(16),
+    })) {
+      await page.locator(`input[name="${name}"]`).fill(value);
+    }
+    await page.getByRole('textbox', { name: 'Day', exact: true }).fill(String(Number(nonLatinBirthDay)));
+    await page.getByRole('combobox', { name: 'Month', exact: true }).selectOption(String(Number(nonLatinBirthMonth)));
+    await page.getByRole('textbox', { name: 'Year', exact: true }).fill(nonLatinBirthYear);
+    expectedActivationFailures += 1;
+    expectedActivationConsoleErrors += 1;
+    const weakNonLatinResponsePromise = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === portalPathname('/auth/activate')
+        && response.request().method() === 'POST'
+    );
+    await page.locator('input[name="password_confirmation"]').press('Enter');
+    assert((await weakNonLatinResponsePromise).status() === 400,
+      'a repeated non-Latin password bypassed activation strength screening');
+    await page.getByRole('alert').filter({ hasText: 'Choose a different password:' }).waitFor();
+    assert(
+      await page.locator('input[name="invite_code"]').inputValue() === nonLatin.inviteCode
+        && await page.locator('input[name="username"]').inputValue() === nonLatin.username
+        && await page.locator('input[name="password"]').inputValue() === ''
+        && await page.locator('input[name="password_confirmation"]').inputValue() === '',
+      'non-Latin activation retry lost the invite/username or retained a password'
+    );
+    await page.locator('input[name="password"]').fill(nonLatin.password);
+    await page.locator('input[name="password_confirmation"]').fill(nonLatin.password);
+    const nonLatinActivationResponsePromise = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === portalPathname('/auth/activate')
+        && response.request().method() === 'POST'
+    );
+    await page.locator('input[name="password_confirmation"]').press('Enter');
+    assert((await nonLatinActivationResponsePromise).status() === 201,
+      'a strong non-Latin password did not activate the same invite after a refused attempt');
+    await page.getByRole('heading', { name: 'Account activated' }).waitFor();
+    const nonLatinActivationText = await page.locator('body').innerText();
+    assert(
+      !nonLatinActivationText.includes(nonLatin.password)
+        && !nonLatinActivationText.includes(nonLatin.inviteCode)
+        && !nonLatinActivationText.includes(nonLatin.healthCardNumber),
+      'non-Latin activation result echoed a credential or identity proof'
+    );
+    await page.getByRole('link', { name: 'Sign in' }).click();
+    await page.locator('input[name="username"]').fill(nonLatin.username);
+    await page.locator('input[name="password"]').fill('松'.repeat(16));
+    expectedAuthFailures += 1;
+    expectedAuthConsoleErrors += 1;
+    const wrongNonLatinLoginPromise = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === portalPathname('/auth/login')
+        && response.request().method() === 'POST'
+    );
+    await page.locator('input[name="password"]').press('Enter');
+    assert((await wrongNonLatinLoginPromise).status() === 401,
+      'non-Latin activation account accepted a different password');
+    await page.getByRole('alert').filter({ hasText: 'Incorrect Username or Password' }).waitFor();
+    assert(await page.locator('input[name="password"]').inputValue() === '',
+      'failed non-Latin sign-in retained the attempted password');
+    await page.locator('input[name="username"]').fill(nonLatin.username);
+    await page.locator('input[name="password"]').fill(nonLatin.password);
+    await page.locator('input[name="password"]').press('Enter');
+    await page.getByRole('heading', { name: 'Verification code' }).waitFor();
+    assert(
+      !(await context.cookies()).some((cookie) => cookie.name === 'carlos_portal_session'),
+      'non-Latin sign-in established a session before MFA'
+    );
+    const nonLatinMfaCode = await readBrowserMfaCode(page, nonLatin.email);
+    await page.locator('input[name="code"]').fill(nonLatinMfaCode);
+    await page.locator('input[name="code"]').press('Enter');
+    await page.getByRole('heading', { name: 'Patient portal' }).waitFor();
+    assert(
+      new URL(page.url()).pathname === portalPathname('/portal')
+        && (await page.locator('.signed-in-user').innerText()).trim() === nonLatin.username.toLowerCase()
+        && (await context.cookies()).some((cookie) => cookie.name === 'carlos_portal_session'),
+      'the newly activated non-Latin credential did not establish its own authenticated dashboard'
+    );
+    const nonLatinLayout = await page.evaluate(() => ({
+      viewport: window.innerWidth,
+      document: document.documentElement.scrollWidth,
+    }));
+    assert(nonLatinLayout.document <= nonLatinLayout.viewport + 1,
+      'the newly activated account dashboard overflows at 360px');
+    await page.screenshot({
+      path: screenshotPath('patient-portal-nonlatin-activation-dashboard-mobile'),
+      fullPage: true,
+    });
+    await page.getByRole('button', { name: 'Logout' }).click();
+    await page.getByRole('heading', { name: 'Sign in' }).waitFor();
+    assert(!(await context.cookies()).some((cookie) => cookie.name === 'carlos_portal_session'),
+      'non-Latin activation account logout left a session cookie');
+    await page.goto(portalUrl('/portal/account'), { waitUntil: 'networkidle' });
+    await page.getByRole('heading', { name: 'Sign in' }).waitFor();
+    assert(new URL(page.url()).pathname === portalPathname('/'),
+      'signed-out non-Latin activation account could reopen protected account details');
+    await page.setViewportSize({ width: 390, height: 844 });
+
     await page.getByRole('link', { name: 'Forgot username or password?' }).click();
     await page.getByRole('heading', { name: 'Reset your password' }).waitFor();
     await assertAccessiblePage(page, 'password-reset request page');
@@ -696,6 +962,40 @@ function screenshotPath(name) {
       'password-reset token was not copied from the URL fragment into the form'
     );
     assert(!page.url().includes('#'), 'password-reset token remained in browser history');
+
+    // A language switch reloads this page through a redirect. The token rides along in the
+    // fragment, so it never reaches the server, and lands in the form again; then it is stripped.
+    const requestsCarryingResetToken = [];
+    // Only the part before "#" is sent; Playwright may report a navigation's fragment too.
+    const recordResetTokenRequest = (request) => {
+      if (request.url().split('#')[0].includes(passwordResetFixture.token)) {
+        requestsCarryingResetToken.push(request.url());
+      }
+    };
+    page.on('request', recordResetTokenRequest);
+    for (const languageCode of ['fr', 'en']) {
+      const languageLink = page.locator(
+        `.language-switch a[href^="${portalPathname(`/locale/${languageCode}`)}"]`
+      );
+      assert(
+        !(await languageLink.getAttribute('href')).includes('#'),
+        'a language link holds the password-reset token before it is clicked'
+      );
+      await languageLink.click();
+      await page.locator(`.language-switch .text-tab.selected[lang="${languageCode}"]`).waitFor();
+      await page.waitForFunction(() => window.location.hash === '');
+      assert(
+        await page.locator('input[name="reset_token"]').inputValue()
+          === passwordResetFixture.token,
+        `switching to ${languageCode} lost the password-reset token`
+      );
+      assert(!page.url().includes('#'), 'password-reset token remained in browser history');
+    }
+    page.off('request', recordResetTokenRequest);
+    assert(
+      requestsCarryingResetToken.length === 0,
+      `the password-reset token reached the server: ${requestsCarryingResetToken.length} requests`
+    );
 
     await page.locator('input[name="new_password"]').fill(passwordResetFixture.newPassword);
     await page.locator('input[name="new_password_confirmation"]').fill(
@@ -849,6 +1149,29 @@ function screenshotPath(name) {
     });
 
     const mfaCode = await readBrowserMfaCode(page, expectedEmail);
+
+    // The MFA page has no GET route, so its language buttons post the challenge back: the same
+    // sign-in continues in the new language and no new code is sent (the resend below still hits
+    // the cooldown from the first code).
+    const challengeTokenField = page.locator('form.form-stack input[name="mfa_challenge_token"]');
+    const challengeTokenBeforeSwitch = await challengeTokenField.inputValue();
+    const mfaLanguageResponsePromise = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === portalPathname('/auth/mfa/language')
+    );
+    await page.locator('.language-switch button[value="fr"]').click();
+    const mfaLanguageResponse = await mfaLanguageResponsePromise;
+    assert(
+      mfaLanguageResponse.status() === 200,
+      `MFA language switch returned ${mfaLanguageResponse.status()}`
+    );
+    await page.locator('.language-switch .text-tab.selected[lang="fr"]').waitFor();
+    assert(
+      await challengeTokenField.inputValue() === challengeTokenBeforeSwitch,
+      'the MFA language switch lost the sign-in'
+    );
+    await page.locator('.language-switch button[value="en"]').click();
+    await page.locator('.language-switch .text-tab.selected[lang="en"]').waitFor();
+    await page.getByRole('heading', { name: 'Verification code' }).waitFor();
     const resendResponsePromise = page.waitForResponse(
       (response) => new URL(response.url()).pathname === portalPathname('/auth/mfa/resend')
     );
@@ -1148,11 +1471,11 @@ function screenshotPath(name) {
       fullPage: true,
     });
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await page.getByRole('link', { name: 'Email passwords', exact: true }).click();
+    await page.getByRole('link', { name: 'Document passwords', exact: true }).click();
     await page.waitForURL(
       (url) => url.pathname === portalPathname('/portal/email-passwords')
     );
-    await page.getByRole('heading', { name: 'Email passwords' }).waitFor();
+    await page.getByRole('heading', { name: 'Document passwords' }).waitFor();
     await assertAccessiblePage(page, 'email-password page');
     assert(
       await page.locator('select[name="provider"]').count() === 1
@@ -1266,7 +1589,7 @@ function screenshotPath(name) {
       page.waitForURL((url) => url.searchParams.get('q') === 'No such message'),
       page.getByRole('button', { name: 'Search' }).click(),
     ]);
-    await page.getByText('No matching email passwords', { exact: true }).waitFor();
+    await page.getByText('No matching document passwords', { exact: true }).waitFor();
     await Promise.all([
       page.waitForURL((url) => url.pathname === portalPathname('/portal/email-passwords')),
       page.getByRole('link', { name: 'Clear filters' }).click(),
@@ -1333,6 +1656,9 @@ function screenshotPath(name) {
     console.log('Patient portal Playwright checks passed');
     console.log(`Sign-in mobile screenshot: ${screenshotPath('patient-portal-sign-in-mobile')}`);
     console.log(`Activation mobile screenshot: ${screenshotPath('patient-portal-activation-mobile')}`);
+    if (expectSelfSignup) {
+      console.log(`Self sign-up mobile screenshot: ${screenshotPath('patient-portal-sign-up-mobile')}`);
+    }
     console.log(`Password-reset mobile screenshot: ${screenshotPath('patient-portal-password-reset-mobile')}`);
     console.log(`MFA mobile screenshot: ${screenshotPath('patient-portal-mfa-mobile')}`);
     console.log(`Desktop screenshot: ${screenshotPath('patient-portal-live-desktop')}`);

@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pytest
 from alembic import command
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import Session
 
@@ -19,7 +20,9 @@ from tests.support import alembic_config_for_tests
 
 @pytest.fixture
 def owned_approval_pg():
-    url = os.environ.get("MYCARLOS_APPROVAL_PG_TEST_URL")
+    url = os.environ.get("MYCARLOS_APPROVAL_PG_TEST_URL") or os.environ.get(
+        "PORTAL_TEST_POSTGRES_URL"
+    )
     if not url:
         pytest.skip("requires an explicitly owned PostgreSQL test connection")
     schema = "a3_approval_" + uuid4().hex
@@ -88,7 +91,7 @@ def test_actual_pg_empty_downgrade_reupgrade_and_retained_row_refusal(owned_appr
         )
         assert (
             connection.scalar(text("SELECT version_num FROM alembic_version"))
-            == "0020_mycarlos_approval_codes"
+            == ScriptDirectory.from_config(alembic_config_for_tests()).get_current_head()
         )
 
 
@@ -106,7 +109,12 @@ def test_actual_pg_empty_downgrade_fences_concurrent_new_proof_insertion(owned_a
                     outcome["migration_pid"] = connection.scalar(text("SELECT pg_backend_pid()"))
 
                     def after_lock(conn, cursor, statement, parameters, context, many):
-                        if statement.startswith("LOCK TABLE "):
+                        # Pause on the lock that covers the writer's table. From a later head,
+                        # other revisions' downgrades lock their own tables first.
+                        if (
+                            statement.startswith("LOCK TABLE ")
+                            and "patient_portal_mycarlos_approval_clinics" in statement
+                        ):
                             locked.set()
                             if not release.wait(10):
                                 raise RuntimeError("owned test release timeout")
