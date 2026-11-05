@@ -1,14 +1,32 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (c) 2026 CARLOS Contributors. All Rights Reserved.
 
-"""A linked myCarlos device enrolls, lists and revokes its availability destinations (P1).
+"""A linked myCarlos device enrolls, lists and revokes its availability destinations (P1, P4).
 
 Registered only while both PATIENT_PORTAL_MYCARLOS_DELIVERY_ENABLED and
 PATIENT_PORTAL_MYCARLOS_AVAILABILITY_ENABLED are on. Every request carries the device's signed
 assertion, checked and used once exactly as the mailbox routes do. Enrolling stores what the
 device reports: the platform, an opaque destination id, the remote switch, remote consent v1
-and an OS permission it observed. Nothing here sends: no worker and no provider exist yet.
+and an OS permission it observed. A revocation names the device's own destination id and is
+answered only once its tombstone is committed, so the device may then drop it from its queue
+(P4). Nothing here sends; the dispatch worker (P2) does, and only with credentials.
 Responses carry the device's own subscription ids and settings, nothing about the patient.
+
+What each revocation answer means for the device's queued entry (myCarlos
+`pending_revocations`, which shares 64 places with its active destinations, so an entry that can
+never be cleared must be dropped):
+- Final, drop the entry:
+  - 200 `{"destination_id", "revoked": true}`: the tombstone is committed, or the id was
+    already revoked, whichever device it was filed under.
+  - 409 `destination_taken`: another device's live destination; this device never enrolled it.
+  - 400 `invalid_enrollment`, `invalid_destination` or `invalid_platform`: never accepted.
+  - 403 `device_removed`: the worker never sends to a removed device.
+- Retry later, keep the entry (nothing is known to have been committed):
+  - 404: the assertion was refused (unsigned, replayed, expired, or signed for another request).
+  - 403 `device_inactive`: the device was not active when its row was locked.
+  - 403 `recipient_mismatch`: retry once the device's link is repaired.
+  - 413: a body over 1 KiB, which a well-formed entry never is.
+  - 5xx, or no answer.
 """
 
 from __future__ import annotations
@@ -36,6 +54,8 @@ from carlos_patient_portal.mycarlos_availability import AvailabilityError, Owner
 from carlos_patient_portal.mycarlos_availability_store import (
     EnrollmentRefusal,
     EnrollmentRequest,
+    RevocationRequest,
+    acknowledge_revocation,
     enroll,
     revoke,
     subscriptions_for_owner,
@@ -45,7 +65,9 @@ from carlos_patient_portal.runtime import PortalRuntime
 from carlos_patient_portal.staff_identity import staff_request_hash
 
 SUBSCRIPTIONS_PATH = "/api/mycarlos/availability/subscriptions"
+REVOCATIONS_PATH = "/api/mycarlos/availability/revocations"
 MAX_ENROLLMENT_BODY = 1024
+MAX_REVOCATION_BODY = 1024
 NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 ENROLLMENT_FIELDS = frozenset(
     {
@@ -56,6 +78,7 @@ ENROLLMENT_FIELDS = frozenset(
         "permission_observed",
     }
 )
+REVOCATION_FIELDS = frozenset({"platform", "destination_id"})
 REFUSAL_STATUS = {
     "invalid_enrollment": 400,
     "invalid_platform": 400,
@@ -126,6 +149,19 @@ def parse_enrollment(body: bytes) -> EnrollmentRequest:
         remote_consent_version=value["remote_consent_version"],
         permission_observed=value["permission_observed"],
     )
+
+
+def parse_revocation(body: bytes) -> RevocationRequest:
+    """The exact two fields, both strings; anything else is refused."""
+    try:
+        value = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        raise EnrollmentRefusal("invalid_enrollment") from None
+    if not isinstance(value, dict) or set(value) != REVOCATION_FIELDS:
+        raise EnrollmentRefusal("invalid_enrollment")
+    if type(value["platform"]) is not str or type(value["destination_id"]) is not str:
+        raise EnrollmentRefusal("invalid_enrollment")
+    return RevocationRequest(platform=value["platform"], destination_id=value["destination_id"])
 
 
 async def _bounded_body(request: Request, maximum: int) -> bytes:
@@ -221,3 +257,13 @@ def register_mycarlos_availability_routes(app: FastAPI, runtime: PortalRuntime) 
             return _response(subscription_record(row))
 
         return await call(request, 0, operation)
+
+    @app.post(REVOCATIONS_PATH, include_in_schema=runtime.settings.is_development)
+    async def acknowledge_device_revocation(request: Request) -> Response:
+        # The answer names only the destination the device sent: a tombstone the portal had to
+        # create was never enrolled, so it has no enrollment to report.
+        def operation(session: Session, owner: Owner, body: bytes) -> Response:
+            row = acknowledge_revocation(session, owner, parse_revocation(body))
+            return _response({"destination_id": row.destination_id, "revoked": True})
+
+        return await call(request, MAX_REVOCATION_BODY, operation)

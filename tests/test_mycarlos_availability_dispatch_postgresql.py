@@ -39,7 +39,6 @@ def pg(request):
     engine = request.getfixturevalue("migrated_postgresql_engine")
     with engine.connect() as connection:
         assert connection.scalar(text("select current_schema()")).startswith("mycarlos_test_")
-    # The mailbox tables are not in a versioned migration yet; the M4 PG tests do the same.
     MailboxBase.metadata.create_all(engine)
     return engine, sessionmaker(engine, expire_on_commit=False)
 

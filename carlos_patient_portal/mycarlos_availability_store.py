@@ -6,7 +6,8 @@
 `SqlAvailabilityTransaction` is the adapter the policy core's `queue_new_copy` takes: it reads
 an owner's live subscriptions and puts intents into the outbox, inside the caller's transaction
 (the one that makes the new mailbox copy durable), never committing itself. `enroll`, `revoke`
-and `subscriptions_for_owner` serve the device's enrollment routes.
+and `subscriptions_for_owner` serve the device's enrollment routes, and `acknowledge_revocation`
+its revocation queue (P4).
 
 What is stored is ids, the platform, the consent the device reported and counters: no document
 id, no text, no provider token (those live in separately scoped storage when P3 adds providers),
@@ -253,6 +254,87 @@ def revoke(
         ):
             session.delete(pending)
         session.flush()
+    return row
+
+
+@dataclass(frozen=True)
+class RevocationRequest:
+    """A destination the device stopped using: opt-out, a removed link or owner, a reset vault."""
+
+    platform: str
+    destination_id: str
+
+
+def acknowledge_revocation(
+    session: Session,
+    owner: Owner,
+    request: RevocationRequest,
+    *,
+    now: datetime | None = None,
+) -> PatientPortalMyCarlosAvailabilitySubscription:
+    """Revokes a destination by the device's own id and returns its tombstone; again is harmless.
+
+    myCarlos keeps each revocation queued until the portal has committed it, and may send one
+    before its enrollment reached the portal, or again after a lost answer. An id the portal has
+    never seen gets a tombstone of its own, so a late enrollment cannot bring it back: such a row
+    was never enrolled, so its remote switch and observed permission are off (the consent version
+    column holds 1, the only version, as its check requires). An id already revoked is answered
+    again unchanged, whoever revoked it and whichever device it was filed under: an app restored
+    from an OS backup, or linked again as a new device, still holds ids filed under its old
+    device, and must be able to clear them; the caller had to know the random id either way.
+    Only another device's live destination is refused (`destination_taken`). For a destination
+    this device holds, the platform is not compared: stopping it is what matters. Pending
+    intents go with it; a leased one cannot be recalled, and the worker's fresh read suppresses
+    its send (P2).
+    """
+    if not session.in_transaction():
+        raise AvailabilityError("transaction_required")
+    try:
+        platform = PushPlatform(request.platform)
+    except ValueError:
+        raise EnrollmentRefusal("invalid_platform") from None
+    destination_id = _uuid_text(request.destination_id, "invalid_destination")
+    _lock_active_device(session, owner)
+    existing = session.scalars(
+        select(PatientPortalMyCarlosAvailabilitySubscription)
+        .where(PatientPortalMyCarlosAvailabilitySubscription.destination_id == destination_id)
+        .with_for_update()
+    ).first()
+    if existing is not None:
+        if existing.revoked_at is not None:
+            return existing
+        if (existing.account_id, existing.device_id) != (owner.account_id, owner.device_id):
+            raise EnrollmentRefusal("destination_taken")
+        return revoke(session, owner, existing.subscription_id, by="device", now=now)
+    instant = now or datetime.now(UTC)
+    row = PatientPortalMyCarlosAvailabilitySubscription(
+        subscription_id=str(uuid4()),
+        account_id=owner.account_id,
+        device_id=owner.device_id,
+        epoch=str(uuid4()),
+        destination_id=destination_id,
+        platform=platform.value,
+        remote_enabled=False,
+        remote_consent_version=REMOTE_CONSENT_VERSION,
+        permission_observed=False,
+        created_at=instant,
+        revoked_at=instant,
+        revoked_by="device",
+    )
+    # Only another device can race this insert (this device's row is locked): the unique index
+    # decides, as in `enroll`. If the winner revoked it too, it is revoked, and so answered; a
+    # destination enrolled elsewhere is not this device's to stop.
+    try:
+        with session.begin_nested():
+            session.add(row)
+            session.flush()
+    except IntegrityError:
+        winner = _destination_row(session, destination_id)
+        if winner is None:
+            raise
+        if winner.revoked_at is not None:
+            return winner
+        raise EnrollmentRefusal("destination_taken") from None
     return row
 
 
