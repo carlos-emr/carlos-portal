@@ -24,7 +24,12 @@ from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
-from carlos_patient_portal.approval_codec import compact_hash, invalid, verify_approval
+from carlos_patient_portal.approval_codec import (
+    CONTRACT_VERSIONS,
+    compact_hash,
+    invalid,
+    verify_approval,
+)
 from carlos_patient_portal.approval_models import ApprovalCode, ApprovalRequest
 from carlos_patient_portal.approvals import (
     MAX_CODE_ATTEMPTS,
@@ -102,6 +107,9 @@ def register_device_approval_routes(app: FastAPI, runtime: PortalRuntime) -> Non
     public_base = normalize_portal(settings.public_base_url)
     if public_base is None:
         raise ValueError("myCarlos approval requires a configured public base URL")
+    accepted_versions = (
+        CONTRACT_VERSIONS if settings.mycarlos_approval_contract_v2_enabled else (1,)
+    )
 
     def execute(request: Request, body: bytes, operation: Callable) -> Response:
         assertion = request.headers.get(DEVICE_ASSERTION_HEADER)
@@ -178,6 +186,7 @@ def register_device_approval_routes(app: FastAPI, runtime: PortalRuntime) -> Non
                 body=raw,
                 public_base=public_base,
                 now=int(time()),
+                versions=accepted_versions,
             )
             return response(content, status)
 
@@ -192,6 +201,17 @@ def register_device_approval_routes(app: FastAPI, runtime: PortalRuntime) -> Non
             if row.device_id != m.device.id:
                 raise invalid("approval_not_found", 404)
             return response(status_payload(row))
+
+        return await call(request, 0, operation)
+
+    # The device approval contract versions this portal takes (myCarlos #144). An app that
+    # finds no such route (an older portal answers 404) signs v1.
+    @app.get("/api/mycarlos/device-approval-versions")
+    async def versions(request: Request) -> Response:
+        def operation(session: Session, m: LockedMailbox, raw: bytes) -> Response:
+            if request.scope.get("query_string", b""):
+                raise invalid()
+            return response({"versions": list(accepted_versions)})
 
         return await call(request, 0, operation)
 
@@ -269,6 +289,7 @@ def register_device_approval_routes(app: FastAPI, runtime: PortalRuntime) -> Non
             )
             challenge, _, _ = compact_parts(row.challenge)
             for field in (
+                "v",
                 "challenge_id",
                 "candidate_intent_sha256",
                 "candidate_device_key_id",

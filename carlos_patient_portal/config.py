@@ -351,6 +351,10 @@ class Settings(BaseSettings):
     # the mailbox on (checked in reject_unsafe_runtime_policy).
     mycarlos_mailbox_enabled: bool = False
     mycarlos_approval_enabled: bool = False
+    # Device approval contract v2 (myCarlos #144): staff requests may wait 24 hours. Off, the
+    # portal lists and takes only v1. Turn it on only once this clinic's CARLOS takes v2: an app
+    # signs v2 when the portal lists it, and an older CARLOS can't approve a v2 request.
+    mycarlos_approval_contract_v2_enabled: bool = False
     # myCarlos document-availability notifications (carlos-portal#78, myCarlos#192). Off by
     # default. With PATIENT_PORTAL_MYCARLOS_DELIVERY_ENABLED it registers the device enrollment
     # and revocation routes (P1, P4); with _MAILBOX_ENABLED too, each new mailbox copy queues a
