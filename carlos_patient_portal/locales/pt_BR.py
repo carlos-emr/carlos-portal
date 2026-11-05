@@ -402,6 +402,87 @@ TEXT: dict[str, str] = {
     "filters": "Filtros",
     "of": "de",
     "page": "Página",
+    "outbound_mfa_email_subject": "Seu código de acesso do {service_name}",
+    "outbound_mfa_email_intro": "Seu código de acesso para o {service_name} é:",
+    "outbound_mfa_email_expiry_one": (
+        "Este código expira em {minutes} minuto. Não compartilhe este código com ninguém."
+    ),
+    "outbound_mfa_email_expiry_other": (
+        "Este código expira em {minutes} minutos. Não compartilhe este código com ninguém."
+    ),
+    "outbound_mfa_email_contact": "Se você não tentou entrar, entre em contato com {clinic_name}.",
+    "outbound_reset_subject": "Redefina sua senha do {service_name}",
+    "outbound_reset_intro": "Foi solicitada a redefinição da senha da sua conta do {service_name}.",
+    "outbound_reset_link_lead": "Abra este link para escolher uma nova senha:",
+    "outbound_reset_expiry_one": (
+        "Este link expira em {minutes} minuto e só pode ser usado uma vez."
+    ),
+    "outbound_reset_expiry_other": (
+        "Este link expira em {minutes} minutos e só pode ser usado uma vez."
+    ),
+    "outbound_reset_contact": (
+        "Se você não solicitou esta redefinição, entre em contato com {clinic_name}."
+    ),
+    "outbound_contact_change_subject": (
+        "As informações de contato do {service_name} foram alteradas"
+    ),
+    "outbound_contact_change_body": (
+        "As informações de contato da sua conta do {service_name} foram alteradas. Os novos "
+        "dados de contato do portal já estão em uso. A equipe da clínica pode revisar "
+        "separadamente as informações correspondentes do prontuário no CARLOS."
+    ),
+    "outbound_contact_change_contact": (
+        "Se você não fez esta alteração, entre em contato imediatamente com {clinic_name}."
+    ),
+    "outbound_booking_prompt_subject": "Você tem uma nova mensagem no {service_name}",
+    "outbound_booking_prompt_intro": (
+        "{clinic_name} enviou uma mensagem para você no {service_name}."
+    ),
+    "outbound_sign_in_lead": "Entre para lê-la:",
+    "outbound_booking_prompt_note": "A mensagem só é exibida depois que você entrar.",
+    "outbound_not_expecting_contact": (
+        "Se você não esperava esta mensagem, entre em contato com {clinic_name}."
+    ),
+    "outbound_booking_update_subject": "Há uma atualização no {service_name}",
+    "outbound_booking_update_intro": "{clinic_name} atualizou uma mensagem no {service_name}.",
+    "outbound_booking_update_note": "A atualização só é exibida depois que você entrar.",
+    "outbound_email_confirm_subject": "Confirme seu novo e-mail do {service_name}",
+    "outbound_email_confirm_intro": (
+        "Este endereço foi informado como o novo e-mail de contato de uma conta do "
+        "{service_name}."
+    ),
+    "outbound_email_confirm_link_lead": "Abra este link para confirmá-lo:",
+    "outbound_email_confirm_expiry_one": (
+        "Este link expira em {hours} hora e só pode ser usado uma vez. Até que seja usado, a "
+        "conta mantém o endereço de e-mail anterior."
+    ),
+    "outbound_email_confirm_expiry_other": (
+        "Este link expira em {hours} horas e só pode ser usado uma vez. Até que seja usado, a "
+        "conta mantém o endereço de e-mail anterior."
+    ),
+    "outbound_email_confirm_contact": (
+        "Se você não esperava esta mensagem, ignore-a ou entre em contato com {clinic_name}."
+    ),
+    "outbound_email_requested_subject": "Foi solicitada uma alteração de contato no {service_name}",
+    "outbound_email_requested_intro": (
+        "Alguém pediu para alterar os dados de contato da sua conta do {service_name}."
+    ),
+    "outbound_email_requested_body": (
+        "Nada mudou ainda. A alteração só entra em vigor depois que o novo endereço de e-mail "
+        "for confirmado, e até lá este endereço continua recebendo seus códigos de acesso e "
+        "links de redefinição de senha."
+    ),
+    "outbound_email_requested_contact": (
+        "Se você não solicitou isso, entre em contato imediatamente com {clinic_name}."
+    ),
+    "outbound_mfa_sms_one": (
+        "Seu código de acesso do {service_name} é {code}. Ele expira em {minutes} minuto. Não o "
+        "compartilhe. Entre em contato com {clinic_name} se você não o solicitou."
+    ),
+    "outbound_mfa_sms_other": (
+        "Seu código de acesso do {service_name} é {code}. Ele expira em {minutes} minutos. Não o "
+        "compartilhe. Entre em contato com {clinic_name} se você não o solicitou."
+    ),
     # Self sign-up (carlos-portal#15).
     "sign_up_contact_clinic": (
         "Se a sua clínica não tiver o seu e-mail, ou tiver um antigo, entre em contato com a "

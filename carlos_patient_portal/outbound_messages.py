@@ -14,13 +14,40 @@
 
 from dataclasses import dataclass
 
-DEFAULT_OUTBOUND_LOCALE = "en"
+from carlos_patient_portal.i18n import DEFAULT_LOCALE, SUPPORTED_LOCALES, plural_text, portal_text
+
+DEFAULT_OUTBOUND_LOCALE = DEFAULT_LOCALE
+_OUTBOUND_LOCALES = frozenset(option.code for option in SUPPORTED_LOCALES)
+
+
+def sender_locale_kwargs(locale: str | None) -> dict[str, str]:
+    """Pass `locale` to a sender only when it is not the default.
+
+    Injected senders that predate the language option keep their old signature, and the default
+    language needs no argument.
+    """
+    if locale is None or locale == DEFAULT_OUTBOUND_LOCALE:
+        return {}
+    return {"locale": locale}
+
+
+def stored_outbound_locale(value: object) -> str:
+    """The language kept with a queued message, or the default when it is missing or unknown."""
+    if isinstance(value, str) and value in _OUTBOUND_LOCALES:
+        return value
+    return DEFAULT_OUTBOUND_LOCALE
 
 
 @dataclass(frozen=True)
 class OutboundMessage:
     subject: str
     body: str
+
+
+def _text(locale: str) -> dict[str, str]:
+    """The catalog for `locale`, per-key English fallback included. Unknown locales are refused."""
+    _require_supported_locale(locale)
+    return portal_text(locale)
 
 
 def mfa_email_message(
@@ -31,16 +58,16 @@ def mfa_email_message(
     expires_in_seconds: int,
     locale: str = DEFAULT_OUTBOUND_LOCALE,
 ) -> OutboundMessage:
-    _require_supported_locale(locale)
-    expires_in_minutes = max(1, expires_in_seconds // 60)
+    text = _text(locale)
+    minutes = max(1, expires_in_seconds // 60)
+    expiry = plural_text(text, "outbound_mfa_email_expiry", minutes, locale)
     return OutboundMessage(
-        subject=f"Your {service_name} verification code",
+        subject=text["outbound_mfa_email_subject"].format(service_name=service_name),
         body=(
-            f"Your verification code for {service_name} is:\n\n"
+            f"{text['outbound_mfa_email_intro'].format(service_name=service_name)}\n\n"
             f"{code}\n\n"
-            f"This code expires in {expires_in_minutes} minutes. "
-            "Do not share this code with anyone.\n\n"
-            f"If you did not try to sign in, contact {clinic_name}."
+            f"{expiry.format(minutes=minutes)}\n\n"
+            f"{text['outbound_mfa_email_contact'].format(clinic_name=clinic_name)}"
         ),
     )
 
@@ -53,15 +80,16 @@ def password_reset_email_message(
     expires_in_seconds: int,
     locale: str = DEFAULT_OUTBOUND_LOCALE,
 ) -> OutboundMessage:
-    _require_supported_locale(locale)
-    expires_in_minutes = max(1, expires_in_seconds // 60)
+    text = _text(locale)
+    minutes = max(1, expires_in_seconds // 60)
+    expiry = plural_text(text, "outbound_reset_expiry", minutes, locale)
     return OutboundMessage(
-        subject=f"Reset your {service_name} password",
+        subject=text["outbound_reset_subject"].format(service_name=service_name),
         body=(
-            f"A password reset was requested for your {service_name} account.\n\n"
-            f"Open this link to choose a new password:\n{reset_url}\n\n"
-            f"This link expires in {expires_in_minutes} minutes and can only be used once.\n\n"
-            f"If you did not request this reset, contact {clinic_name}."
+            f"{text['outbound_reset_intro'].format(service_name=service_name)}\n\n"
+            f"{text['outbound_reset_link_lead']}\n{reset_url}\n\n"
+            f"{expiry.format(minutes=minutes)}\n\n"
+            f"{text['outbound_reset_contact'].format(clinic_name=clinic_name)}"
         ),
     )
 
@@ -72,14 +100,12 @@ def contact_change_email_message(
     clinic_name: str,
     locale: str = DEFAULT_OUTBOUND_LOCALE,
 ) -> OutboundMessage:
-    _require_supported_locale(locale)
+    text = _text(locale)
     return OutboundMessage(
-        subject=f"Contact information changed for {service_name}",
+        subject=text["outbound_contact_change_subject"].format(service_name=service_name),
         body=(
-            f"The contact information for your {service_name} account changed. "
-            "The new portal contact details are in use now. Clinic staff may separately "
-            "review the matching CARLOS chart information.\n\n"
-            f"If you did not make this change, contact {clinic_name} immediately."
+            f"{text['outbound_contact_change_body'].format(service_name=service_name)}\n\n"
+            f"{text['outbound_contact_change_contact'].format(clinic_name=clinic_name)}"
         ),
     )
 
@@ -96,14 +122,17 @@ def booking_prompt_email_message(
     Email is not a secure channel, so the provider, the kind of appointment and its urgency are
     shown only after sign-in.
     """
-    _require_supported_locale(locale)
+    text = _text(locale)
+    intro = text["outbound_booking_prompt_intro"].format(
+        clinic_name=clinic_name, service_name=service_name
+    )
     return OutboundMessage(
-        subject=f"You have a new message in {service_name}",
+        subject=text["outbound_booking_prompt_subject"].format(service_name=service_name),
         body=(
-            f"{clinic_name} has sent you a message in {service_name}.\n\n"
-            f"Sign in to read it:\n{sign_in_url}\n\n"
-            "The message is only shown after you sign in.\n\n"
-            f"If you were not expecting this, contact {clinic_name}."
+            f"{intro}\n\n"
+            f"{text['outbound_sign_in_lead']}\n{sign_in_url}\n\n"
+            f"{text['outbound_booking_prompt_note']}\n\n"
+            f"{text['outbound_not_expecting_contact'].format(clinic_name=clinic_name)}"
         ),
     )
 
@@ -120,14 +149,17 @@ def booking_prompt_update_email_message(
     Sent when CARLOS answers a time the patient picked. Whether it was booked, the time, the
     provider, the kind of visit and where it is are shown only after sign-in.
     """
-    _require_supported_locale(locale)
+    text = _text(locale)
+    intro = text["outbound_booking_update_intro"].format(
+        clinic_name=clinic_name, service_name=service_name
+    )
     return OutboundMessage(
-        subject=f"There is an update in {service_name}",
+        subject=text["outbound_booking_update_subject"].format(service_name=service_name),
         body=(
-            f"{clinic_name} has updated a message in {service_name}.\n\n"
-            f"Sign in to read it:\n{sign_in_url}\n\n"
-            "The update is only shown after you sign in.\n\n"
-            f"If you were not expecting this, contact {clinic_name}."
+            f"{intro}\n\n"
+            f"{text['outbound_sign_in_lead']}\n{sign_in_url}\n\n"
+            f"{text['outbound_booking_update_note']}\n\n"
+            f"{text['outbound_not_expecting_contact'].format(clinic_name=clinic_name)}"
         ),
     )
 
@@ -145,16 +177,16 @@ def email_change_confirmation_email_message(
     Until this link is opened the change has not happened, so the wording must not imply the
     account already uses this address.
     """
-    _require_supported_locale(locale)
-    expires_in_hours = max(1, expires_in_seconds // 3600)
+    text = _text(locale)
+    hours = max(1, expires_in_seconds // 3600)
+    expiry = plural_text(text, "outbound_email_confirm_expiry", hours, locale)
     return OutboundMessage(
-        subject=f"Confirm your new {service_name} email address",
+        subject=text["outbound_email_confirm_subject"].format(service_name=service_name),
         body=(
-            f"This address was given as the new contact email for a {service_name} account.\n\n"
-            f"Open this link to confirm it:\n{confirmation_url}\n\n"
-            f"This link expires in {expires_in_hours} hours and can only be used once. "
-            "Until it is used, the account keeps its previous email address.\n\n"
-            f"If you were not expecting this, ignore this message or contact {clinic_name}."
+            f"{text['outbound_email_confirm_intro'].format(service_name=service_name)}\n\n"
+            f"{text['outbound_email_confirm_link_lead']}\n{confirmation_url}\n\n"
+            f"{expiry.format(hours=hours)}\n\n"
+            f"{text['outbound_email_confirm_contact'].format(clinic_name=clinic_name)}"
         ),
     )
 
@@ -170,15 +202,13 @@ def email_change_requested_email_message(
     It deliberately does not include the proposed address: this mailbox may already be in someone
     else's hands, and the notice should not hand them confirmation of where the change points.
     """
-    _require_supported_locale(locale)
+    text = _text(locale)
     return OutboundMessage(
-        subject=f"A contact change was requested for {service_name}",
+        subject=text["outbound_email_requested_subject"].format(service_name=service_name),
         body=(
-            f"Someone asked to change the contact details on your {service_name} account.\n\n"
-            "Nothing has changed yet. The change only takes effect once the new email address is "
-            "confirmed, and this address continues to receive your verification codes and "
-            "password reset links until then.\n\n"
-            f"If you did not request this, contact {clinic_name} immediately."
+            f"{text['outbound_email_requested_intro'].format(service_name=service_name)}\n\n"
+            f"{text['outbound_email_requested_body']}\n\n"
+            f"{text['outbound_email_requested_contact'].format(clinic_name=clinic_name)}"
         ),
     )
 
@@ -191,14 +221,13 @@ def mfa_sms_message(
     expires_in_seconds: int,
     locale: str = DEFAULT_OUTBOUND_LOCALE,
 ) -> str:
-    _require_supported_locale(locale)
-    return (
-        f"Your {service_name} verification code is {code}. "
-        f"It expires in {max(1, expires_in_seconds // 60)} minutes. "
-        f"Do not share it. Contact {clinic_name} if you did not request it."
+    text = _text(locale)
+    minutes = max(1, expires_in_seconds // 60)
+    return plural_text(text, "outbound_mfa_sms", minutes, locale).format(
+        service_name=service_name, clinic_name=clinic_name, code=code, minutes=minutes
     )
 
 
 def _require_supported_locale(locale: str) -> None:
-    if locale != DEFAULT_OUTBOUND_LOCALE:
+    if locale not in _OUTBOUND_LOCALES:
         raise ValueError("outbound message locale is not supported")

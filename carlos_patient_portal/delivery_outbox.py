@@ -82,6 +82,7 @@ from carlos_patient_portal.models import (
     PatientPortalPasswordResetToken,
     utc_now,
 )
+from carlos_patient_portal.outbound_messages import sender_locale_kwargs, stored_outbound_locale
 
 logger = logging.getLogger(__name__)
 # Both booking notices say only that something is waiting in the portal, and both name their prompt.
@@ -241,6 +242,7 @@ def enqueue_password_reset_delivery(
     expires_in_seconds: int,
     encryption_secret: str,
     encryption_key_id: str = OUTBOX_KEY_ID,
+    locale: str | None = None,
 ) -> PatientPortalOutboundDelivery:
     if result.account_id is None or result.reset_token_id is None or result.recipient is None:
         raise PasswordResetTokenInvalidError()
@@ -250,6 +252,7 @@ def enqueue_password_reset_delivery(
             "recipient": result.recipient,
             "reset_url": reset_url,
             "expires_in_seconds": expires_in_seconds,
+            **sender_locale_kwargs(locale),
         },
         encryption_secret=encryption_secret,
         kind=OUTBOX_KIND_PASSWORD_RESET,
@@ -283,6 +286,7 @@ def enqueue_password_reset_request(
     encryption_secret: str,
     encryption_key_id: str = OUTBOX_KEY_ID,
     max_pending: int = 1_000,
+    locale: str | None = None,
 ) -> PatientPortalOutboundDelivery:
     """Durably queue identity resolution without revealing whether the identity matched."""
     if max_pending < 1:
@@ -306,6 +310,7 @@ def enqueue_password_reset_request(
             "username": username,
             "email": email,
             "client_reference_hash": client_reference_hash,
+            **sender_locale_kwargs(locale),
         },
         encryption_secret=encryption_secret,
         kind=OUTBOX_KIND_PASSWORD_RESET_REQUEST,
@@ -337,10 +342,11 @@ def enqueue_contact_change_delivery(
     recipient: str,
     encryption_secret: str,
     encryption_key_id: str = OUTBOX_KEY_ID,
+    locale: str | None = None,
 ) -> PatientPortalOutboundDelivery:
     message_id = _new_message_id()
     ciphertext, nonce = _encrypt_payload(
-        {"recipient": recipient},
+        {"recipient": recipient, **sender_locale_kwargs(locale)},
         encryption_secret=encryption_secret,
         kind=OUTBOX_KIND_CONTACT_CHANGE,
         account_id=account_id,
@@ -1044,6 +1050,7 @@ def _materialize_password_reset_request(
                 expires_in_seconds=context.token_ttl_seconds,
                 encryption_secret=outbox_encryption_secret,
                 encryption_key_id=context.outbox_active_key_id,
+                locale=stored_outbound_locale(payload.get("locale")),
             )
             spawned_delivery_id = spawned_delivery.id
         final_status = _finish_delivery(
@@ -1160,11 +1167,13 @@ def process_one_delivery(
                         reset_url=reset_url,
                         expires_in_seconds=expires_in_seconds,
                         message_id=message_id,
+                        **sender_locale_kwargs(stored_outbound_locale(payload.get("locale"))),
                     )
                 elif kind == OUTBOX_KIND_CONTACT_CHANGE:
                     email_sender.send_contact_change_notice(
                         recipient=recipient,
                         message_id=message_id,
+                        **sender_locale_kwargs(stored_outbound_locale(payload.get("locale"))),
                     )
                 elif kind == OUTBOX_KIND_BOOKING_PROMPT:
                     # A withdrawal or disable landing between this check and the send still sends

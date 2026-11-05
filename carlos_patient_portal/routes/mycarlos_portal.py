@@ -297,7 +297,7 @@ def register_mycarlos_portal_routes(
             )
         session.commit()
         try:
-            send_mfa_challenge(runtime, delivery)
+            send_mfa_challenge(runtime, delivery, request_locale(request))
         except (PortalEmailDeliveryError, PortalSmsDeliveryError):
             record_mfa_delivery_and_commit(
                 session, delivery=delivery, outcome=AUDIT_OUTCOME_FAILURE

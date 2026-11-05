@@ -378,7 +378,9 @@ def register_login_routes(
         if result.mfa_challenge is not None:
             await run_in_threadpool(session.commit)
             try:
-                await run_in_threadpool(send_mfa_challenge, runtime, result.mfa_challenge)
+                await run_in_threadpool(
+                    send_mfa_challenge, runtime, result.mfa_challenge, request_locale(request)
+                )
             except (PortalEmailDeliveryError, PortalSmsDeliveryError):
                 runtime.operational_metrics.record_failure("mfa_delivery")
                 await run_in_threadpool(
@@ -523,7 +525,7 @@ def register_mfa_routes(
             )
         await run_in_threadpool(session.commit)
         try:
-            await run_in_threadpool(send_mfa_challenge, runtime, delivery)
+            await run_in_threadpool(send_mfa_challenge, runtime, delivery, request_locale(request))
         except (PortalEmailDeliveryError, PortalSmsDeliveryError):
             runtime.operational_metrics.record_failure("mfa_delivery")
             await run_in_threadpool(
@@ -797,6 +799,7 @@ def register_password_reset_routes(
                     encryption_secret=runtime.outbox_encryption_secret,
                     encryption_key_id=runtime.outbox_active_key_id,
                     max_pending=deps.settings.password_reset_queue_max_pending,
+                    locale=request_locale(request),
                 )
             except PasswordResetQueueFullError:
                 # Release the PostgreSQL transaction-scoped admission lock before constructing
@@ -866,6 +869,7 @@ def register_password_reset_routes(
                     runtime,
                     recipient=result.recipient,
                     reset_url=reset_url,
+                    locale=request_locale(request),
                 )
             except PortalEmailDeliveryError as exc:
                 await run_in_threadpool(
@@ -1038,6 +1042,7 @@ def register_email_change_routes(
                         send_contact_change_notice,
                         runtime,
                         recipient=recipient,
+                        locale=request_locale(request),
                     )
                 except PortalEmailDeliveryError:
                     runtime.operational_metrics.record_failure("contact_change_delivery")
@@ -1052,6 +1057,7 @@ def register_email_change_routes(
                     recipient=recipient,
                     encryption_secret=runtime.outbox_encryption_secret,
                     encryption_key_id=runtime.outbox_active_key_id,
+                    locale=request_locale(request),
                 )
                 deliveries.append(delivery)
             await run_in_threadpool(session.commit)
