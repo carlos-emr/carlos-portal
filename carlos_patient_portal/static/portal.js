@@ -42,9 +42,15 @@ if (sessionChannel) {
 window.addEventListener("pagehide", concealRevealed);
 // Hidden: a timer clears the password after the limit. A hidden page's timers can run late or not
 // at all (the browser slows them, the computer sleeps), so on coming back the time spent hidden is
-// checked too, by the wall clock, which keeps counting while the computer sleeps.
+// checked too, by two clocks: the wall clock, which keeps counting while the computer sleeps, and
+// the page's own clock (performance.now), which cannot be set back. Either one reaching the limit
+// clears it.
 let hiddenSince = null;
 let hiddenTimer = null;
+const hiddenTooLong = () => hiddenSince !== null && (
+  Date.now() - hiddenSince.wall >= REVEAL_HIDDEN_LIMIT_MS
+  || performance.now() - hiddenSince.page >= REVEAL_HIDDEN_LIMIT_MS
+);
 document.addEventListener("visibilitychange", () => {
   if (hiddenTimer !== null) {
     window.clearTimeout(hiddenTimer);
@@ -52,7 +58,7 @@ document.addEventListener("visibilitychange", () => {
   }
   if (document.visibilityState === "hidden") {
     if (hiddenSince === null) {
-      hiddenSince = Date.now();
+      hiddenSince = { wall: Date.now(), page: performance.now() };
     }
     hiddenTimer = window.setTimeout(() => {
       hiddenTimer = null;
@@ -60,7 +66,7 @@ document.addEventListener("visibilitychange", () => {
     }, REVEAL_HIDDEN_LIMIT_MS);
     return;
   }
-  if (hiddenSince !== null && Date.now() - hiddenSince >= REVEAL_HIDDEN_LIMIT_MS) {
+  if (hiddenTooLong()) {
     concealRevealed();
   }
   hiddenSince = null;

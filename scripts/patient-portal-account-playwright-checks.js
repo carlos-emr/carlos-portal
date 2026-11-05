@@ -12,8 +12,9 @@
  *   6. A successful password-Reveal response that arrives after the session ended in another tab,
  *      or after the page was hidden (carlos-emr/mycarlos#194).
  *   7. A revealed password through a tab switch: still shown after a brief switch, cleared after
- *      two minutes hidden (by the page's timer, or on return when the timer ran late), and cleared
- *      at once when the session ends in another tab.
+ *      two minutes hidden (by the page's timer, or on return when the timer ran late, by either
+ *      the wall clock or the page's own clock), and cleared at once when the session ends in
+ *      another tab.
  *
  * It is a separate script, with its own seed (tests/seed_browser_account.py), so it never edits or
  * depends on the main check's fixtures or steps.
@@ -1495,6 +1496,35 @@ async function checkRevealThroughTabSwitch(page, context) {
   assert(await shown(), 'no timer has fired yet, so the password is still in the page');
   await setHidden(false);
   assert(!(await shown()), 'coming back after the limit, with a late timer, kept the password');
+
+  // 7e. The wall clock is set back while the page is hidden (so by it, no time passed), and no
+  // timer fires; the page's own clock (performance.now) still moved past the limit. On coming
+  // back the page clears it: either clock reaching the limit is enough.
+  await revealNow();
+  await setHidden(true);
+  const wallBefore = await page.evaluate(() => Date.now());
+  await page.clock.setSystemTime(wallBefore - 60 * 60 * 1000);
+  await page.evaluate((jump) => {
+    const pageClock = performance.now.bind(performance);
+    window.__checkRealPerformanceNow = pageClock;
+    Object.defineProperty(performance, 'now', {
+      configurable: true,
+      writable: true,
+      value: () => pageClock() + jump,
+    });
+  }, revealHiddenLimitMs + 60 * 1000);
+  assert(await shown(), 'no timer has fired yet, so the password is still in the page');
+  await setHidden(false);
+  assert(!(await shown()), 'a wall clock set back while hidden kept the revealed password');
+  await page.evaluate(() => {
+    Object.defineProperty(performance, 'now', {
+      configurable: true,
+      writable: true,
+      value: window.__checkRealPerformanceNow,
+    });
+    delete window.__checkRealPerformanceNow;
+  });
+  await page.clock.setSystemTime(wallBefore);
 
   // 7d. The session ends in another tab while the password is shown: cleared at once.
   await revealNow();
