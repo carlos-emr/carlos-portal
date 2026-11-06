@@ -373,7 +373,7 @@ def test_the_key_gives_itself_up_and_then_only_gets_404(portal) -> None:
     register(client, A, key)
     gone = ask(client, key, method="DELETE")
     assert (gone.status_code, gone.json()) == (200, {"revoked": True})
-    assert keys(app, A)[0].revoked_by == "notice_key"
+    assert keys(app, A)[0].revoked_by == "waiting_key"
     clock.now += 200
     assert ask(client, key, iat=clock.now, exp=clock.now + 60).status_code == 404
     assert ask(client, key, method="DELETE", iat=clock.now, exp=clock.now + 60).status_code == 404

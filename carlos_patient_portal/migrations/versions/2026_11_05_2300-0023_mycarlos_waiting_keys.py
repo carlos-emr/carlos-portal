@@ -39,7 +39,7 @@ _ALEMBIC_REVISION_IDENTIFIERS: dict[str, str | Sequence[str] | None] = {
 globals().update(_ALEMBIC_REVISION_IDENTIFIERS)
 
 _KEYS = "patient_portal_mycarlos_waiting_keys"
-_REVOKED_BY = ("device", "notice_key", "device_removed", "staff", "unlink")
+_REVOKED_BY = ("device", "waiting_key", "device_removed", "staff", "unlink")
 
 
 def upgrade() -> None:

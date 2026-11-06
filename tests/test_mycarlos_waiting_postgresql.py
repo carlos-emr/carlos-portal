@@ -83,7 +83,7 @@ def test_the_table_checks_its_ids_and_who_revoked(pg) -> None:  # noqa: F811
                     )
                 )
             )
-    for allowed in ("device", "notice_key", "device_removed", "staff", "unlink"):
+    for allowed in ("device", "waiting_key", "device_removed", "staff", "unlink"):
         other = public_key(f"allowed-{allowed}")
         with factory() as session, session.begin():
             session.add(

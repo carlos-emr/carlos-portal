@@ -2286,7 +2286,7 @@ class PatientPortalMyCarlosAvailabilityOutbox(Base):
 # get yes or no. Bound to the device row, so to one link. Only the public key is stored. A
 # revoked key stays as a tombstone, so a revoked key id never comes back. ("Notice key" in the
 # design note; the portal already uses that name for its own HMAC notice secrets.)
-MYCARLOS_WAITING_KEY_REVOKED_BY = ("device", "notice_key", "device_removed", "staff", "unlink")
+MYCARLOS_WAITING_KEY_REVOKED_BY = ("device", "waiting_key", "device_removed", "staff", "unlink")
 
 
 class PatientPortalMyCarlosWaitingKey(Base):

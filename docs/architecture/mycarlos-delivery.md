@@ -565,7 +565,7 @@ The routes:
 
 **Who revoked it** is kept on the tombstone:
 - `device`: given up or replaced with the device key;
-- `notice_key`: given up by the key itself;
+- `waiting_key`: given up by the key itself;
 - `device_removed`: the patient removed the device;
 - `staff`: removed through CARLOS;
 - `unlink`: reserved for a device unlink route, which does not exist yet.

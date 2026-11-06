@@ -423,5 +423,5 @@ def revoke_self(session: Session, principal: WaitingPrincipal, *, now: datetime)
     if not session.in_transaction():
         raise AvailabilityError("transaction_required")
     row = _locked_key(session, principal)
-    _revoke(row, "notice_key", now)
+    _revoke(row, "waiting_key", now)
     session.flush()
