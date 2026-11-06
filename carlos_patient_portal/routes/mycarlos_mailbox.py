@@ -112,6 +112,12 @@ async def bounded_body(request: Request, maximum: int) -> bytes:
     return bytes(body)
 
 
+# The kinds of copy besides originals a myCarlos may say it reads, in the listing's `accept`
+# (myCarlos#277). The listing is the same either way; any other value is refused, so a typo is not
+# taken for something the app can read.
+ACCEPTED_LISTING_KINDS = frozenset({"reading-aid/1"})
+
+
 def query_values(
     request: Request, allowed: set[str], *, maximum: int, default: int
 ) -> tuple[int, int, dict[str, str]]:
@@ -210,8 +216,10 @@ def register_device_mailbox_routes(app: FastAPI, runtime: PortalRuntime) -> None
             _body: bytes,
         ) -> Response:
             after, limit, values = query_values(
-                request, {"after", "through", "limit"}, maximum=100, default=50
+                request, {"after", "through", "limit", "accept"}, maximum=100, default=50
             )
+            if "accept" in values and values["accept"] not in ACCEPTED_LISTING_KINDS:
+                raise MailboxRefusal("invalid_cursor")
             through = (
                 cursor(values["through"])
                 if "through" in values

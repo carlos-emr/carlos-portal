@@ -215,6 +215,30 @@ def test_signed_list_download_receipt_and_anchor_survive_actual_http(http_mailbo
     assert [value["proof_kind"] for value in anchors.json()["anchors"]] == ["request", "receipt"]
 
 
+def test_the_listing_takes_the_apps_accept_and_refuses_any_other_query(http_mailbox):
+    _app, client, _proxy = http_mailbox
+    assert client.post(UPLOAD_PATH, content=BODY, headers=job_headers()).status_code == 201
+    # What a myCarlos with reading aids sends (myCarlos#277): the listing is the same.
+    accepted = LIST_PATH + "?limit=50&accept=reading-aid/1"
+    listed = client.get(accepted, headers=device_headers(accepted))
+    assert listed.status_code == 200
+    assert listed.json()["deliveries"] == [OUTER]
+    for query in (
+        "accept=reading-aid/2",
+        "accept=reading-aid%2F1",
+        "accept=",
+        "accept=reading-aid/1,reading-aid/2",
+        "accept=reading-aid/1&accept=reading-aid/1",
+        # Any other key is refused as before.
+        "kinds=reading-aid/1",
+        "limit=50&format=reading-aid/1",
+    ):
+        path = LIST_PATH + "?" + query
+        refused = client.get(path, headers=device_headers(path))
+        assert refused.status_code == 400, query
+        assert refused.json() == {"code": "invalid_cursor"}, query
+
+
 @pytest.mark.parametrize(
     "nonce_already_committed", [False, True], ids=["nonce_commit", "operation_commit"]
 )
