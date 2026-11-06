@@ -1087,7 +1087,7 @@ and name, signed with the new key:
 `PATIENT_PORTAL_MYCARLOS_DELIVERY_ENABLED` (default `false`) turns the feature on. Leave it off:
 it is still being built, and while it is off none of its pages or routes exist.
 
-Two more switches, also default `false`, turn on later parts:
+More switches, also default `false`, turn on later parts:
 
 - `PATIENT_PORTAL_MYCARLOS_MAILBOX_ENABLED`: the device mailbox (pickup of sealed copies).
 - `PATIENT_PORTAL_MYCARLOS_APPROVAL_ENABLED`: device approval (a clinic or an existing device
@@ -1096,6 +1096,9 @@ Two more switches, also default `false`, turn on later parts:
 - `PATIENT_PORTAL_MYCARLOS_APPROVAL_CONTRACT_V2_ENABLED` (off by default): device approval
   contract v2, where a request staff approve may wait 24 hours (myCarlos #144). Off, the portal
   lists and takes only v1. Turn it on only after this clinic's CARLOS takes v2.
+- `PATIENT_PORTAL_MYCARLOS_AVAILABILITY_ENABLED`: "documents ready" availability for linked
+  devices, both the push enrollment and the waiting check a locked myCarlos asks with its waiting
+  key (see *The waiting check* in `docs/architecture/mycarlos-delivery.md`). It needs delivery on.
 
 The tables behind both exist from migration 0018 whatever the switches say (see *Rolling out
 0018* under Migrations).

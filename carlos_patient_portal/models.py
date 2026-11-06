@@ -2279,3 +2279,68 @@ class PatientPortalMyCarlosAvailabilityOutbox(Base):
         String(MAX_AVAILABILITY_DECISION_LENGTH), nullable=True
     )
     created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+# The waiting key (carlos-portal#87): a second Ed25519 key a linked device registers so that,
+# while its vault is locked, it can ask one thing, "is anything waiting for this device?", and
+# get yes or no. Bound to the device row, so to one link. Only the public key is stored. A
+# revoked key stays as a tombstone, so a revoked key id never comes back. ("Notice key" in the
+# design note; the portal already uses that name for its own HMAC notice secrets.)
+MYCARLOS_WAITING_KEY_REVOKED_BY = ("device", "notice_key", "device_removed", "staff", "unlink")
+
+
+class PatientPortalMyCarlosWaitingKey(Base):
+    """One registered waiting key of a linked device; at most one live key per device."""
+
+    __tablename__ = "patient_portal_mycarlos_waiting_keys"
+    __table_args__ = (
+        CheckConstraint(
+            f"length(key_id) = {MYCARLOS_DEVICE_KEY_ID_LENGTH}",
+            name="ck_pp_mycarlos_waiting_keys_kid",
+        ),
+        CheckConstraint(
+            f"length(public_key) = {MYCARLOS_PUBLIC_KEY_LENGTH}",
+            name="ck_pp_mycarlos_waiting_keys_key",
+        ),
+        CheckConstraint(
+            f"revoked_by is null or revoked_by in ({_sql_list(MYCARLOS_WAITING_KEY_REVOKED_BY)})",
+            name="ck_pp_mycarlos_waiting_keys_revoked_by",
+        ),
+        CheckConstraint(
+            "(revoked_at is null) = (revoked_by is null)",
+            name="ck_pp_mycarlos_waiting_keys_revoked_complete",
+        ),
+        Index("ux_pp_mycarlos_waiting_keys_kid", "key_id", unique=True),
+        # One live key per device: a new one replaces it, the old stays as a tombstone.
+        Index(
+            "ux_pp_mycarlos_waiting_keys_live",
+            "device_id",
+            unique=True,
+            sqlite_where=text("revoked_at is null"),
+            postgresql_where=text("revoked_at is null"),
+        ),
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key_id: Mapped[str] = mapped_column(String(MYCARLOS_DEVICE_KEY_ID_LENGTH), nullable=False)
+    public_key: Mapped[bytes] = mapped_column(
+        LargeBinary(MYCARLOS_PUBLIC_KEY_LENGTH), nullable=False
+    )
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey(ACCOUNT_FOREIGN_KEY_TARGET, name="fk_pp_mycarlos_waiting_keys_account"),
+        nullable=False,
+    )
+    device_id: Mapped[int] = mapped_column(
+        ForeignKey("patient_portal_mycarlos_devices.id", name="fk_pp_mycarlos_waiting_keys_device"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    # The last "waiting" answer, for the one-answer-per-120-seconds rule.
+    last_answered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_by: Mapped[str | None] = mapped_column(String(16), nullable=True)

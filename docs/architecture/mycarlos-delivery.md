@@ -48,6 +48,7 @@ Every switch stays off until the whole flow works end to end.
 | Clinic signing key, ECDSA P-256 ([carlos#4691](https://github.com/carlos-emr/carlos/issues/4691)) | CARLOS, encrypted at rest | The PDF's own PAdES signature, and the delivery manifest |
 | Device encryption key, X25519 | myCarlos, inside the vault | Opening copies sealed to that device |
 | Device signing key, Ed25519 | myCarlos, inside the vault | Device requests to the portal, and pickup receipts |
+| Waiting key, Ed25519 ([carlos-portal#87](https://github.com/carlos-emr/carlos-portal/issues/87)) | myCarlos, outside the vault, in the OS-protected store | Only the "anything waiting?" check while the vault is locked (below) |
 | Portal TLS and server keys | Portal | Transport only. Never a document key. |
 
 **Device keys are per link.** myCarlos makes a fresh X25519 and Ed25519 pair for each portal link
@@ -514,6 +515,60 @@ portal's own tables:
   `device_removed` (403).
 - A CARLOS upload for it gets `device_removed` as well.
 - A removed link never comes back. Linking again makes a new link, with fresh keys.
+- The link's waiting key is revoked in the same transaction (`device_removed` when the patient
+  removes it, `staff` through CARLOS), so the waiting check answers 404 from then on.
+
+### The waiting check (a locked myCarlos)
+
+A locked myCarlos cannot sign device requests: the device key is inside the vault. It holds a
+second, separate Ed25519 key, the **waiting key**, which can ask one thing only: is a copy
+waiting for this device? The check is only there while `PATIENT_PORTAL_MYCARLOS_DELIVERY_ENABLED`
+and `PATIENT_PORTAL_MYCARLOS_AVAILABILITY_ENABLED` are both on.
+
+**The key.** The device makes it. The portal stores only the public key, bound to the device row,
+so to one link, with at most one live key per device.
+- `key_id` = b64url(SHA-256(`mycarlos-waiting-key-v1` ‖ u64be(32) ‖ public key)), 43 characters:
+  the same framing as `device_key_id`, under its own label.
+- A waiting key id never names a device, and a device key id never names a waiting key.
+
+**Registering, with the device key** (a device request, like every route above):
+- `POST /api/mycarlos/availability/waiting-keys`, body exactly
+  `{"key_id", "public_key" (b64url of 32 bytes), "alg": "ed25519"}`.
+  - 201 for a new key; 200 for the same live key again. A different key replaces the live one,
+    which stays as a tombstone.
+  - 400 `invalid_waiting_key`: bad shape, a key id that is not the key's, or the device's own key.
+  - 409 `waiting_key_taken`: a key id ever registered before, by any device, or revoked. A
+    revoked key never comes back.
+- `DELETE /api/mycarlos/availability/waiting-keys/{key_id}`: 200 `{"key_id", "revoked": true}`,
+  also again; 404 if it is not this device's key.
+
+**Asking, with the waiting key.** Header `X-MyCarlos-Waiting-Assertion`, the same compact form as
+a device assertion.
+- Claims exactly `aud` (`carlos-patient-portal-waiting-check`), `iss`, `kid` (the key id), `jti`,
+  `iat`, `exp` and `request_hash`. There is no `recipient_id`.
+- At most 60 seconds of lifetime. The nonce is used once, in the same table as device, staff and
+  job assertions.
+- The audience is the domain separator: a waiting assertion never passes a device route, and a
+  device assertion never passes the check.
+
+The routes:
+- `POST /api/mycarlos/availability/waiting`, body exactly `{"key_id"}` (the assertion's `kid`).
+  - **200**, with exactly `{"waiting": true}` or `{"waiting":false}`. Both are 17 bytes, so their
+    size never tells them apart. True while a not-expired copy is `waiting` for the device.
+  - **429** `{"detail": "too soon"}` with `Retry-After`, less than 120 seconds after the key's
+    last answer. It still uses up the assertion.
+  - **404** `{"detail": "not found"}` for every other refusal: a bad, expired or replayed
+    assertion, an unknown or revoked key, or a removed device.
+  - The answer carries no count, no delivery id, no name, date or clinic name.
+- `DELETE /api/mycarlos/availability/waiting`, body exactly `{"key_id"}`: the key gives itself up
+  (a locked app turning its tray notices off). 200 `{"revoked": true}`; afterwards, only 404.
+
+**Who revoked it** is kept on the tombstone:
+- `device`: given up or replaced with the device key;
+- `notice_key`: given up by the key itself;
+- `device_removed`: the patient removed the device;
+- `staff`: removed through CARLOS;
+- `unlink`: reserved for a device unlink route, which does not exist yet.
 
 ### Device requests
 
