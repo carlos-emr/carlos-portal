@@ -517,6 +517,9 @@ portal's own tables:
 - A removed link never comes back. Linking again makes a new link, with fresh keys.
 - The link's waiting key is revoked in the same transaction (`device_removed` when the patient
   removes it, `staff` through CARLOS), so the waiting check answers 404 from then on.
+- So are its availability subscriptions, with the same `revoked_by`, and their pending notices
+  are deleted. Dispatch already refused a removed device; now its push destinations stay only as
+  tombstones, so a removed destination never enrolls again.
 
 ### The waiting check (a locked myCarlos)
 

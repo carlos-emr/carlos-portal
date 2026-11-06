@@ -2131,7 +2131,7 @@ class PatientPortalClinicKey(Base):
 # enrollment and the outbox the policy core in mycarlos_availability needs. Unused while
 # PATIENT_PORTAL_MYCARLOS_AVAILABILITY_ENABLED is off; nothing here sends anything.
 MYCARLOS_AVAILABILITY_PLATFORMS = ("android_fcm", "ios_apns", "macos_apns", "windows_wns")
-MYCARLOS_AVAILABILITY_REVOKED_BY = ("device", "provider", "staff")
+MYCARLOS_AVAILABILITY_REVOKED_BY = ("device", "provider", "staff", "device_removed")
 MYCARLOS_AVAILABILITY_OUTBOX_STATUSES = ("pending", "leased", "done")
 UUID_TEXT_LENGTH = 36
 MAX_AVAILABILITY_DECISION_LENGTH = 96

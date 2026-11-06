@@ -23,7 +23,7 @@ from datetime import UTC, datetime
 from time import time
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -255,6 +255,44 @@ def revoke(
             session.delete(pending)
         session.flush()
     return row
+
+
+def revoke_for_removed_device(
+    session: Session, device_id: int, *, by: str, now: datetime | None = None
+) -> int:
+    """Revokes every live subscription of a device being removed, and its pending intents; how
+    many subscriptions there were.
+
+    `remove_device` calls it in its own transaction, holding the device row, which enrollment,
+    revocation and queueing lock first. A leased intent is already being sent and cannot be
+    recalled: the dispatch-time check refuses an inactive device anyway.
+    """
+    rows = list(
+        session.scalars(
+            select(PatientPortalMyCarlosAvailabilitySubscription)
+            .where(
+                PatientPortalMyCarlosAvailabilitySubscription.device_id == device_id,
+                PatientPortalMyCarlosAvailabilitySubscription.revoked_at.is_(None),
+            )
+            .with_for_update()
+        )
+    )
+    current = now or datetime.now(UTC)
+    for row in rows:
+        row.revoked_at = current
+        row.revoked_by = by
+        row.remote_enabled = False
+    if rows:
+        session.execute(
+            delete(PatientPortalMyCarlosAvailabilityOutbox).where(
+                PatientPortalMyCarlosAvailabilityOutbox.subscription_id.in_(
+                    [row.subscription_id for row in rows]
+                ),
+                PatientPortalMyCarlosAvailabilityOutbox.status == STATUS_PENDING,
+            )
+        )
+    session.flush()
+    return len(rows)
 
 
 @dataclass(frozen=True)
