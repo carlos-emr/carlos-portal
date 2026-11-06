@@ -1,3 +1,90 @@
+// A revealed password must not outlive the page's session, nor stay on a page left hidden
+// (carlos-emr/mycarlos#194). It is cleared at once when the session ends (signing out here or in
+// another tab of this browser) and when the page itself goes (it is left, or put in the
+// back/forward cache). A brief switch to another tab or app keeps it shown; a page hidden for
+// REVEAL_HIDDEN_LIMIT_MS clears it.
+// `revealGeneration` counts the times the page concealed what it showed: a Reveal answer that was
+// already on its way when that happened belongs to an older generation and is dropped, so a late
+// answer can neither put a password on a page whose session ended, nor leave it there. An answer
+// that arrives while the page is hidden is dropped too.
+const REVEAL_HIDDEN_LIMIT_MS = 2 * 60 * 1000;
+let revealGeneration = 0;
+const concealRevealed = () => {
+  revealGeneration += 1;
+  for (const button of document.querySelectorAll("[data-reveal-target]")) {
+    if (!(button instanceof HTMLButtonElement)) {
+      continue;
+    }
+    const target = document.getElementById(button.dataset.revealTarget || "");
+    if (target instanceof HTMLElement) {
+      target.textContent = "";
+      const copyButton = target.parentElement?.querySelector("[data-copy-target]");
+      if (copyButton instanceof HTMLButtonElement) {
+        copyButton.hidden = true;
+      }
+    }
+    button.hidden = false;
+    button.disabled = false;
+    button.textContent = button.dataset.revealLabel || "Reveal";
+  }
+};
+// Another tab of this browser ended the session: this page keeps no password either.
+const sessionChannel = typeof BroadcastChannel === "function"
+  ? new BroadcastChannel("carlos-portal-session")
+  : null;
+if (sessionChannel) {
+  sessionChannel.onmessage = (message) => {
+    if (message.data === "ended") {
+      concealRevealed();
+    }
+  };
+}
+window.addEventListener("pagehide", concealRevealed);
+// Hidden: a timer clears the password after the limit. A hidden page's timers can run late or not
+// at all (the browser slows them, the computer sleeps), so on coming back the time spent hidden is
+// checked too, by two clocks: the wall clock, which keeps counting while the computer sleeps, and
+// the page's own clock (performance.now), which cannot be set back. Either one reaching the limit
+// clears it.
+let hiddenSince = null;
+let hiddenTimer = null;
+const hiddenTooLong = () => hiddenSince !== null && (
+  Date.now() - hiddenSince.wall >= REVEAL_HIDDEN_LIMIT_MS
+  || performance.now() - hiddenSince.page >= REVEAL_HIDDEN_LIMIT_MS
+);
+document.addEventListener("visibilitychange", () => {
+  if (hiddenTimer !== null) {
+    window.clearTimeout(hiddenTimer);
+    hiddenTimer = null;
+  }
+  if (document.visibilityState === "hidden") {
+    if (hiddenSince === null) {
+      hiddenSince = { wall: Date.now(), page: performance.now() };
+    }
+    hiddenTimer = window.setTimeout(() => {
+      hiddenTimer = null;
+      concealRevealed();
+    }, REVEAL_HIDDEN_LIMIT_MS);
+    return;
+  }
+  if (hiddenTooLong()) {
+    concealRevealed();
+  }
+  hiddenSince = null;
+});
+document.addEventListener(
+  "submit",
+  (event) => {
+    if (
+      event.target instanceof HTMLFormElement
+      && (event.target.getAttribute("action") || "").endsWith("/portal/logout")
+    ) {
+      concealRevealed();
+      sessionChannel?.postMessage("ended");
+    }
+  },
+  true
+);
+
 document.addEventListener("click", (event) => {
   if (!(event.target instanceof Element)) {
     return;
@@ -26,6 +113,7 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  const generation = revealGeneration;
   revealButton.disabled = true;
   revealButton.textContent = revealButton.dataset.revealingLabel || "Revealing...";
   const requestBody = new URLSearchParams({
@@ -64,6 +152,12 @@ document.addEventListener("click", (event) => {
         || typeof payload.passphrase !== "string"
       ) {
         throw new Error("invalid reveal response");
+      }
+      if (generation !== revealGeneration || document.visibilityState === "hidden") {
+        // The page was hidden, or its session ended, while this answer was on its way.
+        revealButton.textContent = revealButton.dataset.revealLabel || "Reveal";
+        revealButton.disabled = false;
+        return;
       }
       target.textContent = payload.passphrase;
       const copyButton = target.parentElement?.querySelector("[data-copy-target]");
@@ -138,6 +232,8 @@ window.addEventListener("pageshow", () => {
   for (const toggle of passwordToggles) {
     setPasswordsShown(toggle, false);
   }
+  // A page restored from the back/forward cache never shows what it had revealed.
+  concealRevealed();
 });
 
 document.addEventListener("click", (event) => {
