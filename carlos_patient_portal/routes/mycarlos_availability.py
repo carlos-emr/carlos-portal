@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from time import time
 
 from fastapi import FastAPI, Request
@@ -60,6 +60,23 @@ from carlos_patient_portal.mycarlos_availability_store import (
     revoke,
     subscriptions_for_owner,
 )
+from carlos_patient_portal.mycarlos_waiting import (
+    WAITING_ASSERTION_HEADER,
+    WAITING_KEYS_PATH,
+    WAITING_PATH,
+    TooSoon,
+    WaitingPrincipal,
+    WaitingRefusal,
+    answer,
+    consume_waiting_assertion,
+    find_waiting_key,
+    parse_check,
+    parse_registration,
+    register,
+    revoke_for_device,
+    revoke_self,
+    verify_waiting_assertion,
+)
 from carlos_patient_portal.routes.mycarlos import signed_path
 from carlos_patient_portal.runtime import PortalRuntime
 from carlos_patient_portal.staff_identity import staff_request_hash
@@ -68,6 +85,7 @@ SUBSCRIPTIONS_PATH = "/api/mycarlos/availability/subscriptions"
 REVOCATIONS_PATH = "/api/mycarlos/availability/revocations"
 MAX_ENROLLMENT_BODY = 1024
 MAX_REVOCATION_BODY = 1024
+MAX_WAITING_BODY = 256
 NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 ENROLLMENT_FIELDS = frozenset(
     {
@@ -104,6 +122,23 @@ def _refused(code: str) -> JSONResponse:
     status = REFUSAL_STATUS.get(code, 400)
     if status == 404:
         return _response({"detail": "not found"}, 404)
+    return _response({"code": code}, status)
+
+
+# The waiting key's refusals (carlos-portal#87). Everything about the waiting check itself is 404.
+WAITING_REFUSAL_STATUS = {
+    "invalid_waiting_key": 400,
+    "waiting_key_taken": 409,
+    "device_inactive": 403,
+    "not_found": 404,
+}
+NOT_FOUND = {"detail": "not found"}
+
+
+def _waiting_refused(code: str) -> JSONResponse:
+    status = WAITING_REFUSAL_STATUS.get(code, 400)
+    if status == 404:
+        return _response(NOT_FOUND, 404)
     return _response({"code": code}, status)
 
 
@@ -206,6 +241,8 @@ def register_mycarlos_availability_routes(app: FastAPI, runtime: PortalRuntime) 
             return content  # Context exited/COMMIT succeeded before exposing success.
         except EnrollmentRefusal as exc:
             return _refused(exc.code)
+        except WaitingRefusal as exc:
+            return _waiting_refused(exc.code)
         except AvailabilityError:
             return _refused("invalid_enrollment")
 
@@ -267,3 +304,90 @@ def register_mycarlos_availability_routes(app: FastAPI, runtime: PortalRuntime) 
             return _response({"destination_id": row.destination_id, "revoked": True})
 
         return await call(request, MAX_REVOCATION_BODY, operation)
+
+    # --- The waiting key (carlos-portal#87) -------------------------------------------------
+    # Registered and given up with the device key, like every device route.
+
+    @app.post(WAITING_KEYS_PATH, include_in_schema=runtime.settings.is_development)
+    async def register_waiting_key(request: Request) -> Response:
+        def operation(session: Session, owner: Owner, body: bytes) -> Response:
+            key_id, public_key = parse_registration(body)
+            row, created = register(session, owner, key_id, public_key)
+            return _response({"key_id": row.key_id, "registered": True}, 201 if created else 200)
+
+        return await call(request, MAX_WAITING_BODY, operation)
+
+    @app.delete(WAITING_KEYS_PATH + "/{key_id}", include_in_schema=runtime.settings.is_development)
+    async def revoke_waiting_key(request: Request, key_id: str) -> Response:
+        def operation(session: Session, owner: Owner, body: bytes) -> Response:
+            if body:
+                raise WaitingRefusal("invalid_waiting_key")
+            row = revoke_for_device(session, owner, key_id)
+            return _response({"key_id": row.key_id, "revoked": True})
+
+        return await call(request, 0, operation)
+
+    # Signed with the waiting key itself. Every refusal is the same 404, and both answers are
+    # 17 bytes: the check tells a caller nothing but "waiting" or not.
+
+    def execute_waiting(
+        request: Request,
+        body: bytes,
+        operation: Callable[[Session, WaitingPrincipal], Response],
+    ) -> Response:
+        request_hash = staff_request_hash(
+            request.method,
+            signed_path(runtime, request),
+            request.scope.get("query_string", b""),
+            body,
+        )
+        try:
+            claimed = parse_check(body)
+            with runtime.session_factory() as lookup:
+                principal = verify_waiting_assertion(
+                    request.headers.get(WAITING_ASSERTION_HEADER),
+                    find_key=lambda kid: find_waiting_key(lookup, kid),
+                    expected_request_hash=request_hash,
+                    now=int(time()),
+                )
+            if claimed != principal.key_id:
+                raise WaitingRefusal("not_found")
+            consume_waiting_assertion(runtime.session_factory, principal, now=int(time()))
+            with runtime.session_factory() as session, session.begin():
+                content = operation(session, principal)
+            return content
+        except TooSoon as exc:
+            return JSONResponse(
+                content={"detail": "too soon"},
+                status_code=429,
+                headers={**NO_STORE, "Retry-After": str(exc.retry_after)},
+            )
+        except (DeviceRefusal, WaitingRefusal, AvailabilityError):
+            return _response(NOT_FOUND, 404)
+
+    async def call_waiting(
+        request: Request, operation: Callable[[Session, WaitingPrincipal], Response]
+    ) -> Response:
+        try:
+            body = await _bounded_body(request, MAX_WAITING_BODY)
+        except _TooLarge:
+            return _response({"detail": "request too large"}, 413)
+        if request.scope.get("query_string", b""):
+            return _response(NOT_FOUND, 404)
+        return await run_in_threadpool(execute_waiting, request, body, operation)
+
+    @app.post(WAITING_PATH, include_in_schema=runtime.settings.is_development)
+    async def anything_waiting(request: Request) -> Response:
+        def operation(session: Session, principal: WaitingPrincipal) -> Response:
+            content = answer(session, principal, now=datetime.fromtimestamp(time(), tz=UTC))
+            return Response(content=content, media_type="application/json", headers=NO_STORE)
+
+        return await call_waiting(request, operation)
+
+    @app.delete(WAITING_PATH, include_in_schema=runtime.settings.is_development)
+    async def give_up_waiting_key(request: Request) -> Response:
+        def operation(session: Session, principal: WaitingPrincipal) -> Response:
+            revoke_self(session, principal, now=datetime.fromtimestamp(time(), tz=UTC))
+            return _response({"revoked": True})
+
+        return await call_waiting(request, operation)

@@ -63,6 +63,7 @@ EXPECTED_TABLE_PRIVILEGES = {
     "patient_portal_mycarlos_link_codes": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_mycarlos_link_failures": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_mycarlos_recipients": ORDINARY_TABLE_PRIVILEGES,
+    "patient_portal_mycarlos_waiting_keys": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_outbound_deliveries": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_password_reset_tokens": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_sessions": ORDINARY_TABLE_PRIVILEGES,
