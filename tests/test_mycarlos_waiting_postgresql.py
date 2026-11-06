@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
+from carlos_patient_portal.auth import set_patient_account_access
 from carlos_patient_portal.models import (
     PatientPortalAccount,
     PatientPortalMyCarlosDevice,
@@ -288,7 +289,13 @@ def test_waiting_answer_waits_for_account_disable_and_refuses_cached_active_stat
                 .where(PatientPortalAccount.id == owner.account_id)
                 .with_for_update()
             )
-            account.status = "disabled"
+            set_patient_account_access(
+                holder,
+                account.id,
+                "FAKE staff",
+                enabled=False,
+                clinic_id=account.clinic_id,
+            )
             holder.flush()
             holder_pid = holder.scalar(text("select pg_backend_pid()"))
             start.set()
