@@ -212,3 +212,42 @@ def test_nothing_waits_once_the_copy_has_expired(pg) -> None:  # noqa: F811
     principal = registered(factory, owner, "expired")
     with factory() as session, session.begin():
         assert answer(session, principal, now=AT) == ANSWER_NOTHING
+
+
+def test_removing_a_device_tombstones_its_keys_and_subscriptions(pg) -> None:  # noqa: F811
+    from carlos_patient_portal.models import PatientPortalMyCarlosAvailabilitySubscription
+    from carlos_patient_portal.mycarlos_availability_store import enroll
+    from carlos_patient_portal.mycarlos_devices import remove_device
+    from tests.test_mycarlos_availability_store import consent
+
+    _engine, factory = pg
+    with factory() as session, session.begin():
+        owner = add_owner(session, "pg-removed")
+        enroll(session, owner, consent())
+    registered(factory, owner, "removed")
+    with factory() as session, session.begin():
+        device_key_id = session.scalar(
+            select(PatientPortalMyCarlosDevice.device_key_id).where(
+                PatientPortalMyCarlosDevice.id == owner.device_id
+            )
+        )
+        assert remove_device(
+            session,
+            account_id=owner.account_id,
+            device_key_id=device_key_id,
+            removed_by="patient",
+            now=AT,
+        )
+    with factory() as session:
+        keys = session.scalars(
+            select(PatientPortalMyCarlosWaitingKey.revoked_by).where(
+                PatientPortalMyCarlosWaitingKey.device_id == owner.device_id
+            )
+        ).all()
+        subscriptions = session.scalars(
+            select(PatientPortalMyCarlosAvailabilitySubscription.revoked_by).where(
+                PatientPortalMyCarlosAvailabilitySubscription.device_id == owner.device_id
+            )
+        ).all()
+    # 0024's CHECK takes the removal on PostgreSQL too.
+    assert (keys, subscriptions) == (["device_removed"], ["device_removed"])
