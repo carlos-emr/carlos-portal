@@ -14,7 +14,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
+from carlos_patient_portal.auth import set_patient_account_access
 from carlos_patient_portal.models import (
+    PatientPortalAccount,
     PatientPortalMyCarlosDevice,
     PatientPortalMyCarlosWaitingKey,
 )
@@ -23,6 +25,7 @@ from carlos_patient_portal.mycarlos_waiting import (
     ANSWER_WAITING,
     TooSoon,
     WaitingPrincipal,
+    WaitingRefusal,
     answer,
     register,
     waiting_key_id,
@@ -251,3 +254,54 @@ def test_removing_a_device_tombstones_its_keys_and_subscriptions(pg) -> None:  #
         ).all()
     # 0024's CHECK takes the removal on PostgreSQL too.
     assert (keys, subscriptions) == (["device_removed"], ["device_removed"])
+
+
+def test_waiting_answer_waits_for_account_disable_and_refuses_cached_active_state(pg) -> None:  # noqa: F811
+    engine, factory = pg
+    with factory() as session, session.begin():
+        owner = add_owner(session, "pg-account-disable")
+    principal = registered(factory, owner, "pg-account-disable")
+    request_pid = []
+    cached = Event()
+    start = Event()
+
+    def waiting_request():
+        with factory() as session:
+            account = session.get(PatientPortalAccount, owner.account_id)
+            assert account.status == "active"
+            session.commit()
+            cached.set()
+            assert start.wait(5)
+            with session.begin():
+                request_pid.append(session.scalar(text("select pg_backend_pid()")))
+                try:
+                    answer(session, principal, now=AT)
+                except WaitingRefusal as exc:
+                    return exc.code
+            return "unexpected answer"
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        pending = executor.submit(waiting_request)
+        assert cached.wait(5)
+        with factory() as holder, holder.begin():
+            account = holder.scalar(
+                select(PatientPortalAccount)
+                .where(PatientPortalAccount.id == owner.account_id)
+                .with_for_update()
+            )
+            set_patient_account_access(
+                holder,
+                account.id,
+                "FAKE staff",
+                enabled=False,
+                clinic_id=account.clinic_id,
+            )
+            holder.flush()
+            holder_pid = holder.scalar(text("select pg_backend_pid()"))
+            start.set()
+            observe_block(engine, holder_pid, request_pid, pending)
+        assert pending.result(timeout=5) == "not_found"
+    with factory() as session:
+        key = session.get(PatientPortalMyCarlosWaitingKey, principal.key_row_id)
+        assert key.revoked_at is None
+        assert key.last_answered_at is None
