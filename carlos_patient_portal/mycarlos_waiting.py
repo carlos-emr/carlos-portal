@@ -53,6 +53,7 @@ from carlos_patient_portal.device_identity import (
     _strict_b64url,
     _verify_signature,
     b64url,
+    lock_active_device_account,
 )
 from carlos_patient_portal.mailbox_models import MailboxCopy
 from carlos_patient_portal.models import (
@@ -153,6 +154,7 @@ def _locked_active_device(session: Session, owner: Owner) -> PatientPortalMyCarl
             PatientPortalMyCarlosDevice.account_id == owner.account_id,
         )
         .with_for_update()
+        .execution_options(populate_existing=True)
     ).first()
     if device is None or device.status != MYCARLOS_DEVICE_STATUS_ACTIVE:
         raise WaitingRefusal("device_inactive")
@@ -375,18 +377,28 @@ def consume_waiting_assertion(
 
 
 def _locked_key(session: Session, principal: WaitingPrincipal) -> PatientPortalMyCarlosWaitingKey:
-    row = session.scalars(
-        select(PatientPortalMyCarlosWaitingKey)
-        .where(PatientPortalMyCarlosWaitingKey.id == principal.key_row_id)
-        .with_for_update()
-    ).first()
-    device_status = session.scalar(
-        select(PatientPortalMyCarlosDevice.status).where(
-            PatientPortalMyCarlosDevice.id == principal.device_id
+    account_id = session.scalar(
+        select(PatientPortalMyCarlosWaitingKey.account_id).where(
+            PatientPortalMyCarlosWaitingKey.id == principal.key_row_id,
+            PatientPortalMyCarlosWaitingKey.device_id == principal.device_id,
         )
     )
-    # Revoked or removed between the check and this transaction: refused as unknown.
-    if row is None or row.revoked_at is not None or device_status != MYCARLOS_DEVICE_STATUS_ACTIVE:
+    # Match removal's account -> device -> key order and recheck after each lock.
+    if account_id is None or not lock_active_device_account(session, account_id):
+        raise WaitingRefusal("not_found")
+    _locked_active_device(session, Owner(account_id, principal.device_id))
+    row = session.scalars(
+        select(PatientPortalMyCarlosWaitingKey)
+        .where(
+            PatientPortalMyCarlosWaitingKey.id == principal.key_row_id,
+            PatientPortalMyCarlosWaitingKey.account_id == account_id,
+            PatientPortalMyCarlosWaitingKey.device_id == principal.device_id,
+            PatientPortalMyCarlosWaitingKey.key_id == principal.key_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).first()
+    if row is None or row.revoked_at is not None:
         raise WaitingRefusal("not_found")
     return row
 

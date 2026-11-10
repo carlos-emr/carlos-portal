@@ -32,6 +32,7 @@ from carlos_patient_portal.device_identity import (
     DeviceRefusal,
     consume_device_assertion,
     find_device_record,
+    lock_active_device_account,
     verify_device_assertion,
 )
 from carlos_patient_portal.internal_routes import InternalRouteDependencies, InternalRuntime
@@ -187,6 +188,8 @@ def register_device_mailbox_routes(app: FastAPI, runtime: PortalRuntime) -> None
             return response({"detail": "not found"}, 404)
         try:
             with runtime.session_factory() as session, session.begin():
+                if not lock_active_device_account(session, principal.account_id):
+                    raise MailboxRefusal("invalid_assertion", 404)
                 m = mailbox_lock(
                     session,
                     account_id=principal.account_id,
