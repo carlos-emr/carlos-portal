@@ -47,10 +47,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from carlos_patient_portal.models import (
+    ACCOUNT_STATUS_ACTIVE,
     MYCARLOS_DEVICE_STATUS_ACTIVE,
     MYCARLOS_LINK_CODE_LENGTH,
     MYCARLOS_LINK_ID_LENGTH,
     MYCARLOS_PUBLIC_KEY_LENGTH,
+    PatientPortalAccount,
     PatientPortalMyCarlosDevice,
     PatientPortalMyCarlosRecipient,
 )
@@ -443,6 +445,17 @@ def consume_device_assertion(
         raise DeviceRefusal(REFUSAL_EXPIRED) from exc
     except AssertionReplayError as exc:
         raise DeviceRefusal(REFUSAL_REPLAY) from exc
+
+
+def lock_active_device_account(session: Session, account_id: int) -> bool:
+    """Hold the owning gateway account before device work, refreshing any cached status."""
+    account = session.scalar(
+        select(PatientPortalAccount)
+        .where(PatientPortalAccount.id == account_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    return account is not None and account.status == ACCOUNT_STATUS_ACTIVE
 
 
 def find_device_record(session: Session, device_key_id_value: str) -> DeviceRecord | None:

@@ -45,6 +45,7 @@ from carlos_patient_portal.device_identity import (
     verify_link_request,
 )
 from carlos_patient_portal.models import (
+    ACCOUNT_STATUS_ACTIVE,
     AUDIT_ACTOR_TYPE_PATIENT,
     AUDIT_EVENT_MYCARLOS_LINK,
     AUDIT_OUTCOME_FAILURE,
@@ -306,7 +307,12 @@ def register_mycarlos_device_routes(app: FastAPI, runtime: PortalRuntime) -> Non
                 else None
             )
             recipient = recipient_id_for_account(session, principal.account_id) if account else None
-            if account is None or device is None or recipient is None:
+            if (
+                account is None
+                or account.status != ACCOUNT_STATUS_ACTIVE
+                or device is None
+                or recipient is None
+            ):
                 record_link_attempt(
                     outcome=AUDIT_OUTCOME_FAILURE,
                     reason="unknown_device",

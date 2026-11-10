@@ -47,6 +47,7 @@ from carlos_patient_portal.device_identity import (
     DeviceRefusal,
     consume_device_assertion,
     find_device_record,
+    lock_active_device_account,
     verify_device_assertion,
 )
 from carlos_patient_portal.models import PatientPortalMyCarlosAvailabilitySubscription
@@ -237,6 +238,8 @@ def register_mycarlos_availability_routes(app: FastAPI, runtime: PortalRuntime) 
         owner = Owner(principal.account_id, principal.device_id)
         try:
             with runtime.session_factory() as session, session.begin():
+                if not lock_active_device_account(session, owner.account_id):
+                    raise EnrollmentRefusal("not_found")
                 content = operation(session, owner)
             return content  # Context exited/COMMIT succeeded before exposing success.
         except EnrollmentRefusal as exc:
