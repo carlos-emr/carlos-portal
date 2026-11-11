@@ -139,11 +139,14 @@ def test_outbox_encrypts_and_delivers_reset_with_stable_message_id() -> None:
         assert session.get(PatientPortalPasswordResetToken, reset_id).status == (
             PASSWORD_RESET_STATUS_PENDING
         )
-        assert session.scalar(
-            select(PatientPortalAuditEvent).where(
-                PatientPortalAuditEvent.event_type == AUDIT_EVENT_PASSWORD_RESET_DELIVERY
+        assert (
+            session.scalar(
+                select(PatientPortalAuditEvent).where(
+                    PatientPortalAuditEvent.event_type == AUDIT_EVENT_PASSWORD_RESET_DELIVERY
+                )
             )
-        ) is not None
+            is not None
+        )
 
 
 @pytest.mark.parametrize("tamper_mode", ["corrupt-ciphertext", "swap-encrypted-rows"])
@@ -679,11 +682,14 @@ def test_reset_and_outbox_rollback_together_when_the_source_transaction_fails() 
         fail_source_transaction()
 
     with app.state.session_factory() as session:
-        assert session.scalar(
-            select(PatientPortalPasswordResetToken).where(
-                PatientPortalPasswordResetToken.token_hash == "t" * 64
+        assert (
+            session.scalar(
+                select(PatientPortalPasswordResetToken).where(
+                    PatientPortalPasswordResetToken.token_hash == "t" * 64
+                )
             )
-        ) is None
+            is None
+        )
         assert session.scalar(select(PatientPortalOutboundDelivery)) is None
 
 
@@ -999,8 +1005,7 @@ def test_an_absent_outbox_key_fails_terminally_without_revoking_the_token() -> N
             select(PatientPortalAuditEvent).where(
                 PatientPortalAuditEvent.event_type == AUDIT_EVENT_PASSWORD_RESET_DELIVERY,
                 PatientPortalAuditEvent.outcome == AUDIT_OUTCOME_FAILURE,
-                PatientPortalAuditEvent.reason
-                == "email:encryption_key_unavailable",
+                PatientPortalAuditEvent.reason == "email:encryption_key_unavailable",
             )
         )
         assert failure is not None
@@ -1212,6 +1217,8 @@ def test_password_reset_hit_and_miss_enqueue_identical_account_neutral_work() ->
 def test_password_reset_queue_applies_account_neutral_durable_backpressure() -> None:
     app = migrated_staging_app(
         email_sender=RecordingPortalEmailSender(),
+        # Exercise durable capacity independently of the per-client request budget.
+        auth_rate_limit_max_requests=100,
         password_reset_queue_max_pending=10,
         password_reset_queue_retry_after_seconds=45,
     )
@@ -1240,15 +1247,15 @@ def test_password_reset_queue_applies_account_neutral_durable_backpressure() -> 
         commands = session.scalars(select(PatientPortalOutboundDelivery)).all()
     assert len(commands) == 10
     assert all(command.kind == OUTBOX_KIND_PASSWORD_RESET_REQUEST for command in commands)
-    assert app.state.operational_metrics.snapshot()["failures"] == {
-        "password_reset_queue_full": 1
-    }
+    assert app.state.operational_metrics.snapshot()["failures"] == {"password_reset_queue_full": 1}
 
 
 def test_browser_password_reset_recovers_after_public_worker_frees_queue_capacity() -> None:
     sender = RecordingPortalEmailSender()
     app = migrated_staging_app(
         email_sender=sender,
+        # This scenario fills the queue, retries, then verifies worker-driven recovery.
+        auth_rate_limit_max_requests=100,
         password_reset_queue_max_pending=10,
         password_reset_queue_retry_after_seconds=45,
     )
@@ -1276,9 +1283,7 @@ def test_browser_password_reset_recovers_after_public_worker_frees_queue_capacit
     assert 'role="alert"' in full.text
     assert "Password reset is temporarily unavailable. Please try again shortly." in full.text
     assert 'action="https://portal.example.test/auth/password-reset/request"' in full.text
-    assert app.state.operational_metrics.snapshot()["failures"] == {
-        "password_reset_queue_full": 1
-    }
+    assert app.state.operational_metrics.snapshot()["failures"] == {"password_reset_queue_full": 1}
     with app.state.session_factory() as session:
         commands = session.scalars(
             select(PatientPortalOutboundDelivery).order_by(PatientPortalOutboundDelivery.id)
@@ -1318,10 +1323,13 @@ def test_browser_password_reset_recovers_after_public_worker_frees_queue_capacit
         commands = session.scalars(select(PatientPortalOutboundDelivery)).all()
         assert {command.id for command in commands} == original_ids
         assert sum(command.status == OUTBOX_STATUS_DELIVERED for command in commands) == 1
-        assert sum(
-            command.status in {OUTBOX_STATUS_PENDING, OUTBOX_STATUS_PROCESSING}
-            for command in commands
-        ) == 9
+        assert (
+            sum(
+                command.status in {OUTBOX_STATUS_PENDING, OUTBOX_STATUS_PROCESSING}
+                for command in commands
+            )
+            == 9
+        )
         assert session.scalars(select(PatientPortalPasswordResetToken)).all() == []
     assert sender.messages == []
 
@@ -1343,10 +1351,13 @@ def test_browser_password_reset_recovers_after_public_worker_frees_queue_capacit
     with app.state.session_factory() as session:
         commands = session.scalars(select(PatientPortalOutboundDelivery)).all()
         assert len(commands) == 11
-        assert sum(
-            command.status in {OUTBOX_STATUS_PENDING, OUTBOX_STATUS_PROCESSING}
-            for command in commands
-        ) == 10
+        assert (
+            sum(
+                command.status in {OUTBOX_STATUS_PENDING, OUTBOX_STATUS_PROCESSING}
+                for command in commands
+            )
+            == 10
+        )
         new_commands = [command for command in commands if command.id not in original_ids]
         assert len(new_commands) == 1
         command = new_commands[0]
@@ -1359,6 +1370,4 @@ def test_browser_password_reset_recovers_after_public_worker_frees_queue_capacit
         assert form_values["email"].encode() not in command.encrypted_payload
         assert session.scalars(select(PatientPortalPasswordResetToken)).all() == []
     assert sender.messages == []
-    assert app.state.operational_metrics.snapshot()["failures"] == {
-        "password_reset_queue_full": 1
-    }
+    assert app.state.operational_metrics.snapshot()["failures"] == {"password_reset_queue_full": 1}

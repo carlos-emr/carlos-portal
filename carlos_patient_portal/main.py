@@ -154,6 +154,12 @@ logger = logging.getLogger(__name__)
 
 
 _STATIC_MOUNT_PATH = "/static"
+_AUTH_POST_RATE_LIMIT_FLOWS = {
+    "/auth/password-reset/request": "password-reset-request",
+    "/auth/password-reset/complete": "password-reset-complete",
+    "/auth/mfa/verify": "mfa-verify",
+    "/auth/mfa/resend": "mfa-resend",
+}
 
 
 class _PortalStaticFiles(StaticFiles):
@@ -672,14 +678,23 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
             # Linking a device checks a one-time code, so it gets the login limiter's stricter
             # budget, in its own bucket.
             is_mycarlos_link = path == MYCARLOS_LINK_PATH
+            # Classify the canonical path before parsing recovery or MFA bodies. Each flow
+            # uses the existing per-process auth budget independently of login and linking.
+            auth_post_flow = (
+                _AUTH_POST_RATE_LIMIT_FLOWS.get(path) if request.method == "POST" else None
+            )
             limiter = (
-                runtime.auth_rate_limiter if is_login or is_mycarlos_link else runtime.rate_limiter
+                runtime.auth_rate_limiter
+                if is_login or is_mycarlos_link or auth_post_flow is not None
+                else runtime.rate_limiter
             )
             client_reference = get_request_client_reference(request, settings)
             if is_login:
                 bucket = f"login:{client_reference}"
             elif is_mycarlos_link:
                 bucket = f"mycarlos-link:{client_reference}"
+            elif auth_post_flow is not None:
+                bucket = f"{auth_post_flow}:{client_reference}"
             else:
                 bucket = client_reference
             retry_after_seconds = limiter.consume(bucket)
