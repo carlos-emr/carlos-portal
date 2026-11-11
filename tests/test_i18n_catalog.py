@@ -504,8 +504,15 @@ def test_mfa_page_posts_its_language_buttons_with_the_challenge() -> None:
     assert "/locale/" not in switcher
 
 
+@pytest.mark.parametrize(
+    ("prefix", "suffix"),
+    [("", ""), (" \t", ""), ("", "\r\n "), (" \t", "\r\n ")],
+    ids=["exact", "leading", "trailing", "both"],
+)
 def test_mfa_language_switch_rerenders_the_same_sign_in_without_sending_a_code(
     monkeypatch: pytest.MonkeyPatch,
+    prefix: str,
+    suffix: str,
 ) -> None:
     # French does not translate this key yet; a marker proves the page really is in French.
     monkeypatch.setitem(i18n.TEXT_CATALOG["fr"], "mfa_heading", "Code de vérification (test)")
@@ -520,7 +527,7 @@ def test_mfa_language_switch_rerenders_the_same_sign_in_without_sending_a_code(
         "/auth/mfa/language",
         data={
             "csrf_token": csrf_token,
-            "mfa_challenge_token": challenge_token,
+            "mfa_challenge_token": f"{prefix}{challenge_token}{suffix}",
             "locale": "fr",
         },
     )
@@ -581,7 +588,7 @@ def test_mfa_language_switch_rejects_an_unsupported_language() -> None:
     assert LOCALE_COOKIE_NAME not in response.cookies
 
 
-@pytest.mark.parametrize("challenge_state", ["unknown", "expired"])
+@pytest.mark.parametrize("challenge_state", ["unknown", "expired", "blank", "whitespace"])
 def test_mfa_language_switch_without_a_live_challenge_returns_to_sign_in(
     challenge_state: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -591,6 +598,10 @@ def test_mfa_language_switch_without_a_live_challenge_returns_to_sign_in(
     csrf_token, challenge_token, _ = _start_browser_sign_in(app, client)
     if challenge_state == "unknown":
         challenge_token = "not-a-challenge-token"
+    elif challenge_state == "blank":
+        challenge_token = ""
+    elif challenge_state == "whitespace":
+        challenge_token = " \t\r\n "
     else:
         with app.state.session_factory() as session:
             challenge = session.scalar(select(PatientPortalMfaChallenge))

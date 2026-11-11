@@ -710,7 +710,7 @@ def register_mfa_routes(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND_DETAIL)
         # This response is already in the new language; the cookie covers the requests after it.
         setattr(request.state, REQUEST_LOCALE_STATE_ATTRIBUTE, selected_locale)
-        challenge_token = first_form_value_or_empty(form_values, "mfa_challenge_token")
+        challenge_token = first_form_value_or_empty(form_values, "mfa_challenge_token").strip()
         delivery_state = None
         if challenge_token:
             delivery_state = await run_in_threadpool(
