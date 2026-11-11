@@ -1,7 +1,8 @@
 """Patient-scoped FHIR R4 routes and the HL7 v2.5.1 conformance artifact."""
 
 import json
-from datetime import UTC, datetime
+import logging
+from datetime import UTC, datetime, timedelta
 from unittest import mock
 
 import pytest
@@ -14,8 +15,11 @@ from fhir.resources.organization import Organization
 from fhir.resources.patient import Patient
 from fhir.resources.practitioner import Practitioner
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
 
 from carlos_patient_portal import presenters
+from carlos_patient_portal.audit import hash_sensitive_reference
 from carlos_patient_portal.interop import (
     FHIR_RELEASE,
     FHIR_VERSION,
@@ -38,6 +42,8 @@ from carlos_patient_portal.models import (
     UNLOCK_SECRET_TYPE_EMAIL,
     PatientPortalAccount,
     PatientPortalAuditEvent,
+    PatientPortalSession,
+    utc_now,
 )
 from carlos_patient_portal.routes import fhir as fhir_routes
 from carlos_patient_portal.unlock_secrets import (
@@ -51,6 +57,7 @@ from carlos_patient_portal.view_models import (
     ProviderFilterOptionViewModel,
 )
 from tests.support import (
+    AUDIT_HASH_SECRET,
     SEEDED_INVITE_DOB,
     SEEDED_INVITE_EMAIL,
     SEEDED_INVITE_HCN,
@@ -852,12 +859,7 @@ def test_hl7_message_control_id_respects_the_v251_bound() -> None:
 
 
 def test_document_reference_search_compartment_rejects_another_patients_subject() -> None:
-    """`subject=` and `_id=` were never sent to any FHIR endpoint by the suite.
-
-    The compartment check `subject_matches` could therefore have become `True` unconditionally
-    with a fully green suite. This drives both parameters: another patient's subject must
-    return an empty bundle, and `_id` must stay scoped to the caller's own records.
-    """
+    """A foreign or unrecognized subject must return an empty patient compartment."""
     app = migrated_development_app()
     client = TestClient(app)
     activate_seeded_patient_account(app, client)
@@ -878,3 +880,215 @@ def test_document_reference_search_compartment_rejects_another_patients_subject(
     assert foreign.json().get("entry", []) == []
     assert bare_id.json()["total"] == 0
     Bundle(foreign.json())
+
+
+def test_fhir_idle_expiry_commits_revocation_and_private_failure_audit_before_replay() -> None:
+    app = migrated_development_app()
+    client = TestClient(app)
+    activate_seeded_patient_account(app, client)
+    token = sign_in_patient_api_session(client)
+    headers = bearer_headers(token)
+    valid = client.get("/fhir/Patient", headers=headers)
+    assert valid.status_code == 200
+    assert valid.json()["total"] == 1
+    Bundle(valid.json())
+
+    # Keep the normal future token expiry; only advance the established inactivity fixture.
+    assert app.state.settings.session_idle_timeout_seconds == 600
+    with app.state.session_factory() as session:
+        portal_session = session.scalar(select(PatientPortalSession))
+        assert portal_session is not None
+        assert portal_session.revoked_at is None
+        session_id = portal_session.id
+        original_expiry = portal_session.expires_at
+        assert original_expiry.replace(tzinfo=UTC) > utc_now()
+        portal_session.last_seen_at = utc_now() - timedelta(
+            seconds=app.state.settings.session_idle_timeout_seconds + 1
+        )
+        session.commit()
+
+    denied = client.get("/fhir/Patient", headers=headers)
+    assert denied.status_code == 401
+    assert denied.headers["content-type"].startswith("application/fhir+json")
+    assert denied.json() == {
+        "resourceType": "OperationOutcome",
+        "issue": [
+            {"severity": "error", "code": "login", "diagnostics": "authentication required"}
+        ],
+    }
+    OperationOutcome(denied.json())
+    assert token not in denied.text
+    assert SEEDED_INVITE_EMAIL not in denied.text
+
+    # A fresh session after request teardown must see both writes despite the 401.
+    with app.state.session_factory() as session:
+        portal_session = session.get(PatientPortalSession, session_id)
+        assert portal_session is not None
+        first_revoked_at = portal_session.revoked_at
+        assert first_revoked_at is not None
+        assert portal_session.revoked_reason == "idle_timeout"
+        assert portal_session.expires_at == original_expiry
+        failures = session.scalars(
+            select(PatientPortalAuditEvent).where(
+                PatientPortalAuditEvent.event_type == "fhir.search",
+                PatientPortalAuditEvent.outcome == "failure",
+            )
+        ).all()
+        assert len(failures) == 1
+        failure = failures[0]
+        assert failure.actor_type == "patient"
+        assert failure.reason == "authentication_failed"
+        assert failure.resource_type == "Patient"
+        assert failure.client_reference_hash == hash_sensitive_reference(
+            AUDIT_HASH_SECRET, "fhir_client", "testclient"
+        )
+        assert failure.actor is None
+        assert failure.account_id is None
+        assert failure.clinic_id is None
+        assert failure.demographic_no is None
+        assert failure.resource_id is None
+
+    replay = client.get("/fhir/Patient", headers=headers)
+    assert replay.status_code == 401
+    assert replay.json() == denied.json()
+    with app.state.session_factory() as session:
+        portal_session = session.get(PatientPortalSession, session_id)
+        assert portal_session is not None
+        assert portal_session.revoked_at == first_revoked_at
+        assert portal_session.revoked_reason == "idle_timeout"
+        assert portal_session.expires_at == original_expiry
+        failures = session.scalars(
+            select(PatientPortalAuditEvent).where(
+                PatientPortalAuditEvent.event_type == "fhir.search",
+                PatientPortalAuditEvent.outcome == "failure",
+            )
+        ).all()
+        assert len(failures) == 2
+
+
+def test_fhir_audit_commit_failure_withholds_patient_data_and_allows_clean_retry(
+    monkeypatch, caplog
+) -> None:
+    app = migrated_development_app()
+    client = TestClient(app)
+    try:
+        account_id = activate_seeded_patient_account(app, client)
+        token = sign_in_patient_api_session(client)
+        headers = bearer_headers(token)
+        control = client.get("/fhir/Patient", headers=headers)
+        assert control.status_code == 200
+        assert control.json()["total"] == 1
+        Bundle(control.json())
+        patient_id = control.json()["entry"][0]["resource"]["id"]
+        access_audits = select(PatientPortalAuditEvent).where(
+            PatientPortalAuditEvent.event_type == "fhir.search",
+            PatientPortalAuditEvent.outcome == "success",
+            PatientPortalAuditEvent.account_id == account_id,
+            PatientPortalAuditEvent.resource_type == "Patient",
+        )
+        with app.state.session_factory() as session:
+            original_audit_ids = {event.id for event in session.scalars(access_audits)}
+            assert len(original_audit_ids) == 1
+            portal_session = session.scalar(select(PatientPortalSession))
+            assert portal_session is not None
+            assert portal_session.revoked_at is None
+            session_id = portal_session.id
+            original_expiry = portal_session.expires_at
+            assert original_expiry.replace(tzinfo=UTC) > utc_now()
+
+        private_markers = (
+            "FAKE_FHIR_PRIVATE_SQL",
+            "FAKE_FHIR_PRIVATE_PARAMETER",
+            "FAKE_FHIR_PRIVATE_DRIVER",
+        )
+        database_error = OperationalError(
+            "INSERT INTO FAKE_FHIR_PRIVATE_SQL VALUES (:actor)",
+            {"actor": private_markers[1]},
+            RuntimeError(private_markers[2]),
+        )
+        assert all(marker in str(database_error) for marker in private_markers)
+        reached_audit_commits = []
+        original_commit = Session.commit
+
+        def fail_fhir_commit(session):
+            if reached_audit_commits:
+                return original_commit(session)
+            # The real handler has flushed its access audit, but it is not durable yet.
+            provisional = [
+                event
+                for event in session.scalars(access_audits)
+                if event.id not in original_audit_ids
+            ]
+            if not provisional:
+                return original_commit(session)
+            assert len(provisional) == 1
+            assert provisional[0].reason == "search"
+            assert provisional[0].resource_id == patient_id
+            reached_audit_commits.append(provisional[0].id)
+            raise database_error
+
+        caplog.set_level(logging.WARNING, logger="carlos_patient_portal.main")
+        caplog.clear()
+        with monkeypatch.context() as failure:
+            failure.setattr(Session, "commit", fail_fhir_commit)
+            unavailable = client.get("/fhir/Patient", headers=headers)
+
+        assert len(reached_audit_commits) == 1
+        assert unavailable.status_code == 503
+        assert unavailable.headers["content-type"].startswith("application/fhir+json")
+        assert unavailable.json() == {
+            "resourceType": "OperationOutcome",
+            "issue": [
+                {
+                    "severity": "error",
+                    "code": "transient",
+                    "diagnostics": "service temporarily unavailable",
+                }
+            ],
+        }
+        OperationOutcome(unavailable.json())
+        assert all(
+            marker not in unavailable.text + caplog.text
+            for marker in (
+                *private_markers,
+                token,
+                patient_id,
+                SEEDED_INVITE_EMAIL,
+                SEEDED_INVITE_DOB,
+                SEEDED_INVITE_HCN,
+            )
+        )
+        main_logs = [
+            record for record in caplog.records if record.name == "carlos_patient_portal.main"
+        ]
+        assert any(
+            record.getMessage() == "Portal database operation unavailable: RuntimeError"
+            for record in main_logs
+        )
+        assert all(record.exc_info is None for record in main_logs)
+        assert app.state.operational_metrics.snapshot()["failures"]["database"] == 1
+
+        # New SQL observations after teardown distinguish the failed audit from prior history.
+        with app.state.session_factory() as session:
+            assert {event.id for event in session.scalars(access_audits)} == original_audit_ids
+            portal_session = session.get(PatientPortalSession, session_id)
+            assert portal_session is not None
+            assert portal_session.revoked_at is None
+            assert portal_session.revoked_reason is None
+            assert portal_session.expires_at == original_expiry
+
+        recovered = client.get("/fhir/Patient", headers=headers)
+        assert recovered.status_code == 200
+        assert recovered.json()["total"] == 1
+        assert recovered.json()["entry"][0]["resource"]["id"] == patient_id
+        Bundle(recovered.json())
+        with app.state.session_factory() as session:
+            recovered_audit_ids = {event.id for event in session.scalars(access_audits)}
+            assert original_audit_ids < recovered_audit_ids
+            assert len(recovered_audit_ids - original_audit_ids) == 1
+            portal_session = session.get(PatientPortalSession, session_id)
+            assert portal_session is not None
+            assert portal_session.revoked_at is None
+            assert portal_session.expires_at == original_expiry
+    finally:
+        app.state.database_engine.dispose()

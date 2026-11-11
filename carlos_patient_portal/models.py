@@ -15,6 +15,7 @@
 from datetime import UTC, datetime
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -82,6 +83,8 @@ AUDIT_EVENT_PASSWORD_RESET_DELIVERY = "password_reset.delivery"
 AUDIT_EVENT_PASSWORD_RESET_REQUEST = "password_reset.request"
 AUDIT_EVENT_RETENTION_POLICY_OVERRIDE = "retention.policy_override"
 AUDIT_EVENT_SESSION_LOGOUT = "session.logout"
+# A self sign-up request from the public page (carlos-portal#15), stored or refused by a limit.
+AUDIT_EVENT_SIGNUP_REQUEST = "signup.request"
 AUDIT_EVENT_STAFF_ACTION = "staff.action"
 AUDIT_EVENT_FHIR_READ = "fhir.read"
 AUDIT_EVENT_FHIR_SEARCH = "fhir.search"
@@ -192,6 +195,7 @@ MAX_UNLOCK_SECRET_KEY_ID_LENGTH = 64
 MAX_UNLOCK_SECRET_REVOKE_REASON_LENGTH = 64
 UNLOCK_SECRET_NONCE_LENGTH = 12
 OUTBOX_NONCE_LENGTH = 12
+SIGNUP_REQUEST_NONCE_LENGTH = 12
 MAX_INVITE_DELIVERY_OPERATION_ID_LENGTH = 64
 MAX_INVITE_DELIVERY_REFERENCE_LENGTH = 128
 MAX_BOOKING_PROMPT_OPERATION_ID_LENGTH = 64
@@ -1608,6 +1612,59 @@ class PatientPortalBookingChoice(Base):
     result_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class PatientPortalSignupRequest(Base):
+    """A patient's self sign-up request, waiting for CARLOS to collect it (carlos-portal#15).
+
+    The portal never looks the details up or sends anything to them. CARLOS collects pending
+    requests (carlos-portal#16), matches them against a chart, and invites the patient at the
+    email address already on file. The health card number, date of birth and typed email exist
+    only inside `encrypted_payload`, encrypted with the outbox keyring. `health_card_hash` is the
+    same keyed hash the `signup.request` audit events carry, so a later claim or result can be
+    audited without decrypting. A row lives until CARLOS reports a result or `expires_at` passes.
+    """
+
+    __tablename__ = "patient_portal_signup_requests"
+    __table_args__ = (
+        CheckConstraint(
+            f"length(clinic_id) between 1 and {MAX_CLINIC_ID_LENGTH}",
+            name="ck_pp_signup_requests_clinic_id_length",
+        ),
+        CheckConstraint(
+            f"length(health_card_hash) = {HASH_LENGTH}",
+            name="ck_pp_signup_requests_health_card_hash_length",
+        ),
+        CheckConstraint(
+            "length(encryption_key_id) between 1 and 64",
+            name="ck_pp_signup_requests_key_id_length",
+        ),
+        CheckConstraint(
+            f"length(encryption_nonce) = {SIGNUP_REQUEST_NONCE_LENGTH}",
+            name="ck_pp_signup_requests_nonce_length",
+        ),
+        CheckConstraint(
+            EXPIRY_AFTER_CREATION_SQL,
+            name="ck_pp_signup_requests_expiry_after_creation",
+        ),
+        # The backlog count, the expiry purge, and (carlos-portal#16) the claim all filter on it.
+        Index("ix_pp_signup_requests_expires", "expires_at"),
+        # CARLOS reports a result by id. A reused id could delete a newer patient's request.
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    clinic_id: Mapped[str] = mapped_column(String(MAX_CLINIC_ID_LENGTH), nullable=False)
+    health_card_hash: Mapped[str] = mapped_column(String(HASH_LENGTH), nullable=False)
+    encrypted_payload: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    encryption_nonce: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    encryption_key_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class PatientPortalAuditEvent(Base):
     """Security-relevant event trail for portal-owned workflows."""
 
@@ -1641,6 +1698,7 @@ class PatientPortalAuditEvent(Base):
                 "'login', 'mfa.challenge', 'mfa.delivery', 'mfa.resend', 'mfa.verify', "
                 "'password_reset.complete', 'password_reset.delivery', "
                 "'password_reset.request', 'retention.policy_override', 'session.logout', "
+                "'signup.request', "
                 "'staff.action', "
                 "'fhir.read', 'fhir.search', "
                 "'booking_prompt.create', 'booking_prompt.delivery', 'booking_prompt.list', "
@@ -2067,3 +2125,222 @@ class PatientPortalClinicKey(Base):
         LargeBinary(MAX_CLINIC_KEY_REPLACEMENT_SIGNATURE_LENGTH),
         nullable=True,
     )
+
+
+# myCarlos document-availability notifications (carlos-portal#78, myCarlos#192): the durable
+# enrollment and the outbox the policy core in mycarlos_availability needs. Unused while
+# PATIENT_PORTAL_MYCARLOS_AVAILABILITY_ENABLED is off; nothing here sends anything.
+MYCARLOS_AVAILABILITY_PLATFORMS = ("android_fcm", "ios_apns", "macos_apns", "windows_wns")
+MYCARLOS_AVAILABILITY_REVOKED_BY = ("device", "provider", "staff", "device_removed")
+MYCARLOS_AVAILABILITY_OUTBOX_STATUSES = ("pending", "leased", "done")
+UUID_TEXT_LENGTH = 36
+MAX_AVAILABILITY_DECISION_LENGTH = 96
+
+
+def _sql_list(values: tuple[str, ...]) -> str:
+    return ", ".join(f"'{value}'" for value in values)
+
+
+class PatientPortalMyCarlosAvailabilitySubscription(Base):
+    """One enrolled destination for a linked device's "documents ready" signal.
+
+    The owner is the account and the linked device. `destination_id` is the device's opaque
+    handle for its push registration; the provider token itself is never stored here. The
+    consent fields record what the device said at enrollment: remote consent version 1 and an
+    operating-system permission observed then. A revoked row stays as a tombstone, so a revoked
+    subscription or destination id never comes back. Nothing here names a patient or a document.
+    """
+
+    __tablename__ = "patient_portal_mycarlos_availability_subscriptions"
+    __table_args__ = (
+        CheckConstraint(
+            f"platform in ({_sql_list(MYCARLOS_AVAILABILITY_PLATFORMS)})",
+            name="ck_pp_mycarlos_avail_subs_platform",
+        ),
+        CheckConstraint(
+            f"length(subscription_id) = {UUID_TEXT_LENGTH} and "
+            f"length(epoch) = {UUID_TEXT_LENGTH} and "
+            f"length(destination_id) = {UUID_TEXT_LENGTH}",
+            name="ck_pp_mycarlos_avail_subs_ids",
+        ),
+        CheckConstraint(
+            "remote_consent_version = 1",
+            name="ck_pp_mycarlos_avail_subs_consent",
+        ),
+        CheckConstraint(
+            f"revoked_by is null or revoked_by in ({_sql_list(MYCARLOS_AVAILABILITY_REVOKED_BY)})",
+            name="ck_pp_mycarlos_avail_subs_revoked_by",
+        ),
+        CheckConstraint(
+            "(revoked_at is null) = (revoked_by is null)",
+            name="ck_pp_mycarlos_avail_subs_revoked_complete",
+        ),
+        CheckConstraint(
+            "revoked_at is null or not remote_enabled",
+            name="ck_pp_mycarlos_avail_subs_revoked_off",
+        ),
+        Index("ux_pp_mycarlos_avail_subs_subscription", "subscription_id", unique=True),
+        Index("ux_pp_mycarlos_avail_subs_destination", "destination_id", unique=True),
+        Index("ix_pp_mycarlos_avail_subs_owner", "account_id", "device_id"),
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    subscription_id: Mapped[str] = mapped_column(String(UUID_TEXT_LENGTH), nullable=False)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey(ACCOUNT_FOREIGN_KEY_TARGET, name="fk_pp_mycarlos_avail_subs_account"),
+        nullable=False,
+    )
+    device_id: Mapped[int] = mapped_column(
+        ForeignKey("patient_portal_mycarlos_devices.id", name="fk_pp_mycarlos_avail_subs_device"),
+        nullable=False,
+    )
+    epoch: Mapped[str] = mapped_column(String(UUID_TEXT_LENGTH), nullable=False)
+    destination_id: Mapped[str] = mapped_column(String(UUID_TEXT_LENGTH), nullable=False)
+    platform: Mapped[str] = mapped_column(String(16), nullable=False)
+    remote_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Only consent version 1 exists; a later version rewrites this check and keeps
+    # older rows as their history. A tombstone made for a revocation that overtook its
+    # enrollment (P4) also holds 1, as the check requires, with permission_observed false and
+    # created_at = revoked_at: anything that counts consent must skip such rows.
+    remote_consent_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    permission_observed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_by: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+
+class PatientPortalMyCarlosAvailabilityOutbox(Base):
+    """A "documents ready" intent waiting for, or held by, the dispatch worker.
+
+    One pending row per subscription and epoch at most; a newer mailbox copy coalesces into it
+    (`mycarlos_availability.coalesce_pending`). A leased row is being sent and is never edited
+    by queueing. Times are Unix seconds, as the policy core counts them. The row holds ids and
+    counters only: no document id, no text, no provider token.
+    """
+
+    __tablename__ = "patient_portal_mycarlos_availability_outbox"
+    __table_args__ = (
+        CheckConstraint(
+            f"status in ({_sql_list(MYCARLOS_AVAILABILITY_OUTBOX_STATUSES)})",
+            name="ck_pp_mycarlos_avail_outbox_status",
+        ),
+        CheckConstraint(
+            f"length(epoch) = {UUID_TEXT_LENGTH} and sequence > 0 and attempts >= 0 and "
+            "expires_at > created_at",
+            name="ck_pp_mycarlos_avail_outbox_values",
+        ),
+        CheckConstraint(
+            "(lease_token is null) = (lease_until is null)",
+            name="ck_pp_mycarlos_avail_outbox_lease_complete",
+        ),
+        CheckConstraint(
+            "(status = 'leased') = (lease_token is not null)",
+            name="ck_pp_mycarlos_avail_outbox_leased",
+        ),
+        CheckConstraint(
+            f"lease_token is null or length(lease_token) = {UUID_TEXT_LENGTH}",
+            name="ck_pp_mycarlos_avail_outbox_lease_token",
+        ),
+        Index(
+            "ux_pp_mycarlos_avail_outbox_pending",
+            "subscription_id",
+            "epoch",
+            unique=True,
+            sqlite_where=text("status = 'pending'"),
+            postgresql_where=text("status = 'pending'"),
+        ),
+        Index("ix_pp_mycarlos_avail_outbox_claim", "status", "next_attempt_at"),
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    subscription_id: Mapped[str] = mapped_column(
+        String(UUID_TEXT_LENGTH),
+        ForeignKey(
+            "patient_portal_mycarlos_availability_subscriptions.subscription_id",
+            name="fk_pp_mycarlos_avail_outbox_subscription",
+        ),
+        nullable=False,
+    )
+    epoch: Mapped[str] = mapped_column(String(UUID_TEXT_LENGTH), nullable=False)
+    sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expires_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    lease_token: Mapped[str | None] = mapped_column(String(UUID_TEXT_LENGTH), nullable=True)
+    lease_until: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    last_decision: Mapped[str | None] = mapped_column(
+        String(MAX_AVAILABILITY_DECISION_LENGTH), nullable=True
+    )
+    created_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
+# The waiting key (carlos-portal#87): a second Ed25519 key a linked device registers so that,
+# while its vault is locked, it can ask one thing, "is anything waiting for this device?", and
+# get yes or no. Bound to the device row, so to one link. Only the public key is stored. A
+# revoked key stays as a tombstone, so a revoked key id never comes back. ("Notice key" in the
+# design note; the portal already uses that name for its own HMAC notice secrets.)
+MYCARLOS_WAITING_KEY_REVOKED_BY = ("device", "waiting_key", "device_removed", "staff", "unlink")
+
+
+class PatientPortalMyCarlosWaitingKey(Base):
+    """One registered waiting key of a linked device; at most one live key per device."""
+
+    __tablename__ = "patient_portal_mycarlos_waiting_keys"
+    __table_args__ = (
+        CheckConstraint(
+            f"length(key_id) = {MYCARLOS_DEVICE_KEY_ID_LENGTH}",
+            name="ck_pp_mycarlos_waiting_keys_kid",
+        ),
+        CheckConstraint(
+            f"length(public_key) = {MYCARLOS_PUBLIC_KEY_LENGTH}",
+            name="ck_pp_mycarlos_waiting_keys_key",
+        ),
+        CheckConstraint(
+            f"revoked_by is null or revoked_by in ({_sql_list(MYCARLOS_WAITING_KEY_REVOKED_BY)})",
+            name="ck_pp_mycarlos_waiting_keys_revoked_by",
+        ),
+        CheckConstraint(
+            "(revoked_at is null) = (revoked_by is null)",
+            name="ck_pp_mycarlos_waiting_keys_revoked_complete",
+        ),
+        Index("ux_pp_mycarlos_waiting_keys_kid", "key_id", unique=True),
+        # One live key per device: a new one replaces it, the old stays as a tombstone.
+        Index(
+            "ux_pp_mycarlos_waiting_keys_live",
+            "device_id",
+            unique=True,
+            sqlite_where=text("revoked_at is null"),
+            postgresql_where=text("revoked_at is null"),
+        ),
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key_id: Mapped[str] = mapped_column(String(MYCARLOS_DEVICE_KEY_ID_LENGTH), nullable=False)
+    public_key: Mapped[bytes] = mapped_column(
+        LargeBinary(MYCARLOS_PUBLIC_KEY_LENGTH), nullable=False
+    )
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey(ACCOUNT_FOREIGN_KEY_TARGET, name="fk_pp_mycarlos_waiting_keys_account"),
+        nullable=False,
+    )
+    device_id: Mapped[int] = mapped_column(
+        ForeignKey("patient_portal_mycarlos_devices.id", name="fk_pp_mycarlos_waiting_keys_device"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    # The last "waiting" answer, for the one-answer-per-120-seconds rule.
+    last_answered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_by: Mapped[str | None] = mapped_column(String(16), nullable=True)

@@ -627,6 +627,33 @@ def test_root_mounted_deployment_keeps_unprefixed_urls() -> None:
 
 
 @pytest.mark.parametrize(
+    "url",
+    ["https://portal.example.test/patient;blue", "http://localhost/nested/patient;blue"],
+)
+def test_public_base_url_rejects_literal_semicolons_in_deployment_paths(url) -> None:
+    # Cookie Path treats ';' as an attribute delimiter. An escaped prefix remains supported.
+    with pytest.raises(ValidationError, match="semicolons; use %3B"):
+        development_settings(public_base_url=url)
+
+
+@pytest.mark.parametrize("codepoint", [0, 11, 31, 127])
+def test_public_base_url_rejects_retained_literal_path_controls(codepoint) -> None:
+    with pytest.raises(ValidationError, match="control characters; use percent-encoded"):
+        development_settings(
+            public_base_url="https://portal.example.test/patient" + chr(codepoint) + "blue"
+        )
+
+
+@pytest.mark.parametrize("codepoint", [9, 10, 13])
+def test_public_base_url_preserves_existing_urlsplit_control_filtering(codepoint) -> None:
+    settings = development_settings(
+        public_base_url="https://portal.example.test/patient" + chr(codepoint) + "blue"
+    )
+    assert settings.public_base_url == "https://portal.example.test/patientblue"
+    assert settings.root_path == "/patientblue"
+
+
+@pytest.mark.parametrize(
     "email",
     [".patient@example.com", "patient.@example.com", "pa..tient@example.com"],
 )
@@ -1050,7 +1077,8 @@ def test_an_unset_job_assertion_keyring_turns_every_job_off(value) -> None:
         (
             {"nightly-export": {"export-1": BOOKING_SYNC_KEY}},
             "names an unknown job nightly-export; "
-            "known jobs: booking-sync, delivery-sync, key-publish, signup-poll",
+            "known jobs: booking-sync, delivery-sync, device-approval-sync, "
+            "key-publish, signup-poll",
         ),
         # Text that is not shaped like a job name is not echoed back.
         ({"Booking Sync!": {"k-1": BOOKING_SYNC_KEY}}, r"names an unknown job; known jobs"),

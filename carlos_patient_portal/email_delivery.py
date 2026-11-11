@@ -33,6 +33,7 @@ from carlos_patient_portal.footer_audit import (
     FooterAuditUnavailableError,
 )
 from carlos_patient_portal.outbound_messages import (
+    DEFAULT_OUTBOUND_LOCALE,
     OutboundMessage,
     booking_prompt_email_message,
     booking_prompt_update_email_message,
@@ -89,6 +90,7 @@ class PortalEmailSender(Protocol):
         recipient: str,
         code: str,
         expires_in_seconds: int,
+        locale: str = DEFAULT_OUTBOUND_LOCALE,
     ) -> None:
         raise NotImplementedError
 
@@ -99,19 +101,36 @@ class PortalEmailSender(Protocol):
         reset_url: str,
         expires_in_seconds: int,
         message_id: str | None = None,
+        locale: str = DEFAULT_OUTBOUND_LOCALE,
     ) -> None:
         raise NotImplementedError
 
-    def send_contact_change_notice(self, *, recipient: str, message_id: str | None = None) -> None:
+    def send_contact_change_notice(
+        self,
+        *,
+        recipient: str,
+        message_id: str | None = None,
+        locale: str = DEFAULT_OUTBOUND_LOCALE,
+    ) -> None:
         raise NotImplementedError
 
     def send_booking_prompt_notice(
-        self, *, recipient: str, sign_in_url: str, message_id: str | None = None
+        self,
+        *,
+        recipient: str,
+        sign_in_url: str,
+        message_id: str | None = None,
+        locale: str = DEFAULT_OUTBOUND_LOCALE,
     ) -> None:
         raise NotImplementedError
 
     def send_booking_prompt_update_notice(
-        self, *, recipient: str, sign_in_url: str, message_id: str | None = None
+        self,
+        *,
+        recipient: str,
+        sign_in_url: str,
+        message_id: str | None = None,
+        locale: str = DEFAULT_OUTBOUND_LOCALE,
     ) -> None:
         raise NotImplementedError
 
@@ -121,10 +140,13 @@ class PortalEmailSender(Protocol):
         recipient: str,
         confirmation_url: str,
         expires_in_seconds: int,
+        locale: str = DEFAULT_OUTBOUND_LOCALE,
     ) -> None:
         raise NotImplementedError
 
-    def send_email_change_requested_notice(self, *, recipient: str) -> None:
+    def send_email_change_requested_notice(
+        self, *, recipient: str, locale: str = DEFAULT_OUTBOUND_LOCALE
+    ) -> None:
         raise NotImplementedError
 
 
@@ -169,6 +191,7 @@ class SmtpPortalEmailSender:
         recipient: str,
         code: str,
         expires_in_seconds: int,
+        locale: str = DEFAULT_OUTBOUND_LOCALE,
     ) -> None:
         self._send_message(
             self._build_message(
@@ -176,6 +199,7 @@ class SmtpPortalEmailSender:
                 mfa_email_message(
                     service_name=self.service_name,
                     clinic_name=self.clinic_name,
+                    locale=locale,
                     code=code,
                     expires_in_seconds=expires_in_seconds,
                 ),
@@ -192,6 +216,7 @@ class SmtpPortalEmailSender:
         reset_url: str,
         expires_in_seconds: int,
         message_id: str | None = None,
+        locale: str = DEFAULT_OUTBOUND_LOCALE,
     ) -> None:
         self._send_message(
             self._build_message(
@@ -199,6 +224,7 @@ class SmtpPortalEmailSender:
                 password_reset_email_message(
                     service_name=self.service_name,
                     clinic_name=self.clinic_name,
+                    locale=locale,
                     reset_url=reset_url,
                     expires_in_seconds=expires_in_seconds,
                 ),
@@ -209,13 +235,20 @@ class SmtpPortalEmailSender:
             footer_optional=True,
         )
 
-    def send_contact_change_notice(self, *, recipient: str, message_id: str | None = None) -> None:
+    def send_contact_change_notice(
+        self,
+        *,
+        recipient: str,
+        message_id: str | None = None,
+        locale: str = DEFAULT_OUTBOUND_LOCALE,
+    ) -> None:
         self._send_message(
             self._build_message(
                 recipient,
                 contact_change_email_message(
                     service_name=self.service_name,
                     clinic_name=self.clinic_name,
+                    locale=locale,
                 ),
                 message_id=message_id,
                 kind="contact_change",
@@ -223,7 +256,12 @@ class SmtpPortalEmailSender:
         )
 
     def send_booking_prompt_notice(
-        self, *, recipient: str, sign_in_url: str, message_id: str | None = None
+        self,
+        *,
+        recipient: str,
+        sign_in_url: str,
+        message_id: str | None = None,
+        locale: str = DEFAULT_OUTBOUND_LOCALE,
     ) -> None:
         self._send_message(
             self._build_message(
@@ -231,6 +269,7 @@ class SmtpPortalEmailSender:
                 booking_prompt_email_message(
                     service_name=self.service_name,
                     clinic_name=self.clinic_name,
+                    locale=locale,
                     sign_in_url=sign_in_url,
                 ),
                 message_id=message_id,
@@ -239,7 +278,12 @@ class SmtpPortalEmailSender:
         )
 
     def send_booking_prompt_update_notice(
-        self, *, recipient: str, sign_in_url: str, message_id: str | None = None
+        self,
+        *,
+        recipient: str,
+        sign_in_url: str,
+        message_id: str | None = None,
+        locale: str = DEFAULT_OUTBOUND_LOCALE,
     ) -> None:
         self._send_message(
             self._build_message(
@@ -247,6 +291,7 @@ class SmtpPortalEmailSender:
                 booking_prompt_update_email_message(
                     service_name=self.service_name,
                     clinic_name=self.clinic_name,
+                    locale=locale,
                     sign_in_url=sign_in_url,
                 ),
                 message_id=message_id,
@@ -260,6 +305,7 @@ class SmtpPortalEmailSender:
         recipient: str,
         confirmation_url: str,
         expires_in_seconds: int,
+        locale: str = DEFAULT_OUTBOUND_LOCALE,
     ) -> None:
         self._send_message(
             self._build_message(
@@ -267,6 +313,7 @@ class SmtpPortalEmailSender:
                 email_change_confirmation_email_message(
                     service_name=self.service_name,
                     clinic_name=self.clinic_name,
+                    locale=locale,
                     confirmation_url=confirmation_url,
                     expires_in_seconds=expires_in_seconds,
                 ),
@@ -274,13 +321,16 @@ class SmtpPortalEmailSender:
             )
         )
 
-    def send_email_change_requested_notice(self, *, recipient: str) -> None:
+    def send_email_change_requested_notice(
+        self, *, recipient: str, locale: str = DEFAULT_OUTBOUND_LOCALE
+    ) -> None:
         self._send_message(
             self._build_message(
                 recipient,
                 email_change_requested_email_message(
                     service_name=self.service_name,
                     clinic_name=self.clinic_name,
+                    locale=locale,
                 ),
                 kind="email_change_requested",
             )

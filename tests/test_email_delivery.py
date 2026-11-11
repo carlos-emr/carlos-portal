@@ -101,7 +101,7 @@ def test_smtp_sender_delivers_plain_text_code_with_tls_and_auth(
     assert smtp.message is not None
     assert smtp.message["From"] == "portal@example.test"
     assert smtp.message["To"] == "patient@example.test"
-    assert smtp.message["Subject"] == "Your CARLOS Patient Portal verification code"
+    assert smtp.message["Subject"] == "Your CARLOS Patient Portal sign-in code"
     assert smtp.message["Auto-Submitted"] == "auto-generated"
     assert "123456" in smtp.message.get_body(preferencelist=("plain",)).get_content()
     assert "10 minutes" in smtp.message.get_body(preferencelist=("plain",)).get_content()
@@ -315,3 +315,57 @@ def test_non_development_smtp_requires_transport_encryption() -> None:
             unlock_secret_encryption_secret="u" * 32,
             internal_health_token="h" * 32,
         )
+
+
+@pytest.mark.parametrize("phase", ["tls", "login", "send", "quit"])
+def test_smtp_transport_failures_hide_provider_details_and_close_the_connection(
+    phase: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Provider rejection or connection loss must not expose a recipient, code, or credential."""
+    import ssl
+
+    sensitive_detail = "FAKE patient@example.test code654321 credential-fake-smtp"
+
+    class FailingSmtp(RecordingSmtp):
+        closed = False
+
+        def __exit__(self, *args: object) -> None:
+            self.closed = True
+            if phase == "quit":
+                raise smtplib.SMTPServerDisconnected(sensitive_detail)
+
+        def starttls(self, *, context: ssl.SSLContext) -> None:
+            assert context.check_hostname is True
+            assert context.verify_mode == ssl.CERT_REQUIRED
+            if phase == "tls":
+                raise ssl.SSLError(sensitive_detail)
+            super().starttls(context=context)
+
+        def login(self, username: str, password: str) -> None:
+            if phase == "login":
+                raise smtplib.SMTPAuthenticationError(535, sensitive_detail.encode())
+            super().login(username, password)
+
+        def send_message(self, message: EmailMessage) -> dict[str, tuple[int, bytes]]:
+            if phase == "send":
+                raise smtplib.SMTPDataError(554, sensitive_detail.encode())
+            self.message = message
+            return {}
+
+    monkeypatch.setattr(smtplib, "SMTP", FailingSmtp)
+    sender = SmtpPortalEmailSender(
+        smtp_settings(
+            smtp_starttls=True,
+            smtp_username="fake-user",
+            smtp_password="credential-fake-smtp",
+        )
+    )
+    with pytest.raises(PortalEmailDeliveryError) as failure:
+        sender.send_code(recipient="patient@example.test", code="654321", expires_in_seconds=600)
+    assert str(failure.value) == "portal email delivery failed"
+    assert failure.value.__cause__ is None
+    assert failure.value.__suppress_context__ is True
+    smtp = RecordingSmtp.instance
+    assert isinstance(smtp, FailingSmtp) and smtp.closed
+    assert (smtp.message is not None) == (phase == "quit")

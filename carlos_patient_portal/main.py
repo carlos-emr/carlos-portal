@@ -37,9 +37,11 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import Engine
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette._utils import get_route_path
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.responses import Response
+from starlette.types import Scope
 
 from carlos_patient_portal.accounts import ActivationRateLimit
 from carlos_patient_portal.audit import hash_sensitive_reference, record_audit_event
@@ -90,6 +92,7 @@ from carlos_patient_portal.routes.portal import (
     register_portal_routes,
 )
 from carlos_patient_portal.routes.public import register_public_routes
+from carlos_patient_portal.routes.signup import register_signup_routes
 from carlos_patient_portal.runtime import (
     FhirApiError,
     InMemoryRateLimiter,
@@ -144,10 +147,31 @@ from carlos_patient_portal.web_support import (
     service_notice_response,
     set_csrf_cookie,
     templates,
-    wants_html_response,
+    wants_html_error_page,
 )
 
 logger = logging.getLogger(__name__)
+
+
+_STATIC_MOUNT_PATH = "/static"
+_AUTH_POST_RATE_LIMIT_FLOWS = {
+    "/auth/password-reset/request": "password-reset-request",
+    "/auth/password-reset/complete": "password-reset-complete",
+    "/auth/mfa/verify": "mfa-verify",
+    "/auth/mfa/resend": "mfa-resend",
+}
+
+
+class _PortalStaticFiles(StaticFiles):
+    def get_path(self, scope: Scope) -> str:
+        # Use the application path captured before Mount extends root_path. A stripping
+        # proxy leaves scope.path without the deployment prefix, unlike the mount root.
+        # This lookup-only copy preserves the original URI and security classification;
+        # StaticFiles still normalizes the name and enforces filesystem containment.
+        asset_scope = dict(scope)
+        asset_scope["path"] = scope["state"]["_portal_application_path"]
+        asset_scope["root_path"] = _STATIC_MOUNT_PATH
+        return super().get_path(asset_scope)
 
 
 def build_portal_runtime(
@@ -278,6 +302,22 @@ def record_audit_retention_override(runtime: PortalRuntime) -> None:
         )
 
 
+def warn_if_self_signup_counts_peer_addresses(settings: Settings) -> None:
+    """Warn once at start-up when self sign-up's per-client limit can only see the direct peer.
+
+    Without PATIENT_PORTAL_TRUSTED_CLIENT_IP_HEADER the limit counts the connection's own address.
+    Behind a reverse proxy that is the proxy, so every patient shares one count, and the uniform
+    sign-up page hides the refusals from them. Direct exposure without a proxy is fine, so this is a
+    warning, not a start-up failure.
+    """
+    if settings.self_signup_enabled and settings.trusted_client_ip_header is None:
+        logger.warning(
+            "Self sign-up is on without PATIENT_PORTAL_TRUSTED_CLIENT_IP_HEADER: its per-client "
+            "limit counts the direct peer address, which behind a reverse proxy is shared by "
+            "every patient"
+        )
+
+
 def build_lifespan(
     database_engine: Engine,
     runtime: PortalRuntime | None = None,
@@ -286,6 +326,7 @@ def build_lifespan(
     async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
         if runtime is not None:
             record_audit_retention_override(runtime)
+            warn_if_self_signup_counts_peer_addresses(runtime.settings)
         try:
             if (
                 runtime is not None
@@ -293,9 +334,16 @@ def build_lifespan(
                 and runtime.settings.mycarlos_mailbox_enabled
             ):
                 from carlos_patient_portal.mailbox_worker import run_worker
+                from carlos_patient_portal.mycarlos_availability_dispatch import (
+                    dispatcher_for,
+                    run_dispatch_worker,
+                )
 
+                dispatcher = dispatcher_for(runtime)
                 async with anyio.create_task_group() as workers:
                     workers.start_soon(run_worker, runtime)
+                    if dispatcher is not None:
+                        workers.start_soon(run_dispatch_worker, dispatcher, runtime)
                     try:
                         yield
                     finally:
@@ -308,19 +356,27 @@ def build_lifespan(
     return lifespan
 
 
+def _request_application_path(request: Request) -> str:
+    """Keep the portal boundary path when child mounts change root_path during dispatch."""
+    path = getattr(request.state, "_portal_application_path", None)
+    return request.url.path if path is None else path
+
+
 def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(
         request: Request,
         exc: RequestValidationError,
     ) -> Response:
-        if request.url.path.startswith(FHIR_PATH_PREFIX):
+        if _request_application_path(request).startswith(FHIR_PATH_PREFIX):
             return fhir_operation_outcome_response(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 code="invalid",
                 diagnostics="request parameters are invalid",
             )
-        if request.url.path == "/auth/login" and is_urlencoded_form_request(request):
+        if _request_application_path(request) == "/auth/login" and is_urlencoded_form_request(
+            request
+        ):
             csrf_token = create_csrf_token(runtime.token_keys.csrf)
             response = templates.TemplateResponse(
                 request=request,
@@ -342,6 +398,15 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
                 path=CSRF_COOKIE_PATH,
             )
             return response
+        if wants_html_error_page(request):
+            return service_notice_response(
+                request,
+                settings=runtime.settings,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                heading_key="request_failed_heading",
+                message_key="request_failed_details",
+                retry_after_seconds=None,
+            )
         return JSONResponse(
             status_code=422,
             content={"detail": sanitized_validation_errors(exc)},
@@ -362,12 +427,21 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
     async def password_hash_unusable_handler(
         request: Request,
         exc: PasswordHashUnusableError,
-    ) -> JSONResponse:
+    ) -> Response:
         # A stored hash that cannot be evaluated is a server-side data fault, not a bad password.
         # Returning 401/403 here would tell the patient they mistyped and, on the settings screen,
         # would charge the attempt to a lockout budget they cannot recover from.
         request.app.state.operational_metrics.record_failure("password_hash_unusable")
         logger.error("Stored password hash is unusable; credential check cannot be completed")
+        if wants_html_error_page(request):
+            return service_notice_response(
+                request,
+                settings=runtime.settings,
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                heading_key="service_unavailable_heading",
+                message_key="service_unavailable_details",
+                retry_after_seconds=1,
+            )
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={"detail": SERVICE_UNAVAILABLE_DETAIL},
@@ -386,31 +460,31 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
         60-minute CSRF token TTL and then submitted got that JSON in their browser window,
         with no way back to the portal - the most reachable instance of a broad gap.
         """
-        if request.url.path.startswith(FHIR_PATH_PREFIX):
+        if _request_application_path(request).startswith(FHIR_PATH_PREFIX):
             return fhir_operation_outcome_response(
                 status_code=exc.status_code,
                 code="processing",
                 diagnostics=str(exc.detail),
             )
-        # Path alone is the wrong discriminator: /auth/activate serves a browser form *and*
-        # accepts a JSON body. A caller that declared JSON gets JSON back; a browser form post
-        # or a navigation gets the page.
-        declared_json = "application/json" in (request.headers.get("content-type") or "").lower()
-        if wants_html_response(request.url.path) and not declared_json and request.method != "HEAD":
-            return service_notice_response(
+        if wants_html_error_page(request):
+            response = service_notice_response(
                 request,
                 settings=runtime.settings,
                 status_code=exc.status_code,
                 heading_key="request_failed_heading",
                 message_key="request_failed_details",
-                retry_after_seconds=0,
+                retry_after_seconds=None,
             )
+            # Keep the headers the exception set (a 405's Allow, a Retry-After).
+            response.headers.update(getattr(exc, "headers", None) or {})
+            return response
         return JSONResponse(
             status_code=exc.status_code,
             content={"detail": exc.detail},
             headers=getattr(exc, "headers", None) or {},
         )
 
+    @app.exception_handler(SQLAlchemyError)
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(
         request: Request,
@@ -428,34 +502,101 @@ def register_exception_handlers(app: FastAPI, runtime: PortalRuntime) -> None:
         # bound patient values. Keep the application log useful without copying that material into
         # a sink whose redaction policy is outside this process.
         logger.error("Unhandled portal error: %s", type(exc).__name__)
-        if request.url.path.startswith(FHIR_PATH_PREFIX):
-            return fhir_operation_outcome_response(
+        response: Response | None = None
+        if _request_application_path(request).startswith(FHIR_PATH_PREFIX):
+            response = fhir_operation_outcome_response(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 code="exception",
                 diagnostics="the request could not be completed",
             )
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"detail": "the request could not be completed"},
-        )
+        elif wants_html_error_page(request):
+            try:
+                response = service_notice_response(
+                    request,
+                    settings=runtime.settings,
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    heading_key="service_unavailable_heading",
+                    message_key="service_unavailable_details",
+                    retry_after_seconds=None,
+                )
+            except Exception as render_error:
+                # A fault while drawing the page must not lose the 500 itself.
+                logger.error(
+                    "Portal error page could not be rendered: %s", type(render_error).__name__
+                )
+        if response is None:
+            response = JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content={"detail": "the request could not be completed"},
+            )
+        # This handler runs outside the middleware that adds these to every other response, so
+        # its answer gets them here. An error answer is never cached.
+        apply_standard_response_headers(request, response, runtime.settings)
+        response.headers.setdefault("Cache-Control", "no-store")
+        return response
 
     @app.exception_handler(OperationalError)
     async def database_operational_error_handler(
         request: Request,
         exc: OperationalError,
-    ) -> JSONResponse:
+    ) -> Response:
         request.app.state.operational_metrics.record_failure("database")
         logger.warning("Portal database operation unavailable: %s", type(exc.orig).__name__)
-        if request.url.path.startswith(FHIR_PATH_PREFIX):
+        if _request_application_path(request).startswith(FHIR_PATH_PREFIX):
             return fhir_operation_outcome_response(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 code="transient",
                 diagnostics=SERVICE_UNAVAILABLE_DETAIL,
             )
+        if wants_html_error_page(request):
+            return service_notice_response(
+                request,
+                settings=runtime.settings,
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                heading_key="service_unavailable_heading",
+                message_key="service_unavailable_details",
+                retry_after_seconds=1,
+            )
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={"detail": SERVICE_UNAVAILABLE_DETAIL},
             headers={"Retry-After": "1"},
+        )
+
+
+def apply_standard_response_headers(
+    request: Request,
+    response: Response,
+    settings: Settings,
+) -> None:
+    """The security and caching headers every portal response carries.
+
+    The middleware applies them to every response. The 500 handler runs outside the middleware,
+    so it applies them to its error page itself.
+    """
+    path = _request_application_path(request)
+    for header, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(header, value)
+    if not path.startswith("/api/"):
+        response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+
+    if (
+        path in NO_STORE_PATHS
+        or path.startswith("/auth/")
+        or path.startswith("/api/patient/")
+        or path.startswith(MYCARLOS_API_PREFIX)
+        or path.startswith(FHIR_PATH_PREFIX)
+        or is_portal_path(path)
+        or path.startswith("/internal/")
+        or path.startswith("/dev/admin/")
+    ):
+        response.headers.setdefault("Cache-Control", "no-store")
+        response.headers.setdefault("Pragma", "no-cache")
+
+    if settings.is_production:
+        response.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains",
         )
 
 
@@ -505,14 +646,18 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
-        if settings.maintenance_mode and not is_maintenance_exempt_path(request.url.path):
-            if request.url.path.startswith(FHIR_PATH_PREFIX):
+        path = get_route_path(request.scope)
+        request.state._portal_application_path = path
+        if settings.maintenance_mode and not is_maintenance_exempt_path(
+            path, method=request.method
+        ):
+            if path.startswith(FHIR_PATH_PREFIX):
                 response = fhir_operation_outcome_response(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     code="transient",
                     diagnostics=SERVICE_UNAVAILABLE_DETAIL,
                 )
-            elif wants_html_response(request.url.path):
+            elif wants_html_error_page(request):
                 # A patient who navigated here in a browser gets a page, not a raw JSON body.
                 response = service_notice_response(
                     request,
@@ -528,32 +673,41 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
                     content={"detail": SERVICE_UNAVAILABLE_DETAIL},
                 )
             response.headers["Retry-After"] = str(settings.maintenance_retry_after_seconds)
-        elif is_rate_limited_path(request.url.path):
-            is_login = request.url.path == "/auth/login"
+        elif is_rate_limited_path(path):
+            is_login = path == "/auth/login"
             # Linking a device checks a one-time code, so it gets the login limiter's stricter
             # budget, in its own bucket.
-            is_mycarlos_link = request.url.path == MYCARLOS_LINK_PATH
+            is_mycarlos_link = path == MYCARLOS_LINK_PATH
+            # Classify the canonical path before parsing recovery or MFA bodies. Each flow
+            # uses the existing per-process auth budget independently of login and linking.
+            auth_post_flow = (
+                _AUTH_POST_RATE_LIMIT_FLOWS.get(path) if request.method == "POST" else None
+            )
             limiter = (
-                runtime.auth_rate_limiter if is_login or is_mycarlos_link else runtime.rate_limiter
+                runtime.auth_rate_limiter
+                if is_login or is_mycarlos_link or auth_post_flow is not None
+                else runtime.rate_limiter
             )
             client_reference = get_request_client_reference(request, settings)
             if is_login:
                 bucket = f"login:{client_reference}"
             elif is_mycarlos_link:
                 bucket = f"mycarlos-link:{client_reference}"
+            elif auth_post_flow is not None:
+                bucket = f"{auth_post_flow}:{client_reference}"
             else:
                 bucket = client_reference
             retry_after_seconds = limiter.consume(bucket)
             if retry_after_seconds is None:
                 response = await call_next(request)
-            elif request.url.path.startswith(FHIR_PATH_PREFIX):
+            elif path.startswith(FHIR_PATH_PREFIX):
                 response = fhir_operation_outcome_response(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     code="throttled",
                     diagnostics="too many requests",
                 )
                 response.headers["Retry-After"] = str(retry_after_seconds)
-            elif wants_html_response(request.url.path):
+            elif wants_html_error_page(request):
                 response = service_notice_response(
                     request,
                     settings=settings,
@@ -570,29 +724,7 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
                 )
         else:
             response = await call_next(request)
-        for header, value in SECURITY_HEADERS.items():
-            response.headers.setdefault(header, value)
-        if not request.url.path.startswith("/api/"):
-            response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
-
-        if (
-            request.url.path in NO_STORE_PATHS
-            or request.url.path.startswith("/auth/")
-            or request.url.path.startswith("/api/patient/")
-            or request.url.path.startswith(MYCARLOS_API_PREFIX)
-            or request.url.path.startswith(FHIR_PATH_PREFIX)
-            or is_portal_path(request.url.path)
-            or request.url.path.startswith("/internal/")
-            or request.url.path.startswith("/dev/admin/")
-        ):
-            response.headers.setdefault("Cache-Control", "no-store")
-            response.headers.setdefault("Pragma", "no-cache")
-
-        if settings.is_production:
-            response.headers.setdefault(
-                "Strict-Transport-Security",
-                "max-age=31536000; includeSubDomains",
-            )
+        apply_standard_response_headers(request, response, settings)
         return response
 
     # Registration order is nesting order, and it is inverted: add_middleware inserts at
@@ -740,7 +872,7 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
                     "fhir_client",
                     get_request_client_reference(request, settings),
                 ),
-                resource_type=request.url.path.split("/")[2][:64],
+                resource_type=_request_application_path(request).split("/")[2][:64],
                 reason="authentication_failed",
             )
             session.commit()
@@ -767,7 +899,7 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
                     "fhir_client",
                     get_request_client_reference(request, settings),
                 ),
-                resource_type=request.url.path.split("/")[2][:64],
+                resource_type=_request_application_path(request).split("/")[2][:64],
                 reason="authentication_failed",
             )
             session.commit()
@@ -998,8 +1130,8 @@ def create_app(
     app.state.unlock_secret_encryption_secret = runtime.unlock_secret_encryption_secret
     logging.getLogger("uvicorn.access").disabled = not settings.is_development
     app.mount(
-        "/static",
-        StaticFiles(directory=str(PACKAGE_DIR / "static")),
+        _STATIC_MOUNT_PATH,
+        _PortalStaticFiles(directory=str(PACKAGE_DIR / "static")),
         name="static",
     )
     register_exception_handlers(app, runtime)
@@ -1024,6 +1156,7 @@ def register_app_routes(app: FastAPI, runtime: PortalRuntime) -> None:
     register_logout_route(app, runtime, route_dependencies)
     register_portal_routes(app, runtime, route_dependencies)
     register_activation_routes(app, runtime, route_dependencies)
+    register_signup_routes(app, runtime, route_dependencies)
     register_dev_admin_routes(app, runtime, route_dependencies)
     register_carlos_internal_routes(app, runtime)
     if runtime.settings.mycarlos_delivery_enabled:
@@ -1033,3 +1166,17 @@ def register_app_routes(app: FastAPI, runtime: PortalRuntime) -> None:
             from carlos_patient_portal.routes.mycarlos_mailbox import register_device_mailbox_routes
 
             register_device_mailbox_routes(app, runtime)
+            if runtime.settings.mycarlos_approval_enabled:
+                from carlos_patient_portal.routes.mycarlos_approval import (
+                    register_device_approval_routes,
+                )
+
+                register_device_approval_routes(app, runtime)
+        if runtime.settings.mycarlos_availability_enabled:
+            # Enrollment, and queueing on each new mailbox copy. Sending needs the dispatch
+            # worker, which starts only when the runtime also carries credentials.
+            from carlos_patient_portal.routes.mycarlos_availability import (
+                register_mycarlos_availability_routes,
+            )
+
+            register_mycarlos_availability_routes(app, runtime)

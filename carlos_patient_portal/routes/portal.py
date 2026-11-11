@@ -81,6 +81,7 @@ from carlos_patient_portal.models import (
     AUDIT_EVENT_UNLOCK_SECRET_READ,
     AUDIT_OUTCOME_FAILURE,
     AUDIT_OUTCOME_SUCCESS,
+    EMAIL_CHANGE_STATUS_PENDING,
     EMAIL_CHANGE_STATUS_REVOKED,
     UNLOCK_SECRET_TYPE_EMAIL,
     PatientPortalAccount,
@@ -91,6 +92,7 @@ from carlos_patient_portal.notifications import (
     send_email_change_confirmation,
     send_email_change_requested_notice,
 )
+from carlos_patient_portal.outbound_messages import sender_locale_kwargs
 from carlos_patient_portal.presenters import (
     normalize_email_password_dashboard_provider,
     normalize_email_password_dashboard_search,
@@ -508,6 +510,7 @@ def register_portal_routes(
                     recipient=recipient,
                     encryption_secret=runtime.outbox_encryption_secret,
                     encryption_key_id=runtime.outbox_active_key_id,
+                    locale=request_locale(request),
                 )
                 deliveries.append(delivery)
             await run_in_threadpool(session.commit)
@@ -533,6 +536,7 @@ def register_portal_routes(
                     send_contact_change_notice,
                     runtime,
                     recipient=recipient,
+                    locale=request_locale(request),
                 )
             except PortalEmailDeliveryError:
                 notices_delivered = False
@@ -604,6 +608,7 @@ def register_portal_routes(
                     runtime,
                     recipient=contact_update.confirmation_recipient,
                     confirmation_url=confirmation_url,
+                    locale=request_locale(request),
                 )
             if contact_update.phone_confirmation_recipient is not None:
                 if runtime.sms_sender is None:
@@ -613,12 +618,19 @@ def register_portal_routes(
                     recipient=contact_update.phone_confirmation_recipient,
                     code=contact_update.phone_confirmation_code or "",
                     expires_in_seconds=settings.phone_change_code_ttl_seconds,
+                    **sender_locale_kwargs(request_locale(request)),
                 )
         except (PortalEmailDeliveryError, PortalSmsDeliveryError):
             runtime.operational_metrics.record_failure("email_change_delivery")
             logger.error("Email-change confirmation delivery failed")
             if contact_update.email_change_request is not None:
-                contact_update.email_change_request.status = EMAIL_CHANGE_STATUS_REVOKED
+                await run_in_threadpool(
+                    session.refresh,
+                    contact_update.email_change_request,
+                    with_for_update=True,
+                )
+                if contact_update.email_change_request.status == EMAIL_CHANGE_STATUS_PENDING:
+                    contact_update.email_change_request.status = EMAIL_CHANGE_STATUS_REVOKED
             await run_in_threadpool(
                 record_account_settings_audit_event,
                 session,
@@ -642,6 +654,7 @@ def register_portal_routes(
                 send_email_change_requested_notice,
                 runtime,
                 recipient=account.email,
+                locale=request_locale(request),
             )
         except PortalEmailDeliveryError:
             runtime.operational_metrics.record_failure("contact_change_delivery")
@@ -721,6 +734,7 @@ def register_portal_routes(
                 recipient=recipient,
                 code=code,
                 expires_in_seconds=settings.phone_change_code_ttl_seconds,
+                **sender_locale_kwargs(request_locale(request)),
             )
             await run_in_threadpool(session.commit)
         except PhoneChangeRateLimitedError:
@@ -874,7 +888,7 @@ def register_portal_routes(
             return JSONResponse(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 content={"detail": AUTHENTICATION_REQUIRED_DETAIL},
-                headers={"Location": request.url_for("index").path},
+                headers={"Location": authenticated_session.headers["location"]},
             )
         account = authenticated_session.account
         try:

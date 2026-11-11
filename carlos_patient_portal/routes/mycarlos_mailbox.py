@@ -14,6 +14,7 @@
 
 """Default-off M4 routes; exact frozen v1 bytes, no server-provided URLs or PHI."""
 
+import re
 from collections.abc import Awaitable, Callable
 from time import time
 from typing import Annotated, cast
@@ -31,6 +32,7 @@ from carlos_patient_portal.device_identity import (
     DeviceRefusal,
     consume_device_assertion,
     find_device_record,
+    lock_active_device_account,
     verify_device_assertion,
 )
 from carlos_patient_portal.internal_routes import InternalRouteDependencies, InternalRuntime
@@ -112,6 +114,27 @@ async def bounded_body(request: Request, maximum: int) -> bytes:
     return bytes(body)
 
 
+# The kinds of copy besides originals a myCarlos may say it reads, in the listing's `accept`
+# (myCarlos#277): a comma list of `name/version`, raw in the query as the app sends it. A kind
+# this portal does not have is ignored, so a newer app asking for more still gets what is here;
+# a malformed, empty or repeated item is refused. The listing is the same either way.
+ACCEPTED_LISTING_KINDS = frozenset({"reading-aid/1"})
+LISTING_KIND = re.compile(r"[a-z][a-z0-9-]{0,63}/[1-9][0-9]{0,8}")
+MAX_LISTING_KINDS = 16
+
+
+def listing_accept(value: str) -> frozenset[str]:
+    """The kinds this portal has among those `accept` names; refuses a malformed list."""
+    kinds = value.split(",")
+    if (
+        len(kinds) > MAX_LISTING_KINDS
+        or len(set(kinds)) != len(kinds)
+        or not all(LISTING_KIND.fullmatch(kind) for kind in kinds)
+    ):
+        raise MailboxRefusal("invalid_cursor")
+    return ACCEPTED_LISTING_KINDS.intersection(kinds)
+
+
 def query_values(
     request: Request, allowed: set[str], *, maximum: int, default: int
 ) -> tuple[int, int, dict[str, str]]:
@@ -165,6 +188,8 @@ def register_device_mailbox_routes(app: FastAPI, runtime: PortalRuntime) -> None
             return response({"detail": "not found"}, 404)
         try:
             with runtime.session_factory() as session, session.begin():
+                if not lock_active_device_account(session, principal.account_id):
+                    raise MailboxRefusal("invalid_assertion", 404)
                 m = mailbox_lock(
                     session,
                     account_id=principal.account_id,
@@ -210,8 +235,10 @@ def register_device_mailbox_routes(app: FastAPI, runtime: PortalRuntime) -> None
             _body: bytes,
         ) -> Response:
             after, limit, values = query_values(
-                request, {"after", "through", "limit"}, maximum=100, default=50
+                request, {"after", "through", "limit", "accept"}, maximum=100, default=50
             )
+            if "accept" in values:
+                listing_accept(values["accept"])
             through = (
                 cursor(values["through"])
                 if "through" in values
@@ -452,7 +479,12 @@ def register_internal_mailbox_routes(
                         removed_status=409,
                     )
                     content, status = admit_upload(
-                        session, m, value, now=int(time()), limits=limits
+                        session,
+                        m,
+                        value,
+                        now=int(time()),
+                        limits=limits,
+                        availability_enabled=runtime.settings.mycarlos_availability_enabled,
                     )
                 return response(content, status)
             except MailboxRefusal as exc:

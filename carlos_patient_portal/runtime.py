@@ -25,6 +25,7 @@ from datetime import timedelta
 from math import ceil
 from threading import Lock
 from time import monotonic
+from typing import TYPE_CHECKING
 
 from fastapi import Depends, Request, Response
 from fastapi.responses import RedirectResponse
@@ -37,6 +38,9 @@ from carlos_patient_portal.config import Settings
 from carlos_patient_portal.email_delivery import PortalEmailSender
 from carlos_patient_portal.sms_delivery import PortalSmsSender
 from carlos_patient_portal.token_keys import PortalTokenKeys
+
+if TYPE_CHECKING:
+    from carlos_patient_portal.mycarlos_availability_dispatch import AvailabilityDispatch
 
 MAX_PAGE_OFFSET = 100_000
 # Every primary key is a 32-bit Integer, and PostgreSQL binds an id as ::INTEGER: a larger id cannot
@@ -121,6 +125,7 @@ class InMemoryRateLimiter:
         self.max_requests = max_requests
         self.max_buckets = max_buckets
         self.buckets: OrderedDict[str, RateLimitBucket] = OrderedDict()
+        self._earliest_window_start = float("inf")
         self.lock = Lock()
 
     def consume(self, key: str, *, now: float | None = None) -> int | None:
@@ -135,12 +140,30 @@ class InMemoryRateLimiter:
             self.prune_expired_buckets(current_time)
             bucket = self.buckets.get(key)
             if bucket is None:
+                if (
+                    len(self.buckets) >= self.max_buckets
+                    and current_time - self._earliest_window_start >= self.window_seconds
+                ):
+                    # LRU order differs from expiry order. A stale lower bound may trigger
+                    # an extra scan, but cannot hide an expired bucket behind a live one.
+                    expired_keys = [
+                        existing_key
+                        for existing_key, existing_bucket in self.buckets.items()
+                        if current_time - existing_bucket.window_started_at >= self.window_seconds
+                    ]
+                    for expired_key in expired_keys:
+                        del self.buckets[expired_key]
+                    self._earliest_window_start = min(
+                        (bucket.window_started_at for bucket in self.buckets.values()),
+                        default=float("inf"),
+                    )
                 if len(self.buckets) >= self.max_buckets:
                     self.buckets.popitem(last=False)
                 self.buckets[key] = RateLimitBucket(
                     window_started_at=current_time,
                     request_count=1,
                 )
+                self._earliest_window_start = min(self._earliest_window_start, current_time)
                 return None
             self.buckets.move_to_end(key)
 
@@ -188,6 +211,9 @@ class PortalRuntime:
     outbox_encryption_keys: dict[str, str] | None = None
     outbox_active_key_id: str = "primary"
     operational_metrics: PortalOperationalMetrics = field(default_factory=PortalOperationalMetrics)
+    # myCarlos availability notices: credentialled transports and notice keys. Nothing builds
+    # this from settings yet, so the dispatch worker never starts in a deployment (P2).
+    availability_dispatch: "AvailabilityDispatch | None" = None
 
 
 @dataclass(frozen=True)

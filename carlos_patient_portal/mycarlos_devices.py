@@ -343,5 +343,15 @@ def remove_device(
     device.status = MYCARLOS_DEVICE_STATUS_REMOVED
     device.removed_at = utc_now() if now is None else now
     device.removed_by = removed_by
+    # Its waiting keys (carlos-portal#87) and its availability subscriptions, with their pending
+    # notices, die with it in the same transaction: removed by the patient on the portal, or by
+    # staff through the internal API. Dispatch already refused a removed device; now its push
+    # destinations stay only as tombstones.
+    from carlos_patient_portal.mycarlos_availability_store import revoke_for_removed_device
+    from carlos_patient_portal.mycarlos_waiting import tombstone_device_keys
+
+    by = "staff" if removed_by == "staff" else "device_removed"
+    tombstone_device_keys(session, device.id, by=by, now=device.removed_at)
+    revoke_for_removed_device(session, device.id, by=by, now=device.removed_at)
     session.flush()
     return device, True

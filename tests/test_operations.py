@@ -53,6 +53,16 @@ def test_alembic_config_escapes_percent_interpolation(monkeypatch: pytest.Monkey
             ["migration"],
             "deployment probe configuration is invalid",
         ),
+        (
+            cli.deployment_probe,
+            ["outbox-configuration-sha256"],
+            "deployment probe configuration is invalid",
+        ),
+        (
+            cli.deployment_probe,
+            ["runtime-outbox-configuration-sha256"],
+            "deployment probe configuration is invalid",
+        ),
         (cli.maintenance, ["outbox-status"], "maintenance configuration is invalid"),
         (cli.outbox_worker, ["--once"], "outbox configuration is invalid"),
     ),

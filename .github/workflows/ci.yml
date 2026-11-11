@@ -29,7 +29,9 @@ permissions:
 
 jobs:
   patient-portal:
-    runs-on: ubuntu-latest
+    # Pinned: Playwright 1.60 cannot install Chromium on Ubuntu 26.04, which ubuntu-latest
+    # now gives. Return to ubuntu-latest once Playwright supports Ubuntu 26.04.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -176,6 +178,11 @@ jobs:
           tests/test_postgresql_integration.py
           tests/test_mycarlos_postgresql.py
           tests/test_mycarlos_mailbox_postgresql.py
+          tests/test_approval_postgresql.py
+          tests/test_signup_history_migration.py
+          tests/test_mycarlos_availability_dispatch_postgresql.py
+          tests/test_mycarlos_availability_revocations_postgresql.py
+          tests/test_mycarlos_waiting_postgresql.py
 
       - name: Run patient portal Playwright browser checks
         if: matrix.python-version == '3.12'

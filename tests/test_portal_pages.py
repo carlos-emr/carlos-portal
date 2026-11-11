@@ -3,6 +3,7 @@
 import re
 from dataclasses import fields
 from datetime import UTC, datetime, timedelta
+from html import unescape
 from types import SimpleNamespace
 
 import pytest
@@ -15,6 +16,7 @@ from carlos_patient_portal.config import (
     MIN_PRODUCTION_SECRET_LENGTH,
     Settings,
 )
+from carlos_patient_portal.email_delivery import PortalEmailDeliveryError
 from carlos_patient_portal.i18n import (
     DEFAULT_LOCALE,
     LOCALE_COOKIE_NAME,
@@ -40,6 +42,7 @@ from carlos_patient_portal.models import (
     PatientPortalAuditEvent,
     PatientPortalContactReviewRequest,
     PatientPortalEmailChangeRequest,
+    PatientPortalSession,
     PatientPortalUnlockSecret,
 )
 from carlos_patient_portal.unlock_secrets import (
@@ -671,10 +674,10 @@ def test_email_password_dashboard_empty_search_and_unavailable_password_states()
     empty_search_response = client.get("/portal/email-passwords?q=missing")
 
     assert empty_response.status_code == 200
-    assert "No email passwords" in empty_response.text
+    assert "No document passwords" in empty_response.text
     assert "Page 1 of 1" in empty_response.text
     assert empty_search_response.status_code == 200
-    assert "No matching email passwords" in empty_search_response.text
+    assert "No matching document passwords" in empty_search_response.text
     assert "Page 1 of 1" in empty_search_response.text
 
     with app.state.session_factory() as session:
@@ -1337,6 +1340,7 @@ def test_presenters_perform_no_writes() -> None:
         ("activate.jinja", "public_auth_template_context"),
         ("password_reset_request.jinja", "public_auth_template_context"),
         ("password_reset_complete.jinja", "public_auth_template_context"),
+        ("sign_up.jinja", "public_auth_template_context"),
         ("email_change_complete.jinja", "public_auth_template_context"),
         ("auth_result.jinja", "public_auth_template_context"),
         ("locked.jinja", "public_auth_template_context"),
@@ -1450,6 +1454,50 @@ def test_email_change_confirmation_rejects_an_unknown_token() -> None:
     assert "no longer valid" in forged.text
 
 
+def test_phone_code_resend_inside_the_cooldown_is_rate_limited_not_an_error() -> None:
+    """A resend right after the code was sent must answer with the rate-limited notice.
+
+    On SQLite the stored send time comes back without a zone; the remaining-time arithmetic
+    then raised TypeError and the patient got a 500 page.
+    """
+    sms_sender = RecordingPortalSmsSender()
+    app = migrated_development_app(
+        email_sender=RecordingPortalEmailSender(), sms_sender=sms_sender
+    )
+    client = TestClient(app)
+    browser_sign_in_seeded_patient(app, client)
+    account_page = client.get("/portal/account")
+    requested = client.post(
+        "/portal/account/contact",
+        data={
+            "csrf_token": csrf_token_from_response(account_page),
+            "email": SEEDED_INVITE_EMAIL,
+            "phone_number": "+1 555 010 5556",
+            "current_password": STRONG_PASSWORD,
+        },
+        follow_redirects=False,
+    )
+    assert requested.status_code == 303
+    assert (
+        requested.headers["location"] == "/portal/account?status=phone-confirmation-required"
+    )
+    sent_codes = len(sms_sender.messages)
+
+    confirmation_page = client.get("/portal/account")
+    resent = client.post(
+        "/portal/account/contact/resend-phone",
+        data={"csrf_token": csrf_token_from_response(confirmation_page)},
+        follow_redirects=False,
+    )
+
+    assert resent.status_code == 303
+    assert (
+        resent.headers["location"]
+        == "/portal/account?status=phone-confirmation-rate-limited"
+    )
+    assert len(sms_sender.messages) == sent_codes
+
+
 PORTAL_MUTATING_ROUTES = (
     ("/portal/account/password", {"current_password": "x", "new_password": "y"}),
     ("/portal/account/contact", {"email": "a@b.test", "current_password": "x"}),
@@ -1555,3 +1603,654 @@ def test_csrf_enforcement_splits_on_content_type_only_for_auth_routes() -> None:
     assert portal_json.status_code == 403, "portal mutators must not be bypassable with JSON"
     assert auth_form.status_code == 403
     assert auth_json.status_code == 200, "the JSON API path is deliberately exempt"
+
+
+@pytest.mark.parametrize("delivery_fails", [False, True], ids=["delivered", "provider-failure"])
+def test_phone_confirmation_resend_only_replaces_the_last_delivered_proof(
+    delivery_fails: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resend failure must roll back its new code, time, and failure-budget reset."""
+    from carlos_patient_portal import account_settings
+
+    email_sender, sms_sender = RecordingPortalEmailSender(), RecordingPortalSmsSender()
+    app = migrated_development_app(email_sender=email_sender, sms_sender=sms_sender)
+    with TestClient(app) as client:
+        account_id = browser_sign_in_seeded_patient(app, client)
+        new_phone = "+15550105556"
+        requested = client.post(
+            "/portal/account/contact",
+            data={
+                "csrf_token": csrf_token_from_response(client.get("/portal/account")),
+                "email": SEEDED_INVITE_EMAIL,
+                "phone_number": new_phone,
+                "current_password": STRONG_PASSWORD,
+            },
+            follow_redirects=False,
+        )
+        assert requested.status_code == 303
+        assert requested.headers["location"].endswith("status=phone-confirmation-required")
+        original_code = str(sms_sender.messages[-1]["code"])
+        replacement_code = f"{(int(original_code) + 1) % 1_000_000:06d}"
+        wrong = client.post(
+            "/portal/account/contact/confirm-phone",
+            data={
+                "csrf_token": csrf_token_from_response(client.get("/portal/account")),
+                "phone_confirmation_code": replacement_code,
+            },
+            follow_redirects=False,
+        )
+        assert wrong.headers["location"].endswith("status=phone-confirmation-invalid")
+        with app.state.session_factory() as session, session.begin():
+            pending = session.scalars(select(PatientPortalEmailChangeRequest)).one()
+            pending.phone_code_sent_at -= timedelta(
+                seconds=app.state.settings.phone_change_resend_cooldown_seconds + 1
+            )
+            original_hash, original_sent_at = pending.phone_code_hash, pending.phone_code_sent_at
+            assert pending.phone_failed_attempts == 1
+        # Only the entropy boundary is deterministic. Requests, delivery, commits and
+        # redemption use the real application.
+        monkeypatch.setattr(account_settings, "create_mfa_code", lambda: replacement_code)
+        sms_sender.fail = delivery_fails
+        resent = client.post(
+            "/portal/account/contact/resend-phone",
+            data={"csrf_token": csrf_token_from_response(client.get("/portal/account"))},
+            follow_redirects=False,
+        )
+        assert resent.status_code == 303
+        assert resent.headers["location"].endswith(
+            "status=phone-confirmation-invalid"
+            if delivery_fails
+            else "status=phone-confirmation-required"
+        )
+        assert len(sms_sender.messages) == 2
+        assert sms_sender.messages[-1]["recipient"] == new_phone
+        assert sms_sender.messages[-1]["code"] == replacement_code
+        with app.state.session_factory() as session:
+            pending = session.scalars(select(PatientPortalEmailChangeRequest)).one()
+            account = session.get(PatientPortalAccount, account_id)
+            assert account.phone_number is None
+            assert pending.status == "pending"
+            if delivery_fails:
+                assert pending.phone_code_hash == original_hash
+                assert pending.phone_code_sent_at == original_sent_at
+                assert pending.phone_failed_attempts == 1
+            else:
+                assert pending.phone_code_hash != original_hash
+                assert pending.phone_code_sent_at > original_sent_at
+                assert pending.phone_failed_attempts == 0
+        if not delivery_fails:
+            old_code = client.post(
+                "/portal/account/contact/confirm-phone",
+                data={
+                    "csrf_token": csrf_token_from_response(client.get("/portal/account")),
+                    "phone_confirmation_code": original_code,
+                },
+                follow_redirects=False,
+            )
+            assert old_code.headers["location"].endswith("status=phone-confirmation-invalid")
+        completed = client.post(
+            "/portal/account/contact/confirm-phone",
+            data={
+                "csrf_token": csrf_token_from_response(client.get("/portal/account")),
+                "phone_confirmation_code": original_code if delivery_fails else replacement_code,
+            },
+            follow_redirects=False,
+        )
+        assert completed.status_code == 200
+        assert "Contact information updated" in completed.text
+        assert web_support.PORTAL_SESSION_COOKIE_NAME not in client.cookies
+        with app.state.session_factory() as session:
+            assert session.get(PatientPortalAccount, account_id).phone_number == new_phone
+            assert (
+                session.scalars(select(PatientPortalEmailChangeRequest)).one().status == "confirmed"
+            )
+            assert len(list(session.scalars(select(PatientPortalContactReviewRequest)))) == 1
+
+
+def test_legacy_sender_without_confirmation_revokes_unusable_email_change() -> None:
+    """A configured legacy adapter must fail the required link delivery, even in development."""
+
+    class LegacySender:
+        def send_code(self, **kwargs: object) -> None:
+            pass
+
+    app = migrated_development_app(email_sender=LegacySender())
+    with TestClient(app) as client:
+        account_id = browser_sign_in_seeded_patient(app, client)
+        response = client.post(
+            "/portal/account/contact",
+            data={
+                "csrf_token": csrf_token_from_response(client.get("/portal/account")),
+                "email": "fake.replacement@example.test",
+                "phone_number": "",
+                "current_password": STRONG_PASSWORD,
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        assert response.headers["location"].endswith("status=email-confirmation-notice-failed")
+        assert client.get("/portal/account").status_code == 200
+        with app.state.session_factory() as session:
+            assert session.get(PatientPortalAccount, account_id).email == SEEDED_INVITE_EMAIL
+            assert (
+                session.scalars(select(PatientPortalEmailChangeRequest)).one().status == "revoked"
+            )
+            assert session.scalar(select(PatientPortalContactReviewRequest)) is None
+            failures = list(
+                session.scalars(
+                    select(PatientPortalAuditEvent).where(
+                        PatientPortalAuditEvent.event_type
+                        == AUDIT_EVENT_ACCOUNT_EMAIL_CHANGE_REQUEST,
+                        PatientPortalAuditEvent.outcome == "failure",
+                    )
+                )
+            )
+            assert len(failures) == 1
+            assert failures[0].reason == "delivery_unavailable"
+        assert app.state.operational_metrics.snapshot()["failures"]["email_change_delivery"] == 1
+
+
+def test_legacy_sender_without_advisory_methods_still_confirms_email_change() -> None:
+    """Optional development notices must not undo a delivered and redeemed confirmation link."""
+
+    class LegacyNoticeSender(RecordingPortalEmailSender):
+        send_email_change_requested_notice = None
+        send_contact_change_notice = None
+
+    sender = LegacyNoticeSender()
+    app = migrated_development_app(email_sender=sender)
+    with TestClient(app) as client:
+        account_id = browser_sign_in_seeded_patient(app, client)
+        token = request_seeded_email_change(app, client, sender, email="fake.changed@example.test")
+        confirmed = confirm_seeded_email_change(client, token)
+        assert confirmed.status_code == 200
+        assert "Email address confirmed" in confirmed.text
+        with app.state.session_factory() as session:
+            assert (
+                session.get(PatientPortalAccount, account_id).email == "fake.changed@example.test"
+            )
+            assert (
+                session.scalars(select(PatientPortalEmailChangeRequest)).one().status == "confirmed"
+            )
+            assert len(list(session.scalars(select(PatientPortalContactReviewRequest)))) == 1
+        # The public email-link result leaves any browser cookie until its next use.
+        # The committed session must already be revoked, and replay must clear it.
+        with app.state.session_factory() as session:
+            authorizing = session.scalars(select(PatientPortalSession)).one()
+            assert authorizing.revoked_at is not None
+            assert authorizing.revoked_reason == "contact_change"
+        replay = client.get("/portal/account", follow_redirects=False)
+        assert replay.status_code == 303 and replay.headers["location"] == "/"
+        assert web_support.PORTAL_SESSION_COOKIE_NAME not in client.cookies
+        assert app.state.operational_metrics.snapshot()["failures"] == {}
+
+
+def test_sms_preference_change_invalidates_a_pending_phone_removal_link() -> None:
+    """A link created before an MFA change must not remove its newly required phone."""
+    email_sender, sms_sender = RecordingPortalEmailSender(), RecordingPortalSmsSender()
+    app = migrated_development_app(email_sender=email_sender, sms_sender=sms_sender)
+    with TestClient(app) as client:
+        account_id = browser_sign_in_seeded_patient(app, client)
+        old_phone = "+15550105555"
+        # Normal initial contact fixture, as in the existing phone-removal regression.
+        # Every change to MFA preference and the proposed contact uses an actual route.
+        with app.state.session_factory() as session, session.begin():
+            account = session.get(PatientPortalAccount, account_id)
+            assert account.preferred_mfa_method == "email"
+            account.phone_number = old_phone
+        token = request_seeded_email_change(
+            app, client, email_sender, email="fake.pending-contact@example.test"
+        )
+        with app.state.session_factory() as session:
+            pending = session.scalars(select(PatientPortalEmailChangeRequest)).one()
+            assert pending.status == "pending" and pending.new_phone_number is None
+            assert pending.email_confirmed_at is None and pending.phone_confirmed_at is not None
+            assert session.get(PatientPortalAccount, account_id).phone_number == old_phone
+        preference = client.post(
+            "/portal/account/mfa",
+            data={
+                "csrf_token": csrf_token_from_response(client.get("/portal/account")),
+                "current_password": STRONG_PASSWORD,
+                "preferred_mfa_method": "sms",
+            },
+            follow_redirects=False,
+        )
+        assert preference.status_code == 303
+        assert preference.headers["location"] == "/portal/account?status=mfa-updated"
+        assert sms_sender.messages == []
+        sent_before_confirmation = list(email_sender.messages)
+        refused = confirm_seeded_email_change(client, token)
+        assert refused.status_code == 400
+        assert refused.headers["content-type"].startswith("text/html")
+        assert "no longer valid" in refused.text
+        assert email_sender.messages == sent_before_confirmation
+        assert sms_sender.messages == []
+        with app.state.session_factory() as session:
+            account = session.get(PatientPortalAccount, account_id)
+            assert (account.email, account.phone_number, account.preferred_mfa_method) == (
+                SEEDED_INVITE_EMAIL,
+                old_phone,
+                "sms",
+            )
+            assert (
+                session.scalars(select(PatientPortalEmailChangeRequest)).one().status == "revoked"
+            )
+            assert session.scalar(select(PatientPortalContactReviewRequest)) is None
+            event = session.scalars(
+                select(PatientPortalAuditEvent).where(
+                    PatientPortalAuditEvent.event_type == AUDIT_EVENT_ACCOUNT_EMAIL_CHANGE_CONFIRM
+                )
+            ).one()
+            assert (event.outcome, event.reason) == (AUDIT_OUTCOME_FAILURE, "delivery_unavailable")
+        assert client.get("/portal/account").status_code == 200
+        fresh = client.post(
+            "/auth/login", json={"username": "patient.user", "password": STRONG_PASSWORD}
+        )
+        assert fresh.status_code == 200 and fresh.json()["mfa_delivery_method"] == "sms"
+        assert len(sms_sender.messages) == 1
+        assert sms_sender.messages[0]["recipient"] == old_phone
+        assert email_sender.messages == sent_before_confirmation
+        verified = client.post(
+            "/auth/mfa/verify",
+            json={
+                "mfa_challenge_token": fresh.json()["mfa_challenge_token"],
+                "code": sms_sender.messages[0]["code"],
+            },
+        )
+        assert verified.status_code == 200
+        assert (
+            client.get(
+                "/auth/session", headers=bearer_headers(verified.json()["session_token"])
+            ).status_code
+            == 200
+        )
+
+
+def test_public_email_confirmation_notice_failure_keeps_change_and_other_notice(
+    tmp_path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An advisory failure after confirmation must not undo recovery or skip the other address."""
+    new_email = "fake.confirmed-notice@example.test"
+    attempts = []
+    committed_observations = []
+
+    class FirstNoticeFails(RecordingPortalEmailSender):
+        def send_contact_change_notice(self, *, recipient, message_id=None):
+            # File SQLite gives this observer a separate connection: uncommitted
+            # contact/session writes cannot satisfy these provider-boundary assertions.
+            with app.state.session_factory() as session:
+                account = session.get(PatientPortalAccount, account_id)
+                proof = session.scalars(select(PatientPortalEmailChangeRequest)).one()
+                authorizing = session.scalars(select(PatientPortalSession)).one()
+                reviews = list(session.scalars(select(PatientPortalContactReviewRequest)))
+                assert account.email == new_email
+                assert proof.status == "confirmed" and proof.confirmed_at is not None
+                assert authorizing.revoked_at is not None
+                assert authorizing.revoked_reason == "contact_change"
+                assert len(reviews) == 1
+                committed_observations.append(recipient)
+            attempts.append(recipient)
+            super().send_contact_change_notice(recipient=recipient, message_id=message_id)
+            if recipient == SEEDED_INVITE_EMAIL:
+                raise PortalEmailDeliveryError(
+                    f"FAKE private provider refusal recipient={recipient} proof={token}"
+                )
+
+    sender = FirstNoticeFails()
+    app = migrated_development_app(
+        email_sender=sender,
+        database_url=f"sqlite+pysqlite:///{tmp_path / 'public-confirmation-notice.sqlite'}",
+    )
+    with TestClient(app) as patient:
+        account_id = browser_sign_in_seeded_patient(app, patient)
+        token = request_seeded_email_change(app, patient, sender, email=new_email)
+        assert attempts == []
+        caplog.clear()
+        mailbox = TestClient(app)
+        try:
+            assert web_support.PORTAL_SESSION_COOKIE_NAME not in mailbox.cookies
+            confirmed = confirm_seeded_email_change(mailbox, token)
+            assert web_support.PORTAL_SESSION_COOKIE_NAME not in mailbox.cookies
+        finally:
+            mailbox.close()
+        assert confirmed.status_code == 200
+        assert "Email address confirmed" in confirmed.text
+        assert attempts == committed_observations == [SEEDED_INVITE_EMAIL, new_email]
+        assert [
+            message["recipient"]
+            for message in sender.messages
+            if message.get("type") == "contact_change_notice"
+        ] == attempts
+        assert app.state.operational_metrics.snapshot()["failures"]["contact_change_delivery"] == 1
+        errors = [record for record in caplog.records if record.levelname == "ERROR"]
+        assert [record.getMessage() for record in errors] == [
+            "Contact-change notice delivery failed"
+        ]
+        for private_detail in (
+            SEEDED_INVITE_EMAIL,
+            new_email,
+            token,
+            "FAKE private provider refusal",
+        ):
+            assert private_detail not in caplog.text
+            assert private_detail not in confirmed.text
+        # Assert eager revocation before replaying the old session or one-time proof.
+        with app.state.session_factory() as session:
+            assert session.get(PatientPortalAccount, account_id).email == new_email
+            assert (
+                session.scalars(select(PatientPortalEmailChangeRequest)).one().status == "confirmed"
+            )
+            assert (
+                session.scalars(select(PatientPortalSession)).one().revoked_reason
+                == "contact_change"
+            )
+            assert len(list(session.scalars(select(PatientPortalContactReviewRequest)))) == 1
+        replayed = confirm_seeded_email_change(patient, token)
+        assert replayed.status_code == 400
+        assert attempts == [SEEDED_INVITE_EMAIL, new_email]
+        stale_session = patient.get("/portal/account", follow_redirects=False)
+        assert stale_session.status_code == 303 and stale_session.headers["location"] == "/"
+        assert web_support.PORTAL_SESSION_COOKIE_NAME not in patient.cookies
+        with app.state.session_factory() as session:
+            assert session.get(PatientPortalAccount, account_id).email == new_email
+            assert (
+                session.scalars(select(PatientPortalEmailChangeRequest)).one().status == "confirmed"
+            )
+            assert len(list(session.scalars(select(PatientPortalContactReviewRequest)))) == 1
+
+
+def test_sms_mfa_rejects_immediate_phone_removal_without_losing_sign_in() -> None:
+    """The immediate contact path must preserve the phone needed by selected SMS MFA."""
+    email_sender, sms_sender = RecordingPortalEmailSender(), RecordingPortalSmsSender()
+    app = migrated_development_app(email_sender=email_sender, sms_sender=sms_sender)
+    with TestClient(app) as client:
+        account_id = browser_sign_in_seeded_patient(app, client)
+        old_phone = "+15550105555"
+        # Establish the same initial contact fixture used by the allowed-removal test.
+        # The MFA preference change and attempted contact change use actual routes.
+        with app.state.session_factory() as session, session.begin():
+            account = session.get(PatientPortalAccount, account_id)
+            assert account.preferred_mfa_method == "email"
+            account.phone_number = old_phone
+        preference = client.post(
+            "/portal/account/mfa",
+            data={
+                "csrf_token": csrf_token_from_response(client.get("/portal/account")),
+                "current_password": STRONG_PASSWORD,
+                "preferred_mfa_method": "sms",
+            },
+            follow_redirects=False,
+        )
+        assert preference.status_code == 303
+        assert preference.headers["location"] == "/portal/account?status=mfa-updated"
+        sent_before_removal = list(email_sender.messages)
+        assert sms_sender.messages == []
+        refused = client.post(
+            "/portal/account/contact",
+            data={
+                "csrf_token": csrf_token_from_response(client.get("/portal/account")),
+                "email": SEEDED_INVITE_EMAIL,
+                "phone_number": "",
+                "current_password": STRONG_PASSWORD,
+            },
+            follow_redirects=False,
+        )
+        assert refused.status_code == 400
+        assert refused.headers["content-type"].startswith("text/html")
+        assert "Account change could not be completed." in refused.text
+        assert email_sender.messages == sent_before_removal
+        assert sms_sender.messages == []
+        with app.state.session_factory() as session:
+            account = session.get(PatientPortalAccount, account_id)
+            assert (account.email, account.phone_number, account.preferred_mfa_method) == (
+                SEEDED_INVITE_EMAIL,
+                old_phone,
+                "sms",
+            )
+            assert session.scalar(select(PatientPortalEmailChangeRequest)) is None
+            assert session.scalar(select(PatientPortalContactReviewRequest)) is None
+            authorizing = session.scalars(select(PatientPortalSession)).one()
+            assert authorizing.account_id == account_id and authorizing.revoked_at is None
+            # Rejection is auditable even though no contact change is allowed.
+            events = list(
+                session.scalars(
+                    select(PatientPortalAuditEvent).where(
+                        PatientPortalAuditEvent.event_type == AUDIT_EVENT_ACCOUNT_CONTACT_UPDATE
+                    )
+                )
+            )
+            assert [(event.outcome, event.reason) for event in events] == [
+                (AUDIT_OUTCOME_FAILURE, "delivery_unavailable")
+            ]
+        assert client.get("/portal/account").status_code == 200
+        fresh = client.post(
+            "/auth/login", json={"username": "patient.user", "password": STRONG_PASSWORD}
+        )
+        assert fresh.status_code == 200 and fresh.json()["mfa_delivery_method"] == "sms"
+        assert len(sms_sender.messages) == 1
+        assert sms_sender.messages[0]["recipient"] == old_phone
+        assert email_sender.messages == sent_before_removal
+        verified = client.post(
+            "/auth/mfa/verify",
+            json={
+                "mfa_challenge_token": fresh.json()["mfa_challenge_token"],
+                "code": sms_sender.messages[0]["code"],
+            },
+        )
+        assert verified.status_code == 200
+        assert (
+            client.get(
+                "/auth/session", headers=bearer_headers(verified.json()["session_token"])
+            ).status_code
+            == 200
+        )
+
+
+def test_initial_phone_delivery_failure_revokes_proof_then_allows_explicit_retry() -> None:
+    """Initial delivery failure closes its unusable proof; an explicit retry can recover."""
+    email_sender = RecordingPortalEmailSender()
+    sms_sender = RecordingPortalSmsSender(fail=True)
+    app = migrated_development_app(email_sender=email_sender, sms_sender=sms_sender)
+    with TestClient(app) as client:
+        account_id = browser_sign_in_seeded_patient(app, client)
+        new_phone = "+15550105556"
+        with app.state.session_factory() as session:
+            account = session.get(PatientPortalAccount, account_id)
+            original_contact = (account.email, account.phone_number)
+            authorizing_id = session.scalars(select(PatientPortalSession.id)).one()
+        failed = submit_contact_change(
+            app, client, email=SEEDED_INVITE_EMAIL, phone_number=new_phone
+        )
+        assert failed.status_code == 303
+        assert (
+            failed.headers["location"] == "/portal/account?status=phone-confirmation-notice-failed"
+        )
+        assert len(sms_sender.messages) == 1
+        assert sms_sender.messages[0]["recipient"] == new_phone
+        failed_code = sms_sender.messages[0]["code"]
+        with app.state.session_factory() as session:
+            proof = session.scalars(select(PatientPortalEmailChangeRequest)).one()
+            failed_proof_id = proof.id
+            assert proof.status == EMAIL_CHANGE_STATUS_REVOKED
+            assert proof.phone_confirmed_at is None
+            account = session.get(PatientPortalAccount, account_id)
+            assert (account.email, account.phone_number) == original_contact
+            assert session.get(PatientPortalSession, authorizing_id).revoked_at is None
+            assert session.scalar(select(PatientPortalContactReviewRequest)) is None
+            failure = session.scalars(
+                select(PatientPortalAuditEvent).where(
+                    PatientPortalAuditEvent.event_type == AUDIT_EVENT_ACCOUNT_EMAIL_CHANGE_REQUEST,
+                    PatientPortalAuditEvent.outcome == AUDIT_OUTCOME_FAILURE,
+                )
+            ).one()
+            assert failure.reason == "delivery_unavailable"
+        assert app.state.operational_metrics.snapshot()["failures"]["email_change_delivery"] == 1
+        assert client.get("/portal/account").status_code == 200
+        attempts_after_failure = (len(email_sender.messages), len(sms_sender.messages))
+        # Check before creating a fresh proof: two random codes could legitimately coincide.
+        stale = client.post(
+            "/portal/account/contact/confirm-phone",
+            data={
+                "csrf_token": csrf_token_from_response(client.get("/portal/account")),
+                "phone_confirmation_code": failed_code,
+            },
+            follow_redirects=False,
+        )
+        assert stale.status_code == 303
+        assert stale.headers["location"] == "/portal/account?status=phone-confirmation-invalid"
+        assert (len(email_sender.messages), len(sms_sender.messages)) == attempts_after_failure
+        with app.state.session_factory() as session:
+            assert session.get(PatientPortalEmailChangeRequest, failed_proof_id).status == "revoked"
+            assert (
+                session.scalar(
+                    select(PatientPortalEmailChangeRequest).where(
+                        PatientPortalEmailChangeRequest.status == EMAIL_CHANGE_STATUS_PENDING
+                    )
+                )
+                is None
+            )
+            assert session.get(PatientPortalSession, authorizing_id).revoked_at is None
+            assert session.scalar(select(PatientPortalContactReviewRequest)) is None
+        # Toggle only the established recorder's fault; retry through the real contact route.
+        sms_sender.fail = False
+        retried = submit_contact_change(
+            app, client, email=SEEDED_INVITE_EMAIL, phone_number=new_phone
+        )
+        assert retried.status_code == 303
+        assert retried.headers["location"] == "/portal/account?status=phone-confirmation-required"
+        assert len(sms_sender.messages) == 2
+        assert sms_sender.messages[1]["recipient"] == new_phone
+        new_code = sms_sender.messages[1]["code"]
+        assert any(
+            message.get("type") == "email_change_requested_notice"
+            and message["recipient"] == SEEDED_INVITE_EMAIL
+            for message in email_sender.messages
+        )
+        with app.state.session_factory() as session:
+            proofs = session.scalars(
+                select(PatientPortalEmailChangeRequest).order_by(PatientPortalEmailChangeRequest.id)
+            ).all()
+            assert [proof.status for proof in proofs] == ["revoked", "pending"]
+            fresh_proof_id = proofs[1].id
+            assert fresh_proof_id != failed_proof_id
+            account = session.get(PatientPortalAccount, account_id)
+            assert (account.email, account.phone_number) == original_contact
+            assert session.get(PatientPortalSession, authorizing_id).revoked_at is None
+        completed = client.post(
+            "/portal/account/contact/confirm-phone",
+            data={
+                "csrf_token": csrf_token_from_response(client.get("/portal/account")),
+                "phone_confirmation_code": new_code,
+            },
+            follow_redirects=False,
+        )
+        assert completed.status_code == 200
+        assert "Contact information updated" in completed.text
+        with app.state.session_factory() as session:
+            account = session.get(PatientPortalAccount, account_id)
+            assert (account.email, account.phone_number) == (SEEDED_INVITE_EMAIL, new_phone)
+            assert session.get(PatientPortalEmailChangeRequest, failed_proof_id).status == "revoked"
+            confirmed = session.get(PatientPortalEmailChangeRequest, fresh_proof_id)
+            assert confirmed.status == "confirmed" and confirmed.phone_confirmed_at is not None
+            reviews = session.scalars(select(PatientPortalContactReviewRequest)).all()
+            assert len(reviews) == 1 and reviews[0].phone_number_after == new_phone
+            authorizing = session.get(PatientPortalSession, authorizing_id)
+            assert authorizing.revoked_at is not None
+            assert authorizing.revoked_reason == "contact_change"
+        assert web_support.PORTAL_SESSION_COOKIE_NAME not in client.cookies
+        assert any(
+            message.get("type") == "contact_change_notice"
+            and message["recipient"] == SEEDED_INVITE_EMAIL
+            for message in email_sender.messages
+        )
+
+
+def test_native_legacy_provider_filter_isolates_retained_records_and_clear_restores_both() -> None:
+    app = migrated_development_app()
+    client = TestClient(app)
+    try:
+        account_id = browser_sign_in_seeded_patient(app, client)
+        legacy_secret = "FAKE legacy document passphrase"
+        current_secret = "FAKE current document passphrase"
+        with app.state.session_factory() as session, session.begin():
+            legacy = create_unlock_secret(
+                session,
+                clinic_id="default",
+                demographic_no=1234,
+                account_id=account_id,
+                secret_type=UNLOCK_SECRET_TYPE_EMAIL,
+                secret=legacy_secret,
+                created_by="Clinic Nurse",
+                encryption_secret=UNLOCK_SECRET_ENCRYPTION_SECRET,
+                label="Retained letter",
+                source_reference="retained-provider-letter",
+            ).unlock_secret
+            current = create_unlock_secret(
+                session,
+                clinic_id="default",
+                demographic_no=1234,
+                account_id=account_id,
+                secret_type=UNLOCK_SECRET_TYPE_EMAIL,
+                secret=current_secret,
+                created_by="Clinic Nurse",
+                created_by_id="provider-42",
+                encryption_secret=UNLOCK_SECRET_ENCRYPTION_SECRET,
+                label="Current report",
+                source_reference="current-provider-report",
+            ).unlock_secret
+            legacy_id, current_id = legacy.id, current.id
+            assert legacy.created_by_id is None
+            assert current.created_by_id == "provider-42"
+
+        listing = client.get("/portal/email-passwords")
+        assert listing.status_code == 200
+        assert set(re.findall(r'id="email-password-(\d+)"', listing.text)) == {
+            str(legacy_id),
+            str(current_id),
+        }
+        provider_select = re.search(
+            r'<select[^>]*name="provider"[^>]*>(.*?)</select>', listing.text, re.S
+        )
+        assert provider_select is not None
+        legacy_option = re.search(
+            r'<option value="(name:[^"]+)">Clinic Nurse</option>', provider_select.group(1)
+        )
+        assert legacy_option is not None
+        assert '<option value="id:provider-42">Clinic Nurse</option>' in provider_select.group(1)
+
+        # Submit the value actually emitted for the retained NULL-ID group, not an old bookmark.
+        filtered = client.get(
+            "/portal/email-passwords", params={"provider": unescape(legacy_option.group(1))}
+        )
+        assert filtered.status_code == 200
+        assert set(re.findall(r'id="email-password-(\d+)"', filtered.text)) == {str(legacy_id)}
+        assert "Retained letter" in filtered.text
+        assert "Current report" not in filtered.text
+        assert f'<option value="{legacy_option.group(1)}" selected>' in filtered.text
+        clear_link = re.search(r'<a[^>]*href="([^"]+)"[^>]*>Clear filters</a>', filtered.text)
+        assert clear_link is not None
+
+        cleared = client.get(unescape(clear_link.group(1)))
+        assert cleared.status_code == 200
+        assert not cleared.url.query
+        assert set(re.findall(r'id="email-password-(\d+)"', cleared.text)) == {
+            str(legacy_id),
+            str(current_id),
+        }
+        assert f'<option value="{legacy_option.group(1)}" selected>' not in cleared.text
+        for response in (listing, filtered, cleared):
+            assert legacy_secret not in response.text
+            assert current_secret not in response.text
+
+        with app.state.session_factory() as session:
+            legacy = session.get(PatientPortalUnlockSecret, legacy_id)
+            current = session.get(PatientPortalUnlockSecret, current_id)
+            assert legacy is not None and current is not None
+            assert legacy.created_by_id is None
+            assert current.created_by_id == "provider-42"
+            assert legacy.last_viewed_at is None
+            assert current.last_viewed_at is None
+    finally:
+        app.state.database_engine.dispose()

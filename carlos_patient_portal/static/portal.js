@@ -1,3 +1,90 @@
+// A revealed password must not outlive the page's session, nor stay on a page left hidden
+// (carlos-emr/mycarlos#194). It is cleared at once when the session ends (signing out here or in
+// another tab of this browser) and when the page itself goes (it is left, or put in the
+// back/forward cache). A brief switch to another tab or app keeps it shown; a page hidden for
+// REVEAL_HIDDEN_LIMIT_MS clears it.
+// `revealGeneration` counts the times the page concealed what it showed: a Reveal answer that was
+// already on its way when that happened belongs to an older generation and is dropped, so a late
+// answer can neither put a password on a page whose session ended, nor leave it there. An answer
+// that arrives while the page is hidden is dropped too.
+const REVEAL_HIDDEN_LIMIT_MS = 2 * 60 * 1000;
+let revealGeneration = 0;
+const concealRevealed = () => {
+  revealGeneration += 1;
+  for (const button of document.querySelectorAll("[data-reveal-target]")) {
+    if (!(button instanceof HTMLButtonElement)) {
+      continue;
+    }
+    const target = document.getElementById(button.dataset.revealTarget || "");
+    if (target instanceof HTMLElement) {
+      target.textContent = "";
+      const copyButton = target.parentElement?.querySelector("[data-copy-target]");
+      if (copyButton instanceof HTMLButtonElement) {
+        copyButton.hidden = true;
+      }
+    }
+    button.hidden = false;
+    button.disabled = false;
+    button.textContent = button.dataset.revealLabel || "Reveal";
+  }
+};
+// Another tab of this browser ended the session: this page keeps no password either.
+const sessionChannel = typeof BroadcastChannel === "function"
+  ? new BroadcastChannel("carlos-portal-session")
+  : null;
+if (sessionChannel) {
+  sessionChannel.onmessage = (message) => {
+    if (message.data === "ended") {
+      concealRevealed();
+    }
+  };
+}
+window.addEventListener("pagehide", concealRevealed);
+// Hidden: a timer clears the password after the limit. A hidden page's timers can run late or not
+// at all (the browser slows them, the computer sleeps), so on coming back the time spent hidden is
+// checked too, by two clocks: the wall clock, which keeps counting while the computer sleeps, and
+// the page's own clock (performance.now), which cannot be set back. Either one reaching the limit
+// clears it.
+let hiddenSince = null;
+let hiddenTimer = null;
+const hiddenTooLong = () => hiddenSince !== null && (
+  Date.now() - hiddenSince.wall >= REVEAL_HIDDEN_LIMIT_MS
+  || performance.now() - hiddenSince.page >= REVEAL_HIDDEN_LIMIT_MS
+);
+document.addEventListener("visibilitychange", () => {
+  if (hiddenTimer !== null) {
+    window.clearTimeout(hiddenTimer);
+    hiddenTimer = null;
+  }
+  if (document.visibilityState === "hidden") {
+    if (hiddenSince === null) {
+      hiddenSince = { wall: Date.now(), page: performance.now() };
+    }
+    hiddenTimer = window.setTimeout(() => {
+      hiddenTimer = null;
+      concealRevealed();
+    }, REVEAL_HIDDEN_LIMIT_MS);
+    return;
+  }
+  if (hiddenTooLong()) {
+    concealRevealed();
+  }
+  hiddenSince = null;
+});
+document.addEventListener(
+  "submit",
+  (event) => {
+    if (
+      event.target instanceof HTMLFormElement
+      && (event.target.getAttribute("action") || "").endsWith("/portal/logout")
+    ) {
+      concealRevealed();
+      sessionChannel?.postMessage("ended");
+    }
+  },
+  true
+);
+
 document.addEventListener("click", (event) => {
   if (!(event.target instanceof Element)) {
     return;
@@ -26,6 +113,7 @@ document.addEventListener("click", (event) => {
     return;
   }
 
+  const generation = revealGeneration;
   revealButton.disabled = true;
   revealButton.textContent = revealButton.dataset.revealingLabel || "Revealing...";
   const requestBody = new URLSearchParams({
@@ -33,6 +121,12 @@ document.addEventListener("click", (event) => {
     current_password: passwordInput.value,
   });
   passwordInput.value = "";
+  // This box has no form, so nothing else hides it again once it is sent.
+  for (const toggle of passwordToggles) {
+    if (passwordToggleInputs(toggle).includes(passwordInput)) {
+      setPasswordsShown(toggle, false);
+    }
+  }
   void fetch(revealUrl, {
     method: "POST",
     credentials: "same-origin",
@@ -59,6 +153,12 @@ document.addEventListener("click", (event) => {
       ) {
         throw new Error("invalid reveal response");
       }
+      if (generation !== revealGeneration || document.visibilityState === "hidden") {
+        // The page was hidden, or its session ended, while this answer was on its way.
+        revealButton.textContent = revealButton.dataset.revealLabel || "Reveal";
+        revealButton.disabled = false;
+        return;
+      }
       target.textContent = payload.passphrase;
       const copyButton = target.parentElement?.querySelector("[data-copy-target]");
       if (copyButton instanceof HTMLButtonElement) {
@@ -78,6 +178,30 @@ document.addEventListener("click", (event) => {
     });
 });
 
+// "Show password" controls (#29). Each button names the boxes it controls in aria-controls. The
+// buttons are hidden in the HTML and revealed here, so without JavaScript the boxes just stay hidden.
+const passwordToggles = Array.from(document.querySelectorAll("[data-password-toggle]")).filter(
+  (toggle) => toggle instanceof HTMLButtonElement
+);
+const passwordToggleInputs = (toggle) => (toggle.getAttribute("aria-controls") || "")
+  .split(/\s+/)
+  .map((id) => document.getElementById(id))
+  .filter((input) => input instanceof HTMLInputElement);
+// The boxes themselves say whether they are shown; the button's words say what it does next
+// ("Show password" / "Hide password"), with no aria-pressed (D133, as GOV.UK does it).
+const passwordsShown = (toggle) =>
+  passwordToggleInputs(toggle).some((input) => input.type === "text");
+const setPasswordsShown = (toggle, shown) => {
+  for (const input of passwordToggleInputs(toggle)) {
+    input.type = shown ? "text" : "password";
+  }
+  toggle.textContent = shown
+    ? toggle.dataset.hideLabel || "Hide password"
+    : toggle.dataset.showLabel || "Show password";
+};
+for (const toggle of passwordToggles) {
+  toggle.hidden = false;
+}
 document.addEventListener("click", (event) => {
   if (!(event.target instanceof Element)) {
     return;
@@ -86,17 +210,30 @@ document.addEventListener("click", (event) => {
   if (!(toggle instanceof HTMLButtonElement)) {
     return;
   }
-  const input = document.querySelector("[data-password-input]");
-  if (!(input instanceof HTMLInputElement)) {
-    return;
+  setPasswordsShown(toggle, !passwordsShown(toggle));
+});
+// Hide the boxes again when their form is sent and when the page comes back from the
+// back/forward cache, so a password is not left showing on a shared screen.
+document.addEventListener(
+  "submit",
+  (event) => {
+    if (!(event.target instanceof HTMLFormElement)) {
+      return;
+    }
+    for (const toggle of passwordToggles) {
+      if (passwordToggleInputs(toggle).some((input) => event.target.contains(input))) {
+        setPasswordsShown(toggle, false);
+      }
+    }
+  },
+  true
+);
+window.addEventListener("pageshow", () => {
+  for (const toggle of passwordToggles) {
+    setPasswordsShown(toggle, false);
   }
-  const shouldShow = input.type === "password";
-  input.type = shouldShow ? "text" : "password";
-  toggle.textContent = shouldShow
-    ? toggle.dataset.hideLabel || "Hide password"
-    : toggle.dataset.showLabel || "Show password";
-  toggle.setAttribute("aria-pressed", shouldShow ? "true" : "false");
-  input.focus();
+  // A page restored from the back/forward cache never shows what it had revealed.
+  concealRevealed();
 });
 
 document.addEventListener("click", (event) => {
@@ -168,6 +305,40 @@ if (
   if (!resetToken && resetTokenError instanceof HTMLElement) {
     resetTokenError.hidden = false;
   }
+  // A language link reloads this page through a redirect, and the token must not reach the
+  // server. So on the click it rides in the fragment, which the browser keeps across a redirect
+  // whose Location has none, and the code above moves it into the form again. Only a plain click
+  // on a link that comes back to this same page carries it, and the links themselves never hold
+  // it, so it is not shown on hover, copied with the link, or sent anywhere else.
+  document.querySelectorAll(".language-switch a[href]").forEach((link) => {
+    if (!(link instanceof HTMLAnchorElement)) {
+      return;
+    }
+    link.addEventListener("click", (event) => {
+      const currentToken = resetTokenInput.value;
+      if (
+        !currentToken
+        || event.defaultPrevented
+        || event.button !== 0
+        || event.metaKey
+        || event.ctrlKey
+        || event.shiftKey
+        || event.altKey
+      ) {
+        return;
+      }
+      const target = new URL(link.href, window.location.href);
+      const thisPage = `${window.location.pathname}${window.location.search}`;
+      if (target.origin !== window.location.origin || target.searchParams.get("next") !== thisPage) {
+        return;
+      }
+      event.preventDefault();
+      target.hash = new URLSearchParams({ token: currentToken }).toString();
+      // Replace, not assign: Back should not return to this page, whose URL no longer holds the
+      // token, as an empty form.
+      window.location.replace(target.toString());
+    });
+  });
   resetTokenForm.addEventListener("submit", (event) => {
     if (!resetTokenInput.value) {
       event.preventDefault();

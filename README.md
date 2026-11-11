@@ -16,6 +16,8 @@ The MVP foundation currently includes:
   create/revoke operations, plus a development-only staff API for local testing.
 - Seven-day invite expiry metadata; resend supersedes the old issuance and creates a linked record.
 - Patient invite activation using invite code, email, date of birth, and HCN/HIN proof.
+- An optional self sign-up request page, off by default: a patient asks for an account, the request
+  is stored encrypted for CARLOS to collect, and every request gets the same answer.
 - Activation attempt throttling backed by portal audit events and PostgreSQL transaction locks.
 - Patient login with Argon2id password verification, MFA challenge/verify, opaque bearer sessions,
   logout, password reset, lockout, staff unlock, and forced reset after unlock.
@@ -236,12 +238,36 @@ first, then the best supported match from `Accept-Language`, then English. `GET 
 records the choice and redirects back to a validated local path; it takes no CSRF token because the
 cookie selects strings and a date format only, and carries no identity or authorization.
 
-`SUPPORTED_LOCALES` advertises EN, FR, ES, PL, and PT-BR, and every one of them is selectable and
-persists. **No translations are written yet**: `TEXT_CATALOG` holds an entry per locale, and
-`portal_text()` merges the selected locale over English key by key, so an untranslated locale
-renders English rather than failing. Adding a language therefore means adding keys to
-`TEXT_CATALOG["<code>"]` and a date format to `DATETIME_FORMATS` — no route, template, or context
-change — and a partially translated catalog renders correctly for the keys it does define.
+`SUPPORTED_LOCALES` advertises EN, FR, ES, PL, PT-BR, 简体中文 (zh-CN), and 繁體中文 (zh-TW), each
+named in its own language, and every one of them is selectable and persists. Chinese tags resolve
+by script, then region: `Hant`, `TW`, `HK`, and `MO` mean zh-TW; `Hans`, `CN`, `SG`, and a bare `zh`
+mean zh-CN. Mandarin (`cmn`) defaults to zh-CN and Cantonese (`yue`) to zh-TW.
+
+**Translations are partial.** The strings live one file per locale in
+`carlos_patient_portal/locales/` (`en.py` is the source), and `portal_text()` merges the selected
+locale over English key by key, so an untranslated key renders English rather than failing.
+Translating is therefore only a matter of adding keys to that locale's file; a partially translated
+catalog renders correctly for the keys it does define. A counted message is one key per plural form
+(`<key>_one`/`<key>_other`; Polish `_one`/`_few`/`_many`; Chinese `_other` only), read through
+`plural_text()`. Each language's date-and-time stamp is one line in `DATETIME_FORMATS`; appointment
+times are catalog strings (`booking_slot_date`, `booking_slot_time`) that a translator sets.
+`tests/test_i18n_catalog.py` checks every locale's placeholders against English, and every key for
+the locales listed in its `COMPLETE_LOCALES`; a translation that completes a language adds it there.
+
+The MFA page is only ever rendered in answer to a POST, so its language buttons post the challenge
+to `POST /auth/mfa/language` (CSRF-checked), which renders the same page in the chosen language
+without sending a code. Other pages link back to a page that serves GET: their own path when it
+does, else the signed-in module's page or the front page. A 404 or 405 page links to the front
+page, and so does a page answering the form of an emailed-link page (password reset, email change),
+whose token only that link carries. On the emailed-link pages themselves, a click on a language
+link makes `portal.js` add the token as a fragment, which the browser keeps across the redirect and
+never sends; the links themselves never hold it.
+
+Errors are answered in the medium the caller uses. A browser gets a page in its language for a
+failed request, a throttled or unavailable portal, or an unexpected fault. A caller gets the JSON
+`{"detail": ...}` body (FHIR: an OperationOutcome) when it is on `/api/`, `/fhir/`, `/internal/`
+or `/dev/admin/`, sent a JSON body, asked only for JSON in `Accept`, or authenticated with a bearer
+token.
 
 `PATIENT_PORTAL_PUBLIC_BASE_URL` is used to build password-reset email links and is required when
 SMTP is configured outside development. It must use HTTPS outside development.
@@ -318,7 +344,9 @@ Restart the web and worker processes with the same keyring. Retain the old membe
 or processing outbox row and no prepared invite carries its key ID; removing it sooner makes those
 deliveries or prepare retries fail with `encryption_key_unavailable`. A prepared invite stops
 disclosing its token when it expires, so seven days after the rotation no prepare retry can still
-need the old member. Once the old rows have drained,
+need the old member. Self sign-up requests are encrypted with the same keyring and live at most
+`PATIENT_PORTAL_SELF_SIGNUP_REQUEST_TTL_SECONDS` (one day by default), so keep the old member at
+least that long too. Once the old rows have drained,
 remove the old member and restart both processes again.
 
 Production SMS uses an authenticated HTTPS JSON webhook configured with
@@ -346,6 +374,32 @@ Override `PORTAL_BASE_URL`, `PORTAL_TEST_USER`, `PORTAL_TEST_PASSWORD`, `PORTAL_
 `PORTAL_SCREENSHOT_DIR` when the local setup differs from the defaults. Set `PORTAL_CHROME_PATH` to
 use a particular Chrome or Chromium executable. The test refuses public hosts unless
 `PORTAL_ALLOW_NON_LOCAL_BASE_URL=true` is deliberately set.
+
+A second live browser check covers the account flows the smoke test does not drive: confirming an
+email change from the emailed link, creating Link myCarlos codes (with the MFA-proof step-up),
+listing and removing linked devices, a wrong current password on the account forms and the locked
+page, and declining offered appointment times. Its fixtures are single-use, so it needs a fresh
+database, its own seed and a handful of settings (myCarlos delivery on, an https public address,
+a raised sign-in rate limit); the full recipe is at the top of
+`scripts/patient-portal-account-playwright-checks.js`:
+
+```bash
+python tests/seed_browser_account.py
+npm run test:patient-portal-account-playwright
+```
+
+A third live check covers the sign-in and session flows the smoke test does not drive: a code sent
+by SMS (captured by `scripts/patient-portal-sms-capture.js`, a loopback webhook the portal posts to,
+so no SMS provider is needed), Resend after the cooldown, a phone change confirmed by SMS, the
+signed-in pages in every locale, the notice pages a browser gets for an unknown route, a stale form
+token and the sign-in throttle, and idle session expiry. It needs its own fresh database, seed and
+short cooldown/idle settings; the full recipe is at the top of
+`scripts/patient-portal-session-playwright-checks.js`:
+
+```bash
+python tests/seed_browser_session.py
+npm run test:patient-portal-session-playwright
+```
 
 `PATIENT_PORTAL_CLINIC_ID` and `PATIENT_PORTAL_CLINIC_NAME` have development placeholders.
 Non-development startup rejects those placeholders. The configured clinic is enforced on login
@@ -549,6 +603,26 @@ Migration `0012_atomic_invite_delivery` refuses to downgrade while an invite is 
 downgrading would discard the only encrypted copy of a token CARLOS may still be retrying into its
 durable email queue.
 
+### Rolling out 0018 (myCarlos mailbox and device approval)
+
+Every deploy that brings in `0018_mycarlos_mailbox_approval` needs two steps, even with all the
+myCarlos switches off:
+
+1. **Migrate:** `alembic -c alembic.ini upgrade head` (or `carlos-patient-portal-migrate`). This
+   creates the mailbox and approval tables. They stay empty while the switches are off.
+2. **Grant:** run [`deploy/postgresql-audit-roles.sql`](carlos_patient_portal/deploy/postgresql-audit-roles.sql)
+   again after migrating. It gives the runtime role its rights on the new tables and sequences.
+   Without it, preflight fails closed and the deploy stops.
+
+**Going back:** 0018 can be downgraded only while all its tables are empty. Once a device has
+used the mailbox or asked for approval (even one counter row), the downgrade refuses. Take a
+backup before turning the switches on if you might need to roll back.
+
+**0020 (clinic code v1):** the same two steps apply. Migrate, then run
+`deploy/postgresql-audit-roles.sql` again: it grants the runtime role the new
+`patient_portal_mycarlos_approval_codes` table, and without it preflight fails closed. 0020's
+downgrade also refuses once any code attempt row exists.
+
 Keep every revision id to 32 characters or fewer. Alembic creates `alembic_version.version_num` as
 `VARCHAR(32)`; SQLite ignores the declared width but PostgreSQL enforces it, so a longer id passes
 the test suite and the SQLite round trip while leaving every PostgreSQL database unable to reach
@@ -628,7 +702,8 @@ The remaining secrets have deliberately different rotation behavior:
 - Rotating `PATIENT_PORTAL_IDENTITY_PROOF_SECRET` invalidates pending invitations; reissue them
   after cutover.
 - Rotating `PATIENT_PORTAL_AUDIT_HASH_SECRET` changes pseudonymous client/invite correlations;
-  record the cutover time for investigations.
+  record the cutover time for investigations. It also restarts the self sign-up rate-limit counts,
+  which are keyed by those hashes.
 - Rotating `PATIENT_PORTAL_INTERNAL_API_TOKEN` does not require a synchronised restart. Set
   `PATIENT_PORTAL_INTERNAL_API_TOKEN` to the new value and
   `PATIENT_PORTAL_INTERNAL_API_TOKEN_PREVIOUS` to the outgoing one, restart the portal, cut CARLOS
@@ -1009,7 +1084,8 @@ and name, signed with the new key:
   `{"code": "link_code_invalid"}`, the same for every reason; a key already linked is 409
   `device_exists`; and while CARLOS has published no active clinic key, every link is 409
   `clinic_keys_missing`, checked before the code, so the code stays pending and nothing is counted
-  (a device pins the key list it links with, and nothing refreshes it). On success: the recipient ID (made on the first link), the device key ID, the
+  (a first link has no earlier pins, so its trust starts with the key list it links with; see
+  [the link lifecycle](docs/architecture/mycarlos-link-lifecycle-v1.md)). On success: the recipient ID (made on the first link), the device key ID, the
   clinic's ID and name, and its key list (`kid`, SubjectPublicKeyInfo, status).
 - **Per caller:** the route has the login limiter's budget in its own bucket, and the reference
   nginx policy adds its own zone and a 4 KiB body limit (`/api/mycarlos/link` and its
@@ -1018,6 +1094,22 @@ and name, signed with the new key:
 
 `PATIENT_PORTAL_MYCARLOS_DELIVERY_ENABLED` (default `false`) turns the feature on. Leave it off:
 it is still being built, and while it is off none of its pages or routes exist.
+
+More switches, also default `false`, turn on later parts:
+
+- `PATIENT_PORTAL_MYCARLOS_MAILBOX_ENABLED`: the device mailbox (pickup of sealed copies).
+- `PATIENT_PORTAL_MYCARLOS_APPROVAL_ENABLED`: device approval (a clinic or an existing device
+  approving a new one). It needs delivery and the mailbox on, and a valid
+  `PATIENT_PORTAL_PUBLIC_BASE_URL`; otherwise the portal refuses to start.
+- `PATIENT_PORTAL_MYCARLOS_APPROVAL_CONTRACT_V2_ENABLED` (off by default): device approval
+  contract v2, where a request staff approve may wait 24 hours (myCarlos #144). Off, the portal
+  lists and takes only v1. Turn it on only after this clinic's CARLOS takes v2.
+- `PATIENT_PORTAL_MYCARLOS_AVAILABILITY_ENABLED`: "documents ready" availability for linked
+  devices, both the push enrollment and the waiting check a locked myCarlos asks with its waiting
+  key (see *The waiting check* in `docs/architecture/mycarlos-delivery.md`). It needs delivery on.
+
+The tables behind both exist from migration 0018 whatever the switches say (see *Rolling out
+0018* under Migrations).
 
 The patient browser controls use the same off switch:
 
@@ -1156,6 +1248,80 @@ Activation accepts the CSRF-protected browser form or `application/json`; reques
 at 16 KiB before validation. Failed activation attempts are audited and rate-limited without storing
 raw HCN/HIN, date-of-birth, invite-code, or raw client address values. Client address hashes use
 `PATIENT_PORTAL_AUDIT_HASH_SECRET`.
+
+## Patient Self Sign-up
+
+Off by default. With `PATIENT_PORTAL_SELF_SIGNUP_ENABLED=true`, `GET /auth/sign-up` shows a form
+asking for the health card number, date of birth, and the email address the clinic has on file,
+and the sign-in page links to it. While it is off the route is not registered at all, so
+`/auth/sign-up` answers `404` exactly as an unknown path does, nothing can be stored, and staff
+invites are unaffected (carlos-portal#15, designed in #10).
+
+Migration `0019_self_signup_requests` follows `0018_mycarlos_mailbox_approval` in
+one linear history. It adds the encrypted signup request table and `signup.request`
+to the existing 47-type audit policy; the earlier job, linking and approval migrations
+are unchanged. Existing job, device, mailbox and approval data remain intact.
+Downgrade to `0018` is allowed only when there are no stored signup requests and no
+`signup.request` audit events. Retained signup data causes an explicit refusal before
+schema or version writes; a downgrade never deletes requests or audit evidence.
+This migration does not enable signup or myCarlos delivery.
+
+Earlier unmerged #35 draft schemas used `0016_self_signup_requests` and
+`0019_signup_history_merge`. They are not supported upgrade inputs for this chain.
+Keep those development databases with their original source and evidence; do not
+stamp, reset or migrate them using this revision. Publishing this source does not
+authorize upgrading any existing database.
+
+The rule: **nothing typed on this page is ever used as a destination.** The portal looks nothing
+up, sends nothing, and never calls CARLOS. CARLOS collects stored requests (carlos-portal#16),
+matches them against a chart, and sends a normal invite to the email already on file
+(carlos-emr/carlos#3932). The typed email is kept only so CARLOS can compare it.
+
+`POST /auth/sign-up` takes the CSRF-protected browser form only; there is no JSON variant. The
+date of birth is the Day, Month and Year boxes activation uses, combined on the server by the same
+code. A detail in the wrong format (an impossible date, a malformed email or health card number) is
+answered `400` with the entries shown again, because a format problem says nothing about any
+patient; nothing is stored or counted. A date alone gets activation's "Check the date of birth"
+message. Every other request gets the same `202` page ("If your
+details match our records, we have emailed you a link to finish setting up your account. If
+nothing arrives, contact the clinic."), the same headers, and takes at least
+`PATIENT_PORTAL_SELF_SIGNUP_RESPONSE_FLOOR_MS` (250 by default): a matching patient, an unknown
+card, an existing account, a pending invite, a duplicate, and a request refused by a rate limit
+are indistinguishable to the caller.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `PATIENT_PORTAL_SELF_SIGNUP_ENABLED` | `false` | Registers the page. |
+| `PATIENT_PORTAL_SELF_SIGNUP_REQUEST_TTL_SECONDS` | `86400` | A stored request is deleted unread after this long. |
+| `PATIENT_PORTAL_SELF_SIGNUP_MAX_REQUESTS_PER_CLIENT` | `5` | Stored requests per client address per window. |
+| `PATIENT_PORTAL_SELF_SIGNUP_CLIENT_WINDOW_SECONDS` | `3600` | The per-client window. |
+| `PATIENT_PORTAL_SELF_SIGNUP_MAX_REQUESTS_PER_HEALTH_CARD` | `3` | Stored requests per health card per window. |
+| `PATIENT_PORTAL_SELF_SIGNUP_HEALTH_CARD_WINDOW_SECONDS` | `86400` | The per-card window. |
+| `PATIENT_PORTAL_SELF_SIGNUP_QUEUE_MAX_PENDING` | `1000` | Unexpired requests waiting for CARLOS. |
+| `PATIENT_PORTAL_SELF_SIGNUP_QUEUE_RETRY_AFTER_SECONDS` | `300` | `Retry-After` on the full-backlog `503`. |
+| `PATIENT_PORTAL_SELF_SIGNUP_RESPONSE_FLOOR_MS` | `250` | Minimum time for every answered request. |
+
+- **Rate limits** live in the database, so every web worker shares them. They are counted from
+  `signup.request` audit events, as activation failures are, under one PostgreSQL transaction
+  advisory lock that also covers the backlog count and the insert. Only stored requests count: a
+  refused one is audited but does not extend the limit. The per-card count ignores one or two
+  trailing letters (an Ontario version code), so adding or dropping them does not reset it.
+- **Storage.** The health card number, date of birth, and typed email are stored only inside an
+  AES-256-GCM payload under the outbox keyring (its own HKDF-derived key, bound to the clinic and
+  the card hash). The row's only other identifier is the keyed card hash. A request is deleted
+  when CARLOS reports a result (carlos-portal#16) or at the first submission or
+  `cleanup-transient-auth` run after its TTL passes, whichever comes first.
+- **Audit.** Each stored or refused request writes one `signup.request` event (`success` or
+  `throttled`, with `client_rate_limited` or `health_card_rate_limited`) carrying only keyed
+  hashes: the client address in `client_reference_hash`, the health card in `resource_id` with
+  `resource_type` `signup_health_card`. Never the number, the date of birth, or the email.
+- **Backlog.** A full backlog answers one global `503` with `Retry-After` for every request, as a
+  full password-reset queue does, and counts `self_signup_queue_full` in `/internal/metrics`.
+  While the page is on, `/internal/readiness` reports `self_signup.pending`, `max_pending`, and
+  `oldest_pending_age_seconds`, so a stopped CARLOS poller is noticed. Alert when the oldest
+  request is older than a few polling intervals. The backlog never makes the service unready.
+- The reference nginx configuration limits `/auth/sign-up` submissions at the edge as well. Only a
+  POST counts, so opening the page again after a typo never uses the budget.
 
 ## Patient Auth API
 

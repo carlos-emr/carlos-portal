@@ -17,6 +17,7 @@ import os
 import sqlite3
 import stat
 import tempfile
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -60,6 +61,7 @@ from carlos_patient_portal.models import (
     PatientPortalSession,
     utc_now,
 )
+from carlos_patient_portal.self_signup import purge_expired_signup_requests
 
 DEFAULT_AUDIT_PRUNE_BATCH_SIZE = 1000
 MIN_AUDIT_PRUNE_BATCH_SIZE = 1
@@ -84,6 +86,8 @@ class TransientCleanupResult:
     booking_choice_times: int = 0
     # Picks whose time started before CARLOS answered, closed so they are neither booked nor kept.
     lapsed_booking_choices: int = 0
+    # Self sign-up requests past their TTL that CARLOS never collected.
+    signup_requests: int = 0
 
     @property
     def total(self) -> int:
@@ -98,6 +102,7 @@ class TransientCleanupResult:
             + self.offered_slots
             + self.booking_choice_times
             + self.lapsed_booking_choices
+            + self.signup_requests
         )
 
 
@@ -211,7 +216,9 @@ def cleanup_transient_auth_rows(
 
     Most rows wait `before`, the retention cutoff. Offered appointment times and copies of chosen
     times do not: they are the portal's only appointment data, so they go at the first run after
-    they stop being useful, whatever the retention window.
+    they stop being useful, whatever the retention window. Nor do self sign-up requests, which
+    hold a health card number, a date of birth and an email address: they go at the first run
+    after their TTL passes.
     """
     normalized_batch_size = normalize_prune_batch_size(batch_size)
     current_time = now or utc_now()
@@ -447,6 +454,12 @@ def cleanup_transient_auth_rows(
         strict=True,
     ):
         run_pass(field_name, model, predicate)
+    counts["signup_requests"] = purge_expired_signup_requests(
+        session,
+        now=current_time,
+        batch_size=normalized_batch_size,
+        dry_run=dry_run,
+    )
     return TransientCleanupResult(**counts)
 
 
@@ -572,7 +585,10 @@ def require_regular_file(path: Path, *, description: str) -> None:
 def validate_sqlite_database(path: Path) -> None:
     require_regular_file(path, description="SQLite database")
     try:
-        with sqlite3.connect(sqlite_read_only_uri(path), uri=True) as connection:
+        with (
+            closing(sqlite3.connect(sqlite_read_only_uri(path), uri=True)) as connection,
+            connection,
+        ):
             integrity_result = connection.execute("PRAGMA integrity_check").fetchone()
     except sqlite3.DatabaseError as exc:
         raise BackupUnavailableError(f"SQLite database is invalid: {path}") from exc
@@ -613,8 +629,16 @@ def atomic_sqlite_copy(source_path: Path, destination_path: Path) -> Path:
         os.fchmod(temporary_descriptor, stat.S_IRUSR | stat.S_IWUSR)
         os.close(temporary_descriptor)
         temporary_descriptor = -1
-        with sqlite3.connect(sqlite_read_only_uri(source_path), uri=True) as source_connection:
-            with sqlite3.connect(temporary_path) as destination_connection:
+        with (
+            closing(
+                sqlite3.connect(sqlite_read_only_uri(source_path), uri=True)
+            ) as source_connection,
+            source_connection,
+        ):
+            with (
+                closing(sqlite3.connect(temporary_path)) as destination_connection,
+                destination_connection,
+            ):
                 source_connection.backup(destination_connection)
                 integrity_result = destination_connection.execute(
                     "PRAGMA integrity_check"
