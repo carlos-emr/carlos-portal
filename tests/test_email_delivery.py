@@ -368,7 +368,9 @@ def test_smtp_transport_failures_hide_provider_details_and_close_the_connection(
         assert "closing the connection failed" in caplog.text
     else:
         with pytest.raises(PortalEmailDeliveryError) as failure:
-            sender.send_code(recipient="patient@example.test", code="654321", expires_in_seconds=600)
+            sender.send_code(
+                recipient="patient@example.test", code="654321", expires_in_seconds=600
+            )
         assert str(failure.value) == "portal email delivery failed"
         assert failure.value.__cause__ is None
         assert failure.value.__suppress_context__ is True
