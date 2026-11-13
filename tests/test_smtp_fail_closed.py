@@ -5,7 +5,10 @@ import traceback
 import pytest
 
 from carlos_patient_portal.email_delivery import PortalEmailDeliveryError, SmtpPortalEmailSender
-from tests.test_email_delivery import smtp_settings
+from tests.test_email_delivery import (
+    smtp_settings,
+    trusted_clinic_footer as trusted_clinic_footer,
+)
 
 
 @pytest.mark.parametrize("failed_stage", ["starttls", "login"])

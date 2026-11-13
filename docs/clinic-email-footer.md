@@ -45,10 +45,12 @@ Its audit record names the skipped footer's reason (`footer_skipped`).
 ## Configure web and worker
 
 Deploy the CARLOS footer provider before this portal version, then save the clinic
-footer in CARLOS (**Admin > Emails > Configure Email**, **Edit footer**) before the
-portal sends anything. While that footer is empty, every portal email is refused,
-verification codes and password resets included. The portal needs the saved footer
-even when CARLOS's own emails have the clinic footer turned **Off**. Set the same
+footer in CARLOS (**Admin > Emails > Configure Email**, **Edit footer**) before
+footer-dependent portal email is sent. While that footer is empty, only sign-in/MFA
+verification codes and password resets may proceed without it (D138); every other
+portal email is refused. MIME construction, durable audit storage and SMTP must still
+succeed for those two methods. The portal needs the saved footer even when CARLOS's
+own emails have the clinic footer turned **Off**. Set the same
 `PATIENT_PORTAL_EMAIL_FOOTER_URL`, derived read credential, public keyring, timeout
 and audit-volume path in web and outbox. The worker compatibility probe includes
 these settings. The URL must use HTTPS and end in `/ws/portal/email-footer`, with
