@@ -1,6 +1,6 @@
 # Clinic footer on portal email
 
-All portal SMTP emails carry the clinic footer administered in CARLOS: verification,
+Portal SMTP emails use the clinic footer administered in CARLOS: verification,
 password reset, contact change, email-change confirmation and request notices,
 booking prompts and updates. The portal has no editable copy of the clinic footer.
 These system messages have no personal footer.
@@ -40,7 +40,7 @@ Its audit record names the skipped footer's reason (`footer_skipped`).
 | `content` | The saved footer in CARLOS: its HTML, text and logo |
 | `audit` | The audit volume is mounted, private and writable (this stops sign-in codes and resets too) |
 | `message` | The email couldn't be assembled around the footer |
-| Any of the above, for a sign-in code or password reset | Not refused: it went out without the footer (`sent without footer` in the log, `footer_skipped` in the audit) |
+| Footer retrieval or verification failure, for a sign-in code or password reset | May send without the footer (`sent without footer` after SMTP acceptance, `footer_skipped` in the audit); MIME construction and audit failures still stop the send |
 
 ## Configure web and worker
 
