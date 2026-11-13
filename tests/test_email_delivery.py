@@ -321,6 +321,7 @@ def test_non_development_smtp_requires_transport_encryption() -> None:
 def test_smtp_transport_failures_hide_provider_details_and_close_the_connection(
     phase: str,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Provider rejection or connection loss must not expose a recipient, code, or credential."""
     import ssl
@@ -361,11 +362,18 @@ def test_smtp_transport_failures_hide_provider_details_and_close_the_connection(
             smtp_password="credential-fake-smtp",
         )
     )
-    with pytest.raises(PortalEmailDeliveryError) as failure:
+    if phase == "quit":
+        # SMTP already accepted the message; a close failure must not trigger a retry.
         sender.send_code(recipient="patient@example.test", code="654321", expires_in_seconds=600)
-    assert str(failure.value) == "portal email delivery failed"
-    assert failure.value.__cause__ is None
-    assert failure.value.__suppress_context__ is True
+        assert "closing the connection failed" in caplog.text
+    else:
+        with pytest.raises(PortalEmailDeliveryError) as failure:
+            sender.send_code(recipient="patient@example.test", code="654321", expires_in_seconds=600)
+        assert str(failure.value) == "portal email delivery failed"
+        assert failure.value.__cause__ is None
+        assert failure.value.__suppress_context__ is True
+    for private_value in ("patient@example.test", "654321", "credential-fake-smtp"):
+        assert private_value not in caplog.text
     smtp = RecordingSmtp.instance
     assert isinstance(smtp, FailingSmtp) and smtp.closed
     assert (smtp.message is not None) == (phase == "quit")
