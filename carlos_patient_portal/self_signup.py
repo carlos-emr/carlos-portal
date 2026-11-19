@@ -31,8 +31,9 @@ The seam for carlos-portal#16, the internal API CARLOS polls:
 - Reporting a result deletes the row. `health_card_hash` on the row is the keyed hash the
   `signup.request` audit events carry, so a claim or result can be audited without decrypting.
 
-#16 adds what the claim itself needs: a lease column, the `portal.signup.manage` permission, and
-the `signup.claim` and `signup.result` audit event types.
+carlos-portal#16 added what the claim itself needs (`signup_claims.py`): the lease columns, the
+`portal.signup.manage` permission, and the `signup.claim` and `signup.result` audit event types.
+A request CARLOS has reported keeps its row, without its details, until `expires_at`.
 """
 
 import json
@@ -45,7 +46,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-from sqlalchemy import ColumnElement, delete, func, select
+from sqlalchemy import ColumnElement, and_, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from carlos_patient_portal.audit import hash_sensitive_reference, record_audit_event
@@ -228,7 +229,10 @@ def decrypt_signup_request(
     *,
     encryption_keys: Mapping[str, str],
 ) -> SignupRequestDetails:
-    """Read a stored request back. The seam carlos-portal#16's claim builds on."""
+    """Read a stored request back. The claim (`signup_claims.py`) builds on it."""
+    if signup_request.encrypted_payload is None or signup_request.encryption_nonce is None:
+        # A reported request holds a result, not its details.
+        raise SignupRequestPayloadError("sign-up request payload is invalid")
     secret = encryption_keys.get(signup_request.encryption_key_id)
     if secret is None:
         raise SignupRequestKeyUnavailableError(
@@ -254,8 +258,15 @@ def decrypt_signup_request(
 
 
 def pending_signup_request_predicate(now: datetime) -> ColumnElement[bool]:
-    """A request CARLOS may still collect: its TTL has not passed."""
-    return PatientPortalSignupRequest.expires_at > now
+    """A request still waiting for CARLOS: its TTL has not passed and no result is reported.
+
+    A claimed request whose lease is running is still waiting, so it counts toward the backlog;
+    `signup_claims.claimable_predicate` is the narrower filter a claim uses.
+    """
+    return and_(
+        PatientPortalSignupRequest.expires_at > now,
+        PatientPortalSignupRequest.result.is_(None),
+    )
 
 
 def count_recent_signup_requests(
@@ -298,7 +309,17 @@ def purge_expired_signup_requests(
 ) -> int:
     """Delete up to `batch_size` requests whose TTL has passed; return how many."""
     current_time = now or utc_now()
-    expired = PatientPortalSignupRequest.expires_at <= current_time
+    # A request CARLOS holds a running lease on is kept until the lease ends, so that its result can
+    # still be recorded and its details deleted by that, not by an expiry. A reported request has
+    # no details left and no use for its lease.
+    expired = and_(
+        PatientPortalSignupRequest.expires_at <= current_time,
+        or_(
+            PatientPortalSignupRequest.result.is_not(None),
+            PatientPortalSignupRequest.lease_expires_at.is_(None),
+            PatientPortalSignupRequest.lease_expires_at <= current_time,
+        ),
+    )
     candidates = (
         select(PatientPortalSignupRequest.id)
         .where(expired)
@@ -306,7 +327,7 @@ def purge_expired_signup_requests(
         .limit(batch_size)
     )
     if not dry_run:
-        # A row a CARLOS claim holds (carlos-portal#16) is left for the next run.
+        # A row a CARLOS claim or result is working on is left for the next run.
         candidates = candidates.with_for_update(skip_locked=True)
     request_ids = list(session.scalars(candidates))
     if dry_run or not request_ids:

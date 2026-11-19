@@ -1825,6 +1825,7 @@ def test_internal_contact_review_feed_pages_beyond_one_hundred_requests() -> Non
 # rejected before the request model is ever validated. That ordering is itself asserted below.
 STAFF = "staff"
 BOOKING_SYNC_JOB = "job:booking-sync"
+SIGNUP_POLL_JOB = "job:signup-poll"
 INTERNAL_ROUTE_PERMISSIONS = (
     ("POST", "/internal/carlos/patients/1234/invites", STAFF, "portal.invite.manage"),
     ("POST", "/internal/carlos/patients/1234/invites/prepare", STAFF, "portal.invite.manage"),
@@ -1877,6 +1878,18 @@ INTERNAL_ROUTE_PERMISSIONS = (
         BOOKING_SYNC_JOB,
         "portal.booking_prompt.sync",
     ),
+    (
+        "POST",
+        "/internal/carlos/signup-requests/claim",
+        SIGNUP_POLL_JOB,
+        "portal.signup.manage",
+    ),
+    (
+        "POST",
+        "/internal/carlos/signup-requests/1/result",
+        SIGNUP_POLL_JOB,
+        "portal.signup.manage",
+    ),
 )
 STAFF_ROUTES = tuple(route for route in INTERNAL_ROUTE_PERMISSIONS if route[2] == STAFF)
 JOB_ROUTES = tuple(route for route in INTERNAL_ROUTE_PERMISSIONS if route[2] != STAFF)
@@ -1916,6 +1929,8 @@ def test_internal_openapi_contract_is_stable() -> None:
         "/internal/carlos/patients/{demographic_no}/portal-account/access": ["post"],
         "/internal/carlos/patients/{demographic_no}/unlock": ["post"],
         "/internal/carlos/patients/{demographic_no}/unlock-secrets": ["post"],
+        "/internal/carlos/signup-requests/claim": ["post"],
+        "/internal/carlos/signup-requests/{request_id}/result": ["post"],
         "/internal/carlos/unlock-secrets/{unlock_secret_id}/publish": ["post"],
         "/internal/carlos/unlock-secrets/{unlock_secret_id}/revoke": ["post"],
     }
@@ -1929,6 +1944,7 @@ def route_template(path: str) -> str:
         .replace("/unlock-secrets/1/", "/unlock-secrets/{unlock_secret_id}/")
         .replace("/contact-reviews/1/", "/contact-reviews/{review_request_id}/")
         .replace("/booking-prompts/1/", "/booking-prompts/{prompt_id}/")
+        .replace("/signup-requests/1/", "/signup-requests/{request_id}/")
     )
 
 

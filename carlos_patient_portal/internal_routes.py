@@ -2312,6 +2312,10 @@ def register_carlos_internal_routes(app: FastAPI, runtime: InternalRuntime) -> N
     register_internal_contact_review_routes(app, deps)
     register_internal_booking_prompt_routes(app, runtime, deps)
     register_internal_booking_sync_routes(app, runtime, deps)
+    # The routes live in their own module, which imports this one for the shared dependencies.
+    from carlos_patient_portal.routes.signup_internal import register_internal_signup_routes
+
+    register_internal_signup_routes(app, runtime, deps)
     if runtime.settings.mycarlos_delivery_enabled:
         register_internal_mycarlos_routes(
             app, deps, mailbox_enabled=runtime.settings.mycarlos_mailbox_enabled
