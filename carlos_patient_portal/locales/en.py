@@ -246,6 +246,7 @@ TEXT: dict[str, str] = {
     "incorrect_username_or_password": "Incorrect Username or Password",
     "invite_code": "Invitation code",
     "language_aria_label": "Language",
+    "skip_to_content": "Skip to main content",
     "logo_alt": "CARLOS",
     "logout": "Logout",
     "message_back": "Back to messages",

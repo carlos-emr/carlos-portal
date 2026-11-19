@@ -104,13 +104,13 @@ a {
 .brand-lockup strong {
   display: block;
   color: var(--carlos-blue-dark);
-  font-size: 15px;
+  font-size: 0.9375rem;
 }
 
 .brand-lockup span {
   display: block;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .language-switch {
@@ -135,7 +135,7 @@ a {
   background: transparent;
   border: 1px solid transparent;
   border-radius: 3px;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: bold;
 }
 
@@ -184,7 +184,7 @@ button.text-tab:focus-visible {
 .auth-intro {
   margin: 0 0 14px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.45;
 }
 
@@ -216,7 +216,7 @@ button.text-tab:focus-visible {
   background: #fff8db;
   border: 1px solid #dcc46d;
   border-radius: 4px;
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
@@ -224,13 +224,13 @@ button.text-tab:focus-visible {
 h1 {
   margin: 0 0 12px;
   color: var(--carlos-blue-dark);
-  font-size: 22px;
+  font-size: 1.375rem;
 }
 
 h2 {
   margin: 0;
   color: var(--carlos-blue-dark);
-  font-size: 16px;
+  font-size: 1rem;
 }
 
 .form-stack {
@@ -242,7 +242,7 @@ h2 {
   display: grid;
   gap: 4px;
   color: #1f2937;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: bold;
 }
 
@@ -299,7 +299,7 @@ h2 {
   background: transparent;
   border: 0;
   border-radius: 3px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: bold;
   text-decoration: underline;
 }
@@ -307,7 +307,7 @@ h2 {
 .clinic-help-line {
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.35;
 }
 
@@ -323,7 +323,7 @@ h2 {
 .mfa-destination {
   margin: 0 0 12px;
   color: #1f2937;
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.4;
 }
 
@@ -355,7 +355,7 @@ h2 {
   margin-bottom: 2px;
   padding: 0;
   color: #1f2937;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: bold;
 }
 
@@ -383,7 +383,7 @@ h2 {
 .mfa-method-switch legend {
   margin-bottom: 6px;
   color: #1f2937;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: bold;
 }
 
@@ -405,7 +405,7 @@ h2 {
   padding: 6px 10px;
   color: var(--carlos-blue-dark);
   background: #fff;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: bold;
   cursor: pointer;
 }
@@ -446,7 +446,7 @@ h2 {
   display: inline-block;
   margin-top: 14px;
   color: var(--carlos-blue-dark);
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: bold;
 }
 
@@ -475,7 +475,7 @@ h2 {
 .portal-modal p {
   margin: 8px 0 14px;
   color: #1f2937;
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.4;
 }
 
@@ -486,7 +486,7 @@ h2 {
   background: #fff1f1;
   border: 1px solid #e3a8a8;
   border-radius: 4px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.35;
 }
 
@@ -497,7 +497,7 @@ h2 {
   background: #eef9f2;
   border: 1px solid #a8d8b8;
   border-radius: 4px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.35;
 }
 
@@ -519,7 +519,7 @@ h2 {
 
 .signed-in-user {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 0.8125rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -539,7 +539,7 @@ h2 {
   background: #fff;
   border: 1px solid #aeb7c8;
   border-radius: 4px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: bold;
 }
 
@@ -565,7 +565,7 @@ h2 {
   color: var(--carlos-blue-dark);
   border: 1px solid transparent;
   border-radius: 4px;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: bold;
   text-decoration: none;
 }
@@ -591,7 +591,7 @@ h2 {
 .dashboard-heading p {
   margin: 3px 0 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .module-grid {
@@ -623,14 +623,14 @@ a.module-tile:focus-visible {
 .module-tile p {
   margin: 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.4;
 }
 
 .module-tile > span {
   align-self: end;
   color: var(--carlos-blue-dark);
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: bold;
 }
 
@@ -653,7 +653,7 @@ a.module-tile:focus-visible {
   background: #fff;
   border: 1px solid #c9ced8;
   border-radius: 3px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: bold;
 }
 
@@ -679,7 +679,7 @@ a.module-tile:focus-visible {
   gap: 4px;
   min-width: min(100%, 280px);
   color: #1f2937;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: bold;
 }
 
@@ -698,14 +698,14 @@ a.module-tile:focus-visible {
   gap: 4px;
   min-width: 150px;
   color: #1f2937;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: bold;
 }
 
 .filter-hint {
   max-width: 260px;
   color: #4b5563;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: normal;
 }
 
@@ -715,7 +715,7 @@ a.module-tile:focus-visible {
   max-width: 360px;
   margin: 0 0 12px;
   color: #1f2937;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: bold;
 }
 
@@ -755,7 +755,7 @@ a.module-tile:focus-visible {
 
 .detail-list dt {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: bold;
 }
 
@@ -764,7 +764,7 @@ a.module-tile:focus-visible {
   margin: 0;
   color: #111827;
   overflow-wrap: anywhere;
-  font-size: 14px;
+  font-size: 0.875rem;
 }
 
 .settings-sections {
@@ -799,7 +799,7 @@ a.module-tile:focus-visible {
   width: 100%;
   min-width: 620px;
   border-collapse: collapse;
-  font-size: 14px;
+  font-size: 0.875rem;
 }
 
 .table-shell th,
@@ -812,7 +812,7 @@ a.module-tile:focus-visible {
 .table-shell th {
   color: var(--carlos-blue-dark);
   background: #f6f8fb;
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .cell-primary,
@@ -828,7 +828,7 @@ a.module-tile:focus-visible {
 .cell-secondary {
   margin-top: 2px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .password-copy-group {
@@ -916,7 +916,7 @@ a.module-tile:focus-visible {
   color: #fff;
   background: var(--carlos-blue);
   border-radius: 3px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: bold;
 }
 
@@ -926,7 +926,7 @@ a.module-tile:focus-visible {
 
 .message-meta {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .message-detail {
@@ -941,7 +941,7 @@ a.module-tile:focus-visible {
 
 .message-detail h2 {
   margin: 0 0 4px;
-  font-size: 18px;
+  font-size: 1.125rem;
 }
 
 .message-detail p {
@@ -979,7 +979,7 @@ a.module-tile:focus-visible {
 .booking-slots legend {
   margin-bottom: 6px;
   color: #1f2937;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: bold;
 }
 
@@ -1014,7 +1014,7 @@ a.module-tile:focus-visible {
 
 .booking-slot-details {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .booking-decline-form {
@@ -1041,7 +1041,7 @@ a.module-tile:focus-visible {
   padding: 5px 10px;
   color: var(--muted);
   border: 1px solid transparent;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: bold;
 }
 
@@ -1208,7 +1208,7 @@ a.module-tile:focus-visible {
   .email-password-table td::before {
     content: attr(data-label);
     color: var(--muted);
-    font-size: 12px;
+    font-size: 0.75rem;
     font-weight: bold;
   }
 
@@ -1276,4 +1276,29 @@ a.module-tile:focus-visible {
   block-size: auto;
   background: white;
   image-rendering: pixelated;
+}
+
+/* A skip link (WCAG 2.4.1): off screen until it has the focus, then the first thing on the page. */
+.skip-link {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 100;
+  padding: 0.75rem 1rem;
+  color: #fff;
+  background: var(--carlos-blue-dark);
+  font-size: 1rem;
+  font-weight: bold;
+  transform: translateY(-120%);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+  outline: 3px solid #f5b82e;
+  outline-offset: -3px;
+}
+
+/* The page's <main> takes the focus from the skip link; it needs no ring of its own. */
+main[tabindex="-1"]:focus {
+  outline: none;
 }

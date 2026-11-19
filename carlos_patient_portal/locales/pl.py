@@ -273,6 +273,7 @@ TEXT: dict[str, str] = {
     "incorrect_username_or_password": "Nieprawidłowa nazwa użytkownika lub hasło",
     "invite_code": "Kod zaproszenia",
     "language_aria_label": "Język",
+    "skip_to_content": "Przejdź do głównej treści",
     "logo_alt": "CARLOS",
     "logout": "Wylogowanie",
     "message_back": "Powrót do wiadomości",

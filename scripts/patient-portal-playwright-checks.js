@@ -28,6 +28,7 @@ const { isIP } = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { assertNoSeriousAxeIssues } = require('./patient-portal-axe');
 const { readCapturedMfaCode } = require('./patient-portal-mail-capture');
 
 const allowNonLocalBaseUrl = (
@@ -175,6 +176,7 @@ async function assertAccessiblePage(page, surface) {
   assert(problems.imagesWithoutAlt === 0, `${surface} has an image without alt text`);
   assert(problems.unnamedControls.length === 0,
     `${surface} has unnamed controls: ${problems.unnamedControls.join(', ')}`);
+  await assertNoSeriousAxeIssues(page, surface);
 }
 
 // Stands in for the CARLOS polling job: reports a result for the patient's pending pick on the

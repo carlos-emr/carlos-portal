@@ -4,13 +4,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ service_name }}</title>
+  {%- set page_heading = {
+    "mycarlos": text.mycarlos_link,
+    "account": text.account,
+    "email-passwords": text.email_passwords,
+    "messages": text.messages,
+    "help": text.help,
+  }.get(active_module, text.patient_dashboard) -%}
+  <title>{{ page_heading }} - {{ service_name }}</title>
   {% include "_head_assets.jinja" %}
   <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
   <script src="{{ url_for('static', path='/portal.js') }}" defer></script>
 </head>
 <body>
-  <main class="app-shell">
+  {% include "_skip_link.jinja" %}
+  <main class="app-shell" id="main-content" tabindex="-1">
     <section class="portal-screen dashboard-screen" aria-label="{{ text.patient_dashboard }}">
       <header class="patient-topbar portal-topbar">
         <div class="brand-lockup">
@@ -41,7 +49,7 @@
           {% endfor %}
         </nav>
 
-        <section class="module-workspace" aria-live="polite">
+        <section class="module-workspace">
           {% if active_module == "dashboard" %}
             <header class="module-header dashboard-heading">
               <div>
