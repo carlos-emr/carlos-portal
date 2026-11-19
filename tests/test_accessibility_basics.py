@@ -311,3 +311,39 @@ def test_every_message_the_script_puts_into_a_button_is_announced_or_deliberatel
     # password box (the focus moves to it), the modal (a dialog) and the booking notice
     # (its element is role="status" already).
     assert 'role="status"' in DASHBOARD
+
+
+def _luminance(colour: str) -> float:
+    channels = [int(colour.lstrip("#")[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+    linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def _contrast(foreground: str, background: str) -> float:
+    lighter, darker = sorted((_luminance(foreground), _luminance(background)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def _token(name: str) -> str:
+    match = re.search(rf"--{name}:\s*(#[0-9a-fA-F]{{6}});", STYLES.read_text(encoding="utf-8"))
+    assert match, name
+    return match.group(1)
+
+
+def test_the_brand_blue_is_readable_as_text_on_the_page_and_on_white() -> None:
+    blue = _token("carlos-blue")
+    assert blue.lower() == "#4065b2"
+    # WCAG 1.4.3: 4.5:1 for normal-size text, on the page's pale blue and on white; and white text
+    # on the blue (buttons, the message count) too.
+    assert _contrast(blue, _token("page")) >= 4.5
+    assert _contrast(blue, "#ffffff") >= 4.5
+    assert _contrast("#ffffff", blue) >= 4.5
+
+
+def test_no_old_brand_blue_is_left_in_the_stylesheet() -> None:
+    assert "#486ebd" not in STYLES.read_text(encoding="utf-8").lower()
+
+
+def test_the_axe_check_runs_colour_contrast() -> None:
+    script = (PACKAGE.parent / "scripts" / "patient-portal-axe.js").read_text(encoding="utf-8")
+    assert "disableRules" not in script
