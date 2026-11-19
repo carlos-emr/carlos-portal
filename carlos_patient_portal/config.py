@@ -550,6 +550,9 @@ class Settings(BaseSettings):
     # a full password-reset queue does, so a stopped CARLOS poller cannot grow it without limit.
     self_signup_queue_max_pending: int = Field(default=1_000, ge=10, le=1_000_000)
     self_signup_queue_retry_after_seconds: int = Field(default=5 * 60, ge=1, le=60 * 60)
+    # CARLOS's claim (carlos-portal#16) leases a request for this long. A poller that stops before
+    # reporting its result releases the request to the next claim once the lease has run out.
+    self_signup_claim_lease_seconds: int = Field(default=5 * 60, ge=30, le=60 * 60)
     # Every answered request takes at least this long, so a stored request and one refused by a
     # rate limit cannot be told apart by timing. 0 turns the floor off (tests only).
     self_signup_response_floor_ms: int = Field(default=250, ge=0, le=5_000)

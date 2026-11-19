@@ -185,7 +185,7 @@ def test_registered_jobs_have_well_formed_names_display_names_and_permissions() 
     }
 
 
-def test_no_route_is_open_to_the_signup_job_yet() -> None:
+def test_only_the_two_signup_routes_are_open_to_the_signup_job() -> None:
     app = internal_app()
     jobs = {
         getattr(dependency.call, internal_routes.CALLER_POLICY_ATTRIBUTE).job
@@ -195,7 +195,21 @@ def test_no_route_is_open_to_the_signup_job_yet() -> None:
         if hasattr(dependency.call, internal_routes.CALLER_POLICY_ATTRIBUTE)
     }
 
-    assert jobs == {None, "booking-sync"}
+    assert jobs == {None, "booking-sync", "signup-poll"}
+    signup_paths = {
+        route.path
+        for route in app.routes
+        if getattr(route, "path", "").startswith("/internal/carlos/")
+        for dependency in route.dependant.dependencies
+        if getattr(
+            getattr(dependency.call, internal_routes.CALLER_POLICY_ATTRIBUTE, None), "job", None
+        )
+        == "signup-poll"
+    }
+    assert signup_paths == {
+        "/internal/carlos/signup-requests/claim",
+        "/internal/carlos/signup-requests/{request_id}/result",
+    }
 
 
 def test_a_refusal_code_must_be_one_the_audit_log_knows() -> None:

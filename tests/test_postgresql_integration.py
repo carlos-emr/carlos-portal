@@ -92,6 +92,11 @@ from carlos_patient_portal.self_signup import (
     hash_signup_health_card,
     submit_signup_request,
 )
+from carlos_patient_portal.signup_claims import (
+    SignupResultConflictError,
+    claim_signup_requests,
+    record_signup_result,
+)
 from carlos_patient_portal.staff_identity import (
     CarlosServiceAuthenticationError,
     StaffPrincipal,
@@ -2099,3 +2104,160 @@ def test_postgresql_self_signup_page_answers_alike_when_workers_race_one_card() 
     with Session(app.state.database_engine) as session:
         assert session.scalar(select(func.count(PatientPortalSignupRequest.id))) == 3
     app.state.database_engine.dispose()
+
+
+def test_postgresql_signup_claims_never_hand_one_request_to_two_pollers() -> None:
+    """Pollers claiming at the same moment lease disjoint requests (carlos-portal#16)."""
+    assert POSTGRES_URL is not None
+    clean_postgresql_database()
+    engine = create_portal_engine(POSTGRES_URL)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    audit_secret = "a" * 32
+    keys = {"primary": "o" * 32}
+    request_count = 12
+    try:
+        with session_factory.begin() as session:
+            for index in range(request_count):
+                card = f"73000000{index:02d}"
+                outcome = submit_signup_request(
+                    session,
+                    details=SignupRequestDetails(
+                        health_card_number=card,
+                        date_of_birth=date(1975, 3, 14),
+                        email="fake.patient@example.test",
+                    ),
+                    clinic_id="postgres-clinic",
+                    client_reference_hash=hash_signup_client(audit_secret, f"192.0.2.{index}"),
+                    health_card_hash=hash_signup_health_card(audit_secret, card),
+                    encryption_secret=keys["primary"],
+                    encryption_key_id="primary",
+                    policy=_postgres_signup_policy(),
+                )
+                assert outcome == "stored"
+        barrier = Barrier(6)
+
+        def poller(_index: int) -> list[int]:
+            barrier.wait(timeout=10)
+            with session_factory.begin() as session:
+                claim = claim_signup_requests(
+                    session,
+                    clinic_id="postgres-clinic",
+                    limit=3,
+                    lease_seconds=300,
+                    encryption_keys=keys,
+                    actor="Patient self sign-up",
+                    actor_id="job:signup-poll",
+                    assertion_key_id=None,
+                    assertion_id=None,
+                )
+                return [claimed.request_id for claimed in claim.requests]
+
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            batches = list(executor.map(poller, range(6)))
+
+        handed_out = [request_id for batch in batches for request_id in batch]
+        assert len(handed_out) == len(set(handed_out)), "a request went to two pollers"
+        # SKIP LOCKED may leave a poller with fewer than three, never with more.
+        assert handed_out
+        assert all(len(batch) <= 3 for batch in batches)
+        with Session(engine) as session:
+            leased = session.scalar(
+                select(func.count(PatientPortalSignupRequest.id)).where(
+                    PatientPortalSignupRequest.lease_token_hash.is_not(None)
+                )
+            )
+        assert leased == len(handed_out)
+    finally:
+        engine.dispose()
+
+
+def test_postgresql_signup_results_race_to_one_outcome() -> None:
+    """The same result twice records once; two different results leave one and a conflict."""
+    assert POSTGRES_URL is not None
+    clean_postgresql_database()
+    engine = create_portal_engine(POSTGRES_URL)
+    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
+    audit_secret = "a" * 32
+    keys = {"primary": "o" * 32}
+    tokens: dict[int, str] = {}
+    try:
+        with session_factory.begin() as session:
+            for index in range(2):
+                card = f"74000000{index:02d}"
+                submit_signup_request(
+                    session,
+                    details=SignupRequestDetails(
+                        health_card_number=card,
+                        date_of_birth=date(1975, 3, 14),
+                        email="fake.patient@example.test",
+                    ),
+                    clinic_id="postgres-clinic",
+                    client_reference_hash=hash_signup_client(audit_secret, f"192.0.2.{index}"),
+                    health_card_hash=hash_signup_health_card(audit_secret, card),
+                    encryption_secret=keys["primary"],
+                    encryption_key_id="primary",
+                    policy=_postgres_signup_policy(),
+                )
+        with session_factory.begin() as session:
+            for claimed in claim_signup_requests(
+                session,
+                clinic_id="postgres-clinic",
+                limit=2,
+                lease_seconds=300,
+                encryption_keys=keys,
+                actor="Patient self sign-up",
+                actor_id="job:signup-poll",
+                assertion_key_id=None,
+                assertion_id=None,
+            ).requests:
+                tokens[claimed.request_id] = claimed.lease_token
+        assert len(tokens) == 2
+        barrier = Barrier(2)
+
+        def report(request_id: int, result: str) -> object:
+            barrier.wait(timeout=10)
+            try:
+                with session_factory.begin() as session:
+                    return record_signup_result(
+                        session,
+                        request_id,
+                        clinic_id="postgres-clinic",
+                        lease_token=tokens[request_id],
+                        result=result,
+                        invite_id=None,
+                        identity_proof_secret="i" * 32,
+                        encryption_keys=keys,
+                        actor="Patient self sign-up",
+                        actor_id="job:signup-poll",
+                        assertion_key_id=None,
+                        assertion_id=None,
+                    ).recorded
+            except SignupResultConflictError:
+                return "conflict"
+
+        first_id, second_id = sorted(tokens)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            same = sorted(
+                map(str, executor.map(lambda _: report(first_id, "no_match"), range(2)))
+            )
+        barrier = Barrier(2)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            different = sorted(
+                map(
+                    str,
+                    executor.map(
+                        lambda result: report(second_id, result), ["no_match", "ineligible"]
+                    ),
+                )
+            )
+
+        assert same == ["False", "True"]
+        assert different == ["True", "conflict"]
+        with Session(engine) as session:
+            rows = session.scalars(
+                select(PatientPortalSignupRequest).order_by(PatientPortalSignupRequest.id)
+            ).all()
+            assert all(row.result is not None and row.encrypted_payload is None for row in rows)
+    finally:
+        engine.dispose()
+
