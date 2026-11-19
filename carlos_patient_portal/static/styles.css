@@ -1,10 +1,78 @@
 :root {
+  color-scheme: light dark;
   --carlos-blue: #4065b2;
+  --carlos-blue-hover: #3459a0;
   --carlos-blue-dark: #00283c;
+  --brand-text: #00283c;
+  --brand-bg: #00283c;
+  --on-accent: #ffffff;
   --surface: #ffffff;
+  --surface-subtle: #f6f8fb;
+  --surface-muted: #eef0f4;
+  --surface-topbar: #f5f5f5;
   --line: #d6dbe8;
+  --border-soft: #c9ced8;
+  --border-card: #b8c0d0;
+  --border-control: #7483a0;
   --muted: #5b6472;
   --page: #dfe7f7;
+  --text-strong: #111827;
+  --text: #1f2937;
+  --text-soft: #4b5563;
+  --focus-ring: #8a5a00;
+  --warn-text: #513a00;
+  --warn-bg: #fff8db;
+  --warn-border: #dcc46d;
+  --error-text: #7a1f1f;
+  --error-bg: #fff1f1;
+  --error-border: #e3a8a8;
+  --success-text: #17402a;
+  --success-bg: #eef9f2;
+  --success-border: #a8d8b8;
+}
+
+/* Dark: the device's setting. Every text colour is at least 4.5:1 on every surface it can sit on,
+   and borders, the focus ring and the blue are at least 3:1 (tests/test_accessibility_basics.py
+   computes them from this file). */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --carlos-blue: #436aba;
+    --carlos-blue-hover: #5b82d0;
+    --carlos-blue-dark: #9bb8f5;
+    --brand-text: #d4e3ff;
+    --brand-bg: #0b3a57;
+    --on-accent: #ffffff;
+    --surface: #182033;
+    --surface-subtle: #1d2740;
+    --surface-muted: #232e4a;
+    --surface-topbar: #1d2740;
+    --line: #34405c;
+    --border-soft: #3a4663;
+    --border-card: #46537a;
+    --border-control: #8190ad;
+    --muted: #b4bccb;
+    --page: #0f1626;
+    --text-strong: #f3f4f6;
+    --text: #e5e7eb;
+    --text-soft: #c8cdd8;
+    --focus-ring: #ffd166;
+    --warn-text: #ffe9a6;
+    --warn-bg: #3a2e0a;
+    --warn-border: #8a6d1a;
+    --error-text: #ffc9c9;
+    --error-bg: #3a1519;
+    --error-border: #8a3a42;
+    --success-text: #b7f0cf;
+    --success-bg: #10301e;
+    --success-border: #2f7a4f;
+  }
+
+  /* The logo's dark parts must stay visible on the dark top bar. */
+  .brand-logo {
+    padding: 2px;
+    background: #ffffff;
+    border-radius: 4px;
+  }
 }
 
 [hidden] {
@@ -20,7 +88,7 @@ body {
   flex-direction: column;
   margin: 0;
   min-height: 100vh;
-  color: #111827;
+  color: var(--text-strong);
   background: var(--page);
   font-family: Arial, Helvetica, sans-serif;
   letter-spacing: 0;
@@ -66,7 +134,7 @@ a {
 .portal-screen {
   flex: 1 0 auto;
   background: var(--surface);
-  border: 1px solid #b8c0d0;
+  border: 1px solid var(--border-card);
 }
 
 /* Outside <main>, so it is the page's contentinfo landmark. */
@@ -84,8 +152,8 @@ a {
   gap: 12px;
   min-height: 54px;
   padding: 8px 10px;
-  background: #f5f5f5;
-  border-bottom: 1px solid #c9ced8;
+  background: var(--surface-topbar);
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .brand-lockup {
@@ -103,7 +171,7 @@ a {
 
 .brand-lockup strong {
   display: block;
-  color: var(--carlos-blue-dark);
+  color: var(--brand-text);
   font-size: 0.9375rem;
 }
 
@@ -131,7 +199,7 @@ a {
   justify-content: center;
   min-height: 28px;
   padding: 4px 8px;
-  color: var(--carlos-blue-dark);
+  color: var(--brand-text);
   background: transparent;
   border: 1px solid transparent;
   border-radius: 3px;
@@ -140,7 +208,7 @@ a {
 }
 
 .text-tab.selected {
-  color: #fff;
+  color: var(--on-accent);
   background: var(--carlos-blue);
 }
 
@@ -177,7 +245,7 @@ button.text-tab:focus-visible {
 
 .auth-panel {
   padding: 18px;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--line);
 }
 
@@ -212,9 +280,9 @@ button.text-tab:focus-visible {
 .development-link {
   margin: 0 0 12px;
   padding: 8px 10px;
-  color: #513a00;
-  background: #fff8db;
-  border: 1px solid #dcc46d;
+  color: var(--warn-text);
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
   border-radius: 4px;
   font-size: 0.75rem;
   line-height: 1.4;
@@ -223,13 +291,13 @@ button.text-tab:focus-visible {
 
 h1 {
   margin: 0 0 12px;
-  color: var(--carlos-blue-dark);
+  color: var(--brand-text);
   font-size: 1.375rem;
 }
 
 h2 {
   margin: 0;
-  color: var(--carlos-blue-dark);
+  color: var(--brand-text);
   font-size: 1rem;
 }
 
@@ -241,7 +309,7 @@ h2 {
 .form-stack label {
   display: grid;
   gap: 4px;
-  color: #1f2937;
+  color: var(--text);
   font-size: 0.8125rem;
   font-weight: bold;
 }
@@ -249,17 +317,17 @@ h2 {
 .form-stack input {
   min-height: 34px;
   padding: 6px 8px;
-  border: 1px solid #aeb7c8;
+  border: 1px solid var(--border-control);
   border-radius: 3px;
-  background: #fff;
+  background: var(--surface);
 }
 
 .form-stack select {
   min-height: 34px;
   padding: 6px 8px;
-  border: 1px solid #aeb7c8;
+  border: 1px solid var(--border-control);
   border-radius: 3px;
-  background: #fff;
+  background: var(--surface);
 }
 
 .primary-action {
@@ -268,9 +336,9 @@ h2 {
   justify-content: center;
   min-height: 34px;
   padding: 6px 10px;
-  color: #fff;
+  color: var(--on-accent);
   background: var(--carlos-blue);
-  border: 1px solid #3459a0;
+  border: 1px solid var(--carlos-blue-hover);
   border-radius: 4px;
   font-weight: bold;
 }
@@ -295,7 +363,7 @@ h2 {
   justify-content: center;
   min-height: 30px;
   padding: 4px 6px;
-  color: var(--carlos-blue-dark);
+  color: var(--brand-text);
   background: transparent;
   border: 0;
   border-radius: 3px;
@@ -322,7 +390,7 @@ h2 {
 
 .mfa-destination {
   margin: 0 0 12px;
-  color: #1f2937;
+  color: var(--text);
   font-size: 0.8125rem;
   line-height: 1.4;
 }
@@ -354,13 +422,13 @@ h2 {
 .date-of-birth legend {
   margin-bottom: 2px;
   padding: 0;
-  color: #1f2937;
+  color: var(--text);
   font-size: 0.8125rem;
   font-weight: bold;
 }
 
 .date-of-birth small {
-  color: #4b5563;
+  color: var(--text-soft);
 }
 
 .date-of-birth-parts {
@@ -382,7 +450,7 @@ h2 {
 
 .mfa-method-switch legend {
   margin-bottom: 6px;
-  color: #1f2937;
+  color: var(--text);
   font-size: 0.8125rem;
   font-weight: bold;
 }
@@ -391,7 +459,7 @@ h2 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   width: 100%;
-  border: 1px solid #aeb7c8;
+  border: 1px solid var(--border-control);
   border-radius: 4px;
   overflow: hidden;
 }
@@ -403,15 +471,15 @@ h2 {
   justify-content: center;
   min-height: 34px;
   padding: 6px 10px;
-  color: var(--carlos-blue-dark);
-  background: #fff;
+  color: var(--brand-text);
+  background: var(--surface);
   font-size: 0.8125rem;
   font-weight: bold;
   cursor: pointer;
 }
 
 .segmented-option + .segmented-option {
-  border-left: 1px solid #aeb7c8;
+  border-left: 1px solid var(--border-control);
 }
 
 .segmented-option input {
@@ -422,19 +490,19 @@ h2 {
 }
 
 .segmented-option:has(input:checked) {
-  color: #fff;
+  color: var(--on-accent);
   background: var(--carlos-blue);
 }
 
 .segmented-option:has(input:focus-visible) {
   z-index: 1;
-  outline: 3px solid #f5b82e;
+  outline: 3px solid var(--focus-ring);
   outline-offset: -3px;
 }
 
 .segmented-option.disabled {
-  color: #4b5563;
-  background: #eef0f4;
+  color: var(--text-soft);
+  background: var(--surface-muted);
   cursor: not-allowed;
 }
 
@@ -445,7 +513,7 @@ h2 {
 .auth-back-link {
   display: inline-block;
   margin-top: 14px;
-  color: var(--carlos-blue-dark);
+  color: var(--brand-text);
   font-size: 0.8125rem;
   font-weight: bold;
 }
@@ -467,14 +535,14 @@ h2 {
 .portal-modal {
   width: min(100%, 360px);
   padding: 16px;
-  background: #fff;
-  border: 1px solid #aeb7c8;
+  background: var(--surface);
+  border: 1px solid var(--border-control);
   box-shadow: 0 12px 28px rgb(17 24 39 / 25%);
 }
 
 .portal-modal p {
   margin: 8px 0 14px;
-  color: #1f2937;
+  color: var(--text);
   font-size: 0.8125rem;
   line-height: 1.4;
 }
@@ -482,9 +550,9 @@ h2 {
 .form-error {
   margin: 0;
   padding: 8px 10px;
-  color: #7a1f1f;
-  background: #fff1f1;
-  border: 1px solid #e3a8a8;
+  color: var(--error-text);
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
   border-radius: 4px;
   font-size: 0.8125rem;
   line-height: 1.35;
@@ -493,9 +561,9 @@ h2 {
 .form-notice {
   margin: 0 0 12px;
   padding: 8px 10px;
-  color: #17402a;
-  background: #eef9f2;
-  border: 1px solid #a8d8b8;
+  color: var(--success-text);
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
   border-radius: 4px;
   font-size: 0.8125rem;
   line-height: 1.35;
@@ -535,9 +603,9 @@ h2 {
   justify-content: center;
   min-height: 32px;
   padding: 5px 10px;
-  color: var(--carlos-blue-dark);
-  background: #fff;
-  border: 1px solid #aeb7c8;
+  color: var(--brand-text);
+  background: var(--surface);
+  border: 1px solid var(--border-control);
   border-radius: 4px;
   font-size: 0.8125rem;
   font-weight: bold;
@@ -555,14 +623,14 @@ h2 {
   flex-direction: column;
   gap: 2px;
   padding: 12px 8px;
-  background: #f6f8fb;
-  border-right: 1px solid #c9ced8;
+  background: var(--surface-subtle);
+  border-right: 1px solid var(--border-soft);
 }
 
 .module-link {
   min-height: 36px;
   padding: 9px 10px;
-  color: var(--carlos-blue-dark);
+  color: var(--brand-text);
   border: 1px solid transparent;
   border-radius: 4px;
   font-size: 0.875rem;
@@ -571,8 +639,8 @@ h2 {
 }
 
 .module-link.selected {
-  background: #fff;
-  border-color: #aeb7c8;
+  background: var(--surface);
+  border-color: var(--border-control);
 }
 
 .module-workspace {
@@ -607,9 +675,9 @@ h2 {
   gap: 8px;
   min-height: 150px;
   padding: 14px;
-  color: #111827;
-  background: #fff;
-  border: 1px solid #aeb7c8;
+  color: var(--text-strong);
+  background: var(--surface);
+  border: 1px solid var(--border-control);
   border-radius: 4px;
   text-decoration: none;
 }
@@ -629,15 +697,15 @@ a.module-tile:focus-visible {
 
 .module-tile > span {
   align-self: end;
-  color: var(--carlos-blue-dark);
+  color: var(--brand-text);
   font-size: 0.8125rem;
   font-weight: bold;
 }
 
 .module-tile.disabled {
-  color: #59616e;
-  background: #f2f4f7;
-  border-color: #d6dbe8;
+  color: var(--text-soft);
+  background: var(--surface-muted);
+  border-color: var(--line);
 }
 
 .module-tile-heading {
@@ -649,9 +717,9 @@ a.module-tile:focus-visible {
 
 .module-tile-heading span {
   padding: 2px 5px;
-  color: #59616e;
-  background: #fff;
-  border: 1px solid #c9ced8;
+  color: var(--text-soft);
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
   border-radius: 3px;
   font-size: 0.6875rem;
   font-weight: bold;
@@ -678,7 +746,7 @@ a.module-tile:focus-visible {
   display: grid;
   gap: 4px;
   min-width: min(100%, 280px);
-  color: #1f2937;
+  color: var(--text);
   font-size: 0.8125rem;
   font-weight: bold;
 }
@@ -688,23 +756,23 @@ a.module-tile:focus-visible {
 .filter-field select {
   min-height: 32px;
   padding: 5px 8px;
-  border: 1px solid #aeb7c8;
+  border: 1px solid var(--border-control);
   border-radius: 3px;
-  background: #fff;
+  background: var(--surface);
 }
 
 .filter-field {
   display: grid;
   gap: 4px;
   min-width: 150px;
-  color: #1f2937;
+  color: var(--text);
   font-size: 0.8125rem;
   font-weight: bold;
 }
 
 .filter-hint {
   max-width: 260px;
-  color: #4b5563;
+  color: var(--text-soft);
   font-size: 0.75rem;
   font-weight: normal;
 }
@@ -714,7 +782,7 @@ a.module-tile:focus-visible {
   gap: 4px;
   max-width: 360px;
   margin: 0 0 12px;
-  color: #1f2937;
+  color: var(--text);
   font-size: 0.8125rem;
   font-weight: bold;
 }
@@ -722,9 +790,9 @@ a.module-tile:focus-visible {
 .reveal-step-up input {
   min-height: 36px;
   padding: 7px 9px;
-  border: 1px solid #aeb7c8;
+  border: 1px solid var(--border-control);
   border-radius: 3px;
-  background: #fff;
+  background: var(--surface);
 }
 
 .reveal-step-up small {
@@ -762,7 +830,7 @@ a.module-tile:focus-visible {
 .detail-list dd {
   min-width: 0;
   margin: 0;
-  color: #111827;
+  color: var(--text-strong);
   overflow-wrap: anywhere;
   font-size: 0.875rem;
 }
@@ -810,8 +878,8 @@ a.module-tile:focus-visible {
 }
 
 .table-shell th {
-  color: var(--carlos-blue-dark);
-  background: #f6f8fb;
+  color: var(--brand-text);
+  background: var(--surface-subtle);
   font-size: 0.8125rem;
 }
 
@@ -844,9 +912,9 @@ a.module-tile:focus-visible {
   min-width: 0;
   min-height: 32px;
   padding: 5px 8px;
-  border: 1px solid #aeb7c8;
+  border: 1px solid var(--border-control);
   border-radius: 3px;
-  background: #fff;
+  background: var(--surface);
   font-family: Consolas, "Courier New", monospace;
   line-height: 1.4;
   overflow-wrap: anywhere;
@@ -864,7 +932,7 @@ a.module-tile:focus-visible {
   display: inline-flex;
   align-items: center;
   min-height: 30px;
-  color: #6b2430;
+  color: var(--error-text);
   font-weight: bold;
 }
 
@@ -873,7 +941,7 @@ a.module-tile:focus-visible {
 }
 
 .module-tile-heading .message-count {
-  color: #fff;
+  color: var(--on-accent);
   background: var(--carlos-blue);
   border-color: var(--carlos-blue);
   font-weight: bold;
@@ -913,7 +981,7 @@ a.module-tile:focus-visible {
 .message-badge {
   justify-self: end;
   padding: 2px 6px;
-  color: #fff;
+  color: var(--on-accent);
   background: var(--carlos-blue);
   border-radius: 3px;
   font-size: 0.6875rem;
@@ -978,7 +1046,7 @@ a.module-tile:focus-visible {
 
 .booking-slots legend {
   margin-bottom: 6px;
-  color: #1f2937;
+  color: var(--text);
   font-size: 0.8125rem;
   font-weight: bold;
 }
@@ -1119,7 +1187,7 @@ a.module-tile:focus-visible {
     overflow-x: auto;
     padding: 8px;
     border-right: 0;
-    border-bottom: 1px solid #c9ced8;
+    border-bottom: 1px solid var(--border-soft);
   }
 
   .module-link {
@@ -1278,6 +1346,12 @@ a.module-tile:focus-visible {
   image-rendering: pixelated;
 }
 
+/* Placeholders read in the muted text colour (a browser default is about 3.7:1 on the dark surface). */
+::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
 /* A skip link (WCAG 2.4.1): off screen until it has the focus, then the first thing on the page. */
 .skip-link {
   position: absolute;
@@ -1285,8 +1359,8 @@ a.module-tile:focus-visible {
   left: 0;
   z-index: 100;
   padding: 0.75rem 1rem;
-  color: #fff;
-  background: var(--carlos-blue-dark);
+  color: var(--on-accent);
+  background: var(--brand-bg);
   font-size: 1rem;
   font-weight: bold;
   transform: translateY(-120%);
@@ -1294,7 +1368,7 @@ a.module-tile:focus-visible {
 
 .skip-link:focus {
   transform: translateY(0);
-  outline: 3px solid #f5b82e;
+  outline: 3px solid var(--on-accent);
   outline-offset: -3px;
 }
 
@@ -1331,5 +1405,89 @@ main[tabindex="-1"]:focus {
   .text-tab {
     min-width: 2.75rem;
     min-height: 2.75rem;
+  }
+}
+
+/* More contrast, when the person asks for it: text colours go to the strongest, borders become the
+   control border colour, and the focus ring is thicker. */
+@media (prefers-contrast: more) {
+  :root {
+    --muted: var(--text-strong);
+    --text-soft: var(--text-strong);
+    --text: var(--text-strong);
+    --line: var(--border-control);
+    --border-soft: var(--border-control);
+    --border-card: var(--border-control);
+  }
+
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 4px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+}
+
+/* Forced colours (Windows contrast themes): the system chooses the colours, so what is left to us
+   is shape. Borders stay, the focus ring, selected and checked states and errors are drawn with
+   lines, thickness and underlines as well as colour. */
+@media (forced-colors: active) {
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 3px solid Highlight;
+    outline-offset: 2px;
+  }
+
+  .skip-link {
+    color: LinkText;
+    background: Canvas;
+    border: 2px solid CanvasText;
+  }
+
+  .text-tab.selected,
+  .module-link.selected {
+    border: 2px solid Highlight;
+    text-decoration: underline;
+    font-weight: bold;
+  }
+
+  .segmented-option:has(input:checked),
+  .booking-slot:has(input:checked) {
+    border: 3px solid Highlight;
+  }
+
+  .form-error {
+    border: 3px double CanvasText;
+  }
+
+  .form-notice {
+    border: 2px solid CanvasText;
+  }
+
+  .module-tile.disabled {
+    border-style: dashed;
+    color: GrayText;
+  }
+
+  .message-count {
+    border: 1px solid CanvasText;
+  }
+}
+
+/* Reduced motion: nothing animates, transitions end at once and scrolling is not smoothed. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
   }
 }

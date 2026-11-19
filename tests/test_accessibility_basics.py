@@ -391,6 +391,146 @@ def test_no_old_brand_blue_is_left_in_the_stylesheet() -> None:
     assert "#486ebd" not in STYLES.read_text(encoding="utf-8").lower()
 
 
-def test_the_axe_check_runs_colour_contrast() -> None:
+def test_the_axe_check_runs_in_both_colour_schemes_and_with_forced_colours() -> None:
     script = (PACKAGE.parent / "scripts" / "patient-portal-axe.js").read_text(encoding="utf-8")
-    assert "disableRules" not in script
+    assert "disableRules" not in script  # colour contrast is on
+    assert "emulateMedia({ colorScheme: 'dark' })" in script
+    assert "emulateMedia({ forcedColors: 'active' })" in script
+    # Emulation is always switched off again for the caller's own steps.
+    assert "emulateMedia({ colorScheme: null, forcedColors: null })" in script
+    assert "finally" in script
+
+
+# --- Both palettes: every token pair, computed from the stylesheet --------------------------------
+
+
+def _block(source: str, opening: str) -> str:
+    """The text between the braces that follow `opening` (braces may nest one level)."""
+    start = source.index(opening) + len(opening)
+    depth = 1
+    for index in range(start, len(source)):
+        depth += {"{": 1, "}": -1}.get(source[index], 0)
+        if depth == 0:
+            return source[start:index]
+    raise AssertionError(opening)
+
+
+def _palettes() -> dict[str, dict[str, str]]:
+    css = STYLES.read_text(encoding="utf-8")
+    light_block = _block(css, ":root {")
+    dark_block = _block(_block(css, "@media (prefers-color-scheme: dark) {"), ":root {")
+    declared = re.compile(r"--([a-z-]+):\s*(#[0-9a-fA-F]{6});")
+    light = dict(declared.findall(light_block))
+    dark = {**light, **dict(declared.findall(dark_block))}
+    return {"light": light, "dark": dark}
+
+
+PALETTES = _palettes()
+TEXT_TOKENS = ["text-strong", "text", "text-soft", "muted", "brand-text"]
+SURFACES = ["page", "surface", "surface-subtle", "surface-muted", "surface-topbar"]
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_every_text_colour_is_readable_on_every_surface_in_both_palettes(scheme: str) -> None:
+    palette = PALETTES[scheme]
+    for text in TEXT_TOKENS:
+        for surface in SURFACES:
+            ratio = _contrast(palette[text], palette[surface])
+            assert ratio >= 4.5, f"{scheme}: {text} on {surface} is {ratio:.2f}:1"
+    for text, background in [
+        ("warn-text", "warn-bg"),
+        ("error-text", "error-bg"),
+        ("success-text", "success-bg"),
+        ("on-accent", "carlos-blue"),
+        ("on-accent", "brand-bg"),
+    ]:
+        ratio = _contrast(palette[text], palette[background])
+        assert ratio >= 4.5, f"{scheme}: {text} on {background} is {ratio:.2f}:1"
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_borders_the_focus_ring_and_the_blue_are_visible_in_both_palettes(scheme: str) -> None:
+    palette = PALETTES[scheme]
+    for token in ("border-control", "focus-ring", "carlos-blue"):
+        for surface in ("page", "surface"):
+            ratio = _contrast(palette[token], palette[surface])
+            assert ratio >= 3.0, f"{scheme}: {token} on {surface} is {ratio:.2f}:1"
+    # The status borders are decoration beside text that already says it; the blue as text is
+    # not used (the text tokens above are).
+    assert palette["on-accent"].lower() == "#ffffff"
+
+
+def test_the_dark_palette_defines_every_token_the_light_one_does() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    light = set(re.findall(r"--([a-z-]+):\s*#", _block(css, ":root {")))
+    dark = set(
+        re.findall(
+            r"--([a-z-]+):\s*#",
+            _block(_block(css, "@media (prefers-color-scheme: dark) {"), ":root {"),
+        )
+    )
+    assert light == dark
+
+
+def test_the_colour_and_motion_media_blocks_are_present() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    for opening in (
+        "@media (prefers-color-scheme: dark)",
+        "@media (prefers-contrast: more)",
+        "@media (forced-colors: active)",
+        "@media (prefers-reduced-motion: reduce)",
+    ):
+        assert css.count(opening) == 1, opening
+    assert "color-scheme: light dark;" in css
+    assert '<meta name="color-scheme" content="light dark">' in (
+        TEMPLATES / "_head_assets.jinja"
+    ).read_text(encoding="utf-8")
+    # Order matters: the contrast block must come after the palettes it adjusts.
+    assert css.index("prefers-color-scheme: dark") < css.index("prefers-contrast: more")
+
+
+def test_more_contrast_strengthens_text_and_borders_and_the_focus_ring() -> None:
+    block = _block(STYLES.read_text(encoding="utf-8"), "@media (prefers-contrast: more) {")
+    for token in ("--muted", "--text-soft", "--text"):
+        assert f"{token}: var(--text-strong);" in block
+    for token in ("--line", "--border-soft", "--border-card"):
+        assert f"{token}: var(--border-control);" in block
+    assert "outline: 4px solid var(--focus-ring);" in block
+
+
+def test_forced_colours_keep_focus_selection_and_errors_visible_by_shape() -> None:
+    block = _block(STYLES.read_text(encoding="utf-8"), "@media (forced-colors: active) {")
+    assert "outline: 3px solid Highlight;" in block
+    # Selected and checked states are a thicker or underlined border, not only a colour.
+    assert "border: 2px solid Highlight;" in block and "text-decoration: underline;" in block
+    assert "border: 3px solid Highlight;" in block
+    # Errors and notices are drawn with lines, in system colours.
+    assert "border: 3px double CanvasText;" in block
+    assert "border: 2px solid CanvasText;" in block
+
+
+def test_reduced_motion_stops_animation_transition_and_smooth_scrolling() -> None:
+    block = _block(STYLES.read_text(encoding="utf-8"), "@media (prefers-reduced-motion: reduce) {")
+    for declaration in (
+        "animation: none !important;",
+        "transition: none !important;",
+        "scroll-behavior: auto !important;",
+    ):
+        assert declaration in block
+
+
+def test_no_colour_is_hard_coded_outside_the_palettes() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    light = _block(css, ":root {")
+    dark_media = _block(css, "@media (prefers-color-scheme: dark) {")
+    outside = css.replace(light, "").replace(dark_media, "")
+    literals = re.findall(r"#[0-9a-fA-F]{3,6}\b", outside)
+    # Every colour is a token, so the dark palette and the contrast modes reach all of them.
+    assert literals == [], literals
+
+
+def test_placeholders_use_the_muted_text_colour() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    assert re.search(
+        r"::placeholder\s*\{[^}]*color:\s*var\(--muted\);[^}]*opacity:\s*1;", css, re.S
+    )
