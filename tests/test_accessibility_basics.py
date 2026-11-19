@@ -21,9 +21,7 @@ STYLES = PACKAGE / "static" / "styles.css"
 
 # Every full page (the ones with their own <html>); the partials are included in them.
 FULL_PAGES = sorted(
-    path.name
-    for path in TEMPLATES.glob("*.jinja")
-    if "<html" in path.read_text(encoding="utf-8")
+    path.name for path in TEMPLATES.glob("*.jinja") if "<html" in path.read_text(encoding="utf-8")
 )
 
 
@@ -47,9 +45,11 @@ def test_every_full_page_has_a_banner_before_main_and_a_footer_after_it(name: st
     # The top bar is a <header> whose ancestors are only <div>s, so it is the banner landmark
     # (inside <main> or a <section> it would not be); the footer stays the contentinfo.
     source = (TEMPLATES / name).read_text(encoding="utf-8")
-    assert "<section class=\"portal-screen" not in source, name
+    assert '<section class="portal-screen' not in source, name
     top_bar = min(
-        i for i in (source.find("<header class=\"patient-topbar"), source.find("_public_header.jinja")) if i >= 0
+        i
+        for i in (source.find('<header class="patient-topbar'), source.find("_public_header.jinja"))
+        if i >= 0
     )
     assert top_bar < source.index("<main"), name
     assert source.index("</main>") < source.index("_page_footer.jinja"), name
@@ -108,7 +108,15 @@ def test_the_skip_link_words_are_translated_in_every_language(module) -> None:
 
 @pytest.mark.parametrize(
     ("code", "module"),
-    [("en", en), ("es", es), ("fr", fr), ("pl", pl), ("pt-BR", pt_BR), ("zh-CN", zh_CN), ("zh-TW", zh_TW)],
+    [
+        ("en", en),
+        ("es", es),
+        ("fr", fr),
+        ("pl", pl),
+        ("pt-BR", pt_BR),
+        ("zh-CN", zh_CN),
+        ("zh-TW", zh_TW),
+    ],
 )
 def test_the_sign_in_page_has_the_skip_link_and_a_page_title(code: str, module) -> None:
     client = TestClient(main.create_app(development_settings()))
@@ -133,7 +141,11 @@ DASHBOARD = (TEMPLATES / "dashboard.jinja").read_text(encoding="utf-8")
 
 @pytest.mark.parametrize("key", ["mycarlos", "account", "email-passwords", "help", "messages"])
 def test_a_module_tile_link_is_named_by_its_heading_and_not_by_view(key: str) -> None:
-    link = re.search(rf'<a class="module-tile"[^>]*aria-labelledby="tile-{key}-title[^"]*"[^>]*>(.*?)</a>', DASHBOARD, re.S)
+    link = re.search(
+        rf'<a class="module-tile"[^>]*aria-labelledby="tile-{key}-title[^"]*"[^>]*>(.*?)</a>',
+        DASHBOARD,
+        re.S,
+    )
     assert link, key
     body = link.group(1)
     assert f'id="tile-{key}-title"' in body
@@ -144,7 +156,11 @@ def test_a_module_tile_link_is_named_by_its_heading_and_not_by_view(key: str) ->
 
 
 def test_the_unread_count_is_part_of_the_messages_tile_name() -> None:
-    assert 'aria-labelledby="tile-messages-title{% if new_message_count %} tile-messages-count{% endif %}"' in DASHBOARD
+    assert (
+        'aria-labelledby="tile-messages-title'
+        "{% if new_message_count %} tile-messages-count{% endif %}"
+        '"' in DASHBOARD
+    )
     assert 'id="tile-messages-count"' in DASHBOARD
 
 
@@ -157,8 +173,10 @@ def test_repeated_reveal_and_copy_buttons_say_which_password_they_are_for() -> N
     assert 'id="email-password-subject-{{ row.id }}"' in DASHBOARD
     # Reveal and Copy both describe themselves by the row's subject; their own words stay first.
     assert DASHBOARD.count('aria-describedby="email-password-subject-{{ row.id }}"') == 2
-    # The password itself is a named, read-only text box (a name on a plain <code> is not announced).
-    assert re.search(r'<code[^>]*role="textbox"[^>]*aria-readonly="true"[^>]*aria-label=', DASHBOARD, re.S)
+    # The password itself is a named, read-only text box (a plain <code>'s name is not announced).
+    assert re.search(
+        r'<code[^>]*role="textbox"[^>]*aria-readonly="true"[^>]*aria-label=', DASHBOARD, re.S
+    )
 
 
 @pytest.mark.parametrize(
@@ -169,7 +187,9 @@ def test_a_failed_sign_in_or_code_marks_the_boxes_and_points_them_at_the_error(
 ) -> None:
     source = (TEMPLATES / template).read_text(encoding="utf-8")
     assert f'role="alert" id="{error_id}"' in source
-    marked = f'{{% if error_message %}}aria-invalid="true" aria-describedby="{error_id}"{{% endif %}}'
+    marked = (
+        f'{{% if error_message %}}aria-invalid="true" aria-describedby="{error_id}"{{% endif %}}'
+    )
     assert source.count(marked) == (2 if template == "index.jinja" else 1)
 
 
@@ -193,7 +213,21 @@ def test_language_buttons_are_big_enough_to_touch() -> None:
 
 # --- Structure, read from the parsed page rather than grepped from the template text ----------
 
-_VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
+_VOID = {
+    "area",
+    "base",
+    "br",
+    "col",
+    "embed",
+    "hr",
+    "img",
+    "input",
+    "link",
+    "meta",
+    "source",
+    "track",
+    "wbr",
+}
 
 
 class _Outline(HTMLParser):
@@ -202,7 +236,9 @@ class _Outline(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.stack: list[tuple[str, dict[str, str | None]]] = []
-        self.elements: list[tuple[str, dict[str, str | None], tuple[tuple[str, dict[str, str | None]], ...]]] = []
+        self.elements: list[
+            tuple[str, dict[str, str | None], tuple[tuple[str, dict[str, str | None]], ...]]
+        ] = []
 
     def handle_starttag(self, tag, attrs) -> None:
         attributes = dict(attrs)
@@ -281,7 +317,9 @@ def _check_skip_link_structure(html: str, label: str) -> None:
     topbars = [e for e in outline.elements if "patient-topbar" in (e[1].get("class") or "").split()]
     assert len(topbars) == 1 and topbars[0][0] == "header", label
     # A <header> is the page's banner only when no section, article, aside, nav or main holds it.
-    assert not any(t in {"main", "section", "article", "aside", "nav"} for t, _ in topbars[0][2]), label
+    assert not any(t in {"main", "section", "article", "aside", "nav"} for t, _ in topbars[0][2]), (
+        label
+    )
 
 
 @pytest.mark.parametrize("name", FULL_PAGES)
@@ -306,7 +344,9 @@ def test_every_message_the_script_puts_into_a_button_is_announced_or_deliberatel
         "copyButton.dataset.copyFailedLabel",
     ):
         block = script[script.index(words) :].split(";", 1)[1:2]
-        assert block and "announce(" in script[script.index(words) : script.index(words) + 260], words
+        assert block and "announce(" in script[script.index(words) : script.index(words) + 260], (
+            words
+        )
     # Not announced on purpose: putting a label back (after 2.5 s, on hiding the page), the
     # password box (the focus moves to it), the modal (a dialog) and the booking notice
     # (its element is role="status" already).
