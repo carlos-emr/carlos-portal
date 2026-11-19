@@ -41,24 +41,50 @@ from sqlalchemy.orm import Session
 from carlos_patient_portal.internal_routes import (
     COMMON_INTERNAL_RESPONSES,
     INTERNAL_CONFLICT_RESPONSES,
+    INTERNAL_PREPARE_CREATE_INVITE_RESPONSES,
+    INVITE_PREPARATION_IN_PROGRESS,
+    InternalInviteResponse,
+    InternalInviteTokenResponse,
     InternalRouteDependencies,
     InternalRuntime,
+    invite_payload,
+)
+from carlos_patient_portal.invites import (
+    AccountAlreadyExistsError,
+    InviteNotFoundError,
+    InvitePreparationConflictError,
+    InvitePreparationInProgressError,
+    InvitePreparationKeyUnavailableError,
+    PendingInviteExistsError,
 )
 from carlos_patient_portal.job_identity import JobPrincipal
-from carlos_patient_portal.models import SIGNUP_RESULT_MATCHED
+from carlos_patient_portal.models import (
+    MAX_DEMOGRAPHIC_NO,
+    MAX_INVITE_DELIVERY_OPERATION_ID_LENGTH,
+    MAX_INVITE_DELIVERY_REFERENCE_LENGTH,
+    SIGNUP_RESULT_MATCHED,
+)
 from carlos_patient_portal.runtime import MAX_DATABASE_ID
 from carlos_patient_portal.signup_claims import (
     MAX_SIGNUP_CLAIM_BATCH,
+    SignupInviteUnavailableError,
     SignupLeaseExpiredError,
+    SignupRequestClosedError,
     SignupRequestNotFoundError,
     SignupResultConflictError,
     SignupResultInvalidError,
     SignupResultRefusal,
     claim_signup_requests,
+    commit_signup_invite,
+    prepare_signup_invite,
     record_signup_refusal,
     record_signup_result,
 )
-from carlos_patient_portal.system_jobs import JOB_SIGNUP_POLL, PERMISSION_SIGNUP_MANAGE
+from carlos_patient_portal.system_jobs import (
+    JOB_SIGNUP_POLL,
+    PERMISSION_INVITE_MANAGE,
+    PERMISSION_SIGNUP_MANAGE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +93,9 @@ SIGNUP_REQUEST_NOT_FOUND_DETAIL = "sign-up request not found"
 SIGNUP_LEASE_EXPIRED_DETAIL = "sign-up request lease expired"
 SIGNUP_RESULT_CONFLICT_DETAIL = "sign-up request already has a different result"
 SIGNUP_RESULT_INVALID_DETAIL = "sign-up result is invalid"
+SIGNUP_REQUEST_CLOSED_DETAIL = "sign-up request already has a result"
+SIGNUP_INVITE_CONFLICT_DETAIL = "sign-up request invite conflicts"
+SIGNUP_INVITE_UNAVAILABLE_DETAIL = "invite preparation unavailable"
 
 DEFAULT_SIGNUP_CLAIM_BATCH = 10
 # `secrets.token_urlsafe(32)`: 43 characters of URL-safe base64.
@@ -117,6 +146,38 @@ class InternalSignupResultRequest(BaseModel):
         if (self.result == SIGNUP_RESULT_MATCHED) != (self.invite_id is not None):
             raise ValueError("invite_id is required with matched, and accepted only then")
         return self
+
+
+class InternalSignupInvitePrepareRequest(BaseModel):
+    """The patient, and the operation. The identity proof is the request's own, never sent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    lease_token: str = Field(repr=False, pattern=LEASE_TOKEN_PATTERN)
+    demographic_no: int = Field(strict=True, gt=0, le=MAX_DEMOGRAPHIC_NO)
+    delivery_operation_id: str = Field(
+        min_length=1,
+        max_length=MAX_INVITE_DELIVERY_OPERATION_ID_LENGTH,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+
+
+class InternalSignupInviteCommitRequest(BaseModel):
+    """The operation and its delivery reference. The invite is the request's own, never named."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    lease_token: str = Field(repr=False, pattern=LEASE_TOKEN_PATTERN)
+    delivery_operation_id: str = Field(
+        min_length=1,
+        max_length=MAX_INVITE_DELIVERY_OPERATION_ID_LENGTH,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+    delivery_reference: str = Field(
+        min_length=1,
+        max_length=MAX_INVITE_DELIVERY_REFERENCE_LENGTH,
+        pattern=r"^[A-Za-z0-9._:/-]+$",
+    )
 
 
 class InternalSignupResultResponse(BaseModel):
@@ -248,3 +309,112 @@ def register_internal_signup_routes(
             "invite_id": outcome.invite_id,
             "recorded": outcome.recorded,
         }
+
+    def refusal_response(
+        session: Session, principal: JobPrincipal, refusal: SignupResultRefusal
+    ) -> JSONResponse:
+        """Audit a refused lease or request check, and answer it with the fixed text."""
+        record_signup_refusal(
+            session,
+            refusal,
+            clinic_id=principal.clinic_id,
+            actor=principal.display_name,
+            actor_id=principal.actor_id,
+            assertion_key_id=principal.key_id,
+            assertion_id=principal.assertion_id,
+        )
+        if isinstance(refusal, SignupRequestNotFoundError):
+            return JSONResponse(
+                status_code=404, content={"detail": SIGNUP_REQUEST_NOT_FOUND_DETAIL}
+            )
+        if isinstance(refusal, SignupLeaseExpiredError):
+            return JSONResponse(status_code=409, content={"detail": SIGNUP_LEASE_EXPIRED_DETAIL})
+        if isinstance(refusal, SignupRequestClosedError):
+            return JSONResponse(status_code=409, content={"detail": SIGNUP_REQUEST_CLOSED_DETAIL})
+        return JSONResponse(status_code=409, content={"detail": SIGNUP_INVITE_CONFLICT_DETAIL})
+
+    @app.post(
+        "/internal/carlos/signup-requests/{request_id}/invite/prepare",
+        status_code=201,
+        response_model=InternalInviteTokenResponse,
+        responses=INTERNAL_PREPARE_CREATE_INVITE_RESPONSES,
+    )
+    def internal_prepare_signup_invite(
+        request_id: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
+        payload: InternalSignupInvitePrepareRequest,
+        principal: Annotated[
+            JobPrincipal,
+            Depends(deps.job_principal_requiring(JOB_SIGNUP_POLL, PERMISSION_INVITE_MANAGE)),
+        ],
+        session: Annotated[Session, deps.session_dependency],
+    ) -> dict[str, object] | JSONResponse:
+        try:
+            invite, invite_token = prepare_signup_invite(
+                session,
+                request_id,
+                clinic_id=principal.clinic_id,
+                lease_token=payload.lease_token,
+                demographic_no=payload.demographic_no,
+                delivery_operation_id=payload.delivery_operation_id,
+                identity_proof_secret=runtime.identity_proof_secret,
+                encryption_secret=runtime.outbox_encryption_secret,
+                encryption_key_id=runtime.outbox_active_key_id,
+                encryption_keys=runtime.outbox_encryption_keys
+                or {runtime.outbox_active_key_id: runtime.outbox_encryption_secret},
+                actor=principal.display_name,
+                actor_id=principal.actor_id,
+            )
+        except SignupResultRefusal as refusal:
+            return refusal_response(session, principal, refusal)
+        except SignupInviteUnavailableError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=SIGNUP_INVITE_UNAVAILABLE_DETAIL,
+            ) from exc
+        except AccountAlreadyExistsError as exc:
+            raise HTTPException(status_code=409, detail="portal account already exists") from exc
+        except PendingInviteExistsError as exc:
+            raise HTTPException(status_code=409, detail="pending invite already exists") from exc
+        except InvitePreparationKeyUnavailableError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=SIGNUP_INVITE_UNAVAILABLE_DETAIL,
+            ) from exc
+        except InvitePreparationInProgressError as exc:
+            raise HTTPException(status_code=409, detail=INVITE_PREPARATION_IN_PROGRESS) from exc
+        except InvitePreparationConflictError as exc:
+            raise HTTPException(status_code=409, detail="invite preparation conflicts") from exc
+        return invite_payload(invite, invite_token=invite_token)
+
+    @app.post(
+        "/internal/carlos/signup-requests/{request_id}/invite/commit-delivery",
+        response_model=InternalInviteResponse,
+        responses=INTERNAL_CONFLICT_RESPONSES,
+    )
+    def internal_commit_signup_invite(
+        request_id: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
+        payload: InternalSignupInviteCommitRequest,
+        principal: Annotated[
+            JobPrincipal,
+            Depends(deps.job_principal_requiring(JOB_SIGNUP_POLL, PERMISSION_INVITE_MANAGE)),
+        ],
+        session: Annotated[Session, deps.session_dependency],
+    ) -> dict[str, object] | JSONResponse:
+        try:
+            invite = commit_signup_invite(
+                session,
+                request_id,
+                clinic_id=principal.clinic_id,
+                lease_token=payload.lease_token,
+                delivery_operation_id=payload.delivery_operation_id,
+                delivery_reference=payload.delivery_reference,
+                actor=principal.display_name,
+                actor_id=principal.actor_id,
+            )
+        except SignupResultRefusal as refusal:
+            return refusal_response(session, principal, refusal)
+        except InviteNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="invite not found") from exc
+        except InvitePreparationConflictError as exc:
+            raise HTTPException(status_code=409, detail="invite delivery conflicts") from exc
+        return invite_payload(invite)

@@ -1683,6 +1683,10 @@ class PatientPortalSignupRequest(Base):
             "and lease_token_hash is not null)",
             name="ck_pp_signup_requests_result_shape",
         ),
+        CheckConstraint(
+            "prepared_invite_id is null or prepared_invite_id > 0",
+            name="ck_pp_signup_requests_prepared_invite_positive",
+        ),
         # The backlog count, the expiry purge, and the claim all filter on it.
         Index("ix_pp_signup_requests_expires", "expires_at"),
         # CARLOS reports a result by id. A reused id could delete a newer patient's request.
@@ -1707,6 +1711,9 @@ class PatientPortalSignupRequest(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    # The one invite the sign-up job prepared for this request (carlos-portal#16's invite route).
+    # A match can only be reported with this invite.
+    prepared_invite_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     result: Mapped[str | None] = mapped_column(String(16), nullable=True)
     # The invite CARLOS made for a match. Not a foreign key, as the audit trail's invite_id is not:
     # the portal checks the invite exists in this clinic when the result arrives.
