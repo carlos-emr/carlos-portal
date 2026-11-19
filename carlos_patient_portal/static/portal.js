@@ -1,15 +1,12 @@
-// One polite live region for what a button's changed words alone do not announce (Copied, Copy
-// failed, Revealing..., Password could not be revealed). It exists from the start, empty, so the
-// first message is announced; the text is cleared and set again so that the same words twice in a
-// row are announced twice.
-const liveStatus = document.createElement("div");
-liveStatus.className = "sr-only";
-liveStatus.setAttribute("role", "status");
-liveStatus.setAttribute("aria-live", "polite");
-liveStatus.setAttribute("aria-atomic", "true");
-liveStatus.id = "portal-live-status";
-document.body.append(liveStatus);
+// What a button's changed words alone do not announce (Copied, Copy failed, Revealing..., Password
+// could not be revealed) is written to the page's polite live region (_live_status.jinja). It is
+// in the HTML from the start, empty, so the first message is announced; the text is cleared and
+// set again so that the same words twice in a row are announced twice.
 const announce = (message) => {
+  const liveStatus = document.getElementById("portal-live-status");
+  if (!liveStatus) {
+    return;
+  }
   liveStatus.textContent = "";
   window.setTimeout(() => {
     liveStatus.textContent = message;

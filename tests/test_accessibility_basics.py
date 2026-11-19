@@ -195,8 +195,10 @@ def test_a_failed_sign_in_or_code_marks_the_boxes_and_points_them_at_the_error(
 
 def test_what_a_button_changes_by_its_words_alone_is_announced() -> None:
     script = (PACKAGE / "static" / "portal.js").read_text(encoding="utf-8")
-    assert 'liveStatus.setAttribute("role", "status")' in script
-    assert 'liveStatus.setAttribute("aria-live", "polite")' in script
+    region = (TEMPLATES / "_live_status.jinja").read_text(encoding="utf-8")
+    assert 'id="portal-live-status"' in region
+    assert 'role="status"' in region and 'aria-live="polite"' in region
+    assert 'getElementById("portal-live-status")' in script
     # Revealing, reveal failed, copied, copy failed.
     assert script.count("announce(") == 4  # the four uses
     css = STYLES.read_text(encoding="utf-8")
@@ -314,6 +316,11 @@ def _check_skip_link_structure(html: str, label: str) -> None:
         # The top bar (banner) and the language switch are outside main; so is the footer.
         if "patient-topbar" in classes or "page-footer" in classes or "language-switch" in classes:
             assert not in_main, f"{label}: {tag}.{'.'.join(classes)} is inside main"
+    # The live region is in the page from the start, outside main, empty.
+    regions = [e for e in outline.elements if e[1].get("id") == "portal-live-status"]
+    assert len(regions) == 1, label
+    assert regions[0][1].get("role") == "status", label
+    assert not any(t == "main" for t, _ in regions[0][2]), label
     topbars = [e for e in outline.elements if "patient-topbar" in (e[1].get("class") or "").split()]
     assert len(topbars) == 1 and topbars[0][0] == "header", label
     # A <header> is the page's banner only when no section, article, aside, nav or main holds it.

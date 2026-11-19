@@ -1,0 +1,5 @@
+{# One polite live region for what a button's changed words alone do not announce (Copied, Copy
+   failed, Revealing..., Password could not be revealed). It is in the page from the start, empty,
+   so that the first message is announced; static/portal.js writes to it. Outside <main> and
+   outside the dashboard workspace. #}
+<div id="portal-live-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
