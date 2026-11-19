@@ -1249,7 +1249,7 @@ function screenshotPath(name) {
     );
 
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.getByRole('link', { name: 'Account', exact: true }).click();
+    await page.locator('.module-nav').getByRole('link', { name: 'Account', exact: true }).click();
     await page.waitForURL((url) => url.pathname === portalPathname('/portal/account'));
     await page.getByRole('heading', { name: 'Account' }).waitFor();
     await assertAccessiblePage(page, 'account page');
@@ -1343,7 +1343,7 @@ function screenshotPath(name) {
       path: screenshotPath('patient-portal-account-mobile'),
       fullPage: true,
     });
-    await page.getByRole('link', { name: 'Messages', exact: true }).click();
+    await page.locator('.module-nav').getByRole('link', { name: 'Messages', exact: true }).click();
     await page.waitForURL((url) => url.pathname === portalPathname('/portal/messages'));
     await page.getByRole('heading', { name: 'Messages' }).waitFor();
     await assertAccessiblePage(page, 'messages page');
@@ -1465,7 +1465,7 @@ function screenshotPath(name) {
       await page.locator('.message-badge').count() === 0,
       'opened booking prompts should no longer be marked new'
     );
-    await page.getByRole('link', { name: 'Help', exact: true }).click();
+    await page.locator('.module-nav').getByRole('link', { name: 'Help', exact: true }).click();
     await page.waitForURL((url) => url.pathname === portalPathname('/portal/help'));
     await page.getByRole('heading', { name: 'Help' }).waitFor();
     await assertAccessiblePage(page, 'help page');
