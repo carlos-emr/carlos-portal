@@ -765,7 +765,7 @@ one another permission, is a reviewed code change:
 | Job | Shown as | May hold | Routes |
 | --- | --- | --- | --- |
 | `booking-sync` | Clinic booking | `portal.booking_prompt.sync` | the two booking sync endpoints |
-| `signup-poll` | Patient self sign-up | `portal.signup.manage`, `portal.invite.manage` | the two sign-up request endpoints (claim and result); the invite routes still take staff only |
+| `signup-poll` | Patient self sign-up | `portal.signup.manage`, `portal.invite.manage` | the four sign-up request endpoints (claim, result, and the request's own invite: prepare and commit); the staff invite routes still take staff only |
 | `key-publish` | Clinic signing keys | `portal.mycarlos.clinic_keys.publish` | `PUT /internal/carlos/mycarlos/clinic-keys`, only while Send to myCarlos is on |
 
 A job call carries the same Bearer service token and, instead of the staff header, an
@@ -1348,6 +1348,30 @@ is refused on every route.
   and the same `404` `sign-up request not found`. A result is still accepted while self sign-up is
   switched off, so details already leased can be deleted. The reported row stays, without its
   details, until its own expiry, so that a repeat can be answered as one.
+- **The request's own invite.** The sign-up job (claiming `portal.invite.manage`, and nobody else:
+  staff holding that right are refused on these two routes, as is every other job) makes the invite
+  for a request it holds a running lease on, in the two phases the staff invite routes use:
+  - `POST /internal/carlos/signup-requests/{id}/invite/prepare` with `{"lease_token", "demographic_no",
+    "delivery_operation_id"}` returns `201` with the prepared invite and its one-time `invite_token`.
+    **The identity proof is the request's own**: the invite carries the hashes of the email, date of
+    birth and health card number the patient typed, copied from the stored details; the call cannot
+    name or change them (any such field is `422`). The invite is created by `Patient self sign-up`
+    (`job:signup-poll`), so staff can tell it apart in lists and revoke it like any other. The
+    invite's id is recorded on the request. Preparing again with the same `delivery_operation_id`
+    returns the same invite and token; another operation for a request that has one is `409`
+    `sign-up request invite conflicts`. The invite layer's own `409`s apply (`portal account already
+    exists`, `pending invite already exists`, `invite preparation conflicts`), and `503`
+    `invite preparation unavailable` when the stored details cannot be read.
+  - `POST /internal/carlos/signup-requests/{id}/invite/commit-delivery` with `{"lease_token",
+    "delivery_operation_id", "delivery_reference"}` releases that invite once CARLOS has durably
+    queued its email. It names no invite: only the request's own can be committed (`409` `sign-up
+    request invite conflicts` if none was prepared).
+  - Both need the request's lease token, as the result does, and answer the same refusals: one `404`
+    for an unknown id, another clinic's request, a request never leased or a wrong token; `409`
+    `sign-up request lease expired`; `409` `sign-up request already has a result`. Refusals of the
+    lease or request are audited as a `signup.result` failure with the reason.
+  - **A match can only be reported with the invite prepared for the request.** The result route
+    refuses any other invite (`422`), as it refuses an invite that is not live.
 - **Audit.** A claim writes one `signup.claim` event per leased request, and a result one
   `signup.result` event (with the invite id and the result in `reason`); both name the job as the
   system actor (`Patient self sign-up`, `job:signup-poll`) with the call's key id and assertion id,
@@ -1356,7 +1380,9 @@ is refused on every route.
   health card number, date of birth, email or lease token is ever audited or logged.
 - **Backlog and cleanup.** Reported requests no longer count toward the backlog. The expiry purge
   keeps a request whose lease is still running past its TTL, so its result can still be recorded.
-- Migration `0025_signup_claim` follows `0024_avail_device_removed`. It adds the lease and result
+- Migration `0026_signup_prepared_invite` (the invite route) adds `prepared_invite_id` to the signup
+  table; downgrade is refused while a request holds one. Migration `0025_signup_claim` follows
+  `0024_avail_device_removed`. It adds the lease and result
   columns to the signup table and the `signup.claim` and `signup.result` audit event types; the id
   is the next free one at the time of writing and is to be renumbered at merge if another revision
   has taken it. Downgrade is refused while a reported request or an audit event of either new type
