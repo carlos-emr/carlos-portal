@@ -10,9 +10,11 @@
 </head>
 <body>
   {% include "_skip_link.jinja" %}
-  <main class="app-shell" id="main-content" tabindex="-1">
-    <section class="portal-screen" aria-label="{{ notice_heading }}">
+  <div class="app-shell">
+    <div class="portal-screen">
       {% include "_public_header.jinja" %}
+
+      <main id="main-content" tabindex="-1">
       <div class="auth-layout">
         <section class="auth-panel auth-result" aria-labelledby="notice-title">
           <h1 id="notice-title">{{ notice_heading }}</h1>
@@ -27,8 +29,9 @@
         </section>
       </div>
       {% include "_public_modal.jinja" %}
-    </section>
-  </main>
+      </main>
+    </div>
+  </div>
   {% include "_page_footer.jinja" %}
 </body>
 </html>

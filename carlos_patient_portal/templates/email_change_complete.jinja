@@ -10,9 +10,11 @@
 </head>
 <body>
   {% include "_skip_link.jinja" %}
-  <main class="app-shell" id="main-content" tabindex="-1">
-    <section class="portal-screen" aria-label="{{ text.email_change_complete_heading }}">
+  <div class="app-shell">
+    <div class="portal-screen">
       {% include "_public_header.jinja" %}
+
+      <main id="main-content" tabindex="-1">
       <div class="auth-layout">
         <section class="auth-panel" aria-labelledby="email-change-title">
           <h1 id="email-change-title">{{ text.email_change_complete_heading }}</h1>
@@ -39,8 +41,9 @@
         </section>
       </div>
       {% include "_public_modal.jinja" %}
-    </section>
-  </main>
+      </main>
+    </div>
+  </div>
   {% include "_page_footer.jinja" %}
 </body>
 </html>

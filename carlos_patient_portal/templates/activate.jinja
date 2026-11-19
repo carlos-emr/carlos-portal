@@ -11,9 +11,11 @@
 </head>
 <body>
   {% include "_skip_link.jinja" %}
-  <main class="app-shell" id="main-content" tabindex="-1">
-    <section class="portal-screen" aria-label="{{ text.activation_heading }}">
+  <div class="app-shell">
+    <div class="portal-screen">
       {% include "_public_header.jinja" %}
+
+      <main id="main-content" tabindex="-1">
       <div class="auth-layout auth-layout-wide">
         <section class="auth-panel" aria-labelledby="activation-title">
           <h1 id="activation-title">{{ text.activation_heading }}</h1>
@@ -91,8 +93,9 @@
         </section>
       </div>
       {% include "_public_modal.jinja" %}
-    </section>
-  </main>
+      </main>
+    </div>
+  </div>
   {% include "_page_footer.jinja" %}
 </body>
 </html>

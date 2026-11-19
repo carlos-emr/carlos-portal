@@ -1302,3 +1302,34 @@ a.module-tile:focus-visible {
 main[tabindex="-1"]:focus {
   outline: none;
 }
+
+/* Text for screen readers only: the live region that announces what a button's change of words
+   alone would not (Copied, Revealing, a failure). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The dashboard's <main> carries the layout the dashboard section used to: it fills the space
+   under the top bar. */
+.dashboard-screen > main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Touch screens: language buttons are at least 44 by 44 px (WCAG 2.5.5; 2.5.8 asks only 24). */
+@media (pointer: coarse) {
+  .text-tab {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+  }
+}

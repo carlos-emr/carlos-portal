@@ -11,11 +11,13 @@
 </head>
 <body>
   {% include "_skip_link.jinja" %}
-  <main class="app-shell" id="main-content" tabindex="-1">
-    <section class="portal-screen" aria-label="{{ text.sign_in_aria_label }}">
+  <div class="app-shell">
+    <div class="portal-screen">
       {# Was a byte-for-byte copy of the shared partial, which is how the language switch here
          drifted out of step with every other public page. #}
       {% include "_public_header.jinja" %}
+
+      <main id="main-content" tabindex="-1">
 
       <div class="auth-layout">
         <section class="auth-panel" aria-labelledby="signin-title">
@@ -23,7 +25,7 @@
           <form class="form-stack" method="post" action="{{ url_for('login') }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             {% if error_message %}
-              <p class="form-error" role="alert">{{ error_message }}</p>
+              <p class="form-error" role="alert" id="sign-in-error">{{ error_message }}</p>
             {% endif %}
             <label>
               <span>{{ text.username_label }}</span>
@@ -32,6 +34,7 @@
                 name="username"
                 placeholder="{{ text.username_placeholder }}"
                 autocomplete="username"
+                {% if error_message %}aria-invalid="true" aria-describedby="sign-in-error"{% endif %}
                 required
               >
             </label>
@@ -43,6 +46,7 @@
                 name="password"
                 placeholder="{{ text.password_placeholder }}"
                 autocomplete="current-password"
+                {% if error_message %}aria-invalid="true" aria-describedby="sign-in-error"{% endif %}
                 required
                 id="sign-in-password"
               >
@@ -67,8 +71,9 @@
       </div>
 
       {% include "_public_modal.jinja" %}
-    </section>
-  </main>
+      </main>
+    </div>
+  </div>
   {% include "_page_footer.jinja" %}
 </body>
 </html>
