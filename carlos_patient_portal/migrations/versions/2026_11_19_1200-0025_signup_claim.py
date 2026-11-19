@@ -23,7 +23,9 @@ details or a result and the invite id, never both. The row stays until its own `
 identical repeat of the result can be answered as a repeat.
 
 No new table: the grants and the preflight entry for `patient_portal_signup_requests` (0019) already
-cover every column.
+cover every column. The table is altered in place on PostgreSQL (batch mode recreates it only on
+SQLite, where that is how a CHECK or a nullability is changed): a copy, drop and rename there would
+drop the table's GRANTs with it.
 
 The audit event-type CHECK is rewritten from the list 0019 left (the only revision after 0017 that
 rewrites it) with the two new types added. Downgrade is refused while a reported request or an
@@ -85,7 +87,7 @@ _RESULT_SHAPE = "ck_pp_signup_requests_result_shape"
 
 
 def upgrade() -> None:
-    with op.batch_alter_table(_SIGNUP_TABLE, recreate="always") as batch_op:
+    with op.batch_alter_table(_SIGNUP_TABLE) as batch_op:
         batch_op.alter_column(
             "encrypted_payload",
             existing_type=sa.LargeBinary(),
@@ -174,7 +176,7 @@ def downgrade() -> None:
         batch_op.drop_constraint(_EVENT_CHECK, type_="check")
         batch_op.create_check_constraint(_EVENT_CHECK, f"event_type in ({_OLD_EVENT_TYPES})")
 
-    with op.batch_alter_table(_SIGNUP_TABLE, recreate="always") as batch_op:
+    with op.batch_alter_table(_SIGNUP_TABLE) as batch_op:
         batch_op.drop_constraint(_RESULT_SHAPE, type_="check")
         batch_op.drop_constraint(_RESULT_VALUES, type_="check")
         batch_op.drop_constraint(_LEASE_COMPLETE, type_="check")

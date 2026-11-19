@@ -34,6 +34,7 @@ from datetime import date, datetime
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Path, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
 
@@ -52,7 +53,9 @@ from carlos_patient_portal.signup_claims import (
     SignupRequestNotFoundError,
     SignupResultConflictError,
     SignupResultInvalidError,
+    SignupResultRefusal,
     claim_signup_requests,
+    record_signup_refusal,
     record_signup_result,
 )
 from carlos_patient_portal.system_jobs import JOB_SIGNUP_POLL, PERMISSION_SIGNUP_MANAGE
@@ -163,7 +166,7 @@ def register_internal_signup_routes(
             assertion_key_id=principal.key_id,
             assertion_id=principal.assertion_id,
         )
-        if claim.unreadable:
+        if claim.unreadable or claim.without_key:
             runtime.operational_metrics.record_failure("signup_request_unreadable")
         return {
             "items": [
@@ -193,7 +196,26 @@ def register_internal_signup_routes(
             Depends(deps.job_principal_requiring(JOB_SIGNUP_POLL, PERMISSION_SIGNUP_MANAGE)),
         ],
         session: Annotated[Session, deps.session_dependency],
-    ) -> dict[str, object]:
+    ) -> dict[str, object] | JSONResponse:
+        def refused(refusal: SignupResultRefusal, status_code: int, detail: str) -> JSONResponse:
+            """Audit the refusal, then answer it.
+
+            A refusal is raised before the result writes anything, so the session holds nothing to
+            roll back; the audit row is written into it and committed with it. The error is
+            returned rather than raised for exactly that reason: raising would roll the audit row
+            back. The body is the one `HTTPException` would send.
+            """
+            record_signup_refusal(
+                session,
+                refusal,
+                clinic_id=principal.clinic_id,
+                actor=principal.display_name,
+                actor_id=principal.actor_id,
+                assertion_key_id=principal.key_id,
+                assertion_id=principal.assertion_id,
+            )
+            return JSONResponse(status_code=status_code, content={"detail": detail})
+
         try:
             outcome = record_signup_result(
                 session,
@@ -211,16 +233,15 @@ def register_internal_signup_routes(
                 assertion_id=principal.assertion_id,
             )
         except SignupRequestNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=SIGNUP_REQUEST_NOT_FOUND_DETAIL) from exc
+            return refused(exc, 404, SIGNUP_REQUEST_NOT_FOUND_DETAIL)
         except SignupLeaseExpiredError as exc:
-            raise HTTPException(status_code=409, detail=SIGNUP_LEASE_EXPIRED_DETAIL) from exc
+            return refused(exc, 409, SIGNUP_LEASE_EXPIRED_DETAIL)
         except SignupResultConflictError as exc:
-            raise HTTPException(status_code=409, detail=SIGNUP_RESULT_CONFLICT_DETAIL) from exc
+            return refused(exc, 409, SIGNUP_RESULT_CONFLICT_DETAIL)
         except SignupResultInvalidError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=SIGNUP_RESULT_INVALID_DETAIL,
-            ) from exc
+            return refused(
+                exc, status.HTTP_422_UNPROCESSABLE_CONTENT, SIGNUP_RESULT_INVALID_DETAIL
+            )
         return {
             "request_id": outcome.request_id,
             "result": outcome.result,

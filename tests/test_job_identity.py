@@ -171,6 +171,7 @@ def test_registered_jobs_have_well_formed_names_display_names_and_permissions() 
     }
     assert JOB_ONLY_PERMISSIONS == {
         SYNC,
+        SIGNUP,
         "portal.mycarlos.clinic_keys.publish",
         "portal.mycarlos.delivery.upload",
         "portal.mycarlos.delivery.events.read",

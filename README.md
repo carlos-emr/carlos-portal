@@ -1320,7 +1320,8 @@ are indistinguishable to the caller.
 
 CARLOS polls; the portal never calls CARLOS. Both routes take only the `signup-poll` job claiming
 `portal.signup.manage`, scoped to the portal's clinic. Staff are refused whatever they hold, as is
-every other job.
+every other job, and `portal.signup.manage` is a job-only permission: a staff assertion carrying it
+is refused on every route.
 
 - `POST /internal/carlos/signup-requests/claim` with `{"limit": 1 to 50}` (default 10) leases up to
   that many pending requests, oldest first, and returns `items` of `request_id`, `lease_token`,

@@ -44,7 +44,7 @@ from hashlib import sha256
 from hmac import compare_digest
 from secrets import token_urlsafe
 
-from sqlalchemy import ColumnElement, and_, or_, select
+from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from carlos_patient_portal.audit import record_audit_event
@@ -55,6 +55,8 @@ from carlos_patient_portal.models import (
     AUDIT_EVENT_SIGNUP_RESULT,
     AUDIT_OUTCOME_FAILURE,
     AUDIT_OUTCOME_SUCCESS,
+    INVITE_STATUS_ACCEPTED,
+    INVITE_STATUS_PENDING,
     SIGNUP_RESULT_MATCHED,
     PatientPortalInvite,
     PatientPortalSignupRequest,
@@ -75,23 +77,50 @@ logger = logging.getLogger(__name__)
 MAX_SIGNUP_CLAIM_BATCH = 50
 SIGNUP_CLAIM_REASON_UNREADABLE = "payload_unreadable"
 LEASE_TOKEN_BYTES = 32
-NO_INVITE_FOR_REQUEST = "sign-up result names no invite made for the request"
 
 
-class SignupRequestNotFoundError(Exception):
+class SignupResultRefusal(Exception):
+    """A result the portal refuses. `reason` and `health_card_hash` are for the audit trail only:
+    the caller is told one fixed text per class, never which reason or whose request."""
+
+    reason = "refused"
+
+    def __init__(self, health_card_hash: str | None = None) -> None:
+        super().__init__()
+        self.health_card_hash = health_card_hash
+
+
+class SignupRequestNotFoundError(SignupResultRefusal):
     """No such request for this caller: unknown, another clinic's, or a lease token not its own."""
 
+    reason = "request_not_found"
 
-class SignupLeaseExpiredError(Exception):
+
+class SignupLeaseTokenMismatchError(SignupRequestNotFoundError):
+    """A request of this clinic, presented with a lease token that is not its own.
+
+    The caller gets the same answer as for an unknown id; the audit trail tells them apart.
+    """
+
+    reason = "lease_token_mismatch"
+
+
+class SignupLeaseExpiredError(SignupResultRefusal):
     """The request's lease ran out before the result arrived; it may be claimed again."""
 
+    reason = "lease_expired"
 
-class SignupResultConflictError(Exception):
+
+class SignupResultConflictError(SignupResultRefusal):
     """The request already has a different result."""
 
+    reason = "result_conflict"
 
-class SignupResultInvalidError(ValueError):
-    """The result cannot be recorded as sent: a match with no invite the clinic has."""
+
+class SignupResultInvalidError(SignupResultRefusal, ValueError):
+    """The result cannot be recorded as sent: a match with no invite made for this request."""
+
+    reason = "invite_not_for_request"
 
 
 @dataclass(frozen=True)
@@ -110,7 +139,10 @@ class SignupClaim:
     """The leased requests, and how many were skipped because their details could not be read."""
 
     requests: tuple[ClaimedSignupRequest, ...]
+    # Quarantined by this claim: a key the keyring has, a payload that does not authenticate.
     unreadable: int
+    # Pending requests left out because their key is not in the keyring (they wait for it).
+    without_key: int = 0
 
 
 @dataclass(frozen=True)
@@ -159,10 +191,17 @@ def claim_signup_requests(  # NOSONAR
 ) -> SignupClaim:
     """Lease up to `limit` pending requests of `clinic_id` and return them with their details.
 
-    The caller's transaction commits the leases and the audit rows together. A request whose
-    details cannot be read (a key left the keyring, or the row does not authenticate) is not
-    leased and not returned; it is audited as a failed claim with the health-card hash, and
-    counted for the caller to log. An empty claim writes nothing.
+    The caller's transaction commits the leases and the audit rows together. Two kinds of request
+    cannot be read, and neither may starve the readable ones behind it:
+
+    - one stored under a key that is not in the keyring is left out of the claim by its key id, so
+      it never takes a place in a batch, is never audited again and again, and becomes claimable the
+      moment the key is back; it is only counted (`without_key`) for the caller to log;
+    - one stored under a key the keyring has, whose payload does not authenticate, can never heal.
+      It is quarantined: leased to a token nobody is given until its own expiry (and then purged
+      with the rest), and audited once as a failed claim with the health-card hash.
+
+    An empty claim writes nothing.
     """
     if not 1 <= limit <= MAX_SIGNUP_CLAIM_BATCH:
         raise ValueError("claim limit out of range")
@@ -173,11 +212,22 @@ def claim_signup_requests(  # NOSONAR
             .where(
                 PatientPortalSignupRequest.clinic_id == clinic_id,
                 claimable_predicate(current_time),
+                PatientPortalSignupRequest.encryption_key_id.in_(list(encryption_keys)),
             )
             .order_by(PatientPortalSignupRequest.id)
             .limit(limit)
             .with_for_update(skip_locked=True)
         )
+    )
+    without_key = int(
+        session.scalar(
+            select(func.count(PatientPortalSignupRequest.id)).where(
+                PatientPortalSignupRequest.clinic_id == clinic_id,
+                claimable_predicate(current_time),
+                PatientPortalSignupRequest.encryption_key_id.not_in(list(encryption_keys)),
+            )
+        )
+        or 0
     )
     claimed: list[ClaimedSignupRequest] = []
     unreadable = 0
@@ -187,6 +237,10 @@ def claim_signup_requests(  # NOSONAR
             details = decrypt_signup_request(signup_request, encryption_keys=encryption_keys)
         except (SignupRequestKeyUnavailableError, SignupRequestPayloadError):
             unreadable += 1
+            # Quarantined: a lease no caller holds the token of, until the request expires.
+            signup_request.lease_token_hash = hash_lease_token(token_urlsafe(LEASE_TOKEN_BYTES))
+            signup_request.lease_expires_at = signup_request.expires_at
+            session.flush()
             record_audit_event(
                 session,
                 event_type=AUDIT_EVENT_SIGNUP_CLAIM,
@@ -228,9 +282,27 @@ def claim_signup_requests(  # NOSONAR
                 details=details,
             )
         )
-    if unreadable:
-        logger.warning("Self sign-up claim skipped %d request(s) it could not read", unreadable)
-    return SignupClaim(requests=tuple(claimed), unreadable=unreadable)
+    if unreadable or without_key:
+        logger.warning(
+            "Self sign-up claim: %d request(s) quarantined as unreadable, %d held back for a "
+            "key that is not in the keyring",
+            unreadable,
+            without_key,
+        )
+    return SignupClaim(requests=tuple(claimed), unreadable=unreadable, without_key=without_key)
+
+
+def _invite_is_live(invite: PatientPortalInvite, now: datetime) -> bool:
+    """Whether an invite is one that was sent for a request and can still stand for its answer.
+
+    `pending` (sent, not yet used) while it has not expired, and `accepted` (the patient activated
+    before CARLOS reported). Not `prepared` (staged, never committed or delivered), nor `revoked`
+    or `superseded` (replaced by a newer invite): the patient would be told to wait for an email
+    whose link cannot be used.
+    """
+    if invite.status == INVITE_STATUS_ACCEPTED:
+        return True
+    return invite.status == INVITE_STATUS_PENDING and _as_utc(invite.expires_at) > now
 
 
 def _require_invite_for_request(
@@ -241,12 +313,14 @@ def _require_invite_for_request(
     invite_id: int | None,
     identity_proof_secret: str,
     encryption_keys: Mapping[str, str],
+    now: datetime,
 ) -> None:
     """Raise SignupResultInvalidError unless the invite was made for this request's details.
 
-    One refusal for every reason (no such invite, another clinic's, older than the request, other
-    details, details that cannot be read), so the answer says nothing about which.
+    One refusal for every reason (no such invite, another clinic's, not live, older than the
+    request, other details, details that cannot be read), so the answer says nothing about which.
     """
+    refusal_hash = signup_request.health_card_hash
     invite = session.scalar(
         select(PatientPortalInvite).where(
             PatientPortalInvite.id == invite_id,
@@ -254,8 +328,12 @@ def _require_invite_for_request(
         )
     )
     try:
-        if invite is None or _as_utc(invite.created_at) < _as_utc(signup_request.created_at):
-            raise SignupResultInvalidError(NO_INVITE_FOR_REQUEST)
+        if (
+            invite is None
+            or not _invite_is_live(invite, now)
+            or _as_utc(invite.created_at) < _as_utc(signup_request.created_at)
+        ):
+            raise SignupResultInvalidError(refusal_hash)
         details = decrypt_signup_request(signup_request, encryption_keys=encryption_keys)
         proof = IdentityProof(
             email=details.email,
@@ -263,7 +341,7 @@ def _require_invite_for_request(
             health_card_number=details.health_card_number,
         )
     except (SignupRequestKeyUnavailableError, SignupRequestPayloadError) as exc:
-        raise SignupResultInvalidError(NO_INVITE_FOR_REQUEST) from exc
+        raise SignupResultInvalidError(refusal_hash) from exc
     if not verify_identity_proof(
         proof,
         identity_proof_secret,
@@ -272,7 +350,7 @@ def _require_invite_for_request(
         date_of_birth_hash=invite.proof_date_of_birth_hash,
         health_card_hash=invite.proof_health_card_hash,
     ):
-        raise SignupResultInvalidError(NO_INVITE_FOR_REQUEST)
+        raise SignupResultInvalidError(refusal_hash)
 
 
 # Keyword-only so each security-relevant value is named at the call site.
@@ -299,13 +377,14 @@ def record_signup_result(  # NOSONAR
     different result than the one already recorded; SignupLeaseExpiredError when the lease ran out
     first; SignupResultInvalidError for a match whose invite is not one made for this request.
 
-    A match must name an invite that (1) is this clinic's, (2) was created after the request was
-    stored, and (3) carries the identity proof of exactly what the patient typed: the same email,
-    date of birth and health card number, checked with the activation's own comparison
-    (`verify_identity_proof`). The invite model has no link to a request, so (3) is the link:
-    CARLOS matched those details against the chart, and the invite it made for the match holds
-    their hashes. What is not checked is who created the invite: under the invite routes as they
-    are, that is the system actor's staff assertion, which this module cannot tell from a person's.
+    A match must name an invite that (1) is this clinic's, (2) is live: `pending` and not expired,
+    or `accepted`, (3) was created after the request was stored, and (4) carries the identity proof
+    of exactly what the patient typed: the same email, date of birth and health card number,
+    checked with the activation's own comparison (`verify_identity_proof`). The invite model has
+    no link to a request, so (4) is the link: CARLOS matched those details against the chart, and
+    the invite it made for the match holds their hashes. What is not checked is who created the
+    invite: under the invite routes as they are, that is the system actor's staff assertion, which
+    this module cannot tell from a person's.
     """
     current_time = now or utc_now()
     signup_request = session.scalar(
@@ -319,8 +398,10 @@ def record_signup_result(  # NOSONAR
     stored_hash = signup_request.lease_token_hash if signup_request is not None else None
     # Compared even when there is no row or lease, so the work does not depend on which it was.
     token_matches = compare_digest(hash_lease_token(lease_token), stored_hash or "0" * 64)
-    if signup_request is None or stored_hash is None or not token_matches:
+    if signup_request is None:
         raise SignupRequestNotFoundError()
+    if stored_hash is None or not token_matches:
+        raise SignupLeaseTokenMismatchError(signup_request.health_card_hash)
 
     if signup_request.result is not None:
         if signup_request.result == result and signup_request.invite_id == invite_id:
@@ -330,11 +411,11 @@ def record_signup_result(  # NOSONAR
                 invite_id=invite_id,
                 recorded=False,
             )
-        raise SignupResultConflictError()
+        raise SignupResultConflictError(signup_request.health_card_hash)
 
     lease_expires_at = signup_request.lease_expires_at
     if lease_expires_at is None or _as_utc(lease_expires_at) <= current_time:
-        raise SignupLeaseExpiredError()
+        raise SignupLeaseExpiredError(signup_request.health_card_hash)
 
     if result == SIGNUP_RESULT_MATCHED:
         _require_invite_for_request(
@@ -344,6 +425,7 @@ def record_signup_result(  # NOSONAR
             invite_id=invite_id,
             identity_proof_secret=identity_proof_secret,
             encryption_keys=encryption_keys,
+            now=current_time,
         )
 
     signup_request.encrypted_payload = None
@@ -373,3 +455,37 @@ def record_signup_result(  # NOSONAR
         invite_id=invite_id,
         recorded=True,
     )
+
+
+def record_signup_refusal(
+    session: Session,
+    refusal: SignupResultRefusal,
+    *,
+    clinic_id: str,
+    actor: str,
+    actor_id: str,
+    assertion_key_id: str | None,
+    assertion_id: str | None,
+) -> None:
+    """Audit a refused result, from a transaction of its own.
+
+    The result route's transaction is rolled back by the refusal, so this is written by a separate
+    session that commits. The row carries the reason (which the caller is never told), the job as
+    the actor, the call's key id and assertion id, and, when the request exists, its keyed
+    health-card hash. Never the lease token, the details, or the id the caller sent.
+    """
+    record_audit_event(
+        session,
+        event_type=AUDIT_EVENT_SIGNUP_RESULT,
+        outcome=AUDIT_OUTCOME_FAILURE,
+        actor_type=AUDIT_ACTOR_TYPE_SYSTEM,
+        actor=actor,
+        actor_id=actor_id,
+        clinic_id=clinic_id,
+        resource_type=SIGNUP_HEALTH_CARD_RESOURCE_TYPE if refusal.health_card_hash else None,
+        resource_id=refusal.health_card_hash,
+        reason=refusal.reason,
+        assertion_key_id=assertion_key_id,
+        assertion_id=assertion_id,
+    )
+

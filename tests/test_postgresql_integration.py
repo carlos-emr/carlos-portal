@@ -7,8 +7,9 @@ from threading import Barrier, Event, Lock
 from uuid import uuid4
 
 import pytest
+from alembic import command
 from fastapi.testclient import TestClient
-from sqlalchemy import event, func, inspect, select, text
+from sqlalchemy import create_engine, event, func, inspect, select, text
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
@@ -103,7 +104,11 @@ from carlos_patient_portal.staff_identity import (
     consume_staff_assertion,
 )
 from carlos_patient_portal.token_keys import PortalTokenKeys
-from tests.support import TEST_STAFF_ASSERTION_PUBLIC_KEY, carlos_staff_headers
+from tests.support import (
+    TEST_STAFF_ASSERTION_PUBLIC_KEY,
+    alembic_config_for_tests,
+    carlos_staff_headers,
+)
 
 POSTGRES_URL = os.getenv("PORTAL_TEST_POSTGRES_URL")
 INTERNAL_TOKEN = "i" * 32
@@ -2260,4 +2265,82 @@ def test_postgresql_signup_results_race_to_one_outcome() -> None:
             assert all(row.result is not None and row.encrypted_payload is None for row in rows)
     finally:
         engine.dispose()
+
+
+def test_postgresql_signup_claim_migration_alters_in_place_and_keeps_the_grants() -> None:
+    """0025 must alter the signup table where it is, not copy, drop and rename it.
+
+    A copy and rename (what Alembic's batch mode does on SQLite) would drop the table with its
+    GRANTs, and the application role would lose its access on upgrade. The table keeps its oid, the
+    role keeps its privileges both ways, and the CHECKs are there after the upgrade and gone after
+    the downgrade.
+    """
+    assert POSTGRES_URL is not None
+    schema = "sc25_" + uuid4().hex
+    role = "portal_test_sc25_" + uuid4().hex[:10]
+    bootstrap = create_engine(POSTGRES_URL)
+    with bootstrap.begin() as connection:
+        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+        connection.execute(text(f'CREATE ROLE "{role}" NOLOGIN'))
+    engine = create_engine(
+        POSTGRES_URL, connect_args={"options": f"-csearch_path={schema},pg_catalog"}
+    )
+    table = "patient_portal_signup_requests"
+    new_checks = {
+        "ck_pp_signup_requests_lease_token_hash_length",
+        "ck_pp_signup_requests_lease_complete",
+        "ck_pp_signup_requests_result_values",
+        "ck_pp_signup_requests_result_shape",
+    }
+
+    def table_state(connection) -> tuple[int, set[str], dict[str, bool]]:
+        oid = connection.scalar(text(f"select '{schema}.{table}'::regclass::oid"))
+        checks = set(
+            connection.scalars(
+                text("select conname from pg_constraint where conrelid = :oid and contype = 'c'"),
+                {"oid": oid},
+            )
+        )
+        privileges = {
+            privilege: bool(
+                connection.scalar(
+                    text("select has_table_privilege(:role, :table, :privilege)"),
+                    {"role": role, "table": f"{schema}.{table}", "privilege": privilege},
+                )
+            )
+            for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE")
+        }
+        return int(oid), checks, privileges
+
+    try:
+        with engine.begin() as connection:
+            config = alembic_config_for_tests()
+            config.attributes["connection"] = connection
+            command.upgrade(config, "0024_avail_device_removed")
+            connection.execute(text(f'GRANT USAGE ON SCHEMA "{schema}" TO "{role}"'))
+            connection.execute(
+                text(f'GRANT SELECT, INSERT, UPDATE, DELETE ON "{schema}"."{table}" TO "{role}"')
+            )
+            oid_before, checks_before, privileges_before = table_state(connection)
+            assert all(privileges_before.values())
+            assert not new_checks & checks_before
+
+            command.upgrade(config, "0025_signup_claim")
+            oid_up, checks_up, privileges_up = table_state(connection)
+            assert oid_up == oid_before, "the table was recreated, not altered in place"
+            assert privileges_up == privileges_before
+            assert new_checks <= checks_up
+
+            command.downgrade(config, "0024_avail_device_removed")
+            oid_down, checks_down, privileges_down = table_state(connection)
+            assert oid_down == oid_before, "the downgrade recreated the table"
+            assert privileges_down == privileges_before
+            assert not new_checks & checks_down
+    finally:
+        engine.dispose()
+        with bootstrap.begin() as connection:
+            # Schemas are kept for review, as the other PostgreSQL migration tests keep theirs.
+            connection.execute(text(f'DROP OWNED BY "{role}"'))
+            connection.execute(text(f'DROP ROLE IF EXISTS "{role}"'))
+        bootstrap.dispose()
 

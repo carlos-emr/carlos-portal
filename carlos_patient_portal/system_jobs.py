@@ -86,8 +86,9 @@ SYSTEM_JOBS: Mapping[str, SystemJob] = MappingProxyType(
             permissions=frozenset({PERMISSION_BOOKING_PROMPT_SYNC}),
         ),
         # CARLOS's self sign-up poller. The two sign-up routes (carlos-portal#16) accept it claiming
-        # `portal.signup.manage`. The invite routes still take staff only: how this job's invites
-        # name the sign-up request they answer is not decided yet (see the pull request).
+        # `portal.signup.manage`, which only a job may hold. The existing invite routes still take
+        # staff only; the job's own invite route is a follow-up that ties each invite to a request
+        # the job has claimed.
         JOB_SIGNUP_POLL: SystemJob(
             name=JOB_SIGNUP_POLL,
             display_name="Patient self sign-up",
@@ -124,6 +125,7 @@ SYSTEM_JOBS: Mapping[str, SystemJob] = MappingProxyType(
 JOB_ONLY_PERMISSIONS = APPROVAL_PERMISSIONS | frozenset(
     {
         PERMISSION_BOOKING_PROMPT_SYNC,
+        PERMISSION_SIGNUP_MANAGE,
         PERMISSION_CLINIC_KEYS_PUBLISH,
         PERMISSION_DELIVERY_UPLOAD,
         PERMISSION_DELIVERY_EVENTS_READ,

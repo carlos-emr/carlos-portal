@@ -31,6 +31,7 @@ from carlos_patient_portal.models import (
     AUDIT_EVENT_SIGNUP_CLAIM,
     AUDIT_EVENT_SIGNUP_RESULT,
     AUDIT_EVENT_STAFF_ACTION,
+    PatientPortalAccount,
     PatientPortalAuditEvent,
     PatientPortalSignupRequest,
     utc_now,
@@ -136,6 +137,27 @@ def audit_rows(app, *event_types: str) -> list[PatientPortalAuditEvent]:
         return list(session.scalars(statement))
 
 
+def recorded_results(app) -> list[PatientPortalAuditEvent]:
+    """The `signup.result` rows of results that were recorded (refusals are audited as failures)."""
+    return [row for row in audit_rows(app, AUDIT_EVENT_SIGNUP_RESULT) if row.outcome == "success"]
+
+
+def make_account(app) -> int:
+    """A portal account for an `accepted` invite to point at."""
+    with app.state.session_factory() as session, session.begin():
+        account = PatientPortalAccount(
+            clinic_id=CLINIC,
+            demographic_no=2999,
+            username="fake.patient",
+            email=FAKE_EMAIL,
+            password_hash="x" * 60,
+            status="active",
+        )
+        session.add(account)
+        session.flush()
+        return account.id
+
+
 def update_row(app, request_id: int, **values: object) -> None:
     with app.state.session_factory() as session, session.begin():
         row = session.get(PatientPortalSignupRequest, request_id)
@@ -154,14 +176,20 @@ def typed_identity(**overrides: object) -> IdentityProof:
     return IdentityProof(**values)
 
 
+_next_demographic_no = iter(range(2000, 3000))
+
+
 def make_invite(
     app, *, clinic_id: str = CLINIC, identity: IdentityProof | None = None, **columns: object
 ) -> int:
-    """An invite as CARLOS makes it for a match: the chart's identity, hashed as an invite does."""
+    """An invite as CARLOS makes it for a match: the chart's identity, hashed as an invite does.
+
+    Each invite is for a patient of its own, so creating one never supersedes another.
+    """
     with app.state.session_factory() as session, session.begin():
         invite, _ = create_service_invite(
             session,
-            1234,
+            next(_next_demographic_no),
             clinic_id=clinic_id,
             identity_proof=identity or typed_identity(),
         )
@@ -306,20 +334,65 @@ def test_the_claim_is_closed_while_self_sign_up_is_off() -> None:
     assert response.json() == {"detail": "not found"}
 
 
-def test_a_request_that_cannot_be_read_is_skipped_and_audited_without_its_details() -> None:
+def clone_requests(app, source_id: int, count: int, **overrides: object) -> None:
+    """`count` more rows like `source_id`, for the head of the queue (ids after the source's)."""
+    with app.state.session_factory() as session, session.begin():
+        source = session.get(PatientPortalSignupRequest, source_id)
+        values = {
+            column.name: getattr(source, column.name)
+            for column in PatientPortalSignupRequest.__table__.columns
+            if column.name != "id"
+        }
+        for _ in range(count):
+            session.add(PatientPortalSignupRequest(**{**values, **overrides}))
+
+
+def test_a_request_under_a_key_the_keyring_lacks_waits_for_it_and_blocks_nothing() -> None:
     app = signup_app()
-    store_requests(app, 2)
+    store_requests(app, 1)
     update_row(app, 1, encryption_key_id="retired")
+    # More of them than one batch can hold, ahead of a readable request.
+    clone_requests(app, 1, 54)
+    store_requests(app, 1, first_card=9000000000)
     client = client_at(app, "198.51.100.1")
 
-    items = claimed(claim(client))
+    first = claimed(claim(client, 10))
+    second = claimed(claim(client, 10))
 
-    assert [item["request_id"] for item in items] == [2]
-    assert stored_rows(app)[0].lease_token_hash is None
+    assert [item["request_id"] for item in first] == [56]
+    assert second == []
+    rows = stored_rows(app)
+    # Nothing was leased or quarantined, and no audit row was written for any of them, however
+    # often the poll runs: they only wait for the key, and are claimable the moment it is back.
+    assert all(row.lease_token_hash is None for row in rows[:55])
+    failed = [row for row in audit_rows(app, AUDIT_EVENT_SIGNUP_CLAIM) if row.outcome == "failure"]
+    assert failed == []
+    with app.state.session_factory() as session:
+        # The leased one still waits for its result, so every row still counts.
+        assert summarize_signup_backlog(session).pending == 56
+
+
+def test_a_request_whose_payload_does_not_authenticate_is_quarantined_and_audited_once() -> None:
+    app = signup_app()
+    store_requests(app, 2)
+    update_row(app, 1, encrypted_payload=b"x" * 64)
+    client = client_at(app, "198.51.100.1")
+
+    first = claimed(claim(client))
+    second = claimed(claim(client))
+
+    assert [item["request_id"] for item in first] == [2]
+    assert second == []
+    quarantined = stored_rows(app)[0]
+    # A lease no caller holds the token of, until the request expires: never claimed again.
+    assert quarantined.lease_token_hash is not None
+    assert quarantined.lease_expires_at == quarantined.expires_at
     failed = [row for row in audit_rows(app, AUDIT_EVENT_SIGNUP_CLAIM) if row.outcome == "failure"]
     assert [(row.reason, row.resource_type) for row in failed] == [
         ("payload_unreadable", SIGNUP_HEALTH_CARD_RESOURCE_TYPE)
     ]
+    # No token can report a result for it.
+    assert report(client, 1, "A" * 43, "no_match").status_code == 404
 
 
 # --------------------------------------------------------------------------------------------
@@ -359,6 +432,26 @@ def test_only_the_signup_job_claiming_the_signup_permission_is_accepted() -> Non
     assert [row.event_type for row in audit_rows(app, AUDIT_EVENT_SIGNUP_CLAIM)] == []
     # The refusals are on the audit trail as the job's refusals, not as claims.
     assert any(row.event_type == AUDIT_EVENT_JOB_AUTH_REFUSED for row in audit_rows(app))
+
+
+def test_a_staff_assertion_carrying_the_signup_permission_is_refused_on_every_route() -> None:
+    """`portal.signup.manage` is a job's right: it never rides on a person's login, even beside a
+    right a staff route does take (carlos-portal#16)."""
+    app = signup_app()
+    client = client_at(app, "198.51.100.1")
+    path = "/internal/carlos/patients/1234/invites"
+    headers = carlos_staff_headers(
+        PERMISSION_INVITE_MANAGE, PERMISSION_SIGNUP_MANAGE, clinic_id=CLINIC
+    )
+
+    refused = client.get(path, headers=headers)
+    allowed_without = client.get(
+        path, headers=carlos_staff_headers(PERMISSION_INVITE_MANAGE, clinic_id=CLINIC)
+    )
+
+    assert refused.status_code == 403
+    assert refused.json() == {"detail": "permission denied"}
+    assert allowed_without.status_code != 403
 
 
 def test_a_call_without_a_job_assertion_or_with_the_wrong_token_is_one_plain_404() -> None:
@@ -475,7 +568,7 @@ def test_a_different_result_for_a_reported_request_is_a_conflict() -> None:
         assert attempt.json() == {"detail": "sign-up request already has a different result"}
     row = stored_rows(app)[0]
     assert (row.result, row.invite_id) == ("matched", invite_id)
-    assert len(audit_rows(app, AUDIT_EVENT_SIGNUP_RESULT)) == 1
+    assert len(recorded_results(app)) == 1
 
 
 def test_a_result_after_the_lease_ran_out_is_refused_and_the_details_stay() -> None:
@@ -492,7 +585,7 @@ def test_a_result_after_the_lease_ran_out_is_refused_and_the_details_stay() -> N
     row = stored_rows(app)[0]
     assert row.result is None
     assert row.encrypted_payload is not None
-    assert audit_rows(app, AUDIT_EVENT_SIGNUP_RESULT) == []
+    assert recorded_results(app) == []
 
 
 def test_unknown_ids_wrong_tokens_and_other_clinics_all_answer_alike() -> None:
@@ -547,10 +640,108 @@ def test_a_match_must_name_an_invite_made_for_this_request() -> None:
     row = stored_rows(app)[0]
     assert row.result is None
     assert row.encrypted_payload is not None
-    assert audit_rows(app, AUDIT_EVENT_SIGNUP_RESULT) == []
+    assert recorded_results(app) == []
     # The invite made for these details (a version code typed or left off alike) is accepted.
     good = make_invite(app, identity=typed_identity(health_card_number="9876543210"))
     assert report(client, 1, token, "matched", good).status_code == 200
+
+
+PREPARED_COLUMNS = {
+    "delivery_operation_id": "op-0001",
+    "encrypted_invite_token": b"opaque",
+    "invite_token_nonce": b"n" * 12,
+    "invite_token_key_id": "primary",
+}
+
+
+@pytest.mark.parametrize(
+    ("status", "columns", "accepted"),
+    [
+        ("pending", {}, True),
+        ("accepted", {"accepted_at": "now", "accepted_account_id": "account"}, True),
+        ("pending", {"created_at": "ago", "expires_at": "past"}, False),
+        ("prepared", PREPARED_COLUMNS, False),
+        ("revoked", {"revoked_at": "now", "revoked_by": "FAKE Staff"}, False),
+        ("superseded", {}, False),
+    ],
+)
+def test_a_match_must_name_an_invite_that_can_still_stand_for_the_answer(
+    status: str, columns: dict[str, object], accepted: bool
+) -> None:
+    """`pending` (unexpired) and `accepted` are live; `prepared` was never delivered, `revoked` and
+    `superseded` were replaced: the patient would wait for an email whose link cannot be used."""
+    app = signup_app()
+    store_requests(app, 1)
+    # A request stored long enough ago for an invite to have been made, and to have expired since.
+    update_row(app, 1, created_at=utc_now() - timedelta(days=3))
+    client = client_at(app, "198.51.100.1")
+    token = claimed(claim(client))[0]["lease_token"]
+    moments = {
+        "now": utc_now(),
+        "ago": utc_now() - timedelta(days=2),
+        "past": utc_now() - timedelta(hours=1),
+    }
+    moments["account"] = make_account(app) if status == "accepted" else 0
+    resolved = {
+        name: moments.get(value, value) if isinstance(value, str) else value
+        for name, value in columns.items()
+    }
+    invite_id = make_invite(app, status=status, **resolved)
+
+    response = report(client, 1, token, "matched", invite_id)
+
+    assert response.status_code == (200 if accepted else 422), (status, columns)
+    assert (stored_rows(app)[0].result == "matched") is accepted
+
+
+def test_every_refused_result_leaves_an_audit_row_the_caller_never_sees() -> None:
+    app = signup_app()
+    store_requests(app, 3)
+    client = client_at(app, "198.51.100.1")
+    items = claimed(claim(client, 3))
+    tokens = {item["request_id"]: item["lease_token"] for item in items}
+    update_row(app, 3, lease_expires_at=utc_now() - timedelta(seconds=1))
+    done_invite = make_invite(app)
+    assert report(client, 1, tokens[1], "matched", done_invite).status_code == 200
+    stranger = make_invite(app, identity=typed_identity(email="someone.else@example.test"))
+    before = len(audit_rows(app, AUDIT_EVENT_SIGNUP_RESULT))
+
+    attempts = {
+        "request_not_found": report(client, 999, tokens[2], "no_match"),
+        "lease_token_mismatch": report(client, 2, "A" * 43, "no_match"),
+        "lease_expired": report(client, 3, tokens[3], "no_match"),
+        "result_conflict": report(client, 1, tokens[1], "no_match"),
+        "invite_not_for_request": report(client, 2, tokens[2], "matched", stranger),
+    }
+
+    for response in attempts.values():
+        assert_known_error(response)
+    refusals = audit_rows(app, AUDIT_EVENT_SIGNUP_RESULT)[before:]
+    assert [row.reason for row in refusals] == list(attempts)
+    assert {row.outcome for row in refusals} == {"failure"}
+    assert {(row.actor_type, row.actor_id) for row in refusals} == {("system", "job:signup-poll")}
+    assert all(row.assertion_key_id and row.assertion_id for row in refusals)
+    hashes = {
+        row.reason: (row.resource_type, row.resource_id)
+        for row in refusals
+    }
+    # An unknown id names no request; the others carry only the keyed health-card hash.
+    assert hashes["request_not_found"] == (None, None)
+    for reason in list(attempts)[1:]:
+        resource_type, resource_id = hashes[reason]
+        assert resource_type == SIGNUP_HEALTH_CARD_RESOURCE_TYPE
+        assert resource_id is not None and len(resource_id) == 64
+    everything = json.dumps(
+        [
+            {column.name: str(getattr(row, column.name)) for column in row.__table__.columns}
+            for row in refusals
+        ]
+    )
+    for secret in (FAKE_EMAIL, FAKE_CARD_NORMALIZED, FAKE_DOB, *tokens.values(), "A" * 43):
+        assert secret not in everything
+    # The refusals changed nothing about the requests they were about.
+    rows = stored_rows(app)
+    assert [row.result for row in rows] == ["matched", None, None]
 
 
 @pytest.mark.parametrize(
