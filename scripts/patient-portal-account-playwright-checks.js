@@ -789,7 +789,8 @@ async function checkEmailChangeApplied(page, context) {
 
 // ---- Step 3: linked devices, removal confirmation, Keep and Remove ----
 async function checkLinkedDevices(page) {
-  await openModule(page, 'account', '/portal/account');
+  // The linked devices are on the Link myCarlos page (#100), not in the Account body.
+  await openModule(page, 'mycarlos_link', '/portal/mycarlos');
   const markupDevice = linkAccount.devices.find((device) => device.name.includes('<'));
   const keptDevice = linkAccount.devices.find((device) => device !== markupDevice);
   const unseenDevice = linkAccount.devices.find((device) => !device.seen);
@@ -851,7 +852,7 @@ async function checkLinkedDevices(page) {
   await assertAccessiblePage(page, 'device removal confirmation');
   // Keep leaves the device linked.
   await page.getByRole('link', { name: t('mycarlos_keep'), exact: true }).click();
-  await page.waitForURL((url) => url.pathname === portalPathname('/portal/account'));
+  await page.waitForURL((url) => url.pathname === portalPathname('/portal/mycarlos'));
   assert((await listedNames()).length === 2, 'Keep device removed a device');
   assert(await page.getByRole('status').filter({ hasText: t('mycarlos_removed') }).count() === 0,
     'Keep device reported a removal');
@@ -865,9 +866,12 @@ async function checkLinkedDevices(page) {
   );
   assert(removed.status() === 303, `removing a device returned ${removed.status()}`);
   await page.waitForURL((url) => (
-    url.pathname === portalPathname('/portal/account')
+    url.pathname === portalPathname('/portal/mycarlos')
     && url.searchParams.get('status') === 'mycarlos-device-removed'
   ));
+  // The focus is on the list's heading, and the result is read out by the status region.
+  assert(await page.evaluate(() => document.activeElement?.id) === 'mycarlos-devices-heading',
+    'after a removal the focus should be on the Linked devices heading');
   await page.getByRole('status').filter({ hasText: t('mycarlos_removed') }).waitFor();
   assert(JSON.stringify(await listedNames()) === JSON.stringify([keptDevice.name]),
     `only the other device should remain, got ${JSON.stringify(await listedNames())}`);

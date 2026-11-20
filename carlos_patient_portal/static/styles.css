@@ -1242,13 +1242,104 @@ a.module-tile:focus-visible {
 }
 
 .mycarlos-devices {
+  display: grid;
+  gap: 1rem;
+  margin: 1rem 0;
   padding: 0;
   list-style: none;
 }
 
-.mycarlos-devices li {
-  padding: 1rem 0;
-  border-top: 1px solid currentColor;
+/* A card for each linked device (#100): borders in currentColor and no colours of their own, so
+   that the light and dark schemes and forced colours all draw it. */
+.mycarlos-device-card {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid currentColor;
+  border-radius: 0.5rem;
+}
+
+.mycarlos-devices-empty {
+  justify-items: start;
+}
+
+.mycarlos-devices-empty h3,
+.mycarlos-devices-empty p {
+  margin: 0;
+}
+
+.mycarlos-device-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+.mycarlos-device-icon {
+  flex: none;
+}
+
+.mycarlos-device-head .mycarlos-device-name {
+  flex: 1 1 8rem;
+  margin: 0;
+  min-inline-size: 0;
+}
+
+/* The state is a word in a bordered chip, never a colour alone; "Not seen recently" has a dashed
+   border, so that the two differ by shape as well as by text. */
+.mycarlos-device-status {
+  padding: 0.125rem 0.625rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mycarlos-device-status-stale {
+  border-style: dashed;
+}
+
+.mycarlos-devices dl {
+  margin: 0;
+}
+
+.mycarlos-devices dt {
+  font-weight: 600;
+}
+
+/* The relative time has the full date as its title (hover). */
+.mycarlos-time[title] {
+  text-decoration: underline dotted;
+  text-underline-offset: 0.2em;
+}
+
+/* The written date after a relative time: read by a screen reader, not drawn. */
+.mycarlos-time-full {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Remove is a secondary action with a heavier border, at least 44 px high. */
+.mycarlos-device-remove {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  min-block-size: 2.75rem;
+  border-width: 2px;
+  font-weight: 700;
+}
+
+.mycarlos-devices-section > h2:focus {
+  outline-offset: 0.25rem;
+}
+
+.mycarlos-devices-moved {
+  margin-block: 1rem;
 }
 
 .mycarlos-device-name,

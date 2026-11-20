@@ -561,6 +561,13 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_another": "Créer un autre code",
     "mycarlos_linked": "Associé le",
     "mycarlos_last_seen": "Dernière activité",
+    "mycarlos_devices_moved": "Gérez vos appareils associés sur la page Associer myCarlos.",
+    "mycarlos_status_active": "Actif",
+    "mycarlos_status_stale": "Non vu récemment",
+    "mycarlos_devices_empty_title": "Aucun appareil associé pour l’instant",
+    "mycarlos_devices_empty_body": (
+        "Créez un code, puis saisissez-le dans myCarlos pour associer votre appareil à ce compte."
+    ),
     "mycarlos_empty": "Aucun appareil associé. Choisissez Associer myCarlos pour en ajouter un.",
     "mycarlos_remove_question": "Retirer cet appareil ?",
     "mycarlos_remove_effect": (
