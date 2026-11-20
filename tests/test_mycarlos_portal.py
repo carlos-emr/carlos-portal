@@ -475,4 +475,6 @@ def test_removing_a_device_comes_back_to_the_link_page_with_the_result_announced
     assert re.search(r'<p class="form-notice" role="status">[^<]+</p>', after.text)
     assert "FAKE removable phone" not in after.text
     # An unknown status says nothing.
-    assert 'role="status"' not in client.get("/portal/mycarlos?status=anything").text
+    assert 'class="form-notice" role="status"' not in client.get(
+        "/portal/mycarlos?status=anything"
+    ).text

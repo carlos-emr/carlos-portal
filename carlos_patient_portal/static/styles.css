@@ -1249,7 +1249,7 @@ a.module-tile:focus-visible {
   list-style: none;
 }
 
-/* A card for each linked device (#100): borders in currentColor and no colours of their own, so
+/* A card for each linked device (issue 100): borders in currentColor and no colours of their own, so
    that the light and dark schemes and forced colours all draw it. */
 .mycarlos-device-card {
   display: grid;

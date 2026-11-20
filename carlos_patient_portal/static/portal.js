@@ -497,7 +497,7 @@ if (bookingStatus instanceof HTMLElement) {
   }
 }
 
-// Linked devices (#100): each moment is first the written date (what a page without script, and a
+// Linked devices (issue 100): each moment is first the written date (what a page without script, and a
 // screen reader, get). Where the browser can say it as a relative time ("3 days ago", in the
 // page's language), that is what is shown; the written date stays as the title (hover) and is
 // read after it by a screen reader.
