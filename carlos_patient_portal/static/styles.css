@@ -1308,6 +1308,11 @@ a.module-tile:focus-visible {
   font-weight: 600;
 }
 
+/* "Linked" and "Last seen" each with their time, side by side where there is room. */
+.mycarlos-devices dl > div {
+  min-inline-size: 0;
+}
+
 /* The relative time has the full date as its title (hover). */
 .mycarlos-time[title] {
   text-decoration: underline dotted;

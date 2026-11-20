@@ -11,10 +11,14 @@
             <span class="mycarlos-device-status {{ 'mycarlos-device-status-stale' if device.stale else 'mycarlos-device-status-active' }}">{{ text.mycarlos_status_stale if device.stale else text.mycarlos_status_active }}</span>
           </div>
           <dl>
-            <dt>{{ text.mycarlos_linked }}</dt>
-            <dd>{% if device.linked_iso %}<time class="mycarlos-time" datetime="{{ device.linked_iso }}" title="{{ device.linked_at }}" data-relative>{{ device.linked_at }}</time>{% else %}{{ device.linked_at }}{% endif %}</dd>
-            <dt>{{ text.mycarlos_last_seen }}</dt>
-            <dd>{% if device.last_seen_iso %}<time class="mycarlos-time" datetime="{{ device.last_seen_iso }}" title="{{ device.last_seen_at }}" data-relative>{{ device.last_seen_at }}</time>{% else %}{{ device.last_seen_at }}{% endif %}</dd>
+            <div>
+              <dt>{{ text.mycarlos_linked }}</dt>
+              <dd>{% if device.linked_iso %}<time class="mycarlos-time" datetime="{{ device.linked_iso }}" title="{{ device.linked_at }}" data-relative>{{ device.linked_at }}</time>{% else %}{{ device.linked_at }}{% endif %}</dd>
+            </div>
+            <div>
+              <dt>{{ text.mycarlos_last_seen }}</dt>
+              <dd>{% if device.last_seen_iso %}<time class="mycarlos-time" datetime="{{ device.last_seen_iso }}" title="{{ device.last_seen_at }}" data-relative>{{ device.last_seen_at }}</time>{% else %}{{ device.last_seen_at }}{% endif %}</dd>
+            </div>
           </dl>
           <a class="secondary-action mycarlos-device-remove" href="{{ device.remove_href }}" aria-label="{{ text.mycarlos_remove_named.format(name=device.name) }}">{{ text.mycarlos_remove }}</a>
         </li>
