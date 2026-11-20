@@ -512,6 +512,11 @@ const showRelativeTimes = () => {
   if (typeof Intl === "undefined" || typeof Intl.RelativeTimeFormat !== "function") {
     return;
   }
+  // Nothing to do where there is no page to read (the client tests run this file against a
+  // reduced document).
+  if (!document.documentElement || typeof document.querySelectorAll !== "function") {
+    return;
+  }
   const formatter = new Intl.RelativeTimeFormat(document.documentElement.lang || undefined, {
     numeric: "auto",
   });
