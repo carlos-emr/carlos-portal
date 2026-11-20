@@ -4,14 +4,24 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ service_name }}</title>
+  {%- set page_heading = {
+    "mycarlos": text.mycarlos_link,
+    "account": text.account,
+    "email-passwords": text.email_passwords,
+    "messages": text.messages,
+    "help": text.help,
+  }.get(active_module, text.patient_dashboard) -%}
+  <title>{{ page_heading }} - {{ service_name }}</title>
   {% include "_head_assets.jinja" %}
   <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
   <script src="{{ url_for('static', path='/portal.js') }}" defer></script>
 </head>
 <body>
-  <main class="app-shell">
-    <section class="portal-screen dashboard-screen" aria-label="{{ text.patient_dashboard }}">
+  {# The skip link jumps past the module navigation too: to the workspace, inside main. #}
+  {% from "_skip_link.jinja" import skip_link %}{{ skip_link(text, "module-content") }}
+  {% include "_live_status.jinja" %}
+  <div class="app-shell">
+    <div class="portal-screen dashboard-screen">
       <header class="patient-topbar portal-topbar">
         <div class="brand-lockup">
           <img src="{{ url_for('static', path='/carlos-birdman.png') }}" alt="{{ text.logo_alt }}" class="brand-logo">
@@ -30,6 +40,8 @@
         </div>
       </header>
 
+      <main id="main-content" tabindex="-1">
+
       <div class="dashboard-layout" data-active-module="{{ active_module }}">
         <nav class="module-nav" aria-label="{{ text.module_navigation }}">
           {% for module in modules %}
@@ -41,7 +53,7 @@
           {% endfor %}
         </nav>
 
-        <section class="module-workspace" aria-live="polite">
+        <section class="module-workspace" id="module-content" tabindex="-1">
           {% if active_module == "dashboard" %}
             <header class="module-header dashboard-heading">
               <div>
@@ -51,43 +63,43 @@
             </header>
             <div class="module-grid">
               {% if mycarlos_enabled %}
-                <a class="module-tile" href="{{ url_for('portal_mycarlos') }}">
-                  <h2>{{ text.mycarlos_link }}</h2>
-                  <p>{{ text.mycarlos_approval }}</p>
-                  <span>{{ text.view_module }}</span>
+                <a class="module-tile" href="{{ url_for('portal_mycarlos') }}" aria-labelledby="tile-mycarlos-title" aria-describedby="tile-mycarlos-description">
+                  <h2 id="tile-mycarlos-title">{{ text.mycarlos_link }}</h2>
+                  <p id="tile-mycarlos-description">{{ text.mycarlos_approval }}</p>
+                  <span aria-hidden="true">{{ text.view_module }}</span>
                 </a>
               {% endif %}
-              <a class="module-tile" href="{{ url_for('portal_account') }}">
-                <h2>{{ text.account }}</h2>
-                <p>{{ text.dashboard_account_description }}</p>
-                <span>{{ text.view_module }}</span>
+              <a class="module-tile" href="{{ url_for('portal_account') }}" aria-labelledby="tile-account-title" aria-describedby="tile-account-description">
+                <h2 id="tile-account-title">{{ text.account }}</h2>
+                <p id="tile-account-description">{{ text.dashboard_account_description }}</p>
+                <span aria-hidden="true">{{ text.view_module }}</span>
               </a>
-              <a class="module-tile" href="{{ url_for('portal_email_passwords') }}">
-                <h2>{{ text.email_passwords }}</h2>
-                <p>{{ text.dashboard_email_passwords_description }}</p>
-                <span>{{ text.view_module }}</span>
+              <a class="module-tile" href="{{ url_for('portal_email_passwords') }}" aria-labelledby="tile-email-passwords-title" aria-describedby="tile-email-passwords-description">
+                <h2 id="tile-email-passwords-title">{{ text.email_passwords }}</h2>
+                <p id="tile-email-passwords-description">{{ text.dashboard_email_passwords_description }}</p>
+                <span aria-hidden="true">{{ text.view_module }}</span>
               </a>
-              <a class="module-tile" href="{{ url_for('portal_help') }}">
-                <h2>{{ text.help }}</h2>
-                <p>{{ text.dashboard_help_description }}</p>
-                <span>{{ text.view_module }}</span>
+              <a class="module-tile" href="{{ url_for('portal_help') }}" aria-labelledby="tile-help-title" aria-describedby="tile-help-description">
+                <h2 id="tile-help-title">{{ text.help }}</h2>
+                <p id="tile-help-description">{{ text.dashboard_help_description }}</p>
+                <span aria-hidden="true">{{ text.view_module }}</span>
               </a>
-              <section class="module-tile disabled" aria-disabled="true">
+              <section class="module-tile disabled">
                 <div class="module-tile-heading">
                   <h2>{{ text.documents }}</h2>
                   <span>{{ text.future }}</span>
                 </div>
                 <p>{{ text.dashboard_documents_description }}</p>
               </section>
-              <a class="module-tile" href="{{ url_for('portal_messages') }}">
+              <a class="module-tile" href="{{ url_for('portal_messages') }}" aria-labelledby="tile-messages-title{% if new_message_count %} tile-messages-count{% endif %}" aria-describedby="tile-messages-description">
                 <div class="module-tile-heading">
-                  <h2>{{ text.messages }}</h2>
+                  <h2 id="tile-messages-title">{{ text.messages }}</h2>
                   {% if new_message_count %}
-                    <span class="message-count">{{ new_messages_label }}</span>
+                    <span class="message-count" id="tile-messages-count">{{ new_messages_label }}</span>
                   {% endif %}
                 </div>
-                <p>{{ text.dashboard_messages_description }}</p>
-                <span>{{ text.view_module }}</span>
+                <p id="tile-messages-description">{{ text.dashboard_messages_description }}</p>
+                <span aria-hidden="true">{{ text.view_module }}</span>
               </a>
             </div>
           {% elif active_module == "mycarlos" %}
@@ -293,7 +305,7 @@
                     {% for row in email_passwords.rows %}
                       <tr{% if not row.is_available %} class="unavailable-row"{% endif %}>
                         <td data-label="{{ text.subject }}">
-                          <span class="cell-primary">{{ row.subject }}</span>
+                          <span class="cell-primary" id="email-password-subject-{{ row.id }}">{{ row.subject }}</span>
                           {% if row.source_reference %}
                             <span class="cell-secondary">{{ row.source_reference }}</span>
                           {% endif %}
@@ -307,11 +319,14 @@
                                 id="email-password-{{ row.id }}"
                                 class="copyable-password"
                                 tabindex="0"
+                                role="textbox"
+                                aria-readonly="true"
                                 aria-label="{{ text.password_for.format(subject=row.subject) }}"
                               >{{ text.password_hidden }}</code>
                               <button
                                 class="secondary-action reveal-action"
                                 type="button"
+                                aria-describedby="email-password-subject-{{ row.id }}"
                                 data-reveal-url="{{ url_for('reveal_portal_email_password', email_password_id=row.id).path }}"
                                 data-reveal-target="email-password-{{ row.id }}"
                                 data-csrf-token="{{ csrf_token }}"
@@ -322,6 +337,7 @@
                               <button
                                 class="secondary-action copy-action"
                                 type="button"
+                                aria-describedby="email-password-subject-{{ row.id }}"
                                 data-copy-target="email-password-{{ row.id }}"
                                 data-copy-label="{{ text['copy'] }}"
                                 data-copied-label="{{ text.copied }}"
@@ -457,8 +473,9 @@
           {% endif %}
         </section>
       </div>
-    </section>
-  </main>
+      </main>
+    </div>
+  </div>
   {% include "_page_footer.jinja" %}
 </body>
 </html>

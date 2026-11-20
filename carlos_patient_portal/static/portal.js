@@ -1,3 +1,18 @@
+// What a button's changed words alone do not announce (Copied, Copy failed, Revealing..., Password
+// could not be revealed) is written to the page's polite live region (_live_status.jinja). It is
+// in the HTML from the start, empty, so the first message is announced; the text is cleared and
+// set again so that the same words twice in a row are announced twice.
+const announce = (message) => {
+  const liveStatus = document.getElementById("portal-live-status");
+  if (!liveStatus) {
+    return;
+  }
+  liveStatus.textContent = "";
+  window.setTimeout(() => {
+    liveStatus.textContent = message;
+  }, 60);
+};
+
 // A revealed password must not outlive the page's session, nor stay on a page left hidden
 // (carlos-emr/mycarlos#194). It is cleared at once when the session ends (signing out here or in
 // another tab of this browser) and when the page itself goes (it is left, or put in the
@@ -116,6 +131,7 @@ document.addEventListener("click", (event) => {
   const generation = revealGeneration;
   revealButton.disabled = true;
   revealButton.textContent = revealButton.dataset.revealingLabel || "Revealing...";
+  announce(revealButton.textContent);
   const requestBody = new URLSearchParams({
     csrf_token: csrfToken,
     current_password: passwordInput.value,
@@ -171,6 +187,7 @@ document.addEventListener("click", (event) => {
       revealButton.textContent = (
         revealButton.dataset.revealFailedLabel || "Password could not be revealed."
       );
+      announce(revealButton.textContent);
       window.setTimeout(() => {
         revealButton.textContent = revealButton.dataset.revealLabel || "Reveal";
         revealButton.disabled = false;
@@ -266,11 +283,13 @@ document.addEventListener("click", (event) => {
   void copyPromise
     .then(() => {
       copyButton.textContent = copyButton.dataset.copiedLabel || "Copied";
+      announce(copyButton.textContent);
     })
     .catch(() => {
       copyButton.textContent = (
         copyButton.dataset.copyFailedLabel || "Select and copy manually"
       );
+      announce(copyButton.textContent);
       target.focus();
       const selection = window.getSelection();
       if (!(target instanceof HTMLInputElement) && selection) {

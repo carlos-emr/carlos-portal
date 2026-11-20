@@ -12,6 +12,7 @@
     "test:patient-portal-session-playwright": "node scripts/patient-portal-session-playwright-checks.js"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
     "playwright": "^1.60.0"
   }
 }
