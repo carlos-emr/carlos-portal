@@ -17,7 +17,8 @@
   <script src="{{ url_for('static', path='/portal.js') }}" defer></script>
 </head>
 <body>
-  {% include "_skip_link.jinja" %}
+  {# The skip link jumps past the module navigation too: to the workspace, inside main. #}
+  {% from "_skip_link.jinja" import skip_link %}{{ skip_link(text, "module-content") }}
   {% include "_live_status.jinja" %}
   <div class="app-shell">
     <div class="portal-screen dashboard-screen">
@@ -52,7 +53,7 @@
           {% endfor %}
         </nav>
 
-        <section class="module-workspace">
+        <section class="module-workspace" id="module-content" tabindex="-1">
           {% if active_module == "dashboard" %}
             <header class="module-header dashboard-heading">
               <div>

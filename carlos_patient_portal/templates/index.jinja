@@ -10,7 +10,7 @@
   <script src="{{ url_for('static', path='/portal.js') }}" defer></script>
 </head>
 <body>
-  {% include "_skip_link.jinja" %}
+  {% from "_skip_link.jinja" import skip_link %}{{ skip_link(text) }}
   {% include "_live_status.jinja" %}
   <div class="app-shell">
     <div class="portal-screen">

@@ -1,4 +1,8 @@
 {# The first stop on every full page: a keyboard or screen-reader user can jump past the header and
-   the navigation to the content (WCAG 2.4.1). Hidden until it has the focus; the target is the
-   page's <main id="main-content" tabindex="-1">. #}
-<a class="skip-link" href="#main-content">{{ text.skip_to_content }}</a>
+   the navigation to the content (WCAG 2.4.1). Hidden until it has the focus. The target is the
+   page's <main id="main-content" tabindex="-1">; a page that has more to skip inside main (the
+   dashboard's module navigation) passes the id of its own content. A macro, so that the page's
+   `text` is a parameter and no variable has to come from the context. #}
+{% macro skip_link(text, target="main-content") -%}
+<a class="skip-link" href="#{{ target }}">{{ text.skip_to_content }}</a>
+{%- endmacro %}

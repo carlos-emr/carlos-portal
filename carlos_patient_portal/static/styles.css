@@ -2,7 +2,6 @@
   color-scheme: light dark;
   --carlos-blue: #4065b2;
   --carlos-blue-hover: #3459a0;
-  --carlos-blue-dark: #00283c;
   --brand-text: #00283c;
   --brand-bg: #00283c;
   --on-accent: #ffffff;
@@ -36,16 +35,15 @@
    computes them from this file). */
 @media (prefers-color-scheme: dark) {
   :root {
-    --carlos-blue: #436aba;
+    --carlos-blue: #4b71be;
     --carlos-blue-hover: #5b82d0;
-    --carlos-blue-dark: #9bb8f5;
     --brand-text: #d4e3ff;
     --brand-bg: #0b3a57;
     --on-accent: #ffffff;
     --surface: #182033;
-    --surface-subtle: #1d2740;
-    --surface-muted: #232e4a;
-    --surface-topbar: #1d2740;
+    --surface-subtle: #1a2237;
+    --surface-muted: #1e2840;
+    --surface-topbar: #1a2237;
     --line: #34405c;
     --border-soft: #3a4663;
     --border-card: #46537a;
@@ -1373,7 +1371,8 @@ a.module-tile:focus-visible {
 }
 
 /* The page's <main> takes the focus from the skip link; it needs no ring of its own. */
-main[tabindex="-1"]:focus {
+main[tabindex="-1"]:focus,
+.module-workspace[tabindex="-1"]:focus {
   outline: none;
 }
 

@@ -34,22 +34,40 @@ async function assertForcedColoursSmoke(page, surface) {
   const state = await page.evaluate(() => {
     const heading = document.querySelector('h1');
     const skipLink = document.querySelector('.skip-link');
+    const selected = document.querySelector('.text-tab.selected, .module-link.selected');
+    const selectedStyle = selected ? getComputedStyle(selected) : null;
+    let focusOutline = null;
     if (skipLink instanceof HTMLElement) {
       skipLink.focus();
+      const outline = getComputedStyle(skipLink);
+      focusOutline = { style: outline.outlineStyle, width: parseFloat(outline.outlineWidth) };
+      // Back to where the page was: later steps and screenshots must not see this focus.
+      skipLink.blur();
     }
-    const outline = skipLink ? getComputedStyle(skipLink) : null;
     return {
       headingVisible: Boolean(heading && heading.getClientRects().length > 0),
-      skipLinkOutline: outline
-        ? { style: outline.outlineStyle, width: parseFloat(outline.outlineWidth) }
+      focusOutline,
+      selected: selectedStyle
+        ? {
+          underlined: selectedStyle.textDecorationLine.includes('underline'),
+          borderWidth: parseFloat(selectedStyle.borderTopWidth),
+        }
         : null,
     };
   });
   if (!state.headingVisible) {
     throw new Error(`${surface} shows no heading with forced colours`);
   }
-  if (!state.skipLinkOutline || state.skipLinkOutline.style === 'none' || !(state.skipLinkOutline.width >= 2)) {
+  if (!state.focusOutline || state.focusOutline.style === 'none' || !(state.focusOutline.width >= 2)) {
     throw new Error(`${surface}: the skip link has no visible focus outline with forced colours`);
+  }
+  // Only the stylesheet's forced-colors block gives a selected tab an underline and a 2px border
+  // (outside it the selected state is a fill colour, which forced colours removes), so this fails
+  // if that block is deleted or stops matching. Pages without a selected tab are not checked.
+  if (state.selected && !(state.selected.underlined && state.selected.borderWidth >= 2)) {
+    throw new Error(
+      `${surface}: the selected tab is not drawn by shape (underline, 2px border) with forced colours`
+    );
   }
 }
 

@@ -35,7 +35,13 @@ def test_the_full_pages_are_the_ones_that_are_checked() -> None:
 def test_every_full_page_has_a_skip_link_to_a_focusable_main(name: str) -> None:
     source = (TEMPLATES / name).read_text(encoding="utf-8")
     # The skip link is the first thing in the body.
-    assert re.search(r"<body>\s*\{% include \"_skip_link\.jinja\" %\}", source), name
+    assert re.search(
+        r"<body>\s*(?:\{#.*?#\}\s*)?"
+        r"\{% from \"_skip_link\.jinja\" import skip_link %\}"
+        r"\{\{ skip_link\(text(?:, \"[^\"]+\")?\) \}\}",
+        source,
+        re.S,
+    ), name
     assert source.count('<main id="main-content" tabindex="-1">') == 1, name
     assert source.count("<main") == 1 and source.count("</main>") == 1, name
 
@@ -57,7 +63,8 @@ def test_every_full_page_has_a_banner_before_main_and_a_footer_after_it(name: st
 
 def test_the_skip_link_points_at_the_main_it_skips_to() -> None:
     link = (TEMPLATES / "_skip_link.jinja").read_text(encoding="utf-8")
-    assert 'href="#main-content"' in link
+    assert 'target="main-content"' in link
+    assert 'href="#{{ target }}"' in link
     assert "{{ text.skip_to_content }}" in link
 
 
@@ -266,11 +273,17 @@ def _outline(html: str) -> _Outline:
 
 def _page_source(name: str) -> str:
     """A template as the browser would get it: its includes written in, its Jinja tags removed
-    (every branch of a conditional stays, which is why this is for structure, not for words)."""
+    (every branch of a conditional stays, which is why this is for structure, not for words).
+    The skip link macro is written out as the link it makes."""
     source = (TEMPLATES / name).read_text(encoding="utf-8")
     source = re.sub(
         r"\{%-?\s*include\s+\"([^\"]+)\"\s*-?%\}",
         lambda match: _page_source(match.group(1)),
+        source,
+    )
+    source = re.sub(
+        r"\{\{\s*skip_link\(text(?:,\s*\"([^\"]+)\")?\)\s*\}\}",
+        lambda match: f'<a class="skip-link" href="#{match.group(1) or "main-content"}">x</a>',
         source,
     )
     source = re.sub(r"\{#.*?#\}", "", source, flags=re.S)
@@ -296,20 +309,32 @@ def _check_skip_link_structure(html: str, label: str) -> None:
     assert len(mains) == 1, label
     assert mains[0][1].get("id") == "main-content", label
     assert mains[0][1].get("tabindex") == "-1", label
-    # The skip link points at that main, and is the first thing a keyboard reaches.
+    # The skip link is the first thing a keyboard reaches, and points at an element of the page.
     focusables = [(i, e) for i, e in enumerate(outline.elements) if _is_focusable(e[0], e[1])]
     first = focusables[0][1]
-    assert first[0] == "a" and first[1].get("href") == "#main-content", label
+    assert first[0] == "a" and (first[1].get("href") or "").startswith("#"), label
     assert "skip-link" in (first[1].get("class") or ""), label
-    main_at = outline.elements.index(mains[0])
-    inside_main = [i for i, e in focusables if any(tag == "main" for tag, _ in e[2])]
-    assert inside_main, f"{label}: nothing in the page content can be reached"
-    # What the skip link skips: the top bar, which comes before main and is not inside it.
-    before_main = [e for i, e in focusables if i < main_at]
-    assert len(before_main) > 1, f"{label}: the skip link would skip nothing"
-    # The first stop after main begins is inside main.
-    after = [e for i, e in focusables if i >= main_at][0]
-    assert any(tag == "main" for tag, _ in after[2]), label
+    target_id = first[1]["href"][1:]
+    targets = [e for e in outline.elements if e[1].get("id") == target_id]
+    assert len(targets) == 1, f"{label}: the skip link points at #{target_id}"
+    target = targets[0]
+    assert target[1].get("tabindex") == "-1", label
+    # The target is main itself, or something inside main (the dashboard's content, after its
+    # module navigation).
+    assert target is mains[0] or any(tag == "main" for tag, _ in target[2]), label
+    target_at = outline.elements.index(target)
+
+    def in_target(element) -> bool:
+        return element is target or any(a.get("id") == target_id for _, a in element[2])
+
+    inside_target = [i for i, e in focusables if in_target(e)]
+    assert inside_target, f"{label}: nothing in the page content can be reached"
+    # What the skip link skips: the top bar (and the module navigation), before the target.
+    before_target = [e for i, e in focusables if i < target_at]
+    assert len(before_target) > 1, f"{label}: the skip link would skip nothing"
+    # The first stop at or after the target begins is inside it.
+    after = [e for i, e in focusables if i >= target_at][0]
+    assert in_target(after), label
     for tag, attributes, ancestors in outline.elements:
         in_main = any(t == "main" for t, _ in ancestors)
         classes = (attributes.get("class") or "").split()
@@ -452,7 +477,7 @@ def test_every_text_colour_is_readable_on_every_surface_in_both_palettes(scheme:
 def test_borders_the_focus_ring_and_the_blue_are_visible_in_both_palettes(scheme: str) -> None:
     palette = PALETTES[scheme]
     for token in ("border-control", "focus-ring", "carlos-blue"):
-        for surface in ("page", "surface"):
+        for surface in SURFACES:
             ratio = _contrast(palette[token], palette[surface])
             assert ratio >= 3.0, f"{scheme}: {token} on {surface} is {ratio:.2f}:1"
     # The status borders are decoration beside text that already says it; the blue as text is
@@ -534,3 +559,25 @@ def test_placeholders_use_the_muted_text_colour() -> None:
     assert re.search(
         r"::placeholder\s*\{[^}]*color:\s*var\(--muted\);[^}]*opacity:\s*1;", css, re.S
     )
+
+
+def test_the_dashboard_skip_link_skips_the_module_navigation_too() -> None:
+    page = _page_source("dashboard.jinja")
+    assert 'href="#module-content"' in page
+    outline = _outline(page)
+    nav = [
+        e for e in outline.elements if e[0] == "nav" and "module-nav" in (e[1].get("class") or "")
+    ]
+    content = [e for e in outline.elements if e[1].get("id") == "module-content"]
+    assert len(nav) == 1 and len(content) == 1
+    # The workspace comes after the navigation, so the skip link jumps over it.
+    assert outline.elements.index(nav[0]) < outline.elements.index(content[0])
+    assert content[0][1].get("tabindex") == "-1"
+
+
+def test_no_unused_colour_token_is_left_in_the_stylesheet() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    declared = set(re.findall(r"--([a-z-]+):", css))
+    used = set(re.findall(r"var\(--([a-z-]+)\)", css))
+    # A token nothing reads is dead; the media blocks read tokens too.
+    assert declared - used == set(), declared - used
