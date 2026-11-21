@@ -499,7 +499,13 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_another": "Create another code",
     "mycarlos_linked": "Linked",
     "mycarlos_last_seen": "Last seen",
-    "mycarlos_empty": "No linked devices. Choose Link myCarlos to add one.",
+    "mycarlos_devices_moved": "Manage your linked devices on the Link myCarlos page.",
+    "mycarlos_status_active": "Active",
+    "mycarlos_status_stale": "Not seen recently",
+    "mycarlos_devices_empty_title": "No linked devices yet",
+    "mycarlos_devices_empty_body": (
+        "Create a code, then enter it in myCarlos to link your device to this account."
+    ),
     "mycarlos_remove_question": "Remove this device?",
     "mycarlos_remove_effect": (
         "This device will stop receiving new documents. To use it again, link it "
