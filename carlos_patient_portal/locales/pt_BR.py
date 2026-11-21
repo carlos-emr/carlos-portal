@@ -563,6 +563,7 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_not_seen": "Ainda sem atividade",
     "mycarlos_mfa_required": "Verifique seu acesso antes de vincular ou remover um dispositivo.",
     "mycarlos_verify": "Verificar acesso",
+    "mycarlos_verify_to_create": "Verificar o acesso para criar um código",
     "mycarlos_portal_address": "Endereço do portal",
     "mycarlos_qr_label": "Escanear no myCarlos",
     "mycarlos_qr_alt": "Código QR para vincular o myCarlos a este portal.",

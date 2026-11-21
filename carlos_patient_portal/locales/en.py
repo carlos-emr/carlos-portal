@@ -520,6 +520,7 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_not_seen": "Not yet seen",
     "mycarlos_mfa_required": "Verify your sign-in before linking or removing a device.",
     "mycarlos_verify": "Verify sign-in",
+    "mycarlos_verify_to_create": "Verify sign-in to create a code",
     "mycarlos_portal_address": "Portal address",
     "mycarlos_qr_label": "Scan in myCarlos",
     "mycarlos_qr_alt": "QR code for linking myCarlos to this portal.",
