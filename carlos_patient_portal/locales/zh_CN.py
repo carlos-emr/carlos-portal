@@ -414,7 +414,6 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_status_stale": "近期未见",
     "mycarlos_devices_empty_title": "尚无已关联的设备",
     "mycarlos_devices_empty_body": "请创建关联码，然后在 myCarlos 中输入，将您的设备关联到此账户。",
-    "mycarlos_empty": "没有已关联的设备。请选择「关联 myCarlos」添加设备。",
     "mycarlos_remove_question": "要移除此设备吗？",
     "mycarlos_remove_effect": (
         "此设备将不再接收新文档。如需再次使用，请重新关联。已保存在 myCarlos 中的文档会保留在那里。"

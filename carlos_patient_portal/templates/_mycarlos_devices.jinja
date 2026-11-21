@@ -1,6 +1,11 @@
 {# Linked devices (#100): a card for each, on the Link myCarlos page. #}
 <section class="settings-section mycarlos-devices-section" aria-labelledby="mycarlos-devices-heading">
-  <h2 id="mycarlos-devices-heading" tabindex="-1">{{ text.mycarlos_devices }}</h2>
+  {# A removal redirects here and focuses the heading. A status region already in the page is not
+     announced, so the heading also names the notice as its description, read with the focus. #}
+  <h2 id="mycarlos-devices-heading" tabindex="-1"{% if account_notice %} aria-describedby="mycarlos-devices-notice"{% endif %}>{{ text.mycarlos_devices }}</h2>
+  {% if account_notice %}
+    <p class="form-notice" role="status" id="mycarlos-devices-notice">{{ account_notice }}</p>
+  {% endif %}
   {% if mycarlos.devices %}
     <ul class="mycarlos-devices">
       {% for device in mycarlos.devices %}
@@ -28,7 +33,7 @@
     <div class="mycarlos-device-card mycarlos-devices-empty">
       <h3>{{ text.mycarlos_devices_empty_title }}</h3>
       <p>{{ text.mycarlos_devices_empty_body }}</p>
-      <a class="primary-action" href="#mycarlos-create-code">{{ text.mycarlos_create }}</a>
+      <a class="primary-action" href="#mycarlos-link-action">{{ text.mycarlos_create }}</a>
     </div>
   {% endif %}
 </section>

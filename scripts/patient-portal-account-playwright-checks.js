@@ -873,6 +873,13 @@ async function checkLinkedDevices(page) {
   assert(await page.evaluate(() => document.activeElement?.id) === 'mycarlos-devices-heading',
     'after a removal the focus should be on the Linked devices heading');
   await page.getByRole('status').filter({ hasText: t('mycarlos_removed') }).waitFor();
+  // A status region already in the page is not announced, so the focused heading carries it.
+  assert(await page.evaluate(() => {
+    const heading = document.getElementById('mycarlos-devices-heading');
+    const notice = document.getElementById(heading?.getAttribute('aria-describedby') || '');
+    return notice?.getAttribute('role') === 'status'
+      && heading.closest('section') === notice.closest('section');
+  }), 'the focused Linked devices heading should be described by the removal notice');
   assert(JSON.stringify(await listedNames()) === JSON.stringify([keptDevice.name]),
     `only the other device should remain, got ${JSON.stringify(await listedNames())}`);
   assert(await removeLink(markupDevice).count() === 0, 'the removed device still has a link');

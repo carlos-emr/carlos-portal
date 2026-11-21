@@ -419,7 +419,6 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_status_stale": "近期未見",
     "mycarlos_devices_empty_title": "尚無已連結的裝置",
     "mycarlos_devices_empty_body": "請建立連結碼，然後在 myCarlos 中輸入，將您的裝置連結到此帳戶。",
-    "mycarlos_empty": "沒有已連結的裝置。請選擇「連結 myCarlos」來新增裝置。",
     "mycarlos_remove_question": "要移除此裝置嗎？",
     "mycarlos_remove_effect": (
         "此裝置將不再接收新文件。若要再次使用，請重新連結。已儲存在 myCarlos 中的文件會保留。"

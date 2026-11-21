@@ -547,7 +547,6 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_devices_empty_body": (
         "Cree un código y escríbalo en myCarlos para vincular su dispositivo a esta cuenta."
     ),
-    "mycarlos_empty": "No hay dispositivos vinculados. Elija Vincular myCarlos para añadir uno.",
     "mycarlos_remove_question": "¿Quitar este dispositivo?",
     "mycarlos_remove_effect": (
         "Este dispositivo dejará de recibir documentos nuevos. Para volver a usarlo, vincúlelo de "

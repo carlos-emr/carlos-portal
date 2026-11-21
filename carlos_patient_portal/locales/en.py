@@ -506,7 +506,6 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_devices_empty_body": (
         "Create a code, then enter it in myCarlos to link your device to this account."
     ),
-    "mycarlos_empty": "No linked devices. Choose Link myCarlos to add one.",
     "mycarlos_remove_question": "Remove this device?",
     "mycarlos_remove_effect": (
         "This device will stop receiving new documents. To use it again, link it "

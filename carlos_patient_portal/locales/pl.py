@@ -579,9 +579,6 @@ MYCARLOS_TEXT: dict[str, str] = {
         "Proszę utworzyć kod, a następnie wpisać go w myCarlos, aby połączyć urządzenie "
         "z tym kontem."
     ),
-    "mycarlos_empty": (
-        "Brak połączonych urządzeń. Aby dodać urządzenie, proszę wybrać „Proszę połączyć myCarlos”."
-    ),
     "mycarlos_remove_question": "Usunąć to urządzenie?",
     "mycarlos_remove_effect": (
         "To urządzenie przestanie otrzymywać nowe dokumenty. Aby znów z niego korzystać, "

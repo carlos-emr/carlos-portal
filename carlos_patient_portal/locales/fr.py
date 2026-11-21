@@ -568,7 +568,6 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_devices_empty_body": (
         "Créez un code, puis saisissez-le dans myCarlos pour associer votre appareil à ce compte."
     ),
-    "mycarlos_empty": "Aucun appareil associé. Choisissez Associer myCarlos pour en ajouter un.",
     "mycarlos_remove_question": "Retirer cet appareil ?",
     "mycarlos_remove_effect": (
         "Cet appareil ne recevra plus de nouveaux documents. Pour le réutiliser, associez-le à "

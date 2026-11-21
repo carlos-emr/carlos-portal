@@ -434,7 +434,7 @@ def test_linked_devices_are_cards_on_the_link_page_and_account_only_points_to_th
     assert f'href="/portal/account/mycarlos/devices/{key}/remove"' in link_page
     assert 'aria-label="Remove device: FAKE Pixel phone"' in link_page
     # The list is below the Create a code action, which the empty state would point to.
-    assert link_page.index('id="mycarlos-create-code"') < link_page.index(
+    assert link_page.index('id="mycarlos-link-action"') < link_page.index(
         'id="mycarlos-devices-heading"'
     )
     account_page = client.get("/portal/account").text
@@ -450,9 +450,27 @@ def test_linked_devices_with_none_show_a_card_with_the_create_a_code_action():
     link_page = client.get("/portal/mycarlos").text
     assert "mycarlos-devices-empty" in link_page
     assert "No linked devices yet" in link_page
-    assert 'href="#mycarlos-create-code"' in link_page
+    assert 'href="#mycarlos-link-action"' in link_page
+    # The card's action points at the page's Create a code button.
+    assert re.search(
+        r'<button[^>]*id="mycarlos-link-action"[^>]*>Create a code</button>', link_page
+    )
     # Only the empty-state card: no device cards.
     assert 'class="mycarlos-device-card"' not in link_page
+
+
+def test_linked_devices_empty_card_points_to_verify_when_a_step_up_is_needed():
+    app, client, sms, _account = make_portal(require_mfa=False)
+    sign_in(client, sms, mfa=False)
+    link_page = client.get("/portal/mycarlos").text
+    # Without the MFA proof the page offers Verify, not Create a code; the empty card's link
+    # must still land on a real element, and that element is the Verify button.
+    assert "mycarlos-devices-empty" in link_page
+    assert 'href="#mycarlos-link-action"' in link_page
+    assert link_page.count('id="mycarlos-link-action"') == 1
+    verify = re.search(r'<button[^>]*id="mycarlos-link-action"[^>]*>([^<]+)</button>', link_page)
+    assert verify is not None and verify.group(1) == MYCARLOS_TEXT_CATALOG["en"]["mycarlos_verify"]
+    assert 'action="/portal/mycarlos/code"' not in link_page
 
 
 def test_removing_a_device_comes_back_to_the_link_page_with_the_result_announced():
@@ -472,8 +490,21 @@ def test_removing_a_device_comes_back_to_the_link_page_with_the_result_announced
     )
     after = client.get("/portal/mycarlos?status=mycarlos-device-removed")
     # The result is in a polite status region, and the removed device is gone.
-    assert re.search(r'<p class="form-notice" role="status">[^<]+</p>', after.text)
+    notice = re.search(
+        r'<p class="form-notice" role="status" id="mycarlos-devices-notice">([^<]+)</p>', after.text
+    )
+    assert notice is not None and notice.group(1) == "Device removed."
     assert "FAKE removable phone" not in after.text
+    # A status region already in the page is not announced, so the notice sits right under the
+    # heading the redirect focuses and is that heading's description, read out with the focus.
+    heading = re.search(r'<h2 id="mycarlos-devices-heading"[^>]*>', after.text)
+    assert heading is not None
+    assert 'tabindex="-1"' in heading.group(0)
+    assert 'aria-describedby="mycarlos-devices-notice"' in heading.group(0)
+    section = after.text[heading.end():]
+    assert re.match(r"[^<]*</h2>\s*<p class=\"form-notice\" role=\"status\"", section)
+    # Without a removal there is nothing to describe the heading with.
+    assert 'aria-describedby="mycarlos-devices-notice"' not in client.get("/portal/mycarlos").text
     # An unknown status says nothing.
     assert 'class="form-notice" role="status"' not in client.get(
         "/portal/mycarlos?status=anything"
