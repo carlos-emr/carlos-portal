@@ -12,51 +12,65 @@
 # You should have received a copy of the GNU Affero General Public License along with this program.
 # If not, see <https://www.gnu.org/licenses/>.
 
+
 """Reference vectors for `mycarlos-send/1` (patient to clinic); never imported by production code.
 
 DRAFT for review (docs/architecture/mycarlos-send.md). No server code exists for this contract. This
 generator uses only the standard library, no keys and no randomness: every identifier, hash and
 "ciphertext" below is FAKE and fixed. It produces:
 
-- the byte-exact framing, hash-chain, nonce and AAD derivations the three implementations
-  (carlos-portal, CARLOS, myCarlos) must agree on, with cases that must NOT agree;
-- canonical bytes (and their hashes) of an outer record, an envelope and the three acknowledgements;
-- a small reference validator for the outer record and the envelope, and the accept/refuse cases it
-  gives, so a second implementation can be tested against the same list;
+- the byte-exact framing, hash-chain, nonce, AAD and signing-input derivations the three
+  implementations (carlos-portal, CARLOS, myCarlos) must agree on, with cases that must NOT agree;
+- canonical bytes (and their hashes) of every signed or sealed object, and ONE fully consistent
+  end-to-end vector (an envelope, the outer record, the chunks and every hash agree);
+- a small reference validator for each object and the accept/refuse cases it gives, so a second
+  implementation can be tested against the same list;
 - the state machine, the idempotency table and the routes, as data.
 
-It does not do HPKE, AEAD, signatures, storage or any clinical check: signing inputs are given as
-bytes, and a signature is never produced here. Regenerate with no arguments (refuses to overwrite an
-approved file); verify with `--check`.
+It does not do HPKE, AEAD, signatures, storage or any clinical check: a signature is never produced
+here, only the exact bytes that would be signed. Regenerate with no arguments (refuses to overwrite
+an approved file); verify with `--check`.
 """
 
 import argparse
+import base64
 import hashlib
 import json
 import re
+import unicodedata
 from pathlib import Path
 
 FIXTURES = Path(__file__).parent / "fixtures"
 OUTPUT = FIXTURES / "send-contract-v1.json"
 
 VERSION = 1
+KIB = 1024
 MIB = 1024 * 1024
 
 # Ceilings the PARSER enforces, whatever a deployment enables. A deployment advertises smaller
 # working limits in its capabilities; a larger one needs a new contract version.
 LIMITS = {
-    "envelope_sealed_max": 64 * 1024,
+    # Ten clinic-signed copies carry ten manifests of up to 16 KiB (about 21 KiB each as text) next
+    # to the text and names: the sealed envelope is allowed 256 KiB, and the plain envelope the same
+    # less the tag. (A smaller budget would make ten manifests impossible.)
+    "envelope_sealed_max": 256 * KIB,
     "body_max_bytes": 8192,
     "attachments_max": 10,
     "name_max_chars": 120,
     "chunk_plain_max": 4 * MIB,
     "aead_tag": 16,
     "lifetime_max_seconds": 7 * 24 * 3600,
-    "manifest_max_bytes": 16 * 1024,
-    "ref_max_chars": 64,
+    "created_skew_seconds": 300,
+    "manifest_max_bytes": 16 * KIB,
     "ack_max_bytes": 4096,
-    "outer_max_bytes": 8192,
+    "recall_max_bytes": 1024,
+    "inbox_key_statement_max_bytes": 2048,
+    "inbox_key_validity_max_days": 400,
+    "outer_max_bytes": 16 * KIB,
     "chunks_per_attachment_max": 128,
+    "sealed_key_bytes": 80,
+    "ref_chars": 22,
+    "id_chars_max": 128,
 }
 
 # What a deployment may turn on. Phase 1 fits database blobs; phase 2 (video) needs object storage.
@@ -82,7 +96,15 @@ PHASES = {
         "storage": "object_store",
     },
 }
-ALL_MEDIA_TYPES = PHASES["phase2_video"]["media_types"]
+
+# Domain separation: the device key also signs request assertions and the clinic key also signs
+# delivery manifests, so each object here is signed over its own prefix, never over bare bytes.
+SIGN_DOMAINS = {
+    "envelope": b"mycarlos-send/1 envelope-signature",
+    "ack": b"mycarlos-send/1 ack-signature",
+    "recall": b"mycarlos-send/1 recall-signature",
+    "inbox_key": b"mycarlos-send/1 inbox-key-signature",
+}
 
 # Fixed FAKE identifiers (UUID version 4 shape).
 MESSAGE_ID = "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c"
@@ -95,19 +117,21 @@ CLINIC_ID = "clinic-FAKE0001"
 RECIPIENT_ID = "rcp-FAKE0001aaaaaaaaaaaa"
 DEVICE_KEY_ID = "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0"
 CLINIC_KID = "FAKEclinickidFAKEclinickidFAKEclinickidFAKEcl0"
-INBOX_KID = "FAKEinboxkidFAKEinboxkidFAKEinboxkidFAKEinbo0"
 CREATED_AT = 1_792_450_800
 EXPIRES_AT = CREATED_AT + 3 * 24 * 3600
+FAKE_INBOX_PUBLIC_KEY = bytes(range(32))
+FAKE_REF = "AbCdEfGhIjKlMnOpQrStUv"  # 22 characters: a random 128-bit handle in the real thing
 
 UUID4 = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 B64URL = re.compile(r"^[A-Za-z0-9_-]+$")
-OPAQUE_REF = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+ID_TEXT = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+OPAQUE_REF = re.compile(r"^[A-Za-z0-9_-]{22}$")
 
 
 def canonical(value):
     """The bytes every object is hashed and signed as: sorted keys, no spaces, UTF-8, integers and
-    strings only (so this equals RFC 8785 for every object of this contract)."""
+    strings and null only (so this equals RFC 8785 for every object of this contract)."""
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
         "utf-8"
     )
@@ -126,8 +150,39 @@ def uuid_bytes(text):
     return bytes.fromhex(text.replace("-", ""))
 
 
+def b64u(raw):
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
 def encoded(raw):
     return {"hex": raw.hex(), "size": len(raw), "sha256": digest(raw)}
+
+
+def signing_input(kind, payload):
+    """The EXACT bytes a signature covers: the domain prefix and the canonical payload, framed. The
+    signature never covers the base64 text, and never the payload alone."""
+    return frame(SIGN_DOMAINS[kind], payload)
+
+
+def check_compact_payload(payload_b64):
+    """What a verifier does with the first half of `b64url(payload).b64url(signature)` BEFORE it
+    verifies anything: unpadded base64url, JSON, and the payload must already be its own canonical
+    form (`canonical(parse(bytes)) == bytes`), so there is one byte string per object and a verifier
+    never signs-over or hashes bytes it did not itself reproduce. Returns (object, None) or
+    (None, reason)."""
+    if not isinstance(payload_b64, str) or not B64URL.match(payload_b64):
+        return None, "not_base64url"
+    try:
+        raw = base64.urlsafe_b64decode(payload_b64 + "=" * (-len(payload_b64) % 4))
+    except ValueError:
+        return None, "not_base64url"
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None, "not_json"
+    if canonical(value) != raw:
+        return None, "not_canonical"
+    return value, None
 
 
 # --- the hash chain -----------------------------------------------------------------------------
@@ -153,9 +208,17 @@ def chain_link(previous, index, chunk_sha256):
 def attachment_head(message_id, attachment_id, chunk_ciphertexts):
     """The chain over the SHA-256 of each sealed chunk, in order, bound to the message, the
     attachment and the chunk count: a dropped, repeated, reordered or borrowed chunk changes it."""
-    head = chain_start(message_id, attachment_id, len(chunk_ciphertexts))
-    for index, chunk in enumerate(chunk_ciphertexts):
-        head = chain_link(head, index, hashlib.sha256(chunk).digest())
+    return head_from_hashes(
+        message_id,
+        attachment_id,
+        [hashlib.sha256(chunk).digest() for chunk in chunk_ciphertexts],
+    )
+
+
+def head_from_hashes(message_id, attachment_id, chunk_hashes):
+    head = chain_start(message_id, attachment_id, len(chunk_hashes))
+    for index, chunk_hash in enumerate(chunk_hashes):
+        head = chain_link(head, index, chunk_hash)
     return head
 
 
@@ -168,11 +231,6 @@ def message_head(message_id, envelope_ciphertext, attachment_heads):
             *attachment_heads,
         )
     ).digest()
-
-
-def fake_chunks(seed, sizes):
-    """FAKE 'sealed chunks': fixed bytes of the right sizes; the chain never looks inside."""
-    return [bytes([seed + index]) * size for index, size in enumerate(sizes)]
 
 
 # --- AEAD inputs (bytes only: no cipher runs here) ----------------------------------------------
@@ -220,11 +278,11 @@ def key_aad(message_id, recipient_id, device_key_id, clinic_id, envelope_sha256)
 # --- the objects --------------------------------------------------------------------------------
 
 
-def attachment(attachment_id, name, media_type, size, plaintext_sha256, chunk_count, head, prov):
+def attachment(attachment_id, name, media_type, size, plaintext_sha256, head, prov):
     return {
         "attachment_id": attachment_id,
         "chain_head": head,
-        "chunk_count": chunk_count,
+        "chunk_count": -(-size // LIMITS["chunk_plain_max"]),
         "chunk_size": LIMITS["chunk_plain_max"],
         "media_type": media_type,
         "name": name,
@@ -251,31 +309,36 @@ def envelope_object(attachments, body="FAKE message: please see the attached FAK
     }
 
 
-def outer_object(envelope_ciphertext, attachments_visible, chain_head, sealed_key):
-    chunk_total = sum(item["chunk_count"] for item in attachments_visible)
+def sealed_size(size):
+    """The sealed bytes of `size` plaintext bytes in 4 MiB chunks: each chunk and its tag."""
+    chunks = -(-size // LIMITS["chunk_plain_max"])
+    return size + chunks * LIMITS["aead_tag"]
+
+
+def outer_object(envelope_ciphertext, visible, chain_head, sealed_key, kid):
     return {
-        "attachment_count": len(attachments_visible),
-        "attachments": attachments_visible,
+        "attachment_count": len(visible),
+        "attachments": visible,
         "chain_head": chain_head,
-        "chunk_total": chunk_total,
+        "chunk_total": sum(item["chunk_count"] for item in visible),
         "clinic_id": CLINIC_ID,
         "created_at": CREATED_AT,
         "device_key_id": DEVICE_KEY_ID,
         "envelope_sha256": digest(envelope_ciphertext),
         "envelope_size": len(envelope_ciphertext),
         "expires_at": EXPIRES_AT,
-        "kind": "documents" if attachments_visible else "message",
+        "kind": "documents" if visible else "message",
         "message_id": MESSAGE_ID,
         "recipient_id": RECIPIENT_ID,
         "sealed_key": sealed_key,
-        "sealed_key_kid": INBOX_KID,
-        "total_size": len(envelope_ciphertext) + sum(item["size"] for item in attachments_visible),
+        "sealed_key_kid": kid,
+        "total_size": len(envelope_ciphertext) + sum(item["size"] for item in visible),
         "typ": "mycarlos-send-outer",
         "v": VERSION,
     }
 
 
-def ack_object(state, reason=None, ref="ref-FAKE0001", at=CREATED_AT + 600, head=None):
+def ack_object(state, reason=None, ref=FAKE_REF, at=CREATED_AT + 600, head=None):
     return {
         "at": at,
         "chain_head": head,
@@ -292,7 +355,45 @@ def ack_object(state, reason=None, ref="ref-FAKE0001", at=CREATED_AT + 600, head
     }
 
 
-# --- the reference validator (the contract in code) ---------------------------------------------
+def recall_object(head, at=CREATED_AT + 900):
+    return {
+        "at": at,
+        "chain_head": head,
+        "clinic_id": CLINIC_ID,
+        "device_key_id": DEVICE_KEY_ID,
+        "message_id": MESSAGE_ID,
+        "recipient_id": RECIPIENT_ID,
+        "typ": "mycarlos-send-recall",
+        "v": VERSION,
+    }
+
+
+def inbox_key_kid(public_key):
+    return b64u(hashlib.sha256(public_key).digest())
+
+
+def inbox_key_statement(
+    public_key=FAKE_INBOX_PUBLIC_KEY,
+    not_before=CREATED_AT - 86_400,
+    not_after=CREATED_AT + 300 * 86_400,
+    status="active",
+    serial=1,
+):
+    return {
+        "clinic_id": CLINIC_ID,
+        "kid": inbox_key_kid(public_key),
+        "not_after": not_after,
+        "not_before": not_before,
+        "public_key": b64u(public_key),
+        "serial": serial,
+        "signer_kid": CLINIC_KID,
+        "status": status,
+        "typ": "mycarlos-send-inbox-key",
+        "v": VERSION,
+    }
+
+
+# --- the reference validators (the contract in code) --------------------------------------------
 
 OUTER_FIELDS = {
     "attachment_count",
@@ -314,7 +415,7 @@ OUTER_FIELDS = {
     "typ",
     "v",
 }
-VISIBLE_ATTACHMENT_FIELDS = {"chain_head", "chunk_count", "index", "size"}
+VISIBLE_ATTACHMENT_FIELDS = {"attachment_id", "chain_head", "chunk_count", "index", "size"}
 ENVELOPE_FIELDS = {
     "attachments",
     "body",
@@ -354,6 +455,29 @@ ACK_FIELDS = {
     "typ",
     "v",
 }
+RECALL_FIELDS = {
+    "at",
+    "chain_head",
+    "clinic_id",
+    "device_key_id",
+    "message_id",
+    "recipient_id",
+    "typ",
+    "v",
+}
+INBOX_KEY_FIELDS = {
+    "clinic_id",
+    "kid",
+    "not_after",
+    "not_before",
+    "public_key",
+    "serial",
+    "signer_kid",
+    "status",
+    "typ",
+    "v",
+}
+# Why a message was not accepted (one per refusal, from a fixed list).
 REFUSAL_REASONS = [
     "unsupported_version",
     "bad_signature",
@@ -370,41 +494,108 @@ REFUSAL_REASONS = [
     "owner_group_missing",
     "not_enabled",
 ]
+# Why a recall was not honoured.
+RECALL_REFUSAL_REASONS = ["recall_too_late", "recall_unknown_message"]
+ACK_STATES = ["collected", "filed", "refused", "recalled", "recall_refused"]
 
 
 def is_int(value):
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def has_control(text):
-    return any(ord(c) < 32 and c != "\n" or ord(c) == 127 for c in text)
+def version_ok(obj):
+    """`v` is exactly the integer 1: not true, not 1.0, not "1", not null."""
+    return "v" in obj and is_int(obj["v"]) and obj["v"] == VERSION
 
 
-def check_outer(obj, working=PHASES["phase1"]):
+def id_text(value):
+    return isinstance(value, str) and bool(ID_TEXT.match(value))
+
+
+def uuid4(value):
+    return isinstance(value, str) and bool(UUID4.match(value))
+
+
+def hex64(value):
+    return isinstance(value, str) and bool(HEX64.match(value))
+
+
+def check_text(text, *, name=False):
+    """Text the app may show: NFC, one line feed allowed in a body, no other control, format,
+    separator or private-use characters (C0, C1, bidirectional controls, zero-width, U+2028 and
+    U+2029, and the like), and in a name no leading or trailing white space."""
+    if not isinstance(text, str):
+        return "bad_text"
+    if unicodedata.normalize("NFC", text) != text:
+        return "not_nfc"
+    for char in text:
+        category = unicodedata.category(char)
+        if char == "\n" and not name:
+            continue
+        if category in ("Cc", "Cf", "Zl", "Zp", "Cs", "Co", "Cn"):
+            return "forbidden_character"
+    if name and text != text.strip():
+        return "edge_white_space"
+    return None
+
+
+def b64url_decoded_size(text):
+    if not isinstance(text, str) or not B64URL.match(text):
+        return None
+    try:
+        return len(base64.urlsafe_b64decode(text + "=" * (-len(text) % 4)))
+    except ValueError:
+        return None
+
+
+def check_times(created_at, expires_at, now):
+    """The lifetime rules with a clock: created no later than the skew allowance ahead, not older
+    than the longest lifetime, and not yet expired."""
+    if not is_int(created_at) or not is_int(expires_at) or not is_int(now):
+        return "bad_number"
+    if expires_at <= created_at:
+        return "bad_lifetime"
+    if expires_at - created_at > LIMITS["lifetime_max_seconds"]:
+        return "lifetime_too_long"
+    if created_at > now + LIMITS["created_skew_seconds"]:
+        return "bad_time"
+    if expires_at <= now:
+        return "expired"
+    return None
+
+
+def check_outer(obj, working=PHASES["phase1"], now=None):
     """None when the outer record is acceptable, else the first reason (a stable name)."""
     if not isinstance(obj, dict):
         return "not_object"
-    if is_int(obj.get("v")) and obj["v"] != VERSION:
+    if "v" in obj and not version_ok(obj):
         return "unsupported_version"
     if set(obj) != OUTER_FIELDS:
         return "unknown_or_missing_field"
     if obj["typ"] != "mycarlos-send-outer" or obj["kind"] not in ("message", "documents"):
         return "bad_type"
-    for field in ("message_id",):
-        if not isinstance(obj[field], str) or not UUID4.match(obj[field]):
+    if not uuid4(obj["message_id"]):
+        return "bad_id"
+    for field in ("clinic_id", "recipient_id", "device_key_id", "sealed_key_kid"):
+        if not id_text(obj[field]):
             return "bad_id"
     for field in ("chain_head", "envelope_sha256"):
-        if not isinstance(obj[field], str) or not HEX64.match(obj[field]):
+        if not hex64(obj[field]):
             return "bad_hash"
-    if not isinstance(obj["sealed_key"], str) or not B64URL.match(obj["sealed_key"]):
+    if b64url_decoded_size(obj["sealed_key"]) != LIMITS["sealed_key_bytes"]:
         return "bad_sealed_key"
     for field in ("created_at", "expires_at", "envelope_size", "total_size", "chunk_total"):
         if not is_int(obj[field]) or obj[field] < 0:
             return "bad_number"
-    if obj["expires_at"] <= obj["created_at"]:
-        return "bad_lifetime"
-    if obj["expires_at"] - obj["created_at"] > LIMITS["lifetime_max_seconds"]:
-        return "lifetime_too_long"
+    if now is not None:
+        reason = check_times(obj["created_at"], obj["expires_at"], now)
+        if reason:
+            return reason
+    else:
+        if obj["expires_at"] <= obj["created_at"]:
+            return "bad_lifetime"
+        if obj["expires_at"] - obj["created_at"] > LIMITS["lifetime_max_seconds"]:
+            return "lifetime_too_long"
     if not 49 <= obj["envelope_size"] <= LIMITS["envelope_sealed_max"]:
         return "envelope_size"
     items = obj["attachments"]
@@ -416,33 +607,35 @@ def check_outer(obj, working=PHASES["phase1"]):
         return "kind_mismatch"
     chunks = 0
     size = obj["envelope_size"]
+    seen = set()
+    chunk = LIMITS["chunk_plain_max"] + LIMITS["aead_tag"]
     for position, item in enumerate(items):
         if not isinstance(item, dict) or set(item) != VISIBLE_ATTACHMENT_FIELDS:
             return "unknown_or_missing_field"
         if item["index"] != position:
             return "attachment_order"
-        if not isinstance(item["chain_head"], str) or not HEX64.match(item["chain_head"]):
+        if not uuid4(item["attachment_id"]):
+            return "bad_id"
+        if item["attachment_id"] in seen:
+            return "duplicate_attachment_id"
+        seen.add(item["attachment_id"])
+        if not hex64(item["chain_head"]):
             return "bad_hash"
-        if not is_int(item["chunk_count"]) or not (
-            1 <= item["chunk_count"] <= LIMITS["chunks_per_attachment_max"]
-        ):
+        count = item["chunk_count"]
+        if not is_int(count) or not 1 <= count <= LIMITS["chunks_per_attachment_max"]:
             return "bad_chunk_count"
-        if not is_int(item["size"]) or item["size"] < item["chunk_count"] * LIMITS["aead_tag"]:
+        if not is_int(item["size"]):
             return "bad_size"
-        # Sealed size: at most the plain chunks plus a tag each.
-        most = item["chunk_count"] * (LIMITS["chunk_plain_max"] + LIMITS["aead_tag"])
-        if item["size"] > most:
+        # Every chunk but the last is full: the sealed size is bounded on both sides by the count.
+        if not (count - 1) * chunk + LIMITS["aead_tag"] + 1 <= item["size"] <= count * chunk:
             return "bad_size"
-        if (
-            item["size"]
-            > working["attachment_max_bytes"] + item["chunk_count"] * LIMITS["aead_tag"]
-        ):
+        if item["size"] > working["attachment_max_bytes"] + count * LIMITS["aead_tag"]:
             return "too_large"
-        chunks += item["chunk_count"]
+        chunks += count
         size += item["size"]
     if chunks != obj["chunk_total"] or size != obj["total_size"]:
         return "totals_mismatch"
-    if obj["total_size"] > working["message_max_bytes"]:
+    if obj["total_size"] > working["message_max_bytes"] + LIMITS["envelope_sealed_max"]:
         return "too_large"
     return None
 
@@ -451,14 +644,17 @@ def check_envelope(obj, working=PHASES["phase1"]):
     """None when the (decrypted, signature-checked elsewhere) envelope is acceptable."""
     if not isinstance(obj, dict):
         return "not_object"
-    if is_int(obj.get("v")) and obj["v"] != VERSION:
+    if "v" in obj and not version_ok(obj):
         return "unsupported_version"
     if set(obj) != ENVELOPE_FIELDS:
         return "unknown_or_missing_field"
     if obj["typ"] != "mycarlos-send-envelope":
         return "bad_type"
     for field in ("message_id", "conversation_id"):
-        if not isinstance(obj[field], str) or not UUID4.match(obj[field]):
+        if not uuid4(obj[field]):
+            return "bad_id"
+    for field in ("clinic_id", "recipient_id", "device_key_id"):
+        if not id_text(obj[field]):
             return "bad_id"
     if obj["in_reply_to"] is not None:
         return "reply_not_supported"  # reserved: null in v1
@@ -471,11 +667,13 @@ def check_envelope(obj, working=PHASES["phase1"]):
     body = obj["body"]
     if not isinstance(body, str) or len(body.encode("utf-8")) > LIMITS["body_max_bytes"]:
         return "body_too_long"
-    if has_control(body):
-        return "body_control_characters"
+    reason = check_text(body)
+    if reason:
+        return "body_" + reason
     items = obj["attachments"]
     if not isinstance(items, list) or len(items) > LIMITS["attachments_max"]:
         return "too_many_attachments"
+    # Empty means only White_Space characters (Python's str.strip), in a body with no attachment.
     if not body.strip() and not items:
         return "empty_message"
     seen = set()
@@ -483,7 +681,7 @@ def check_envelope(obj, working=PHASES["phase1"]):
     for item in items:
         if not isinstance(item, dict) or set(item) != ATTACHMENT_FIELDS:
             return "unknown_or_missing_field"
-        if not isinstance(item["attachment_id"], str) or not UUID4.match(item["attachment_id"]):
+        if not uuid4(item["attachment_id"]):
             return "bad_id"
         if item["attachment_id"] in seen:
             return "duplicate_attachment_id"
@@ -493,23 +691,22 @@ def check_envelope(obj, working=PHASES["phase1"]):
             not isinstance(name, str)
             or not 1 <= len(name) <= LIMITS["name_max_chars"]
             or any(c in name for c in "/\\:\x00")
-            or has_control(name)
             or name in (".", "..")
         ):
             return "bad_name"
+        reason = check_text(name, name=True)
+        if reason:
+            return "name_" + reason
         if item["media_type"] not in working["media_types"]:
             return "type_not_allowed"
         if not is_int(item["size"]) or not 1 <= item["size"] <= working["attachment_max_bytes"]:
             return "too_large"
         total += item["size"]
-        if not isinstance(item["sha256"], str) or not HEX64.match(item["sha256"]):
-            return "bad_hash"
-        if not isinstance(item["chain_head"], str) or not HEX64.match(item["chain_head"]):
+        if not hex64(item["sha256"]) or not hex64(item["chain_head"]):
             return "bad_hash"
         if item["chunk_size"] != LIMITS["chunk_plain_max"]:
             return "bad_chunk_size"
-        expected_chunks = -(-item["size"] // item["chunk_size"])
-        if item["chunk_count"] != expected_chunks:
+        if item["chunk_count"] != -(-item["size"] // item["chunk_size"]):
             return "bad_chunk_count"
         prov = item["provenance"]
         if not isinstance(prov, dict) or prov.get("kind") not in (
@@ -523,7 +720,7 @@ def check_envelope(obj, working=PHASES["phase1"]):
         else:
             if set(prov) != {"kind", "delivery_id", "manifest"}:
                 return "bad_provenance"
-            if not isinstance(prov["delivery_id"], str) or not UUID4.match(prov["delivery_id"]):
+            if not uuid4(prov["delivery_id"]):
                 return "bad_id"
             manifest = prov["manifest"]
             if (
@@ -539,81 +736,204 @@ def check_envelope(obj, working=PHASES["phase1"]):
     return None
 
 
+def check_pair(outer, envelope):
+    """CARLOS's check after opening: the envelope (signed) and the outer record (what the portal
+    held) describe the same message. The signed envelope's chain heads are the ones that count."""
+    if outer["message_id"] != envelope["message_id"]:
+        return "pair_message"
+    for field in ("clinic_id", "recipient_id", "device_key_id", "created_at", "expires_at"):
+        if outer[field] != envelope[field]:
+            return "pair_" + field
+    if outer["attachment_count"] != len(envelope["attachments"]):
+        return "pair_attachment_count"
+    for visible, described in zip(outer["attachments"], envelope["attachments"], strict=True):
+        if (
+            visible["attachment_id"] != described["attachment_id"]
+            or visible["chain_head"] != described["chain_head"]
+            or visible["chunk_count"] != described["chunk_count"]
+            or visible["size"] != sealed_size(described["size"])
+        ):
+            return "pair_attachment"
+    return None
+
+
 def check_ack(obj):
     if not isinstance(obj, dict):
         return "not_object"
-    if is_int(obj.get("v")) and obj["v"] != VERSION:
+    if "v" in obj and not version_ok(obj):
         return "unsupported_version"
     if set(obj) != ACK_FIELDS:
         return "unknown_or_missing_field"
-    if obj["typ"] != "mycarlos-send-ack" or obj["state"] not in ("collected", "filed", "refused"):
+    if obj["typ"] != "mycarlos-send-ack" or obj["state"] not in ACK_STATES:
         return "bad_type"
-    if (obj["state"] == "refused") != (obj["reason"] is not None):
+    needs_reason = obj["state"] in ("refused", "recall_refused")
+    if needs_reason != (obj["reason"] is not None):
         return "reason_mismatch"
-    if obj["reason"] is not None and obj["reason"] not in REFUSAL_REASONS:
+    allowed = REFUSAL_REASONS if obj["state"] == "refused" else RECALL_REFUSAL_REASONS
+    if needs_reason and obj["reason"] not in allowed:
         return "bad_reason"
+    for field in ("message_id",):
+        if not uuid4(obj[field]):
+            return "bad_id"
+    for field in ("clinic_id", "recipient_id", "device_key_id", "kid"):
+        if not id_text(obj[field]):
+            return "bad_id"
+    # The handle is the clinic's own and random: never derived from a chart or message id.
     if not isinstance(obj["ref"], str) or not OPAQUE_REF.match(obj["ref"]):
         return "bad_ref"
-    if not isinstance(obj["chain_head"], str) or not HEX64.match(obj["chain_head"]):
+    if not hex64(obj["chain_head"]):
         return "bad_hash"
     if not is_int(obj["at"]) or obj["at"] < 0:
         return "bad_number"
     return None
 
 
-# State the app shows, and what each means (the words never say read, reviewed or seen).
+def check_recall(obj):
+    if not isinstance(obj, dict):
+        return "not_object"
+    if "v" in obj and not version_ok(obj):
+        return "unsupported_version"
+    if set(obj) != RECALL_FIELDS:
+        return "unknown_or_missing_field"
+    if obj["typ"] != "mycarlos-send-recall":
+        return "bad_type"
+    if not uuid4(obj["message_id"]):
+        return "bad_id"
+    for field in ("clinic_id", "recipient_id", "device_key_id"):
+        if not id_text(obj[field]):
+            return "bad_id"
+    if not hex64(obj["chain_head"]):
+        return "bad_hash"
+    if not is_int(obj["at"]) or obj["at"] < 0:
+        return "bad_number"
+    return None
+
+
+def check_inbox_key(obj, now):
+    """What the app checks of a clinic inbox key statement (its signature, by a pinned clinic key,
+    is checked first, elsewhere) before it seals anything to the key."""
+    if not isinstance(obj, dict):
+        return "not_object"
+    if "v" in obj and not version_ok(obj):
+        return "unsupported_version"
+    if set(obj) != INBOX_KEY_FIELDS:
+        return "unknown_or_missing_field"
+    if obj["typ"] != "mycarlos-send-inbox-key" or obj["status"] not in ("active", "revoked"):
+        return "bad_type"
+    for field in ("clinic_id", "kid", "signer_kid"):
+        if not id_text(obj[field]):
+            return "bad_id"
+    if b64url_decoded_size(obj["public_key"]) != 32:
+        return "bad_public_key"
+    raw = base64.urlsafe_b64decode(obj["public_key"] + "=")
+    if obj["kid"] != inbox_key_kid(raw):
+        return "kid_mismatch"
+    if not is_int(obj["serial"]) or obj["serial"] < 1:
+        return "bad_serial"
+    if not is_int(obj["not_before"]) or not is_int(obj["not_after"]):
+        return "bad_number"
+    if obj["not_after"] <= obj["not_before"]:
+        return "bad_validity"
+    if obj["not_after"] - obj["not_before"] > LIMITS["inbox_key_validity_max_days"] * 86_400:
+        return "validity_too_long"
+    if obj["status"] == "revoked":
+        return "revoked"
+    if now < obj["not_before"]:
+        return "not_yet_valid"
+    if now >= obj["not_after"]:
+        return "expired"
+    return None
+
+
+# What the patient sees and what each means. `by` says who can make the claim true: the app, the
+# portal (an unsigned claim the device cannot verify) or the clinic system (signed, verified against
+# the link's pinned clinic keys). The words never say read, seen or reviewed.
 STATES = {
     "queued": {
-        "set_by": "app",
+        "by": "app",
         "means": "kept in the sent record; nothing has been sent yet",
         "never_means": "that anything left this device",
     },
     "sending": {
-        "set_by": "app",
-        "means": "parts are being uploaded; resumes where it stopped",
+        "by": "app",
+        "means": "parts are being uploaded in this run of the app",
         "never_means": "that the portal has all of it",
     },
     "received": {
-        "set_by": "portal (reply the app checks: message_id, chain_head, received_at)",
-        "means": "the portal holds every part and the chain checked; it cannot read them",
-        "never_means": "that the clinic has it",
+        "by": "portal-claim",
+        "means": "the portal says it holds every part and that the chain it can recompute matches",
+        "never_means": "that the clinic has it, or that the portal's check protects against "
+        "the portal",
     },
     "collected": {
-        "set_by": "clinic system, by a signed acknowledgement (state collected)",
+        "by": "clinic-signed",
         "means": "the clinic's system fetched, opened and checked the message",
         "never_means": "filed, seen or read by anyone",
     },
     "filed": {
-        "set_by": "clinic system, by a signed acknowledgement (state filed)",
-        "means": "stored in the clinic's pending-review queue for staff",
+        "by": "clinic-signed",
+        "means": "stored in the clinic's pending-review queue for staff, not yet in a chart",
         "never_means": "that any staff member has read, reviewed or acted on it",
     },
     "refused": {
-        "set_by": "portal (limits, device) or clinic system (signed acknowledgement with a reason)",
-        "means": "not accepted, with one reason from a fixed list; nothing is kept",
+        "by": "clinic-signed, or portal-claim before the clinic collected it",
+        "means": "not accepted, for one reason from a fixed list; nothing is kept",
         "never_means": "a judgement about the content",
     },
     "expired": {
-        "set_by": "app or portal, when expires_at passes before the clinic collected it",
-        "means": "the portal deleted what it held; the sent record keeps that it expired",
-        "never_means": "that it was delivered",
+        "by": "portal-claim or app, only before the clinic collected it",
+        "means": "the time ran out before the clinic's system collected it; the portal deleted it",
+        "never_means": "that it was delivered; after a signed collected only the clinic's signed "
+        "answer ends the message",
     },
     "recalled": {
-        "set_by": "clinic system, by a signed acknowledgement after a recall request",
-        "means": "removed from the pending-review queue before it was accepted into a chart",
+        "by": "clinic-signed",
+        "means": "removed from the pending queue before it was accepted into a chart",
         "never_means": "that nobody saw it",
     },
+    "cancelled": {
+        "by": "app and portal, before the upload was completed",
+        "means": "the upload was stopped and everything deleted",
+        "never_means": "anything about a message that was completed",
+    },
 }
+# `recall requested` is a mark on received, collected or filed, not a state of its own.
 TRANSITIONS = {
     "queued": ["sending", "cancelled"],
     "sending": ["received", "cancelled", "expired", "refused"],
     "received": ["collected", "refused", "expired", "recalled"],
-    "collected": ["filed", "refused", "expired", "recalled"],
+    "collected": ["filed", "refused", "recalled"],
     "filed": ["recalled"],
     "refused": [],
     "expired": [],
     "recalled": [],
     "cancelled": [],
+}
+RULES = {
+    "after_a_signed_collected": (
+        "only the clinic's signed filed, refused or recalled ends the message; the portal's "
+        "unsigned refused or expired is shown as 'the portal says ...' and changes nothing; the "
+        "clinic's system enforces expires_at itself (a signed refused with reason expired)"
+    ),
+    "cancel_vs_complete": (
+        "one row lock on the message: the first wins; a cancel after complete is 409 use_recall, a "
+        "complete after cancel is 409 cancelled"
+    ),
+    "recall_vs_accept": (
+        "the clinic's recall handling and its accept-into-chart take the same row lock on the "
+        "inbound row: the first wins and the loser reads the other's result (recalled, or "
+        "recall_refused with reason recall_too_late)"
+    ),
+    "recall": (
+        "a recall is a device-signed object (message_id, chain_head, clinic_id); the portal relays "
+        "it, the clinic verifies the signature against its accepted-device table and the chain "
+        "head against its own record, then answers with a signed recalled or recall_refused"
+    ),
+    "interrupted_send": (
+        "the content key lives only in memory: a restart, a lock or a crash ends the send. The "
+        "app cancels what the portal holds and the patient sends again as a NEW message_id, so a "
+        "nonce is never used twice under one key"
+    ),
 }
 
 ROUTES = [
@@ -621,40 +941,46 @@ ROUTES = [
     [
         "POST",
         "/api/mycarlos/sends",
-        "device assertion; body is the JCS outer record",
-        "201, 200, 409 send_conflict",
+        "device assertion; body is the canonical outer record",
+        "201, 200, 409 send_conflict, 410 gone, 422",
     ],
     [
         "PUT",
         "/api/mycarlos/sends/{message_id}/envelope",
         "device assertion; body the sealed envelope",
-        "200, 409 chunk_conflict",
+        "200, 409 chunk_conflict, 413",
     ],
     [
         "PUT",
         "/api/mycarlos/sends/{message_id}/attachments/{a}/chunks/{n}",
-        "device assertion; body one sealed chunk",
+        "device assertion; body one sealed chunk (header X-Chunk-SHA256)",
         "200, 409 chunk_conflict, 413",
     ],
     [
         "GET",
         "/api/mycarlos/sends/{message_id}",
         "device assertion",
-        "200 with state and received parts; 404",
+        "200 with state, and for each part whether it is held and its SHA-256; 404",
     ],
     [
         "POST",
         "/api/mycarlos/sends/{message_id}/complete",
         "device assertion; empty body",
-        "200 received; 422 chain_mismatch",
+        "200 received; 409 cancelled; 422 chain_mismatch",
     ],
     [
         "POST",
         "/api/mycarlos/sends/{message_id}/cancel",
-        "device assertion; empty body",
-        "200 cancelled; 200 recall_requested after received",
+        "device assertion; empty body; only before complete",
+        "200 cancelled; 409 use_recall",
     ],
-    ["GET", "/api/mycarlos/sends", "device assertion; ?after&limit (max 50)", "200 list of states"],
+    [
+        "POST",
+        "/api/mycarlos/sends/{message_id}/recall",
+        "device assertion; body the device-signed recall (compact)",
+        "200 recall_requested; 409 gone",
+    ],
+    ["GET", "/api/mycarlos/sends", "device assertion; ?after&limit (at most 50)", "200"],
     [
         "POST",
         "/internal/carlos/mycarlos/sends/claim",
@@ -663,14 +989,26 @@ ROUTES = [
     ],
     [
         "GET",
-        "/internal/carlos/mycarlos/sends/{id}/parts/{part}",
+        "/internal/carlos/mycarlos/sends/{id}/envelope",
+        "job send-sync, portal.mycarlos.send.read; lease token",
+        "200 octet-stream; 404",
+    ],
+    [
+        "GET",
+        "/internal/carlos/mycarlos/sends/{id}/attachments/{a}/chunks/{n}",
         "job send-sync, portal.mycarlos.send.read; lease token",
         "200 octet-stream; 404",
     ],
     [
         "POST",
+        "/internal/carlos/mycarlos/sends/recalls",
+        "job send-sync, portal.mycarlos.send.read; body {limit}",
+        "200 pending recalls with their device-signed recall objects",
+    ],
+    [
+        "POST",
         "/internal/carlos/mycarlos/sends/{id}/result",
-        "job send-sync, portal.mycarlos.send.result; lease token",
+        "job send-sync, portal.mycarlos.send.result; lease token or recall",
         "200, 409 lease_expired or conflict, 404",
     ],
 ]
@@ -678,96 +1016,94 @@ ROUTES = [
 IDEMPOTENCY = [
     ["create", "first request", 201, "created"],
     ["create", "same outer record, byte for byte", 200, "nothing written"],
-    ["create", "same message_id, different outer record", 409, "send_conflict; nothing changed"],
+    ["create", "same message_id from this device, different outer record", 409, "send_conflict"],
+    [
+        "create",
+        "a message_id that this device used and the portal has deleted (a tombstone)",
+        410,
+        "gone; never recreated",
+    ],
+    ["create", "expires_at in the past", 422, "expired"],
+    ["create", "created_at more than 300 s ahead of the portal's clock", 422, "bad_time"],
+    [
+        "any",
+        "a message_id that belongs to another device or does not exist",
+        404,
+        "the same answer: no existence oracle; ids are scoped to the device",
+    ],
     ["envelope or chunk", "first time", 200, "stored"],
     ["envelope or chunk", "same bytes again", 200, "nothing written"],
-    [
-        "envelope or chunk",
-        "different bytes for the same place",
-        409,
-        "chunk_conflict; nothing changed",
-    ],
-    ["complete", "all parts present and the chain matches", 200, "state received"],
+    ["envelope or chunk", "different bytes for the same place", 409, "chunk_conflict"],
+    ["complete", "all parts present, chain matches", 200, "state received"],
     ["complete", "again, once received", 200, "unchanged"],
-    [
-        "complete",
-        "a part missing or a hash that does not chain",
-        422,
-        "chain_mismatch or missing parts listed",
-    ],
-    ["cancel", "before received", 200, "everything deleted; state cancelled"],
-    ["cancel", "after received", 200, "recall_requested; the clinic decides"],
-    ["result", "same outcome and acknowledgement again", 200, "recorded: false"],
-    ["result", "a different outcome for a finished message", 409, "conflict"],
+    ["complete", "a part missing, or a hash that does not chain", 422, "chain_mismatch"],
+    ["complete", "after a cancel", 409, "cancelled"],
+    ["cancel", "before complete", 200, "everything deleted, state cancelled"],
+    ["cancel", "after complete", 409, "use_recall"],
+    ["recall", "device-signed, for a received message", 200, "recall_requested"],
+    ["recall", "the same recall again", 200, "nothing written"],
+    ["recall", "for a deleted message", 409, "gone"],
     [
         "result",
-        "lease expired before the answer",
-        409,
-        "lease_expired; the message can be claimed again",
+        "same outcome and the same acknowledgement again",
+        200,
+        "recorded: false",
+    ],
+    ["result", "a different outcome for a finished message", 409, "conflict"],
+    ["result", "lease expired before the answer", 409, "lease_expired; claimable again"],
+    [
+        "CARLOS filing",
+        "the same (device, message_id, chain_head) again",
+        "n/a",
+        "the original acknowledgement is issued again, byte for byte; nothing is filed twice",
+    ],
+    [
+        "CARLOS filing",
+        "the same (device, message_id) with a different chain_head",
+        "n/a",
+        "a signed refused, reason duplicate_message",
     ],
 ]
 
+PORTAL_LEARNS = [
+    "that a message exists, when it was created and when it expires",
+    "which device, recipient and clinic it is for (it knows them already)",
+    "the number of attachments, and each one's chunk count and sealed size (not its name or type)",
+    "the total size, and when each part arrived",
+    "the state, and the clinic's signed acknowledgements it relays",
+]
+PORTAL_DOES_NOT_LEARN = [
+    "the text, the names, the types or the content of anything",
+    "who the patient is beyond the account the device already belongs to",
+    "whether a document is the clinic's own signed copy",
+]
 
-def build():
-    # Three sealed chunks of an attachment (the last short) and a one-chunk attachment: FAKE bytes.
-    envelope_ciphertext = bytes([0xE0]) * 700
-    chunks_a = fake_chunks(0x10, [64, 64, 21])
-    chunks_b = fake_chunks(0x40, [48])
-    head_a = attachment_head(MESSAGE_ID, ATTACHMENT_A, chunks_a)
-    head_b = attachment_head(MESSAGE_ID, ATTACHMENT_B, chunks_b)
-    message = message_head(MESSAGE_ID, envelope_ciphertext, [head_a, head_b])
 
-    base = {
-        "attachment_chunk_sha256": [digest(c) for c in chunks_a],
-        "attachment_head": head_a.hex(),
-        "message_head": message.hex(),
-    }
-    cases = []
+# --- fake data: a fully consistent message ------------------------------------------------------
 
-    def chain_case(name, head, expect):
-        cases.append({"name": name, "head": head.hex(), "expect": expect})
 
-    chain_case("the base chain", head_a, "equals base")
-    chain_case(
-        "chunks 1 and 2 swapped",
-        attachment_head(MESSAGE_ID, ATTACHMENT_A, [chunks_a[0], chunks_a[2], chunks_a[1]]),
-        "differs",
-    )
-    chain_case(
-        "last chunk dropped (count 2)",
-        attachment_head(MESSAGE_ID, ATTACHMENT_A, chunks_a[:2]),
-        "differs",
-    )
-    chain_case(
-        "first chunk repeated",
-        attachment_head(MESSAGE_ID, ATTACHMENT_A, [chunks_a[0]] + chunks_a),
-        "differs",
-    )
-    chain_case(
-        "one byte of a chunk changed",
-        attachment_head(
-            MESSAGE_ID, ATTACHMENT_A, [chunks_a[0], chunks_a[1][:-1] + b"\x00", chunks_a[2]]
-        ),
-        "differs",
-    )
-    chain_case(
-        "the same chunks under another message_id",
-        attachment_head(OTHER_MESSAGE_ID, ATTACHMENT_A, chunks_a),
-        "differs",
-    )
-    chain_case(
-        "the same chunks as another attachment",
-        attachment_head(MESSAGE_ID, ATTACHMENT_B, chunks_a),
-        "differs",
-    )
-    cases.append(
-        {
-            "name": "message head with the attachments in the other order",
-            "head": message_head(MESSAGE_ID, envelope_ciphertext, [head_b, head_a]).hex(),
-            "expect": "differs from message_head",
-        }
-    )
+def fake_bytes(seed, size):
+    return bytes([seed]) * size
 
+
+def build_message():
+    """One end-to-end consistent message: an 8 MiB + 17 byte PDF (three chunks) the clinic signed
+    earlier, and a 1000 byte photo (one chunk). 'Sealed' bytes are FAKE fixed bytes of the right
+    sizes (no cipher runs); every size, count, hash, head and descriptor below agrees."""
+    chunk = LIMITS["chunk_plain_max"]
+    tag = LIMITS["aead_tag"]
+    size_a = 2 * chunk + 17
+    size_b = 1000
+    plain_a = fake_bytes(0xA1, size_a)
+    plain_b = fake_bytes(0xB2, size_b)
+    sealed_a = [
+        fake_bytes(0x10, chunk + tag),
+        fake_bytes(0x11, chunk + tag),
+        fake_bytes(0x12, 17 + tag),
+    ]
+    sealed_b = [fake_bytes(0x40, size_b + tag)]
+    head_a = attachment_head(MESSAGE_ID, ATTACHMENT_A, sealed_a)
+    head_b = attachment_head(MESSAGE_ID, ATTACHMENT_B, sealed_b)
     prov_clinic = {
         "delivery_id": DELIVERY_ID,
         "kind": "clinic-signed-copy",
@@ -777,9 +1113,8 @@ def build():
         ATTACHMENT_A,
         "FAKE-lab-result.pdf",
         "application/pdf",
-        64 + 64 + 21 - 3 * LIMITS["aead_tag"] if False else 5 * MIB + 17,
-        digest(b"FAKE plaintext A"),
-        2,
+        size_a,
+        digest(plain_a),
         head_a.hex(),
         prov_clinic,
     )
@@ -787,82 +1122,255 @@ def build():
         ATTACHMENT_B,
         "FAKE-photo.jpg",
         "image/jpeg",
-        1000,
-        digest(b"FAKE plaintext B"),
-        1,
+        size_b,
+        digest(plain_b),
         head_b.hex(),
         {"kind": "patient-original"},
     )
     envelope = envelope_object([att_a, att_b])
     envelope_bytes = canonical(envelope)
-
+    # The sealed envelope is the canonical bytes and the tag.
+    envelope_ciphertext = fake_bytes(0xE0, len(envelope_bytes) + tag)
+    head = message_head(MESSAGE_ID, envelope_ciphertext, [head_a, head_b])
     visible = [
-        {"chain_head": head_a.hex(), "chunk_count": 2, "index": 0, "size": 5 * MIB + 17 + 2 * 16},
-        {"chain_head": head_b.hex(), "chunk_count": 1, "index": 1, "size": 1000 + 16},
+        {
+            "attachment_id": ATTACHMENT_A,
+            "chain_head": head_a.hex(),
+            "chunk_count": 3,
+            "index": 0,
+            "size": sum(len(c) for c in sealed_a),
+        },
+        {
+            "attachment_id": ATTACHMENT_B,
+            "chain_head": head_b.hex(),
+            "chunk_count": 1,
+            "index": 1,
+            "size": sum(len(c) for c in sealed_b),
+        },
     ]
-    outer = outer_object(envelope_ciphertext, visible, message.hex(), "RkFLRXNlYWxlZGtleQ")
-    outer_bytes = canonical(outer)
-    request_hash = lambda method, path, body: digest(  # noqa: E731
-        frame(method.encode(), path.encode(), b"", body)
-    )
-
-    acks = {
-        name: encoded(canonical(ack_object(*args, head=message.hex())))
-        for name, args in {
-            "collected": ("collected",),
-            "filed": ("filed",),
-            "refused": ("refused", "scan_failed"),
-        }.items()
+    kid = inbox_key_kid(FAKE_INBOX_PUBLIC_KEY)
+    sealed_key = b64u(fake_bytes(0x5E, LIMITS["sealed_key_bytes"]))
+    outer = outer_object(envelope_ciphertext, visible, head.hex(), sealed_key, kid)
+    return {
+        "plain_a": plain_a,
+        "plain_b": plain_b,
+        "sealed_a": sealed_a,
+        "sealed_b": sealed_b,
+        "head_a": head_a,
+        "head_b": head_b,
+        "head": head,
+        "envelope": envelope,
+        "envelope_bytes": envelope_bytes,
+        "envelope_ciphertext": envelope_ciphertext,
+        "outer": outer,
+        "outer_bytes": canonical(outer),
     }
 
+
+def build():
+    m = build_message()
+    envelope, outer = m["envelope"], m["outer"]
+    envelope_bytes, outer_bytes = m["envelope_bytes"], m["outer_bytes"]
+    sealed_a, sealed_b = m["sealed_a"], m["sealed_b"]
+    head_a, head_b = m["head_a"], m["head_b"]
+    head = m["head"]
+    envelope_ciphertext = m["envelope_ciphertext"]
+
+    # --- the chain cases: what must equal the base, and everything that must not.
+    chain_cases = []
+
+    def chain_case(name, value, expect):
+        chain_cases.append({"name": name, "head": value.hex(), "expect": expect})
+
+    chain_case("the base chain", head_a, "equals base")
+    chain_case(
+        "chunks 1 and 2 swapped",
+        attachment_head(MESSAGE_ID, ATTACHMENT_A, [sealed_a[0], sealed_a[2], sealed_a[1]]),
+        "differs",
+    )
+    chain_case(
+        "last chunk dropped (count 2)",
+        attachment_head(MESSAGE_ID, ATTACHMENT_A, sealed_a[:2]),
+        "differs",
+    )
+    chain_case(
+        "first chunk repeated",
+        attachment_head(MESSAGE_ID, ATTACHMENT_A, [sealed_a[0], *sealed_a]),
+        "differs",
+    )
+    changed = sealed_a[1][:-1] + b"\x00"
+    chain_case(
+        "one byte of a chunk changed",
+        attachment_head(MESSAGE_ID, ATTACHMENT_A, [sealed_a[0], changed, sealed_a[2]]),
+        "differs",
+    )
+    chain_case(
+        "the same chunks under another message_id",
+        attachment_head(OTHER_MESSAGE_ID, ATTACHMENT_A, sealed_a),
+        "differs",
+    )
+    chain_case(
+        "the same chunks as another attachment",
+        attachment_head(MESSAGE_ID, ATTACHMENT_B, sealed_a),
+        "differs",
+    )
+    chain_case(
+        "message head with the attachments in the other order",
+        message_head(MESSAGE_ID, envelope_ciphertext, [head_b, head_a]),
+        "differs from message_head",
+    )
+    chain_case(
+        "message head with another sealed envelope",
+        message_head(MESSAGE_ID, envelope_ciphertext[:-1] + b"\x00", [head_a, head_b]),
+        "differs from message_head",
+    )
+
+    # --- outer record cases.
     outer_cases = []
 
-    def outer_case(name, mutate):
+    def outer_case(name, mutate, now=None):
         value = json.loads(outer_bytes)
         mutate(value)
         outer_cases.append(
-            {"name": name, "object": value, "expect": check_outer(value) or "accept"}
+            {
+                "name": name,
+                "now": now,
+                "object": value,
+                "expect": check_outer(value, now=now) or "accept",
+            }
         )
 
     outer_case("exactly as built", lambda o: None)
+    outer_case("with a clock inside its lifetime", lambda o: None, now=CREATED_AT + 60)
     outer_case("an unknown field", lambda o: o.update(extra=1))
     outer_case("a missing field", lambda o: o.pop("sealed_key"))
-    outer_case("version 2", lambda o: o.update(v=2))
-    outer_case("version as text", lambda o: o.update(v="1"))
+    for label, value in [("2", 2), ("as text", "1"), ("true", True), ("1.0", 1.0), ("null", None)]:
+        outer_case(f"version {label}", lambda o, value=value: o.update(v=value))
+    outer_case("no version at all", lambda o: o.pop("v"))
     outer_case("message_id not a UUID", lambda o: o.update(message_id="not-a-uuid"))
+    outer_case("clinic_id a number", lambda o: o.update(clinic_id=7))
+    outer_case("recipient_id with a space", lambda o: o.update(recipient_id="a b"))
+    outer_case("device_key_id empty", lambda o: o.update(device_key_id=""))
+    outer_case("sealed_key_kid too long", lambda o: o.update(sealed_key_kid="k" * 129))
     outer_case("chain_head not hex", lambda o: o.update(chain_head="zz" * 32))
+    outer_case("sealed_key of 79 bytes", lambda o: o.update(sealed_key=b64u(b"x" * 79)))
+    outer_case("sealed_key with padding", lambda o: o.update(sealed_key=o["sealed_key"] + "="))
     outer_case(
         "lifetime over seven days",
         lambda o: o.update(expires_at=o["created_at"] + 7 * 24 * 3600 + 1),
     )
     outer_case("expires before it is created", lambda o: o.update(expires_at=o["created_at"]))
+    outer_case("expires_at in the past", lambda o: None, now=EXPIRES_AT + 1)
     outer_case(
-        "eleven attachments",
-        lambda o: o.update(attachments=o["attachments"] * 6, attachment_count=12),
+        "created_at ahead of the clock beyond the skew", lambda o: None, now=CREATED_AT - 301
     )
+    outer_case(
+        "created_at ahead of the clock within the skew", lambda o: None, now=CREATED_AT - 300
+    )
+
+    def eleven(o):
+        item = {
+            "attachment_id": ATTACHMENT_A,
+            "chain_head": "0" * 64,
+            "chunk_count": 1,
+            "index": 0,
+            "size": 1016,
+        }
+        o["attachments"] = [
+            {**item, "attachment_id": f"7d2b8b2c-3e5f-4a0c-9c63-2f3a4b5c6d{n:02x}", "index": n}
+            for n in range(11)
+        ]
+        o["attachment_count"] = 11
+        o["chunk_total"] = 11
+        o["total_size"] = o["envelope_size"] + 11 * 1016
+
+    outer_case("eleven attachments (consistent totals)", eleven)
     outer_case("count disagrees with the list", lambda o: o.update(attachment_count=3))
     outer_case("kind message with attachments", lambda o: o.update(kind="message"))
     outer_case("attachments out of order", lambda o: o["attachments"].reverse())
+    outer_case(
+        "an attachment id repeated",
+        lambda o: o["attachments"][1].update(attachment_id=ATTACHMENT_A),
+    )
+    outer_case(
+        "an attachment id not a UUID", lambda o: o["attachments"][0].update(attachment_id="x")
+    )
     outer_case("a chunk count of zero", lambda o: o["attachments"][0].update(chunk_count=0))
+    outer_case(
+        "a size too small for its chunk count",
+        lambda o: o["attachments"][0].update(size=o["attachments"][0]["size"] - 4 * MIB),
+    )
     outer_case("totals do not add up", lambda o: o.update(total_size=o["total_size"] + 1))
-    outer_case("over the phase 1 message limit", lambda o: o.update(total_size=65 * MIB))
 
+    def over_attachment(o):
+        count = 6  # 6 sealed chunks hold up to 24 MiB: over the 20 MiB phase 1 limit
+        size = 5 * (4 * MIB + 16) + 4 * MIB // 2
+        o["attachments"][0].update(chunk_count=count, size=size)
+        o["chunk_total"] = count + 1
+        o["total_size"] = o["envelope_size"] + size + o["attachments"][1]["size"]
+
+    outer_case("an attachment over the phase 1 limit (consistent totals)", over_attachment)
+
+    def over_message(o):
+        items = []
+        for n in range(4):  # four attachments of 17 MiB: each allowed, 68 MiB together: over 64
+            size = 4 * (4 * MIB + 16) + 1 * MIB
+            items.append(
+                {
+                    "attachment_id": f"7d2b8b2c-3e5f-4a0c-9c63-2f3a4b5c6d{n:02x}",
+                    "chain_head": "1" * 64,
+                    "chunk_count": 5,
+                    "index": n,
+                    "size": size,
+                }
+            )
+        o["attachments"] = items
+        o["attachment_count"] = 4
+        o["chunk_total"] = 20
+        o["total_size"] = o["envelope_size"] + sum(i["size"] for i in items)
+
+    outer_case("a message over the phase 1 limit (consistent totals)", over_message)
+
+    # --- envelope cases.
     envelope_cases = []
 
     def envelope_case(name, mutate, working=PHASES["phase1"]):
         value = json.loads(envelope_bytes)
         mutate(value)
         envelope_cases.append(
-            {"name": name, "object": value, "expect": check_envelope(value, working) or "accept"}
+            {
+                "name": name,
+                "object": value,
+                "phase": "phase2_video" if working is PHASES["phase2_video"] else "phase1",
+                "expect": check_envelope(value, working) or "accept",
+            }
         )
 
     envelope_case("exactly as built", lambda e: None)
     envelope_case("an unknown field", lambda e: e.update(sender_name="FAKE Person"))
-    envelope_case("version 2", lambda e: e.update(v=2))
+    for label, value in [("2", 2), ("as text", "1"), ("true", True), ("1.0", 1.0), ("null", None)]:
+        envelope_case(f"version {label}", lambda e, value=value: e.update(v=value))
+    envelope_case("clinic_id a number", lambda e: e.update(clinic_id=1))
     envelope_case("a reply (reserved, null in v1)", lambda e: e.update(in_reply_to=MESSAGE_ID))
     envelope_case("body of 8193 bytes", lambda e: e.update(body="x" * 8193))
-    envelope_case("a control character in the body", lambda e: e.update(body="hello\x07"))
-    envelope_case("no text and no attachment", lambda e: e.update(body=" ", attachments=[]))
+    for label, char in [
+        ("a C0 control character", "\x07"),
+        ("a C1 control character", "\x85"),
+        ("U+2028", " "),
+        ("U+2029", " "),
+        ("a bidirectional override", "‮"),
+        ("a bidirectional isolate", "⁦"),
+        ("a zero-width space", "​"),
+        ("a byte order mark", "﻿"),
+        ("a private-use character", ""),
+    ]:
+        envelope_case(f"{label} in the body", lambda e, char=char: e.update(body=f"hello{char}x"))
+    envelope_case("a decomposed letter in the body", lambda e: e.update(body="é"))
+    envelope_case(
+        "a line feed in the body is allowed", lambda e: e.update(body="line one\nline two")
+    )
+    envelope_case("no text and no attachment", lambda e: e.update(body="  ", attachments=[]))
+    envelope_case("text and no attachment", lambda e: e.update(body="FAKE hello", attachments=[]))
     envelope_case(
         "an attachment id repeated",
         lambda e: e["attachments"][1].update(attachment_id=ATTACHMENT_A),
@@ -871,6 +1379,14 @@ def build():
         "a name with a path separator", lambda e: e["attachments"][0].update(name="../x.pdf")
     )
     envelope_case("a name of 121 characters", lambda e: e["attachments"][0].update(name="a" * 121))
+    envelope_case(
+        "a name with a bidirectional control",
+        lambda e: e["attachments"][0].update(name="a‮b.pdf"),
+    )
+    envelope_case("a name with a line feed", lambda e: e["attachments"][0].update(name="a\nb.pdf"))
+    envelope_case(
+        "a name with edge white space", lambda e: e["attachments"][0].update(name=" a.pdf")
+    )
     envelope_case(
         "an executable type",
         lambda e: e["attachments"][1].update(media_type="application/x-msdownload"),
@@ -882,7 +1398,7 @@ def build():
         PHASES["phase2_video"],
     )
     envelope_case(
-        "a wrong chunk count for the size", lambda e: e["attachments"][0].update(chunk_count=3)
+        "a wrong chunk count for the size", lambda e: e["attachments"][0].update(chunk_count=2)
     )
     envelope_case(
         "a clinic-signed copy that is not a PDF",
@@ -893,6 +1409,10 @@ def build():
         lambda e: e["attachments"][0]["provenance"].pop("manifest"),
     )
     envelope_case(
+        "a clinic-signed copy with a manifest over 16 KiB",
+        lambda e: e["attachments"][0]["provenance"].update(manifest="a" * 8192 + "." + "b" * 9000),
+    )
+    envelope_case(
         "an unknown provenance kind",
         lambda e: e["attachments"][1].update(provenance={"kind": "clinic-authored"}),
     )
@@ -901,18 +1421,180 @@ def build():
         lambda e: e["attachments"][1].update(size=21 * MIB, chunk_count=6),
     )
 
+    # --- pair cases (CARLOS's check once it has opened the message).
+    pair_cases = []
+
+    def pair_case(name, mutate):
+        out = json.loads(outer_bytes)
+        env = json.loads(envelope_bytes)
+        mutate(out, env)
+        pair_cases.append(
+            {"name": name, "expect": check_pair(out, env) or "accept"},
+        )
+
+    pair_case("as built", lambda o, e: None)
+    pair_case("another message id", lambda o, e: e.update(message_id=OTHER_MESSAGE_ID))
+    pair_case(
+        "an attachment head the portal held that the signed envelope does not name",
+        lambda o, e: o["attachments"][0].update(chain_head="f" * 64),
+    )
+    pair_case("an attachment count that differs", lambda o, e: e["attachments"].pop())
+    pair_case(
+        "a size that is not the sealed size of the plaintext",
+        lambda o, e: o["attachments"][1].update(size=999),
+    )
+
+    # --- compact payload cases.
+    ack_collected = ack_object("collected", head=head.hex())
+    canonical_ack = canonical(ack_collected)
+    unsorted = dict(reversed(list(ack_collected.items())))
+    reordered = json.dumps(unsorted, separators=(",", ":")).encode()  # keys not sorted
+    spaced = json.dumps(ack_collected, sort_keys=True).encode()
+    duplicate_key = canonical_ack[:-1] + b',"v":1}'
+    compact_cases = []
+    for name, raw in [
+        ("the canonical payload", canonical_ack),
+        ("keys not sorted", reordered),
+        ("spaces after the separators", spaced),
+        ("a key twice", duplicate_key),
+        ("a trailing line feed", canonical_ack + b"\n"),
+        ("not JSON", b"not json"),
+    ]:
+        payload = b64u(raw)
+        value, reason = check_compact_payload(payload)
+        compact_cases.append(
+            {"name": name, "payload_b64url": payload, "expect": reason or "accept"}
+        )
+    compact_cases.append(
+        {
+            "name": "padded base64url",
+            "payload_b64url": b64u(canonical_ack) + "=",
+            "expect": check_compact_payload(b64u(canonical_ack) + "=")[1] or "accept",
+        }
+    )
+
+    # --- acknowledgement cases.
     ack_cases = []
     for name, value in [
-        ("collected", ack_object("collected", head=message.hex())),
-        ("filed", ack_object("filed", head=message.hex())),
-        ("refused with a reason", ack_object("refused", "type_not_allowed", head=message.hex())),
-        ("refused without a reason", ack_object("refused", None, head=message.hex())),
-        ("filed with a reason", ack_object("filed", "scan_failed", head=message.hex())),
-        ("an unknown reason", ack_object("refused", "because", head=message.hex())),
-        ("a state that means read", ack_object("read", head=message.hex())),
-        ("a ref with spaces", ack_object("filed", ref="a b", head=message.hex())),
+        ("collected", ack_object("collected", head=head.hex())),
+        ("filed", ack_object("filed", head=head.hex())),
+        ("refused with a reason", ack_object("refused", "type_not_allowed", head=head.hex())),
+        ("recalled", ack_object("recalled", head=head.hex())),
+        (
+            "recall refused with a reason",
+            ack_object("recall_refused", "recall_too_late", head=head.hex()),
+        ),
+        ("refused without a reason", ack_object("refused", None, head=head.hex())),
+        ("filed with a reason", ack_object("filed", "scan_failed", head=head.hex())),
+        ("an unknown reason", ack_object("refused", "because", head=head.hex())),
+        ("a recall reason on a refusal", ack_object("refused", "recall_too_late", head=head.hex())),
+        (
+            "a refusal reason on a recall refusal",
+            ack_object("recall_refused", "scan_failed", head=head.hex()),
+        ),
+        ("a state that means read", ack_object("read", head=head.hex())),
+        ("a ref with spaces", ack_object("filed", ref="a b" + "c" * 19, head=head.hex())),
+        ("a ref that is not 22 characters", ack_object("filed", ref="short", head=head.hex())),
+        ("a clinic_id that is a number", {**ack_object("filed", head=head.hex()), "clinic_id": 5}),
+        ("version true", {**ack_object("filed", head=head.hex()), "v": True}),
     ]:
         ack_cases.append({"name": name, "object": value, "expect": check_ack(value) or "accept"})
+
+    # --- recall cases.
+    recall = recall_object(head.hex())
+    recall_cases = []
+    for name, value in [
+        ("as built", recall),
+        ("a state field added", {**recall, "state": "recalled"}),
+        ("a chain_head that is not hex", {**recall, "chain_head": "zz" * 32}),
+        ("version 1.0", {**recall, "v": 1.0}),
+        ("a clinic_id missing", {k: v for k, v in recall.items() if k != "clinic_id"}),
+    ]:
+        recall_cases.append(
+            {"name": name, "object": value, "expect": check_recall(value) or "accept"}
+        )
+
+    # --- inbox key statement cases (checked with a clock).
+    now = CREATED_AT
+    statement = inbox_key_statement()
+    other_key = bytes(range(1, 33))
+    inbox_cases = []
+
+    def inbox_case(name, value, at=now):
+        inbox_cases.append(
+            {
+                "name": name,
+                "now": at,
+                "object": value,
+                "expect": check_inbox_key(value, at) or "accept",
+            }
+        )
+
+    inbox_case("an active statement inside its validity", statement)
+    inbox_case("an unknown field", {**statement, "note": "x"})
+    inbox_case("a revoked key", inbox_key_statement(status="revoked"))
+    inbox_case("not yet valid", inbox_key_statement(not_before=now + 10))
+    inbox_case("expired", inbox_key_statement(not_after=now - 1))
+    inbox_case("valid for more than 400 days", inbox_key_statement(not_after=now + 401 * 86_400))
+    inbox_case("a kid that is not the key's hash", {**statement, "kid": inbox_key_kid(other_key)})
+    inbox_case("a public key of 31 bytes", {**statement, "public_key": b64u(b"x" * 31)})
+    inbox_case("a serial of zero", {**statement, "serial": 0})
+    inbox_case("version 2", {**statement, "v": 2})
+
+    # --- the signing inputs: exactly the bytes a signature covers.
+    envelope_input = signing_input("envelope", envelope_bytes)
+    ack_input = signing_input("ack", canonical_ack)
+    recall_bytes = canonical(recall)
+    recall_input = signing_input("recall", recall_bytes)
+    statement_bytes = canonical(statement)
+    statement_input = signing_input("inbox_key", statement_bytes)
+
+    request_hash = lambda method, path, body: digest(  # noqa: E731
+        frame(method.encode(), path.encode(), b"", body)
+    )
+
+    time_cases = []
+    for name, created, expires, clock in [
+        ("inside its lifetime", CREATED_AT, EXPIRES_AT, CREATED_AT + 60),
+        ("created within the skew ahead", CREATED_AT, EXPIRES_AT, CREATED_AT - 300),
+        ("created beyond the skew ahead", CREATED_AT, EXPIRES_AT, CREATED_AT - 301),
+        ("already expired", CREATED_AT, EXPIRES_AT, EXPIRES_AT),
+        ("expires after more than seven days", CREATED_AT, CREATED_AT + 7 * 86_400 + 1, CREATED_AT),
+    ]:
+        time_cases.append(
+            {
+                "name": name,
+                "created_at": created,
+                "expires_at": expires,
+                "now": clock,
+                "expect": check_times(created, expires, clock) or "accept",
+            }
+        )
+
+    text_cases = []
+    for name, text, as_name in [
+        ("plain text", "FAKE hello", False),
+        ("a line feed in a body", "a\nb", False),
+        ("a line feed in a name", "a\nb", True),
+        ("a decomposed letter", "é", False),
+        ("a no-break space inside", "a b", False),
+        ("a zero-width joiner", "a‍b", False),
+        ("a left-to-right mark", "a‎b", False),
+        ("a name with a trailing space", "a.pdf ", True),
+    ]:
+        text_cases.append(
+            {
+                "name": name,
+                "text": text,
+                "as_name": as_name,
+                "expect": check_text(text, name=as_name) or "accept",
+            }
+        )
+
+    plain_pieces = {
+        "plaintext_a_sha256": digest(m["plain_a"]),
+        "plaintext_b_sha256": digest(m["plain_b"]),
+    }
 
     return {
         "description": (
@@ -920,27 +1602,37 @@ def build():
             "No signature, key, cipher or randomness is used: signing inputs are bytes, and every "
             "hash below is over fixed FAKE bytes. Not a conformance claim for any real component."
         ),
-        "format_version": 1,
+        "format_version": 2,
         "contract": "mycarlos-send/1",
         "canonical_json": (
-            "sorted keys, no spaces, UTF-8, strings and integers only (RFC 8785 for these objects)"
+            "sorted keys, no spaces, UTF-8, strings and integers and null only "
+            "(RFC 8785 for these objects)"
         ),
         "frame": "each part preceded by its length as eight bytes, big endian",
+        "compact_form": (
+            "b64url(payload).b64url(signature), unpadded; the signature covers "
+            "signing_input(kind, payload) = frame(domain, payload), never the base64 text; a "
+            "verifier requires canonical(parse(payload)) == payload before anything else"
+        ),
         "limits": LIMITS,
         "phases": PHASES,
         "refusal_reasons": REFUSAL_REASONS,
+        "recall_refusal_reasons": RECALL_REFUSAL_REASONS,
+        "ack_states": ACK_STATES,
         "identifiers": {
             "message_id": MESSAGE_ID,
             "attachment_a": ATTACHMENT_A,
             "attachment_b": ATTACHMENT_B,
             "clinic_id": CLINIC_ID,
             "recipient_id": RECIPIENT_ID,
+            "other_message_id": OTHER_MESSAGE_ID,
         },
+        "signing_domains": {kind: encoded(prefix) for kind, prefix in SIGN_DOMAINS.items()},
         "chain": {
             "definition": {
                 "start": (
-                    "sha256(frame('mycarlos-send/1 chain-start', message_id16, "
-                    "attachment_id16, chunk_count8))"
+                    "sha256(frame('mycarlos-send/1 chain-start', message_id16, attachment_id16, "
+                    "chunk_count8))"
                 ),
                 "link": (
                     "sha256(frame('mycarlos-send/1 chain-link', previous32, index8, "
@@ -949,16 +1641,27 @@ def build():
                 "attachment_head": "the link after the last chunk",
                 "message_head": (
                     "sha256(frame('mycarlos-send/1 message', message_id16, "
-                    "sha256(sealed_envelope), head_of_attachment_0, "
-                    "head_of_attachment_1, ...))"
+                    "sha256(sealed_envelope), head_of_attachment_0, head_of_attachment_1, ...))"
+                ),
+                "who_checks": (
+                    "the portal recomputes every head from the ciphertext it holds (it can: "
+                    "attachment_id is in the outer record), which finds corruption and loss; it "
+                    "does NOT protect against the portal, which can recompute anything. The "
+                    "protective check is CARLOS's: after opening, the chain heads named inside "
+                    "the SIGNED envelope must equal the heads it recomputes from what it fetched"
                 ),
             },
-            "chunks_a_sizes": [len(c) for c in chunks_a],
-            "chunks_b_sizes": [len(c) for c in chunks_b],
+            "attachment_a_chunk_sealed_sizes": [len(c) for c in sealed_a],
+            "attachment_a_chunk_sha256": [digest(c) for c in sealed_a],
+            "attachment_b_chunk_sealed_sizes": [len(c) for c in sealed_b],
+            "attachment_b_chunk_sha256": [digest(c) for c in sealed_b],
             "envelope_ciphertext": {"fill": "0xe0", "size": len(envelope_ciphertext)},
-            "base": base,
-            "attachment_b_head": head_b.hex(),
-            "cases": cases,
+            "base": {
+                "attachment_a_head": head_a.hex(),
+                "attachment_b_head": head_b.hex(),
+                "message_head": head.hex(),
+            },
+            "cases": chain_cases,
         },
         "aead": {
             "note": "bytes only; the cipher is ChaCha20-Poly1305 with the message's content key",
@@ -978,39 +1681,78 @@ def build():
                     hashlib.sha256(envelope_ciphertext).digest(),
                 )
             ),
-        },
-        "envelope": {
-            "object": envelope,
-            "canonical": encoded(envelope_bytes),
-            "signed_by": (
-                "the device Ed25519 key over the canonical bytes; compact "
-                "b64url(payload).b64url(signature)"
+            "sealed_key": (
+                "b64url(enc || ciphertext) of the HPKE seal of the 32-byte content key: 32 + 32 + "
+                "16 = 80 bytes, unpadded"
             ),
         },
+        "end_to_end": {
+            "note": (
+                "ONE message in which every size, count, hash, head and descriptor agrees: the "
+                "outer record, the envelope and the chunk hashes above describe the same bytes"
+            ),
+            "plaintext": plain_pieces,
+            "envelope": envelope,
+            "outer": outer,
+            "pair_check": check_pair(outer, envelope) or "accept",
+        },
+        "envelope": {
+            "canonical": encoded(envelope_bytes),
+            "signing_input": encoded(envelope_input),
+            "signed_by": "the device Ed25519 key",
+        },
         "outer": {
-            "object": outer,
             "canonical": encoded(outer_bytes),
             "create_request_hash": request_hash("POST", "/api/mycarlos/sends", outer_bytes),
             "chunk_request_hash": request_hash(
                 "PUT",
                 f"/api/mycarlos/sends/{MESSAGE_ID}/attachments/0/chunks/1",
-                chunks_a[1],
+                sealed_a[1],
             ),
         },
         "acks": {
-            "signed_by": (
-                "a clinic signing key (ECDSA P-256, ES256) over the canonical bytes; "
-                "compact b64url(payload).b64url(signature)"
+            "signed_by": "a clinic signing key (ECDSA P-256, ES256)",
+            "collected": {
+                "canonical": encoded(canonical_ack),
+                "signing_input": encoded(ack_input),
+            },
+            "filed": encoded(canonical(ack_object("filed", head=head.hex()))),
+            "refused": encoded(canonical(ack_object("refused", "scan_failed", head=head.hex()))),
+            "recalled": encoded(canonical(ack_object("recalled", head=head.hex()))),
+            "recall_refused": encoded(
+                canonical(ack_object("recall_refused", "recall_too_late", head=head.hex()))
             ),
-            "payloads": acks,
         },
+        "recall": {
+            "signed_by": "the device Ed25519 key",
+            "canonical": encoded(recall_bytes),
+            "signing_input": encoded(recall_input),
+        },
+        "inbox_key": {
+            "signed_by": (
+                "a clinic signing key (ES256) that the link already pins; the app seals only to a "
+                "key named by a statement that verifies, is active and is inside its validity"
+            ),
+            "canonical": encoded(statement_bytes),
+            "signing_input": encoded(statement_input),
+            "kid": statement["kid"],
+        },
+        "compact_cases": compact_cases,
         "outer_cases": outer_cases,
         "envelope_cases": envelope_cases,
+        "pair_cases": pair_cases,
         "ack_cases": ack_cases,
+        "recall_cases": recall_cases,
+        "inbox_key_cases": inbox_cases,
+        "time_cases": time_cases,
+        "text_cases": text_cases,
         "states": STATES,
         "transitions": TRANSITIONS,
+        "rules": RULES,
         "routes": ROUTES,
         "idempotency": IDEMPOTENCY,
+        "portal_learns": PORTAL_LEARNS,
+        "portal_does_not_learn": PORTAL_DOES_NOT_LEARN,
     }
 
 
