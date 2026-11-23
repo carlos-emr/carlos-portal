@@ -1,0 +1,2135 @@
+{
+  "description": "FAKE reference vectors for mycarlos-send/1 (patient to clinic), DRAFT for review. No signature, key, cipher or randomness is used: signing inputs are bytes, and every hash below is over fixed FAKE bytes. Not a conformance claim for any real component.",
+  "format_version": 1,
+  "contract": "mycarlos-send/1",
+  "canonical_json": "sorted keys, no spaces, UTF-8, strings and integers only (RFC 8785 for these objects)",
+  "frame": "each part preceded by its length as eight bytes, big endian",
+  "limits": {
+    "envelope_sealed_max": 65536,
+    "body_max_bytes": 8192,
+    "attachments_max": 10,
+    "name_max_chars": 120,
+    "chunk_plain_max": 4194304,
+    "aead_tag": 16,
+    "lifetime_max_seconds": 604800,
+    "manifest_max_bytes": 16384,
+    "ref_max_chars": 64,
+    "ack_max_bytes": 4096,
+    "outer_max_bytes": 8192,
+    "chunks_per_attachment_max": 128
+  },
+  "phases": {
+    "phase1": {
+      "attachment_max_bytes": 20971520,
+      "message_max_bytes": 67108864,
+      "media_types": [
+        "application/pdf",
+        "image/jpeg",
+        "image/png",
+        "image/heic"
+      ],
+      "storage": "database_blobs"
+    },
+    "phase2_video": {
+      "attachment_max_bytes": 536870912,
+      "message_max_bytes": 1073741824,
+      "media_types": [
+        "application/pdf",
+        "image/jpeg",
+        "image/png",
+        "image/heic",
+        "video/mp4",
+        "video/quicktime",
+        "video/webm"
+      ],
+      "storage": "object_store"
+    }
+  },
+  "refusal_reasons": [
+    "unsupported_version",
+    "bad_signature",
+    "device_not_accepted",
+    "clinic_mismatch",
+    "expired",
+    "too_large",
+    "type_not_allowed",
+    "active_content",
+    "scan_failed",
+    "chain_mismatch",
+    "hash_mismatch",
+    "duplicate_message",
+    "owner_group_missing",
+    "not_enabled"
+  ],
+  "identifiers": {
+    "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+    "attachment_a": "7d2b8b2c-3e5f-4a0c-9c63-2f3a4b5c6d7e",
+    "attachment_b": "8e3c9c3d-4f60-4b1d-ad74-3a4b5c6d7e8f",
+    "clinic_id": "clinic-FAKE0001",
+    "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa"
+  },
+  "chain": {
+    "definition": {
+      "start": "sha256(frame('mycarlos-send/1 chain-start', message_id16, attachment_id16, chunk_count8))",
+      "link": "sha256(frame('mycarlos-send/1 chain-link', previous32, index8, sha256(sealed_chunk)))",
+      "attachment_head": "the link after the last chunk",
+      "message_head": "sha256(frame('mycarlos-send/1 message', message_id16, sha256(sealed_envelope), head_of_attachment_0, head_of_attachment_1, ...))"
+    },
+    "chunks_a_sizes": [
+      64,
+      64,
+      21
+    ],
+    "chunks_b_sizes": [
+      48
+    ],
+    "envelope_ciphertext": {
+      "fill": "0xe0",
+      "size": 700
+    },
+    "base": {
+      "attachment_chunk_sha256": [
+        "638d8f43c659418f592a008776d3982998183b19317d037920fd392dd7a715bc",
+        "9aed5fce4bb60c40cb8a2983b43540adb4c8ac8aa1ef1f20de57526f9ed86e38",
+        "a1234ad77a445fde2fc09f1d5a30a2df8d87519e4f2ad6da16398ec4eb0986c1"
+      ],
+      "attachment_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+      "message_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37"
+    },
+    "attachment_b_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+    "cases": [
+      {
+        "name": "the base chain",
+        "head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+        "expect": "equals base"
+      },
+      {
+        "name": "chunks 1 and 2 swapped",
+        "head": "c92fbf720c3e826c50df9fb80e8cfb4c7979fa208902fce3ba51893b847e1ae6",
+        "expect": "differs"
+      },
+      {
+        "name": "last chunk dropped (count 2)",
+        "head": "37b024c134d05f3e75f04749d88ca964b6c392ab60ffcd915f40c2738997b6d2",
+        "expect": "differs"
+      },
+      {
+        "name": "first chunk repeated",
+        "head": "0546539559f45c0687710fc92abb0ed931ad2d298e369abc44c3d688f160d07e",
+        "expect": "differs"
+      },
+      {
+        "name": "one byte of a chunk changed",
+        "head": "f649289d097fbeef1bb80a34b2c5e55e29e3fb3bfc85067fd526bfd06574d6b6",
+        "expect": "differs"
+      },
+      {
+        "name": "the same chunks under another message_id",
+        "head": "8dd9f1d2befd8eab341067ffa017f11d2252f27d5a5a72940d0352b4698ae1d0",
+        "expect": "differs"
+      },
+      {
+        "name": "the same chunks as another attachment",
+        "head": "f106c07d03f7da8952c1a1f966b3a76a48e52715a4361831adeb5c9839acd4bf",
+        "expect": "differs"
+      },
+      {
+        "name": "message head with the attachments in the other order",
+        "head": "3094cafee5b1d5323e532e32be15e7e5a789f09fb253d2c2cfd277add3d15adc",
+        "expect": "differs from message_head"
+      }
+    ]
+  },
+  "aead": {
+    "note": "bytes only; the cipher is ChaCha20-Poly1305 with the message's content key",
+    "envelope_nonce": {
+      "hex": "ffffffff0000000000000000",
+      "size": 12,
+      "sha256": "3414421b183188342209566fad4e0c0723070b4030630dde685ba70281e92725"
+    },
+    "chunk_nonce_a0_n0": {
+      "hex": "000000000000000000000000",
+      "size": 12,
+      "sha256": "15ec7bf0b50732b49f8228e07d24365338f9e3ab994b00af08e5a3bffe55fd8b"
+    },
+    "chunk_nonce_a1_n2": {
+      "hex": "000000010000000000000002",
+      "size": 12,
+      "sha256": "978bfdedbb1dec207e238e181d8b95e06749e5789e51edb4ab889a5add36daca"
+    },
+    "envelope_aad": {
+      "hex": "00000000000000186d796361726c6f732d73656e642f3120656e76656c6f706500000000000000105b0f6f0a1c3d4e8a9a410d1e2f3a4b5c00000000000000187263702d46414b4530303031616161616161616161616161000000000000002e46414b456465766963656b6579696446414b456465766963656b6579696446414b456465766963656b6579696430000000000000000f636c696e69632d46414b4530303031",
+      "size": 165,
+      "sha256": "757edf6d39a150540a23a8306d3e744e461c8e48f7b8ae328767b8b269780100"
+    },
+    "chunk_aad_a0_n1": {
+      "hex": "00000000000000156d796361726c6f732d73656e642f31206368756e6b00000000000000105b0f6f0a1c3d4e8a9a410d1e2f3a4b5c00000000000000107d2b8b2c3e5f4a0c9c632f3a4b5c6d7e0000000000000008000000000000000100000000000000080000000000000003",
+      "size": 109,
+      "sha256": "87723bbbcd83aca460c4e4dc2eec5a93e53d9e30b327e76d6d896d5b434e9905"
+    },
+    "key_aad": {
+      "hex": "00000000000000136d796361726c6f732d73656e642f31206b657900000000000000105b0f6f0a1c3d4e8a9a410d1e2f3a4b5c00000000000000187263702d46414b4530303031616161616161616161616161000000000000002e46414b456465766963656b6579696446414b456465766963656b6579696446414b456465766963656b6579696430000000000000000f636c696e69632d46414b45303030310000000000000020b8577462c9f2a17689ff001bf4cec285947b1b4848eda3352868e9e116f076eb",
+      "size": 200,
+      "sha256": "14692d7588553d5f8d1ac643f7ff5dbc7c1b002f8f9bf7285cdb02dd5ef1d62d"
+    }
+  },
+  "envelope": {
+    "object": {
+      "attachments": [
+        {
+          "attachment_id": "7d2b8b2c-3e5f-4a0c-9c63-2f3a4b5c6d7e",
+          "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+          "chunk_count": 2,
+          "chunk_size": 4194304,
+          "media_type": "application/pdf",
+          "name": "FAKE-lab-result.pdf",
+          "provenance": {
+            "delivery_id": "9f4dad4e-5071-4c2e-be85-4b5c6d7e8f90",
+            "kind": "clinic-signed-copy",
+            "manifest": "FAKEmanifestpayload.FAKEmanifestsignature"
+          },
+          "sha256": "6808413895b31df69a07f1f7f2e112c5aebaddb6c7367d84e315e21151e0da5a",
+          "size": 5242897
+        },
+        {
+          "attachment_id": "8e3c9c3d-4f60-4b1d-ad74-3a4b5c6d7e8f",
+          "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+          "chunk_count": 1,
+          "chunk_size": 4194304,
+          "media_type": "image/jpeg",
+          "name": "FAKE-photo.jpg",
+          "provenance": {
+            "kind": "patient-original"
+          },
+          "sha256": "70ec1fd1736b96cfe48d0b317bd0b5490229f9a00f17dcf6dd60073252ee8a30",
+          "size": 1000
+        }
+      ],
+      "body": "FAKE message: please see the attached FAKE results.",
+      "clinic_id": "clinic-FAKE0001",
+      "conversation_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+      "created_at": 1792450800,
+      "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+      "expires_at": 1792710000,
+      "in_reply_to": null,
+      "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+      "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+      "typ": "mycarlos-send-envelope",
+      "v": 1
+    },
+    "canonical": {
+      "hex": "7b226174746163686d656e7473223a5b7b226174746163686d656e745f6964223a2237643262386232632d336535662d346130632d396336332d326633613462356336643765222c22636861696e5f68656164223a2234323037383337313233343262626464303839663564646435366665333635336564653265326632316331633033613137656265393866323832353632363332222c226368756e6b5f636f756e74223a322c226368756e6b5f73697a65223a343139343330342c226d656469615f74797065223a226170706c69636174696f6e2f706466222c226e616d65223a2246414b452d6c61622d726573756c742e706466222c2270726f76656e616e6365223a7b2264656c69766572795f6964223a2239663464616434652d353037312d346332652d626538352d346235633664376538663930222c226b696e64223a22636c696e69632d7369676e65642d636f7079222c226d616e6966657374223a2246414b456d616e69666573747061796c6f61642e46414b456d616e69666573747369676e6174757265227d2c22736861323536223a2236383038343133383935623331646636396130376631663766326531313263356165626164646236633733363764383465333135653231313531653064613561222c2273697a65223a353234323839377d2c7b226174746163686d656e745f6964223a2238653363396333642d346636302d346231642d616437342d336134623563366437653866222c22636861696e5f68656164223a2230663332326539613663373739626162383930353939626664646163386236663634613066363633383666323265333938636636363335323730396135346465222c226368756e6b5f636f756e74223a312c226368756e6b5f73697a65223a343139343330342c226d656469615f74797065223a22696d6167652f6a706567222c226e616d65223a2246414b452d70686f746f2e6a7067222c2270726f76656e616e6365223a7b226b696e64223a2270617469656e742d6f726967696e616c227d2c22736861323536223a2237306563316664313733366239366366653438643062333137626430623534393032323966396130306631376463663664643630303733323532656538613330222c2273697a65223a313030307d5d2c22626f6479223a2246414b45206d6573736167653a20706c6561736520736565207468652061747461636865642046414b4520726573756c74732e222c22636c696e69635f6964223a22636c696e69632d46414b4530303031222c22636f6e766572736174696f6e5f6964223a2235623066366630612d316333642d346538612d396134312d306431653266336134623563222c22637265617465645f6174223a313739323435303830302c226465766963655f6b65795f6964223a2246414b456465766963656b6579696446414b456465766963656b6579696446414b456465766963656b6579696430222c22657870697265735f6174223a313739323731303030302c22696e5f7265706c795f746f223a6e756c6c2c226d6573736167655f6964223a2235623066366630612d316333642d346538612d396134312d306431653266336134623563222c22726563697069656e745f6964223a227263702d46414b4530303031616161616161616161616161222c22747970223a226d796361726c6f732d73656e642d656e76656c6f7065222c2276223a317d",
+      "size": 1257,
+      "sha256": "6edcd1d02338b638014ffe59a7e76b83ebac38e8cf8647de41962d0b6bf031e1"
+    },
+    "signed_by": "the device Ed25519 key over the canonical bytes; compact b64url(payload).b64url(signature)"
+  },
+  "outer": {
+    "object": {
+      "attachment_count": 2,
+      "attachments": [
+        {
+          "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+          "chunk_count": 2,
+          "index": 0,
+          "size": 5242929
+        },
+        {
+          "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+          "chunk_count": 1,
+          "index": 1,
+          "size": 1016
+        }
+      ],
+      "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+      "chunk_total": 3,
+      "clinic_id": "clinic-FAKE0001",
+      "created_at": 1792450800,
+      "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+      "envelope_sha256": "b8577462c9f2a17689ff001bf4cec285947b1b4848eda3352868e9e116f076eb",
+      "envelope_size": 700,
+      "expires_at": 1792710000,
+      "kind": "documents",
+      "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+      "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+      "sealed_key": "RkFLRXNlYWxlZGtleQ",
+      "sealed_key_kid": "FAKEinboxkidFAKEinboxkidFAKEinboxkidFAKEinbo0",
+      "total_size": 5244645,
+      "typ": "mycarlos-send-outer",
+      "v": 1
+    },
+    "canonical": {
+      "hex": "7b226174746163686d656e745f636f756e74223a322c226174746163686d656e7473223a5b7b22636861696e5f68656164223a2234323037383337313233343262626464303839663564646435366665333635336564653265326632316331633033613137656265393866323832353632363332222c226368756e6b5f636f756e74223a322c22696e646578223a302c2273697a65223a353234323932397d2c7b22636861696e5f68656164223a2230663332326539613663373739626162383930353939626664646163386236663634613066363633383666323265333938636636363335323730396135346465222c226368756e6b5f636f756e74223a312c22696e646578223a312c2273697a65223a313031367d5d2c22636861696e5f68656164223a2233313932373063616639653363376361363231616636366231343031373835313034633435373262393636653038623032636138663266353439383733633337222c226368756e6b5f746f74616c223a332c22636c696e69635f6964223a22636c696e69632d46414b4530303031222c22637265617465645f6174223a313739323435303830302c226465766963655f6b65795f6964223a2246414b456465766963656b6579696446414b456465766963656b6579696446414b456465766963656b6579696430222c22656e76656c6f70655f736861323536223a2262383537373436326339663261313736383966663030316266346365633238353934376231623438343865646133333532383638653965313136663037366562222c22656e76656c6f70655f73697a65223a3730302c22657870697265735f6174223a313739323731303030302c226b696e64223a22646f63756d656e7473222c226d6573736167655f6964223a2235623066366630612d316333642d346538612d396134312d306431653266336134623563222c22726563697069656e745f6964223a227263702d46414b4530303031616161616161616161616161222c227365616c65645f6b6579223a22526b464c52584e6c5957786c5a47746c6551222c227365616c65645f6b65795f6b6964223a2246414b45696e626f786b696446414b45696e626f786b696446414b45696e626f786b696446414b45696e626f30222c22746f74616c5f73697a65223a353234343634352c22747970223a226d796361726c6f732d73656e642d6f75746572222c2276223a317d",
+      "size": 892,
+      "sha256": "5517e3b713ee399ace6119fd757059b05f7292b1d6f63702eb647fb2f41c97f5"
+    },
+    "create_request_hash": "e842ea442c5397abff3eecfb6e666609c3c845e4f79bce9a4eee22f522154ca4",
+    "chunk_request_hash": "a17e08a19d6502190a99205c7a26d009ca6b733b9bae29e71d5ebfd52ea806cc"
+  },
+  "acks": {
+    "signed_by": "a clinic signing key (ECDSA P-256, ES256) over the canonical bytes; compact b64url(payload).b64url(signature)",
+    "payloads": {
+      "collected": {
+        "hex": "7b226174223a313739323435313430302c22636861696e5f68656164223a2233313932373063616639653363376361363231616636366231343031373835313034633435373262393636653038623032636138663266353439383733633337222c22636c696e69635f6964223a22636c696e69632d46414b4530303031222c226465766963655f6b65795f6964223a2246414b456465766963656b6579696446414b456465766963656b6579696446414b456465766963656b6579696430222c226b6964223a2246414b45636c696e69636b696446414b45636c696e69636b696446414b45636c696e69636b696446414b45636c30222c226d6573736167655f6964223a2235623066366630612d316333642d346538612d396134312d306431653266336134623563222c22726561736f6e223a6e756c6c2c22726563697069656e745f6964223a227263702d46414b4530303031616161616161616161616161222c22726566223a227265662d46414b4530303031222c227374617465223a22636f6c6c6563746564222c22747970223a226d796361726c6f732d73656e642d61636b222c2276223a317d",
+        "size": 428,
+        "sha256": "3b834d4c5c8c4f1c04c4d76a088063b3490ed8f6579ef202c9017a773990cb2e"
+      },
+      "filed": {
+        "hex": "7b226174223a313739323435313430302c22636861696e5f68656164223a2233313932373063616639653363376361363231616636366231343031373835313034633435373262393636653038623032636138663266353439383733633337222c22636c696e69635f6964223a22636c696e69632d46414b4530303031222c226465766963655f6b65795f6964223a2246414b456465766963656b6579696446414b456465766963656b6579696446414b456465766963656b6579696430222c226b6964223a2246414b45636c696e69636b696446414b45636c696e69636b696446414b45636c696e69636b696446414b45636c30222c226d6573736167655f6964223a2235623066366630612d316333642d346538612d396134312d306431653266336134623563222c22726561736f6e223a6e756c6c2c22726563697069656e745f6964223a227263702d46414b4530303031616161616161616161616161222c22726566223a227265662d46414b4530303031222c227374617465223a2266696c6564222c22747970223a226d796361726c6f732d73656e642d61636b222c2276223a317d",
+        "size": 424,
+        "sha256": "6e908280ddff2ae26f4d646302b0b977328f52fbd909070c34cdf5479938b958"
+      },
+      "refused": {
+        "hex": "7b226174223a313739323435313430302c22636861696e5f68656164223a2233313932373063616639653363376361363231616636366231343031373835313034633435373262393636653038623032636138663266353439383733633337222c22636c696e69635f6964223a22636c696e69632d46414b4530303031222c226465766963655f6b65795f6964223a2246414b456465766963656b6579696446414b456465766963656b6579696446414b456465766963656b6579696430222c226b6964223a2246414b45636c696e69636b696446414b45636c696e69636b696446414b45636c696e69636b696446414b45636c30222c226d6573736167655f6964223a2235623066366630612d316333642d346538612d396134312d306431653266336134623563222c22726561736f6e223a227363616e5f6661696c6564222c22726563697069656e745f6964223a227263702d46414b4530303031616161616161616161616161222c22726566223a227265662d46414b4530303031222c227374617465223a2272656675736564222c22747970223a226d796361726c6f732d73656e642d61636b222c2276223a317d",
+        "size": 435,
+        "sha256": "d907b353175da32983835e6d0e3502d64b635c2cb63e073304b469c1d9422f2f"
+      }
+    }
+  },
+  "outer_cases": [
+    {
+      "name": "exactly as built",
+      "object": {
+        "attachment_count": 2,
+        "attachments": [
+          {
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "index": 0,
+            "size": 5242929
+          },
+          {
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "index": 1,
+            "size": 1016
+          }
+        ],
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "chunk_total": 3,
+        "clinic_id": "clinic-FAKE0001",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "envelope_sha256": "b8577462c9f2a17689ff001bf4cec285947b1b4848eda3352868e9e116f076eb",
+        "envelope_size": 700,
+        "expires_at": 1792710000,
+        "kind": "documents",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "sealed_key": "RkFLRXNlYWxlZGtleQ",
+        "sealed_key_kid": "FAKEinboxkidFAKEinboxkidFAKEinboxkidFAKEinbo0",
+        "total_size": 5244645,
+        "typ": "mycarlos-send-outer",
+        "v": 1
+      },
+      "expect": "accept"
+    },
+    {
+      "name": "an unknown field",
+      "object": {
+        "attachment_count": 2,
+        "attachments": [
+          {
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "index": 0,
+            "size": 5242929
+          },
+          {
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "index": 1,
+            "size": 1016
+          }
+        ],
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "chunk_total": 3,
+        "clinic_id": "clinic-FAKE0001",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "envelope_sha256": "b8577462c9f2a17689ff001bf4cec285947b1b4848eda3352868e9e116f076eb",
+        "envelope_size": 700,
+        "expires_at": 1792710000,
+        "kind": "documents",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "sealed_key": "RkFLRXNlYWxlZGtleQ",
+        "sealed_key_kid": "FAKEinboxkidFAKEinboxkidFAKEinboxkidFAKEinbo0",
+        "total_size": 5244645,
+        "typ": "mycarlos-send-outer",
+        "v": 1,
+        "extra": 1
+      },
+      "expect": "unknown_or_missing_field"
+    },
+    {
+      "name": "a missing field",
+      "object": {
+        "attachment_count": 2,
+        "attachments": [
+          {
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "index": 0,
+            "size": 5242929
+          },
+          {
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "index": 1,
+            "size": 1016
+          }
+        ],
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "chunk_total": 3,
+        "clinic_id": "clinic-FAKE0001",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "envelope_sha256": "b8577462c9f2a17689ff001bf4cec285947b1b4848eda3352868e9e116f076eb",
+        "envelope_size": 700,
+        "expires_at": 1792710000,
+        "kind": "documents",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "sealed_key_kid": "FAKEinboxkidFAKEinboxkidFAKEinboxkidFAKEinbo0",
+        "total_size": 5244645,
+        "typ": "mycarlos-send-outer",
+        "v": 1
+      },
+      "expect": "unknown_or_missing_field"
+    },
+    {
+      "name": "version 2",
+      "object": {
+        "attachment_count": 2,
+        "attachments": [
+          {
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "index": 0,
+            "size": 5242929
+          },
+          {
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "index": 1,
+            "size": 1016
+          }
+        ],
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "chunk_total": 3,
+        "clinic_id": "clinic-FAKE0001",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "envelope_sha256": "b8577462c9f2a17689ff001bf4cec285947b1b4848eda3352868e9e116f076eb",
+        "envelope_size": 700,
+        "expires_at": 1792710000,
+        "kind": "documents",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "sealed_key": "RkFLRXNlYWxlZGtleQ",
+        "sealed_key_kid": "FAKEinboxkidFAKEinboxkidFAKEinboxkidFAKEinbo0",
+        "total_size": 5244645,
+        "typ": "mycarlos-send-outer",
+        "v": 2
+      },
+      "expect": "unsupported_version"
+    },
+    {
+      "name": "version as text",
+      "object": {
+        "attachment_count": 2,
+        "attachments": [
+          {
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "index": 0,
+            "size": 5242929
+          },
+          {
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "index": 1,
+            "size": 1016
+          }
+        ],
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "chunk_total": 3,
+        "clinic_id": "clinic-FAKE0001",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "envelope_sha256": "b8577462c9f2a17689ff001bf4cec285947b1b4848eda3352868e9e116f076eb",
+        "envelope_size": 700,
+        "expires_at": 1792710000,
+        "kind": "documents",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "sealed_key": "RkFLRXNlYWxlZGtleQ",
+        "sealed_key_kid": "FAKEinboxkidFAKEinboxkidFAKEinboxkidFAKEinbo0",
+        "total_size": 5244645,
+        "typ": "mycarlos-send-outer",
+        "v": "1"
+      },
+      "expect": "accept"
+    },
+    {
+      "name": "message_id not a UUID",
+      "object": {
+        "attachment_count": 2,
+        "attachments": [
+          {
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "index": 0,
+            "size": 5242929
+          },
+          {
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "index": 1,
+            "size": 1016
+          }
+        ],
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "chunk_total": 3,
+        "clinic_id": "clinic-FAKE0001",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "envelope_sha256": "b8577462c9f2a17689ff001bf4cec285947b1b4848eda3352868e9e116f076eb",
+        "envelope_size": 700,
+        "expires_at": 1792710000,
+        "kind": "documents",
+        "message_id": "not-a-uuid",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "sealed_key": "RkFLRXNlYWxlZGtleQ",
+        "sealed_key_kid": "FAKEinboxkidFAKEinboxkidFAKEinboxkidFAKEinbo0",
+        "total_size": 5244645,
+        "typ": "mycarlos-send-outer",
+        "v": 1
+      },
+      "expect": "bad_id"
+    },
+    {
+      "name": "chain_head not hex",
+      "object": {
+        "attachment_count": 2,
+        "attachments": [
+          {
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "index": 0,
+            "size": 5242929
+          },
+          {
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "index": 1,
+            "size": 1016
+          }
+        ],
+        "chain_head": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+        "chunk_total": 3,
+        "clinic_id": "clinic-FAKE0001",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "envelope_sha256": "b8577462c9f2a17689ff001bf4cec285947b1b4848eda3352868e9e116f076eb",
+        "envelope_size": 700,
+        "expires_at": 1792710000,
+        "kind": "documents",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "sealed_key": "RkFLRXNlYWxlZGtleQ",
+        "sealed_key_kid": "FAKEinboxkidFAKEinboxkidFAKEinboxkidFAKEinbo0",
+        "total_size": 5244645,
+        "typ": "mycarlos-send-outer",
+        "v": 1
+      },
+      "expect": "bad_hash"
+    },
+    {
+      "name": "lifetime over seven days",
+      "object": {
+        "attachment_count": 2,
+        "attachments": [
+          {
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "index": 0,
+            "size": 5242929
+          },
+          {
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "index": 1,
+            "size": 1016
+          }
+        ],
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "chunk_total": 3,
+        "clinic_id": "clinic-FAKE0001",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "envelope_sha256": "b8577462c9f2a17689ff001bf4cec285947b1b4848eda3352868e9e116f076eb",
+        "envelope_size": 700,
+        "expires_at": 1793055601,
+        "kind": "documents",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "sealed_key": "RkFLRXNlYWxlZGtleQ",
+        "sealed_key_kid": "FAKEinboxkidFAKEinboxkidFAKEinboxkidFAKEinbo0",
+        "total_size": 5244645,
+        "typ": "mycarlos-send-outer",
+        "v": 1
+      },
+      "expect": "lifetime_too_long"
+    },
+    {
+      "name": "expires before it is created",
+      "object": {
+        "attachment_count": 2,
+        "attachments": [
+          {
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "index": 0,
+            "size": 5242929
+          },
+          {
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "index": 1,
+            "size": 1016
+          }
+        ],
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "chunk_total": 3,
+        "clinic_id": "clinic-FAKE0001",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "envelope_sha256": "b8577462c9f2a17689ff001bf4cec285947b1b4848eda3352868e9e116f076eb",
+        "envelope_size": 700,
+        "expires_at": 1792450800,
+        "kind": "documents",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "sealed_key": "RkFLRXNlYWxlZGtleQ",
+        "sealed_key_kid": "FAKEinboxkidFAKEinboxkidFAKEinboxkidFAKEinbo0",
+        "total_size": 5244645,
+        "typ": "mycarlos-send-outer",
+        "v": 1
+      },
+      "expect": "bad_lifetime"
+    },
+    {
+      "name": "eleven attachments",
+      "object": {
+        "attachment_count": 12,
+        "attachments": [
+          {
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "index": 0,
+            "size": 5242929
+          },
+          {
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "index": 1,
+            "size": 1016
+          },
+          {
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "index": 0,
+            "size": 5242929
+          },
+          {
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "index": 1,
+            "size": 1016
+          },
+          {
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "index": 0,
+            "size": 5242929
+          },
+          {
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "index": 1,
+            "size": 1016
+          },
+          {
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "index": 0,
+            "size": 5242929
+          },
+          {
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "index": 1,
+            "size": 1016
+          },
+          {
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "index": 0,
+            "size": 5242929
+          },
+          {
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "index": 1,
+            "size": 1016
+          },
+          {
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "index": 0,
+            "size": 5242929
+          },
+          {
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "index": 1,
+            "size": 1016
+          }
+        ],
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "chunk_total": 3,
+        "clinic_id": "clinic-FAKE0001",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "envelope_sha256": "b8577462c9f2a17689ff001bf4cec285947b1b4848eda3352868e9e116f076eb",
+        "envelope_size": 700,
+        "expires_at": 1792710000,
+        "kind": "documents",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "sealed_key": "RkFLRXNlYWxlZGtleQ",
+        "sealed_key_kid": "FAKEinboxkidFAKEinboxkidFAKEinboxkidFAKEinbo0",
+        "total_size": 5244645,
+        "typ": "mycarlos-send-outer",
+        "v": 1
+      },
+      "expect": "too_many_attachments"
+    },
+    {
+      "name": "count disagrees with the list",
+      "object": {
+        "attachment_count": 3,
+        "attachments": [
+          {
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "index": 0,
+            "size": 5242929
+          },
+          {
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "index": 1,
+            "size": 1016
+          }
+        ],
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "chunk_total": 3,
+        "clinic_id": "clinic-FAKE0001",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "envelope_sha256": "b8577462c9f2a17689ff001bf4cec285947b1b4848eda3352868e9e116f076eb",
+        "envelope_size": 700,
+        "expires_at": 1792710000,
+        "kind": "documents",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "sealed_key": "RkFLRXNlYWxlZGtleQ",
+        "sealed_key_kid": "FAKEinboxkidFAKEinboxkidFAKEinboxkidFAKEinbo0",
+        "total_size": 5244645,
+        "typ": "mycarlos-send-outer",
+        "v": 1
+      },
+      "expect": "attachment_count"
+    },
+    {
+      "name": "kind message with attachments",
+      "object": {
+        "attachment_count": 2,
+        "attachments": [
+          {
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "index": 0,
+            "size": 5242929
+          },
+          {
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "index": 1,
+            "size": 1016
+          }
+        ],
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "chunk_total": 3,
+        "clinic_id": "clinic-FAKE0001",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "envelope_sha256": "b8577462c9f2a17689ff001bf4cec285947b1b4848eda3352868e9e116f076eb",
+        "envelope_size": 700,
+        "expires_at": 1792710000,
+        "kind": "message",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "sealed_key": "RkFLRXNlYWxlZGtleQ",
+        "sealed_key_kid": "FAKEinboxkidFAKEinboxkidFAKEinboxkidFAKEinbo0",
+        "total_size": 5244645,
+        "typ": "mycarlos-send-outer",
+        "v": 1
+      },
+      "expect": "kind_mismatch"
+    },
+    {
+      "name": "attachments out of order",
+      "object": {
+        "attachment_count": 2,
+        "attachments": [
+          {
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "index": 1,
+            "size": 1016
+          },
+          {
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "index": 0,
+            "size": 5242929
+          }
+        ],
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "chunk_total": 3,
+        "clinic_id": "clinic-FAKE0001",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "envelope_sha256": "b8577462c9f2a17689ff001bf4cec285947b1b4848eda3352868e9e116f076eb",
+        "envelope_size": 700,
+        "expires_at": 1792710000,
+        "kind": "documents",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "sealed_key": "RkFLRXNlYWxlZGtleQ",
+        "sealed_key_kid": "FAKEinboxkidFAKEinboxkidFAKEinboxkidFAKEinbo0",
+        "total_size": 5244645,
+        "typ": "mycarlos-send-outer",
+        "v": 1
+      },
+      "expect": "attachment_order"
+    },
+    {
+      "name": "a chunk count of zero",
+      "object": {
+        "attachment_count": 2,
+        "attachments": [
+          {
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 0,
+            "index": 0,
+            "size": 5242929
+          },
+          {
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "index": 1,
+            "size": 1016
+          }
+        ],
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "chunk_total": 3,
+        "clinic_id": "clinic-FAKE0001",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "envelope_sha256": "b8577462c9f2a17689ff001bf4cec285947b1b4848eda3352868e9e116f076eb",
+        "envelope_size": 700,
+        "expires_at": 1792710000,
+        "kind": "documents",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "sealed_key": "RkFLRXNlYWxlZGtleQ",
+        "sealed_key_kid": "FAKEinboxkidFAKEinboxkidFAKEinboxkidFAKEinbo0",
+        "total_size": 5244645,
+        "typ": "mycarlos-send-outer",
+        "v": 1
+      },
+      "expect": "bad_chunk_count"
+    },
+    {
+      "name": "totals do not add up",
+      "object": {
+        "attachment_count": 2,
+        "attachments": [
+          {
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "index": 0,
+            "size": 5242929
+          },
+          {
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "index": 1,
+            "size": 1016
+          }
+        ],
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "chunk_total": 3,
+        "clinic_id": "clinic-FAKE0001",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "envelope_sha256": "b8577462c9f2a17689ff001bf4cec285947b1b4848eda3352868e9e116f076eb",
+        "envelope_size": 700,
+        "expires_at": 1792710000,
+        "kind": "documents",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "sealed_key": "RkFLRXNlYWxlZGtleQ",
+        "sealed_key_kid": "FAKEinboxkidFAKEinboxkidFAKEinboxkidFAKEinbo0",
+        "total_size": 5244646,
+        "typ": "mycarlos-send-outer",
+        "v": 1
+      },
+      "expect": "totals_mismatch"
+    },
+    {
+      "name": "over the phase 1 message limit",
+      "object": {
+        "attachment_count": 2,
+        "attachments": [
+          {
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "index": 0,
+            "size": 5242929
+          },
+          {
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "index": 1,
+            "size": 1016
+          }
+        ],
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "chunk_total": 3,
+        "clinic_id": "clinic-FAKE0001",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "envelope_sha256": "b8577462c9f2a17689ff001bf4cec285947b1b4848eda3352868e9e116f076eb",
+        "envelope_size": 700,
+        "expires_at": 1792710000,
+        "kind": "documents",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "sealed_key": "RkFLRXNlYWxlZGtleQ",
+        "sealed_key_kid": "FAKEinboxkidFAKEinboxkidFAKEinboxkidFAKEinbo0",
+        "total_size": 68157440,
+        "typ": "mycarlos-send-outer",
+        "v": 1
+      },
+      "expect": "totals_mismatch"
+    }
+  ],
+  "envelope_cases": [
+    {
+      "name": "exactly as built",
+      "object": {
+        "attachments": [
+          {
+            "attachment_id": "7d2b8b2c-3e5f-4a0c-9c63-2f3a4b5c6d7e",
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "chunk_size": 4194304,
+            "media_type": "application/pdf",
+            "name": "FAKE-lab-result.pdf",
+            "provenance": {
+              "delivery_id": "9f4dad4e-5071-4c2e-be85-4b5c6d7e8f90",
+              "kind": "clinic-signed-copy",
+              "manifest": "FAKEmanifestpayload.FAKEmanifestsignature"
+            },
+            "sha256": "6808413895b31df69a07f1f7f2e112c5aebaddb6c7367d84e315e21151e0da5a",
+            "size": 5242897
+          },
+          {
+            "attachment_id": "8e3c9c3d-4f60-4b1d-ad74-3a4b5c6d7e8f",
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "chunk_size": 4194304,
+            "media_type": "image/jpeg",
+            "name": "FAKE-photo.jpg",
+            "provenance": {
+              "kind": "patient-original"
+            },
+            "sha256": "70ec1fd1736b96cfe48d0b317bd0b5490229f9a00f17dcf6dd60073252ee8a30",
+            "size": 1000
+          }
+        ],
+        "body": "FAKE message: please see the attached FAKE results.",
+        "clinic_id": "clinic-FAKE0001",
+        "conversation_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "expires_at": 1792710000,
+        "in_reply_to": null,
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "typ": "mycarlos-send-envelope",
+        "v": 1
+      },
+      "expect": "accept"
+    },
+    {
+      "name": "an unknown field",
+      "object": {
+        "attachments": [
+          {
+            "attachment_id": "7d2b8b2c-3e5f-4a0c-9c63-2f3a4b5c6d7e",
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "chunk_size": 4194304,
+            "media_type": "application/pdf",
+            "name": "FAKE-lab-result.pdf",
+            "provenance": {
+              "delivery_id": "9f4dad4e-5071-4c2e-be85-4b5c6d7e8f90",
+              "kind": "clinic-signed-copy",
+              "manifest": "FAKEmanifestpayload.FAKEmanifestsignature"
+            },
+            "sha256": "6808413895b31df69a07f1f7f2e112c5aebaddb6c7367d84e315e21151e0da5a",
+            "size": 5242897
+          },
+          {
+            "attachment_id": "8e3c9c3d-4f60-4b1d-ad74-3a4b5c6d7e8f",
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "chunk_size": 4194304,
+            "media_type": "image/jpeg",
+            "name": "FAKE-photo.jpg",
+            "provenance": {
+              "kind": "patient-original"
+            },
+            "sha256": "70ec1fd1736b96cfe48d0b317bd0b5490229f9a00f17dcf6dd60073252ee8a30",
+            "size": 1000
+          }
+        ],
+        "body": "FAKE message: please see the attached FAKE results.",
+        "clinic_id": "clinic-FAKE0001",
+        "conversation_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "expires_at": 1792710000,
+        "in_reply_to": null,
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "typ": "mycarlos-send-envelope",
+        "v": 1,
+        "sender_name": "FAKE Person"
+      },
+      "expect": "unknown_or_missing_field"
+    },
+    {
+      "name": "version 2",
+      "object": {
+        "attachments": [
+          {
+            "attachment_id": "7d2b8b2c-3e5f-4a0c-9c63-2f3a4b5c6d7e",
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "chunk_size": 4194304,
+            "media_type": "application/pdf",
+            "name": "FAKE-lab-result.pdf",
+            "provenance": {
+              "delivery_id": "9f4dad4e-5071-4c2e-be85-4b5c6d7e8f90",
+              "kind": "clinic-signed-copy",
+              "manifest": "FAKEmanifestpayload.FAKEmanifestsignature"
+            },
+            "sha256": "6808413895b31df69a07f1f7f2e112c5aebaddb6c7367d84e315e21151e0da5a",
+            "size": 5242897
+          },
+          {
+            "attachment_id": "8e3c9c3d-4f60-4b1d-ad74-3a4b5c6d7e8f",
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "chunk_size": 4194304,
+            "media_type": "image/jpeg",
+            "name": "FAKE-photo.jpg",
+            "provenance": {
+              "kind": "patient-original"
+            },
+            "sha256": "70ec1fd1736b96cfe48d0b317bd0b5490229f9a00f17dcf6dd60073252ee8a30",
+            "size": 1000
+          }
+        ],
+        "body": "FAKE message: please see the attached FAKE results.",
+        "clinic_id": "clinic-FAKE0001",
+        "conversation_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "expires_at": 1792710000,
+        "in_reply_to": null,
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "typ": "mycarlos-send-envelope",
+        "v": 2
+      },
+      "expect": "unsupported_version"
+    },
+    {
+      "name": "a reply (reserved, null in v1)",
+      "object": {
+        "attachments": [
+          {
+            "attachment_id": "7d2b8b2c-3e5f-4a0c-9c63-2f3a4b5c6d7e",
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "chunk_size": 4194304,
+            "media_type": "application/pdf",
+            "name": "FAKE-lab-result.pdf",
+            "provenance": {
+              "delivery_id": "9f4dad4e-5071-4c2e-be85-4b5c6d7e8f90",
+              "kind": "clinic-signed-copy",
+              "manifest": "FAKEmanifestpayload.FAKEmanifestsignature"
+            },
+            "sha256": "6808413895b31df69a07f1f7f2e112c5aebaddb6c7367d84e315e21151e0da5a",
+            "size": 5242897
+          },
+          {
+            "attachment_id": "8e3c9c3d-4f60-4b1d-ad74-3a4b5c6d7e8f",
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "chunk_size": 4194304,
+            "media_type": "image/jpeg",
+            "name": "FAKE-photo.jpg",
+            "provenance": {
+              "kind": "patient-original"
+            },
+            "sha256": "70ec1fd1736b96cfe48d0b317bd0b5490229f9a00f17dcf6dd60073252ee8a30",
+            "size": 1000
+          }
+        ],
+        "body": "FAKE message: please see the attached FAKE results.",
+        "clinic_id": "clinic-FAKE0001",
+        "conversation_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "expires_at": 1792710000,
+        "in_reply_to": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "typ": "mycarlos-send-envelope",
+        "v": 1
+      },
+      "expect": "reply_not_supported"
+    },
+    {
+      "name": "body of 8193 bytes",
+      "object": {
+        "attachments": [
+          {
+            "attachment_id": "7d2b8b2c-3e5f-4a0c-9c63-2f3a4b5c6d7e",
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "chunk_size": 4194304,
+            "media_type": "application/pdf",
+            "name": "FAKE-lab-result.pdf",
+            "provenance": {
+              "delivery_id": "9f4dad4e-5071-4c2e-be85-4b5c6d7e8f90",
+              "kind": "clinic-signed-copy",
+              "manifest": "FAKEmanifestpayload.FAKEmanifestsignature"
+            },
+            "sha256": "6808413895b31df69a07f1f7f2e112c5aebaddb6c7367d84e315e21151e0da5a",
+            "size": 5242897
+          },
+          {
+            "attachment_id": "8e3c9c3d-4f60-4b1d-ad74-3a4b5c6d7e8f",
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "chunk_size": 4194304,
+            "media_type": "image/jpeg",
+            "name": "FAKE-photo.jpg",
+            "provenance": {
+              "kind": "patient-original"
+            },
+            "sha256": "70ec1fd1736b96cfe48d0b317bd0b5490229f9a00f17dcf6dd60073252ee8a30",
+            "size": 1000
+          }
+        ],
+        "body": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "clinic_id": "clinic-FAKE0001",
+        "conversation_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "expires_at": 1792710000,
+        "in_reply_to": null,
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "typ": "mycarlos-send-envelope",
+        "v": 1
+      },
+      "expect": "body_too_long"
+    },
+    {
+      "name": "a control character in the body",
+      "object": {
+        "attachments": [
+          {
+            "attachment_id": "7d2b8b2c-3e5f-4a0c-9c63-2f3a4b5c6d7e",
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "chunk_size": 4194304,
+            "media_type": "application/pdf",
+            "name": "FAKE-lab-result.pdf",
+            "provenance": {
+              "delivery_id": "9f4dad4e-5071-4c2e-be85-4b5c6d7e8f90",
+              "kind": "clinic-signed-copy",
+              "manifest": "FAKEmanifestpayload.FAKEmanifestsignature"
+            },
+            "sha256": "6808413895b31df69a07f1f7f2e112c5aebaddb6c7367d84e315e21151e0da5a",
+            "size": 5242897
+          },
+          {
+            "attachment_id": "8e3c9c3d-4f60-4b1d-ad74-3a4b5c6d7e8f",
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "chunk_size": 4194304,
+            "media_type": "image/jpeg",
+            "name": "FAKE-photo.jpg",
+            "provenance": {
+              "kind": "patient-original"
+            },
+            "sha256": "70ec1fd1736b96cfe48d0b317bd0b5490229f9a00f17dcf6dd60073252ee8a30",
+            "size": 1000
+          }
+        ],
+        "body": "hello\u0007",
+        "clinic_id": "clinic-FAKE0001",
+        "conversation_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "expires_at": 1792710000,
+        "in_reply_to": null,
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "typ": "mycarlos-send-envelope",
+        "v": 1
+      },
+      "expect": "body_control_characters"
+    },
+    {
+      "name": "no text and no attachment",
+      "object": {
+        "attachments": [],
+        "body": " ",
+        "clinic_id": "clinic-FAKE0001",
+        "conversation_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "expires_at": 1792710000,
+        "in_reply_to": null,
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "typ": "mycarlos-send-envelope",
+        "v": 1
+      },
+      "expect": "empty_message"
+    },
+    {
+      "name": "an attachment id repeated",
+      "object": {
+        "attachments": [
+          {
+            "attachment_id": "7d2b8b2c-3e5f-4a0c-9c63-2f3a4b5c6d7e",
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "chunk_size": 4194304,
+            "media_type": "application/pdf",
+            "name": "FAKE-lab-result.pdf",
+            "provenance": {
+              "delivery_id": "9f4dad4e-5071-4c2e-be85-4b5c6d7e8f90",
+              "kind": "clinic-signed-copy",
+              "manifest": "FAKEmanifestpayload.FAKEmanifestsignature"
+            },
+            "sha256": "6808413895b31df69a07f1f7f2e112c5aebaddb6c7367d84e315e21151e0da5a",
+            "size": 5242897
+          },
+          {
+            "attachment_id": "7d2b8b2c-3e5f-4a0c-9c63-2f3a4b5c6d7e",
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "chunk_size": 4194304,
+            "media_type": "image/jpeg",
+            "name": "FAKE-photo.jpg",
+            "provenance": {
+              "kind": "patient-original"
+            },
+            "sha256": "70ec1fd1736b96cfe48d0b317bd0b5490229f9a00f17dcf6dd60073252ee8a30",
+            "size": 1000
+          }
+        ],
+        "body": "FAKE message: please see the attached FAKE results.",
+        "clinic_id": "clinic-FAKE0001",
+        "conversation_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "expires_at": 1792710000,
+        "in_reply_to": null,
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "typ": "mycarlos-send-envelope",
+        "v": 1
+      },
+      "expect": "duplicate_attachment_id"
+    },
+    {
+      "name": "a name with a path separator",
+      "object": {
+        "attachments": [
+          {
+            "attachment_id": "7d2b8b2c-3e5f-4a0c-9c63-2f3a4b5c6d7e",
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "chunk_size": 4194304,
+            "media_type": "application/pdf",
+            "name": "../x.pdf",
+            "provenance": {
+              "delivery_id": "9f4dad4e-5071-4c2e-be85-4b5c6d7e8f90",
+              "kind": "clinic-signed-copy",
+              "manifest": "FAKEmanifestpayload.FAKEmanifestsignature"
+            },
+            "sha256": "6808413895b31df69a07f1f7f2e112c5aebaddb6c7367d84e315e21151e0da5a",
+            "size": 5242897
+          },
+          {
+            "attachment_id": "8e3c9c3d-4f60-4b1d-ad74-3a4b5c6d7e8f",
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "chunk_size": 4194304,
+            "media_type": "image/jpeg",
+            "name": "FAKE-photo.jpg",
+            "provenance": {
+              "kind": "patient-original"
+            },
+            "sha256": "70ec1fd1736b96cfe48d0b317bd0b5490229f9a00f17dcf6dd60073252ee8a30",
+            "size": 1000
+          }
+        ],
+        "body": "FAKE message: please see the attached FAKE results.",
+        "clinic_id": "clinic-FAKE0001",
+        "conversation_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "expires_at": 1792710000,
+        "in_reply_to": null,
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "typ": "mycarlos-send-envelope",
+        "v": 1
+      },
+      "expect": "bad_name"
+    },
+    {
+      "name": "a name of 121 characters",
+      "object": {
+        "attachments": [
+          {
+            "attachment_id": "7d2b8b2c-3e5f-4a0c-9c63-2f3a4b5c6d7e",
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "chunk_size": 4194304,
+            "media_type": "application/pdf",
+            "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "provenance": {
+              "delivery_id": "9f4dad4e-5071-4c2e-be85-4b5c6d7e8f90",
+              "kind": "clinic-signed-copy",
+              "manifest": "FAKEmanifestpayload.FAKEmanifestsignature"
+            },
+            "sha256": "6808413895b31df69a07f1f7f2e112c5aebaddb6c7367d84e315e21151e0da5a",
+            "size": 5242897
+          },
+          {
+            "attachment_id": "8e3c9c3d-4f60-4b1d-ad74-3a4b5c6d7e8f",
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "chunk_size": 4194304,
+            "media_type": "image/jpeg",
+            "name": "FAKE-photo.jpg",
+            "provenance": {
+              "kind": "patient-original"
+            },
+            "sha256": "70ec1fd1736b96cfe48d0b317bd0b5490229f9a00f17dcf6dd60073252ee8a30",
+            "size": 1000
+          }
+        ],
+        "body": "FAKE message: please see the attached FAKE results.",
+        "clinic_id": "clinic-FAKE0001",
+        "conversation_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "expires_at": 1792710000,
+        "in_reply_to": null,
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "typ": "mycarlos-send-envelope",
+        "v": 1
+      },
+      "expect": "bad_name"
+    },
+    {
+      "name": "an executable type",
+      "object": {
+        "attachments": [
+          {
+            "attachment_id": "7d2b8b2c-3e5f-4a0c-9c63-2f3a4b5c6d7e",
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "chunk_size": 4194304,
+            "media_type": "application/pdf",
+            "name": "FAKE-lab-result.pdf",
+            "provenance": {
+              "delivery_id": "9f4dad4e-5071-4c2e-be85-4b5c6d7e8f90",
+              "kind": "clinic-signed-copy",
+              "manifest": "FAKEmanifestpayload.FAKEmanifestsignature"
+            },
+            "sha256": "6808413895b31df69a07f1f7f2e112c5aebaddb6c7367d84e315e21151e0da5a",
+            "size": 5242897
+          },
+          {
+            "attachment_id": "8e3c9c3d-4f60-4b1d-ad74-3a4b5c6d7e8f",
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "chunk_size": 4194304,
+            "media_type": "application/x-msdownload",
+            "name": "FAKE-photo.jpg",
+            "provenance": {
+              "kind": "patient-original"
+            },
+            "sha256": "70ec1fd1736b96cfe48d0b317bd0b5490229f9a00f17dcf6dd60073252ee8a30",
+            "size": 1000
+          }
+        ],
+        "body": "FAKE message: please see the attached FAKE results.",
+        "clinic_id": "clinic-FAKE0001",
+        "conversation_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "expires_at": 1792710000,
+        "in_reply_to": null,
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "typ": "mycarlos-send-envelope",
+        "v": 1
+      },
+      "expect": "type_not_allowed"
+    },
+    {
+      "name": "video in phase 1",
+      "object": {
+        "attachments": [
+          {
+            "attachment_id": "7d2b8b2c-3e5f-4a0c-9c63-2f3a4b5c6d7e",
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "chunk_size": 4194304,
+            "media_type": "application/pdf",
+            "name": "FAKE-lab-result.pdf",
+            "provenance": {
+              "delivery_id": "9f4dad4e-5071-4c2e-be85-4b5c6d7e8f90",
+              "kind": "clinic-signed-copy",
+              "manifest": "FAKEmanifestpayload.FAKEmanifestsignature"
+            },
+            "sha256": "6808413895b31df69a07f1f7f2e112c5aebaddb6c7367d84e315e21151e0da5a",
+            "size": 5242897
+          },
+          {
+            "attachment_id": "8e3c9c3d-4f60-4b1d-ad74-3a4b5c6d7e8f",
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "chunk_size": 4194304,
+            "media_type": "video/mp4",
+            "name": "FAKE-photo.jpg",
+            "provenance": {
+              "kind": "patient-original"
+            },
+            "sha256": "70ec1fd1736b96cfe48d0b317bd0b5490229f9a00f17dcf6dd60073252ee8a30",
+            "size": 1000
+          }
+        ],
+        "body": "FAKE message: please see the attached FAKE results.",
+        "clinic_id": "clinic-FAKE0001",
+        "conversation_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "expires_at": 1792710000,
+        "in_reply_to": null,
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "typ": "mycarlos-send-envelope",
+        "v": 1
+      },
+      "expect": "type_not_allowed"
+    },
+    {
+      "name": "video in phase 2",
+      "object": {
+        "attachments": [
+          {
+            "attachment_id": "7d2b8b2c-3e5f-4a0c-9c63-2f3a4b5c6d7e",
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "chunk_size": 4194304,
+            "media_type": "application/pdf",
+            "name": "FAKE-lab-result.pdf",
+            "provenance": {
+              "delivery_id": "9f4dad4e-5071-4c2e-be85-4b5c6d7e8f90",
+              "kind": "clinic-signed-copy",
+              "manifest": "FAKEmanifestpayload.FAKEmanifestsignature"
+            },
+            "sha256": "6808413895b31df69a07f1f7f2e112c5aebaddb6c7367d84e315e21151e0da5a",
+            "size": 5242897
+          },
+          {
+            "attachment_id": "8e3c9c3d-4f60-4b1d-ad74-3a4b5c6d7e8f",
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "chunk_size": 4194304,
+            "media_type": "video/mp4",
+            "name": "FAKE-photo.jpg",
+            "provenance": {
+              "kind": "patient-original"
+            },
+            "sha256": "70ec1fd1736b96cfe48d0b317bd0b5490229f9a00f17dcf6dd60073252ee8a30",
+            "size": 1000
+          }
+        ],
+        "body": "FAKE message: please see the attached FAKE results.",
+        "clinic_id": "clinic-FAKE0001",
+        "conversation_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "expires_at": 1792710000,
+        "in_reply_to": null,
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "typ": "mycarlos-send-envelope",
+        "v": 1
+      },
+      "expect": "accept"
+    },
+    {
+      "name": "a wrong chunk count for the size",
+      "object": {
+        "attachments": [
+          {
+            "attachment_id": "7d2b8b2c-3e5f-4a0c-9c63-2f3a4b5c6d7e",
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 3,
+            "chunk_size": 4194304,
+            "media_type": "application/pdf",
+            "name": "FAKE-lab-result.pdf",
+            "provenance": {
+              "delivery_id": "9f4dad4e-5071-4c2e-be85-4b5c6d7e8f90",
+              "kind": "clinic-signed-copy",
+              "manifest": "FAKEmanifestpayload.FAKEmanifestsignature"
+            },
+            "sha256": "6808413895b31df69a07f1f7f2e112c5aebaddb6c7367d84e315e21151e0da5a",
+            "size": 5242897
+          },
+          {
+            "attachment_id": "8e3c9c3d-4f60-4b1d-ad74-3a4b5c6d7e8f",
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "chunk_size": 4194304,
+            "media_type": "image/jpeg",
+            "name": "FAKE-photo.jpg",
+            "provenance": {
+              "kind": "patient-original"
+            },
+            "sha256": "70ec1fd1736b96cfe48d0b317bd0b5490229f9a00f17dcf6dd60073252ee8a30",
+            "size": 1000
+          }
+        ],
+        "body": "FAKE message: please see the attached FAKE results.",
+        "clinic_id": "clinic-FAKE0001",
+        "conversation_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "expires_at": 1792710000,
+        "in_reply_to": null,
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "typ": "mycarlos-send-envelope",
+        "v": 1
+      },
+      "expect": "bad_chunk_count"
+    },
+    {
+      "name": "a clinic-signed copy that is not a PDF",
+      "object": {
+        "attachments": [
+          {
+            "attachment_id": "7d2b8b2c-3e5f-4a0c-9c63-2f3a4b5c6d7e",
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "chunk_size": 4194304,
+            "media_type": "image/png",
+            "name": "FAKE-lab-result.pdf",
+            "provenance": {
+              "delivery_id": "9f4dad4e-5071-4c2e-be85-4b5c6d7e8f90",
+              "kind": "clinic-signed-copy",
+              "manifest": "FAKEmanifestpayload.FAKEmanifestsignature"
+            },
+            "sha256": "6808413895b31df69a07f1f7f2e112c5aebaddb6c7367d84e315e21151e0da5a",
+            "size": 5242897
+          },
+          {
+            "attachment_id": "8e3c9c3d-4f60-4b1d-ad74-3a4b5c6d7e8f",
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "chunk_size": 4194304,
+            "media_type": "image/jpeg",
+            "name": "FAKE-photo.jpg",
+            "provenance": {
+              "kind": "patient-original"
+            },
+            "sha256": "70ec1fd1736b96cfe48d0b317bd0b5490229f9a00f17dcf6dd60073252ee8a30",
+            "size": 1000
+          }
+        ],
+        "body": "FAKE message: please see the attached FAKE results.",
+        "clinic_id": "clinic-FAKE0001",
+        "conversation_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "expires_at": 1792710000,
+        "in_reply_to": null,
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "typ": "mycarlos-send-envelope",
+        "v": 1
+      },
+      "expect": "type_not_allowed"
+    },
+    {
+      "name": "a clinic-signed copy without its manifest",
+      "object": {
+        "attachments": [
+          {
+            "attachment_id": "7d2b8b2c-3e5f-4a0c-9c63-2f3a4b5c6d7e",
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "chunk_size": 4194304,
+            "media_type": "application/pdf",
+            "name": "FAKE-lab-result.pdf",
+            "provenance": {
+              "delivery_id": "9f4dad4e-5071-4c2e-be85-4b5c6d7e8f90",
+              "kind": "clinic-signed-copy"
+            },
+            "sha256": "6808413895b31df69a07f1f7f2e112c5aebaddb6c7367d84e315e21151e0da5a",
+            "size": 5242897
+          },
+          {
+            "attachment_id": "8e3c9c3d-4f60-4b1d-ad74-3a4b5c6d7e8f",
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "chunk_size": 4194304,
+            "media_type": "image/jpeg",
+            "name": "FAKE-photo.jpg",
+            "provenance": {
+              "kind": "patient-original"
+            },
+            "sha256": "70ec1fd1736b96cfe48d0b317bd0b5490229f9a00f17dcf6dd60073252ee8a30",
+            "size": 1000
+          }
+        ],
+        "body": "FAKE message: please see the attached FAKE results.",
+        "clinic_id": "clinic-FAKE0001",
+        "conversation_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "expires_at": 1792710000,
+        "in_reply_to": null,
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "typ": "mycarlos-send-envelope",
+        "v": 1
+      },
+      "expect": "bad_provenance"
+    },
+    {
+      "name": "an unknown provenance kind",
+      "object": {
+        "attachments": [
+          {
+            "attachment_id": "7d2b8b2c-3e5f-4a0c-9c63-2f3a4b5c6d7e",
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "chunk_size": 4194304,
+            "media_type": "application/pdf",
+            "name": "FAKE-lab-result.pdf",
+            "provenance": {
+              "delivery_id": "9f4dad4e-5071-4c2e-be85-4b5c6d7e8f90",
+              "kind": "clinic-signed-copy",
+              "manifest": "FAKEmanifestpayload.FAKEmanifestsignature"
+            },
+            "sha256": "6808413895b31df69a07f1f7f2e112c5aebaddb6c7367d84e315e21151e0da5a",
+            "size": 5242897
+          },
+          {
+            "attachment_id": "8e3c9c3d-4f60-4b1d-ad74-3a4b5c6d7e8f",
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 1,
+            "chunk_size": 4194304,
+            "media_type": "image/jpeg",
+            "name": "FAKE-photo.jpg",
+            "provenance": {
+              "kind": "clinic-authored"
+            },
+            "sha256": "70ec1fd1736b96cfe48d0b317bd0b5490229f9a00f17dcf6dd60073252ee8a30",
+            "size": 1000
+          }
+        ],
+        "body": "FAKE message: please see the attached FAKE results.",
+        "clinic_id": "clinic-FAKE0001",
+        "conversation_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "expires_at": 1792710000,
+        "in_reply_to": null,
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "typ": "mycarlos-send-envelope",
+        "v": 1
+      },
+      "expect": "bad_provenance"
+    },
+    {
+      "name": "an attachment over 20 MiB in phase 1",
+      "object": {
+        "attachments": [
+          {
+            "attachment_id": "7d2b8b2c-3e5f-4a0c-9c63-2f3a4b5c6d7e",
+            "chain_head": "420783712342bbdd089f5ddd56fe3653ede2e2f21c1c03a17ebe98f282562632",
+            "chunk_count": 2,
+            "chunk_size": 4194304,
+            "media_type": "application/pdf",
+            "name": "FAKE-lab-result.pdf",
+            "provenance": {
+              "delivery_id": "9f4dad4e-5071-4c2e-be85-4b5c6d7e8f90",
+              "kind": "clinic-signed-copy",
+              "manifest": "FAKEmanifestpayload.FAKEmanifestsignature"
+            },
+            "sha256": "6808413895b31df69a07f1f7f2e112c5aebaddb6c7367d84e315e21151e0da5a",
+            "size": 5242897
+          },
+          {
+            "attachment_id": "8e3c9c3d-4f60-4b1d-ad74-3a4b5c6d7e8f",
+            "chain_head": "0f322e9a6c779bab890599bfddac8b6f64a0f66386f22e398cf66352709a54de",
+            "chunk_count": 6,
+            "chunk_size": 4194304,
+            "media_type": "image/jpeg",
+            "name": "FAKE-photo.jpg",
+            "provenance": {
+              "kind": "patient-original"
+            },
+            "sha256": "70ec1fd1736b96cfe48d0b317bd0b5490229f9a00f17dcf6dd60073252ee8a30",
+            "size": 22020096
+          }
+        ],
+        "body": "FAKE message: please see the attached FAKE results.",
+        "clinic_id": "clinic-FAKE0001",
+        "conversation_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "created_at": 1792450800,
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "expires_at": 1792710000,
+        "in_reply_to": null,
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "typ": "mycarlos-send-envelope",
+        "v": 1
+      },
+      "expect": "too_large"
+    }
+  ],
+  "ack_cases": [
+    {
+      "name": "collected",
+      "object": {
+        "at": 1792451400,
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "clinic_id": "clinic-FAKE0001",
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "kid": "FAKEclinickidFAKEclinickidFAKEclinickidFAKEcl0",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "reason": null,
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "ref": "ref-FAKE0001",
+        "state": "collected",
+        "typ": "mycarlos-send-ack",
+        "v": 1
+      },
+      "expect": "accept"
+    },
+    {
+      "name": "filed",
+      "object": {
+        "at": 1792451400,
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "clinic_id": "clinic-FAKE0001",
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "kid": "FAKEclinickidFAKEclinickidFAKEclinickidFAKEcl0",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "reason": null,
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "ref": "ref-FAKE0001",
+        "state": "filed",
+        "typ": "mycarlos-send-ack",
+        "v": 1
+      },
+      "expect": "accept"
+    },
+    {
+      "name": "refused with a reason",
+      "object": {
+        "at": 1792451400,
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "clinic_id": "clinic-FAKE0001",
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "kid": "FAKEclinickidFAKEclinickidFAKEclinickidFAKEcl0",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "reason": "type_not_allowed",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "ref": "ref-FAKE0001",
+        "state": "refused",
+        "typ": "mycarlos-send-ack",
+        "v": 1
+      },
+      "expect": "accept"
+    },
+    {
+      "name": "refused without a reason",
+      "object": {
+        "at": 1792451400,
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "clinic_id": "clinic-FAKE0001",
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "kid": "FAKEclinickidFAKEclinickidFAKEclinickidFAKEcl0",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "reason": null,
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "ref": "ref-FAKE0001",
+        "state": "refused",
+        "typ": "mycarlos-send-ack",
+        "v": 1
+      },
+      "expect": "reason_mismatch"
+    },
+    {
+      "name": "filed with a reason",
+      "object": {
+        "at": 1792451400,
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "clinic_id": "clinic-FAKE0001",
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "kid": "FAKEclinickidFAKEclinickidFAKEclinickidFAKEcl0",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "reason": "scan_failed",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "ref": "ref-FAKE0001",
+        "state": "filed",
+        "typ": "mycarlos-send-ack",
+        "v": 1
+      },
+      "expect": "reason_mismatch"
+    },
+    {
+      "name": "an unknown reason",
+      "object": {
+        "at": 1792451400,
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "clinic_id": "clinic-FAKE0001",
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "kid": "FAKEclinickidFAKEclinickidFAKEclinickidFAKEcl0",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "reason": "because",
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "ref": "ref-FAKE0001",
+        "state": "refused",
+        "typ": "mycarlos-send-ack",
+        "v": 1
+      },
+      "expect": "bad_reason"
+    },
+    {
+      "name": "a state that means read",
+      "object": {
+        "at": 1792451400,
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "clinic_id": "clinic-FAKE0001",
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "kid": "FAKEclinickidFAKEclinickidFAKEclinickidFAKEcl0",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "reason": null,
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "ref": "ref-FAKE0001",
+        "state": "read",
+        "typ": "mycarlos-send-ack",
+        "v": 1
+      },
+      "expect": "bad_type"
+    },
+    {
+      "name": "a ref with spaces",
+      "object": {
+        "at": 1792451400,
+        "chain_head": "319270caf9e3c7ca621af66b1401785104c4572b966e08b02ca8f2f549873c37",
+        "clinic_id": "clinic-FAKE0001",
+        "device_key_id": "FAKEdevicekeyidFAKEdevicekeyidFAKEdevicekeyid0",
+        "kid": "FAKEclinickidFAKEclinickidFAKEclinickidFAKEcl0",
+        "message_id": "5b0f6f0a-1c3d-4e8a-9a41-0d1e2f3a4b5c",
+        "reason": null,
+        "recipient_id": "rcp-FAKE0001aaaaaaaaaaaa",
+        "ref": "a b",
+        "state": "filed",
+        "typ": "mycarlos-send-ack",
+        "v": 1
+      },
+      "expect": "bad_ref"
+    }
+  ],
+  "states": {
+    "queued": {
+      "set_by": "app",
+      "means": "kept in the sent record; nothing has been sent yet",
+      "never_means": "that anything left this device"
+    },
+    "sending": {
+      "set_by": "app",
+      "means": "parts are being uploaded; resumes where it stopped",
+      "never_means": "that the portal has all of it"
+    },
+    "received": {
+      "set_by": "portal (reply the app checks: message_id, chain_head, received_at)",
+      "means": "the portal holds every part and the chain checked; it cannot read them",
+      "never_means": "that the clinic has it"
+    },
+    "collected": {
+      "set_by": "clinic system, by a signed acknowledgement (state collected)",
+      "means": "the clinic's system fetched, opened and checked the message",
+      "never_means": "filed, seen or read by anyone"
+    },
+    "filed": {
+      "set_by": "clinic system, by a signed acknowledgement (state filed)",
+      "means": "stored in the clinic's pending-review queue for staff",
+      "never_means": "that any staff member has read, reviewed or acted on it"
+    },
+    "refused": {
+      "set_by": "portal (limits, device) or clinic system (signed acknowledgement with a reason)",
+      "means": "not accepted, with one reason from a fixed list; nothing is kept",
+      "never_means": "a judgement about the content"
+    },
+    "expired": {
+      "set_by": "app or portal, when expires_at passes before the clinic collected it",
+      "means": "the portal deleted what it held; the sent record keeps that it expired",
+      "never_means": "that it was delivered"
+    },
+    "recalled": {
+      "set_by": "clinic system, by a signed acknowledgement after a recall request",
+      "means": "removed from the pending-review queue before it was accepted into a chart",
+      "never_means": "that nobody saw it"
+    }
+  },
+  "transitions": {
+    "queued": [
+      "sending",
+      "cancelled"
+    ],
+    "sending": [
+      "received",
+      "cancelled",
+      "expired",
+      "refused"
+    ],
+    "received": [
+      "collected",
+      "refused",
+      "expired",
+      "recalled"
+    ],
+    "collected": [
+      "filed",
+      "refused",
+      "expired",
+      "recalled"
+    ],
+    "filed": [
+      "recalled"
+    ],
+    "refused": [],
+    "expired": [],
+    "recalled": [],
+    "cancelled": []
+  },
+  "routes": [
+    [
+      "GET",
+      "/api/mycarlos/send-capabilities",
+      "device assertion",
+      "200; 404 when not enabled"
+    ],
+    [
+      "POST",
+      "/api/mycarlos/sends",
+      "device assertion; body is the JCS outer record",
+      "201, 200, 409 send_conflict"
+    ],
+    [
+      "PUT",
+      "/api/mycarlos/sends/{message_id}/envelope",
+      "device assertion; body the sealed envelope",
+      "200, 409 chunk_conflict"
+    ],
+    [
+      "PUT",
+      "/api/mycarlos/sends/{message_id}/attachments/{a}/chunks/{n}",
+      "device assertion; body one sealed chunk",
+      "200, 409 chunk_conflict, 413"
+    ],
+    [
+      "GET",
+      "/api/mycarlos/sends/{message_id}",
+      "device assertion",
+      "200 with state and received parts; 404"
+    ],
+    [
+      "POST",
+      "/api/mycarlos/sends/{message_id}/complete",
+      "device assertion; empty body",
+      "200 received; 422 chain_mismatch"
+    ],
+    [
+      "POST",
+      "/api/mycarlos/sends/{message_id}/cancel",
+      "device assertion; empty body",
+      "200 cancelled; 200 recall_requested after received"
+    ],
+    [
+      "GET",
+      "/api/mycarlos/sends",
+      "device assertion; ?after&limit (max 50)",
+      "200 list of states"
+    ],
+    [
+      "POST",
+      "/internal/carlos/mycarlos/sends/claim",
+      "job send-sync, portal.mycarlos.send.claim",
+      "200 claims with lease tokens"
+    ],
+    [
+      "GET",
+      "/internal/carlos/mycarlos/sends/{id}/parts/{part}",
+      "job send-sync, portal.mycarlos.send.read; lease token",
+      "200 octet-stream; 404"
+    ],
+    [
+      "POST",
+      "/internal/carlos/mycarlos/sends/{id}/result",
+      "job send-sync, portal.mycarlos.send.result; lease token",
+      "200, 409 lease_expired or conflict, 404"
+    ]
+  ],
+  "idempotency": [
+    [
+      "create",
+      "first request",
+      201,
+      "created"
+    ],
+    [
+      "create",
+      "same outer record, byte for byte",
+      200,
+      "nothing written"
+    ],
+    [
+      "create",
+      "same message_id, different outer record",
+      409,
+      "send_conflict; nothing changed"
+    ],
+    [
+      "envelope or chunk",
+      "first time",
+      200,
+      "stored"
+    ],
+    [
+      "envelope or chunk",
+      "same bytes again",
+      200,
+      "nothing written"
+    ],
+    [
+      "envelope or chunk",
+      "different bytes for the same place",
+      409,
+      "chunk_conflict; nothing changed"
+    ],
+    [
+      "complete",
+      "all parts present and the chain matches",
+      200,
+      "state received"
+    ],
+    [
+      "complete",
+      "again, once received",
+      200,
+      "unchanged"
+    ],
+    [
+      "complete",
+      "a part missing or a hash that does not chain",
+      422,
+      "chain_mismatch or missing parts listed"
+    ],
+    [
+      "cancel",
+      "before received",
+      200,
+      "everything deleted; state cancelled"
+    ],
+    [
+      "cancel",
+      "after received",
+      200,
+      "recall_requested; the clinic decides"
+    ],
+    [
+      "result",
+      "same outcome and acknowledgement again",
+      200,
+      "recorded: false"
+    ],
+    [
+      "result",
+      "a different outcome for a finished message",
+      409,
+      "conflict"
+    ],
+    [
+      "result",
+      "lease expired before the answer",
+      409,
+      "lease_expired; the message can be claimed again"
+    ]
+  ]
+}
