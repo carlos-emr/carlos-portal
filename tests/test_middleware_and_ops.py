@@ -111,7 +111,9 @@ def test_operational_metrics_are_protected_and_request_logs_are_phi_safe(
     assert all("?" not in message and "portal-check-123" in message for message in request_logs[:1])
 
     assert phi_shaped.status_code in {401, 404}
-    parameterized_logs = [message for message in request_logs if "/fhir/Patient" in message]
+    parameterized_logs = [
+        message for message in request_logs if "/fhir/Patient" in message
+    ]
     assert parameterized_logs, "the parameterized request produced no http_request line"
     for message in parameterized_logs:
         # The template, not the resolved path.

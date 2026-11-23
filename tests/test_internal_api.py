@@ -126,7 +126,9 @@ def internal_app(**overrides: object):
         "unlock_secret_encryption_secret": UNLOCK_SECRET,
         **overrides,
     }
-    app = create_app(Settings(**settings_values))
+    app = create_app(
+        Settings(**settings_values)
+    )
     upgrade_to_head(app.state.database_engine)
     return app
 
@@ -928,14 +930,10 @@ def test_internal_delivery_commit_audits_committing_staff_once(resend) -> None:
         )
         assert committed.status_code == 200
     with app.state.session_factory() as session:
-        events = list(
-            session.scalars(
-                select(PatientPortalAuditEvent).where(
-                    PatientPortalAuditEvent.invite_id == invite_id,
-                    PatientPortalAuditEvent.resource_type == "delivery_reference",
-                )
-            )
-        )
+        events = list(session.scalars(select(PatientPortalAuditEvent).where(
+            PatientPortalAuditEvent.invite_id == invite_id,
+            PatientPortalAuditEvent.resource_type == "delivery_reference",
+        )))
         assert len(events) == 1
         assert events[0].event_type == (
             AUDIT_EVENT_INVITE_RESEND if resend else AUDIT_EVENT_INVITE_CREATE
@@ -1943,7 +1941,9 @@ def test_internal_route_permission_manifest_covers_every_route() -> None:
         if getattr(route, "path", "").startswith("/internal/carlos")
         for method in sorted(getattr(route, "methods", set()) - {"HEAD", "OPTIONS"})
     }
-    declared = {(method, route_template(path)) for method, path, _, _ in INTERNAL_ROUTE_PERMISSIONS}
+    declared = {
+        (method, route_template(path)) for method, path, _, _ in INTERNAL_ROUTE_PERMISSIONS
+    }
 
     assert declared == registered
 
@@ -2357,7 +2357,9 @@ PREVIOUS_INTERNAL_API_TOKEN = "r" * MIN_PRODUCTION_SECRET_LENGTH
 
 def test_previous_internal_api_token_is_accepted_during_rotation() -> None:
     """Both tokens work while _PREVIOUS is set, so CARLOS can be cut over independently."""
-    client = TestClient(internal_app(internal_api_token_previous=PREVIOUS_INTERNAL_API_TOKEN))
+    client = TestClient(
+        internal_app(internal_api_token_previous=PREVIOUS_INTERNAL_API_TOKEN)
+    )
 
     with_active = client.post(
         "/internal/carlos/patients/1234/invites",

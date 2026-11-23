@@ -49,8 +49,8 @@ def install_fake_docker(tmp_path: Path, *, fail_preflight: bool) -> Path:
     failure = "exit 23" if fail_preflight else "exit 0"
     executable.write_text(
         "#!/bin/sh\n"
-        'printf \'%s|%s\\n\' "$PORTAL_IMAGE" "$*" >> "$FAKE_DOCKER_LOG"\n'
-        'case "$*" in\n'
+        "printf '%s|%s\\n' \"$PORTAL_IMAGE\" \"$*\" >> \"$FAKE_DOCKER_LOG\"\n"
+        "case \"$*\" in\n"
         "  *'outbox-configuration-sha256'*) "
         "case \"$*\" in *' outbox outbox-configuration-sha256'*) "
         "printf '%s\\n' \"$FAKE_WORKER_OUTBOX_DIGEST\" ;; "
@@ -62,25 +62,25 @@ def install_fake_docker(tmp_path: Path, *, fail_preflight: bool) -> Path:
         "  *'deployment-probe migration'*) "
         "printf '%s\\n' \"${FAKE_MIGRATION_DATABASE_PROBE:-}\"; exit 0 ;;\n"
         "  *'deployment-probe runtime'*) "
-        'if [ "${FAKE_REQUIRE_POLICY_FIRST:-false}" = true ] '
-        '&& [ ! -f "$FAKE_POLICY_STATE" ]; then exit 29; fi; '
+        "if [ \"${FAKE_REQUIRE_POLICY_FIRST:-false}\" = true ] "
+        "&& [ ! -f \"$FAKE_POLICY_STATE\" ]; then exit 29; fi; "
         "printf '%s\\n' \"$FAKE_WEB_DATABASE_PROBE\"; exit 0 ;;\n"
         "  *'outbox outbox'*) "
-        'if [ "${FAKE_REQUIRE_POLICY_FIRST:-false}" = true ] '
-        '&& [ ! -f "$FAKE_POLICY_STATE" ]; then exit 29; fi; '
+        "if [ \"${FAKE_REQUIRE_POLICY_FIRST:-false}\" = true ] "
+        "&& [ ! -f \"$FAKE_POLICY_STATE\" ]; then exit 29; fi; "
         "printf '%s\\n' \"$FAKE_WORKER_DATABASE_PROBE\"; exit 0 ;;\n"
         "  *'audit-maintenance maintenance'*) "
-        'if [ "${FAKE_REQUIRE_POLICY_FIRST:-false}" = true ] '
-        '&& [ ! -f "$FAKE_POLICY_STATE" ]; then exit 29; fi; '
+        "if [ \"${FAKE_REQUIRE_POLICY_FIRST:-false}\" = true ] "
+        "&& [ ! -f \"$FAKE_POLICY_STATE\" ]; then exit 29; fi; "
         "printf '%s\\n' \"${FAKE_MAINTENANCE_DATABASE_PROBE:-}\"; exit 0 ;;\n"
         "  *'hasattr(c, \"get_outbox_settings\") else 42'*) "
-        'if [ "${FAKE_OUTBOX_PROBE_FAILURE:-false}" = true ]; then exit 23; fi; '
-        'if [ "${FAKE_LEGACY_OUTBOX_IMAGE:-false}" = true ]; then exit 42; fi ;;\n'
+        "if [ \"${FAKE_OUTBOX_PROBE_FAILURE:-false}\" = true ]; then exit 23; fi; "
+        "if [ \"${FAKE_LEGACY_OUTBOX_IMAGE:-false}\" = true ]; then exit 42; fi ;;\n"
         "  *'up --detach'*) "
-        'if [ -n "${FAKE_OUTBOX_ENV_LOG:-}" ]; then '
-        'printf \'%s\\n\' "$PORTAL_OUTBOX_ENV_FILE" > "$FAKE_OUTBOX_ENV_LOG"; fi ;;\n'
+        "if [ -n \"${FAKE_OUTBOX_ENV_LOG:-}\" ]; then "
+        "printf '%s\\n' \"$PORTAL_OUTBOX_ENV_FILE\" > \"$FAKE_OUTBOX_ENV_LOG\"; fi ;;\n"
         "  *'run --rm database-policy') "
-        'if [ -n "${FAKE_POLICY_STATE:-}" ]; then : > "$FAKE_POLICY_STATE"; fi ;;\n'
+        "if [ -n \"${FAKE_POLICY_STATE:-}\" ]; then : > \"$FAKE_POLICY_STATE\"; fi ;;\n"
         f"  *'run --rm preflight'*) {failure} ;;\n"
         "esac\n"
         "exit 0\n"
@@ -201,7 +201,9 @@ def test_rollback_aborts_when_worker_capability_cannot_be_inspected(tmp_path: Pa
 def test_rollback_rejects_a_worker_database_mismatch(tmp_path: Path) -> None:
     fake_docker = install_fake_docker(tmp_path, fail_preflight=False)
     environment = rollback_environment(tmp_path, fake_docker)
-    environment["FAKE_WORKER_DATABASE_PROBE"] = "31|32|34|" + "d" * 64 + "|tls|safe"
+    environment["FAKE_WORKER_DATABASE_PROBE"] = (
+        "31|32|34|" + "d" * 64 + "|tls|safe"
+    )
 
     result = subprocess.run(  # noqa: S603
         [str(DEPLOY_SCRIPT), "rollback"],
@@ -246,10 +248,16 @@ def test_database_policy_restores_connect_before_restricted_probes(
     fake_docker = install_fake_docker(tmp_path, fail_preflight=False)
     environment = rollback_environment(tmp_path, fake_docker)
     policy = (
-        REPOSITORY_ROOT / "carlos_patient_portal" / "deploy" / "postgresql-audit-roles.sql"
+        REPOSITORY_ROOT
+        / "carlos_patient_portal"
+        / "deploy"
+        / "postgresql-audit-roles.sql"
     ).read_bytes()
     identity = (
-        REPOSITORY_ROOT / "carlos_patient_portal" / "deploy" / "postgresql-database-identity.sql"
+        REPOSITORY_ROOT
+        / "carlos_patient_portal"
+        / "deploy"
+        / "postgresql-database-identity.sql"
     ).read_bytes()
     owner_digest = sha256(b"portal_schema_owner").hexdigest()
     runtime_digest = sha256(b"portal_runtime").hexdigest()
@@ -264,10 +272,18 @@ def test_database_policy_restores_connect_before_restricted_probes(
                 f"{database_prefix}|direct|tls|safe|{owner_digest}|"
                 f"{runtime_digest}|{maintenance_digest}"
             ),
-            "FAKE_MIGRATION_DATABASE_PROBE": (f"{database_prefix}|{owner_digest}|tls|safe"),
-            "FAKE_WEB_DATABASE_PROBE": (f"{database_prefix}|{runtime_digest}|tls|safe"),
-            "FAKE_WORKER_DATABASE_PROBE": (f"{database_prefix}|{runtime_digest}|tls|safe"),
-            "FAKE_MAINTENANCE_DATABASE_PROBE": (f"{database_prefix}|{maintenance_digest}|tls|safe"),
+            "FAKE_MIGRATION_DATABASE_PROBE": (
+                f"{database_prefix}|{owner_digest}|tls|safe"
+            ),
+            "FAKE_WEB_DATABASE_PROBE": (
+                f"{database_prefix}|{runtime_digest}|tls|safe"
+            ),
+            "FAKE_WORKER_DATABASE_PROBE": (
+                f"{database_prefix}|{runtime_digest}|tls|safe"
+            ),
+            "FAKE_MAINTENANCE_DATABASE_PROBE": (
+                f"{database_prefix}|{maintenance_digest}|tls|safe"
+            ),
             "FAKE_REQUIRE_POLICY_FIRST": "true",
             "FAKE_POLICY_STATE": str(tmp_path / "policy-applied"),
         }
@@ -288,7 +304,9 @@ def test_database_policy_restores_connect_before_restricted_probes(
         index for index, call in enumerate(calls) if call.endswith("run --rm database-policy")
     )
     runtime_index = next(
-        index for index, call in enumerate(calls) if call.endswith("deployment-probe runtime")
+        index
+        for index, call in enumerate(calls)
+        if call.endswith("deployment-probe runtime")
     )
     assert policy_index < runtime_index
 
@@ -336,7 +354,9 @@ def test_preflight_rejects_mismatched_web_and_worker_configuration(tmp_path: Pat
 def test_preflight_rejects_a_worker_database_mismatch(tmp_path: Path) -> None:
     fake_docker = install_fake_docker(tmp_path, fail_preflight=False)
     environment = rollback_environment(tmp_path, fake_docker)
-    environment["FAKE_WORKER_DATABASE_PROBE"] = "31|32|34|" + "d" * 64 + "|tls|safe"
+    environment["FAKE_WORKER_DATABASE_PROBE"] = (
+        "31|32|34|" + "d" * 64 + "|tls|safe"
+    )
 
     result = subprocess.run(  # noqa: S603
         [str(DEPLOY_SCRIPT), "preflight"],
@@ -369,7 +389,10 @@ def test_database_identity_artifact_mismatch_fails_before_database_mutation(
     fake_docker = install_fake_docker(tmp_path, fail_preflight=False)
     environment = rollback_environment(tmp_path, fake_docker)
     policy = (
-        REPOSITORY_ROOT / "carlos_patient_portal" / "deploy" / "postgresql-audit-roles.sql"
+        REPOSITORY_ROOT
+        / "carlos_patient_portal"
+        / "deploy"
+        / "postgresql-audit-roles.sql"
     ).read_bytes()
     environment["FAKE_ARTIFACT_OUTPUT"] = f"{sha256(policy).hexdigest()}|{'0' * 64}"
 

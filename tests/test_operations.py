@@ -390,9 +390,12 @@ def test_audit_pruning_compares_live_targets_after_url_query_parsing(
 ) -> None:
     settings = Settings(
         environment="development",
-        database_url=("postgresql+psycopg://runtime@declared:5432/portal?dbname=runtime_actual"),
+        database_url=(
+            "postgresql+psycopg://runtime@declared:5432/portal?dbname=runtime_actual"
+        ),
         maintenance_database_url=(
-            "postgresql+psycopg://maintenance@declared:5432/portal?dbname=maintenance_actual"
+            "postgresql+psycopg://maintenance@declared:5432/portal"
+            "?dbname=maintenance_actual"
         ),
     )
     monkeypatch.setattr(cli, "get_settings", lambda: settings)
@@ -435,7 +438,9 @@ def test_production_audit_pruning_requires_tls_on_both_live_connections(
 ) -> None:
     settings = production_settings(
         database_url="postgresql+psycopg://runtime@localhost:5432/portal",
-        maintenance_database_url=("postgresql+psycopg://maintenance@localhost:5432/portal"),
+        maintenance_database_url=(
+            "postgresql+psycopg://maintenance@localhost:5432/portal"
+        ),
         database_maintenance_role="maintenance",
     )
     monkeypatch.setattr(cli, "get_settings", lambda: settings)

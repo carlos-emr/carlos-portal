@@ -329,7 +329,8 @@ def test_signed_in_dashboard_links_the_source_code() -> None:
         response = client.get(path)
         assert response.status_code == 200
         assert (
-            rendered_source_code_url(response.text) == "https://github.com/carlos-emr/carlos-portal"
+            rendered_source_code_url(response.text)
+            == "https://github.com/carlos-emr/carlos-portal"
         )
 
 
@@ -344,7 +345,8 @@ def test_configured_source_code_url_replaces_the_upstream_link() -> None:
 
     for response in (index_response, dashboard_response):
         assert (
-            rendered_source_code_url(response.text) == "https://git.example.test/clinic/portal-fork"
+            rendered_source_code_url(response.text)
+            == "https://git.example.test/clinic/portal-fork"
         )
         assert "github.com/carlos-emr/carlos-portal" not in response.text
 
@@ -461,7 +463,7 @@ def test_account_contact_update_creates_staff_review_request() -> None:
     assert phone_confirmed.status_code == 200
     assert "Contact information updated" in phone_confirmed.text
     assert "you have been signed out" in phone_confirmed.text
-    assert 'carlos_portal_session=""' in phone_confirmed.headers["set-cookie"]
+    assert "carlos_portal_session=\"\"" in phone_confirmed.headers["set-cookie"]
     signed_out_account = client.get("/portal/account", follow_redirects=False)
     assert signed_out_account.status_code == 303
     assert signed_out_account.headers["location"] == "/"
@@ -500,7 +502,9 @@ def test_account_contact_update_creates_staff_review_request() -> None:
         assert review_request.email_after == "new.patient@example.com"
         assert review_request.phone_number_before is None
         assert review_request.phone_number_after == "+15550105555"
-        assert [(event.event_type, event.outcome, event.reason) for event in audit_events] == [
+        assert [
+            (event.event_type, event.outcome, event.reason) for event in audit_events
+        ] == [
             (AUDIT_EVENT_ACCOUNT_CONTACT_UPDATE, AUDIT_OUTCOME_FAILURE, "step_up_failed"),
             (
                 AUDIT_EVENT_ACCOUNT_EMAIL_CHANGE_REQUEST,
@@ -1120,7 +1124,10 @@ def test_email_change_confirmation_delivery_failure_revokes_the_pending_request(
     app = app_holder["app"]
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/portal/account?status=email-confirmation-notice-failed"
+    assert (
+        response.headers["location"]
+        == "/portal/account?status=email-confirmation-notice-failed"
+    )
     with app.state.session_factory() as session:
         account = session.scalar(select(PatientPortalAccount))
         email_change_request = session.scalar(select(PatientPortalEmailChangeRequest))
@@ -1129,7 +1136,8 @@ def test_email_change_confirmation_delivery_failure_revokes_the_pending_request(
             for event in session.scalars(
                 select(PatientPortalAuditEvent)
                 .where(
-                    PatientPortalAuditEvent.event_type == AUDIT_EVENT_ACCOUNT_EMAIL_CHANGE_REQUEST
+                    PatientPortalAuditEvent.event_type
+                    == AUDIT_EVENT_ACCOUNT_EMAIL_CHANGE_REQUEST
                 )
                 .order_by(PatientPortalAuditEvent.id)
             )
@@ -1166,7 +1174,7 @@ def test_phone_removal_does_not_create_an_unsendable_confirmation_code() -> None
     assert response.status_code == 200
     assert "Contact information updated" in response.text
     assert "you have been signed out" in response.text
-    assert 'carlos_portal_session=""' in response.headers["set-cookie"]
+    assert "carlos_portal_session=\"\"" in response.headers["set-cookie"]
     assert sms_sender.messages == []
     signed_out_account = client.get("/portal/account", follow_redirects=False)
     assert signed_out_account.status_code == 303
@@ -1260,7 +1268,8 @@ def test_contact_change_records_a_failure_when_the_security_notice_cannot_be_sen
             for event in session.scalars(
                 select(PatientPortalAuditEvent)
                 .where(
-                    PatientPortalAuditEvent.event_type == AUDIT_EVENT_ACCOUNT_EMAIL_CHANGE_REQUEST
+                    PatientPortalAuditEvent.event_type
+                    == AUDIT_EVENT_ACCOUNT_EMAIL_CHANGE_REQUEST
                 )
                 .order_by(PatientPortalAuditEvent.id)
             )
@@ -1452,7 +1461,9 @@ def test_phone_code_resend_inside_the_cooldown_is_rate_limited_not_an_error() ->
     then raised TypeError and the patient got a 500 page.
     """
     sms_sender = RecordingPortalSmsSender()
-    app = migrated_development_app(email_sender=RecordingPortalEmailSender(), sms_sender=sms_sender)
+    app = migrated_development_app(
+        email_sender=RecordingPortalEmailSender(), sms_sender=sms_sender
+    )
     client = TestClient(app)
     browser_sign_in_seeded_patient(app, client)
     account_page = client.get("/portal/account")
@@ -1467,7 +1478,9 @@ def test_phone_code_resend_inside_the_cooldown_is_rate_limited_not_an_error() ->
         follow_redirects=False,
     )
     assert requested.status_code == 303
-    assert requested.headers["location"] == "/portal/account?status=phone-confirmation-required"
+    assert (
+        requested.headers["location"] == "/portal/account?status=phone-confirmation-required"
+    )
     sent_codes = len(sms_sender.messages)
 
     confirmation_page = client.get("/portal/account")
@@ -1478,7 +1491,10 @@ def test_phone_code_resend_inside_the_cooldown_is_rate_limited_not_an_error() ->
     )
 
     assert resent.status_code == 303
-    assert resent.headers["location"] == "/portal/account?status=phone-confirmation-rate-limited"
+    assert (
+        resent.headers["location"]
+        == "/portal/account?status=phone-confirmation-rate-limited"
+    )
     assert len(sms_sender.messages) == sent_codes
 
 

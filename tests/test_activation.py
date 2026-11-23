@@ -685,10 +685,9 @@ def test_throttled_activation_skips_expensive_password_strength_analysis(
         activation_max_failures_per_client=1,
     )
     client = TestClient(app)
-    assert (
-        client.post("/auth/activate", json=activation_request("forged-invite-token")).status_code
-        == 400
-    )
+    assert client.post(
+        "/auth/activate", json=activation_request("forged-invite-token")
+    ).status_code == 400
 
     def fail_if_called(*_args: object, **_kwargs: object) -> dict[str, object]:
         pytest.fail("password strength analysis ran for a throttled activation")

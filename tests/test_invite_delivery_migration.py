@@ -46,9 +46,7 @@ def test_invite_delivery_migration_follows_main_and_guards_prepared_tokens(tmp_p
         }
         with Session(engine) as session, session.begin():
             invite, _ = prepare_create_invite(
-                session,
-                1234,
-                "Preparing Staff",
+                session, 1234, "Preparing Staff",
                 delivery_operation_id="migration-preparation",
                 identity_proof=IdentityProof(
                     email="migration.patient@example.com",
@@ -86,12 +84,9 @@ def test_dropping_the_redundant_pending_index_keeps_pending_invites_unique(tmp_p
     config.set_main_option("script_location", "carlos_patient_portal:migrations")
     database_url = f"sqlite+pysqlite:///{tmp_path / 'pending-index.db'}"
     config.set_main_option("sqlalchemy.url", database_url)
-    assert (
-        ScriptDirectory.from_config(config)
-        .get_revision("0013_drop_redundant_pending_idx")
-        .down_revision
-        == "0012_atomic_invite_delivery"
-    )
+    assert ScriptDirectory.from_config(config).get_revision(
+        "0013_drop_redundant_pending_idx"
+    ).down_revision == "0012_atomic_invite_delivery"
     command.upgrade(config, "0013_drop_redundant_pending_idx")
     engine = create_engine(database_url)
 

@@ -173,32 +173,38 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
                 )
             )
             quoted_database = engine.dialect.identifier_preparer.quote(database_name)
-            connection.execute(text(f"REVOKE TEMPORARY ON DATABASE {quoted_database} FROM PUBLIC"))
+            connection.execute(
+                text(f"REVOKE TEMPORARY ON DATABASE {quoted_database} FROM PUBLIC")
+            )
             connection.execute(text("REVOKE ALL ON SCHEMA public FROM PUBLIC"))
             connection.execute(text(f'DROP ROLE IF EXISTS "{incoming_role}"'))
             connection.execute(text(f'DROP ROLE IF EXISTS "{runtime_role}"'))
             connection.execute(text(f'DROP ROLE IF EXISTS "{owner_role}"'))
             connection.execute(text(f'CREATE ROLE "{owner_role}" NOLOGIN'))
             connection.execute(
-                text(f"CREATE ROLE \"{runtime_role}\" LOGIN PASSWORD '{runtime_password}'")
+                text(f'CREATE ROLE "{runtime_role}" LOGIN PASSWORD \'{runtime_password}\'')
             )
             connection.execute(
                 text(f'GRANT CONNECT ON DATABASE {quoted_database} TO "{runtime_role}"')
             )
             connection.execute(text(f'GRANT USAGE ON SCHEMA public TO "{runtime_role}"'))
-            connection.execute(text(f'GRANT SELECT ON public.alembic_version TO "{runtime_role}"'))
             connection.execute(
-                text(f'ALTER TABLE public.patient_portal_audit_events OWNER TO "{owner_role}"')
+                text(f'GRANT SELECT ON public.alembic_version TO "{runtime_role}"')
             )
             connection.execute(
                 text(
-                    f"GRANT SELECT, INSERT ON public.patient_portal_audit_events "
+                    f'ALTER TABLE public.patient_portal_audit_events OWNER TO "{owner_role}"'
+                )
+            )
+            connection.execute(
+                text(
+                    f'GRANT SELECT, INSERT ON public.patient_portal_audit_events '
                     f'TO "{runtime_role}"'
                 )
             )
             connection.execute(
                 text(
-                    f"GRANT USAGE, SELECT ON SEQUENCE patient_portal_audit_events_id_seq "
+                    f'GRANT USAGE, SELECT ON SEQUENCE patient_portal_audit_events_id_seq '
                     f'TO "{runtime_role}"'
                 )
             )
@@ -272,7 +278,10 @@ def test_postgresql_runtime_role_cannot_rewrite_or_delete_audit_events() -> None
             quoted_owner = engine.dialect.identifier_preparer.quote(original_owner)
             with engine.begin() as connection:
                 connection.execute(
-                    text(f"ALTER TABLE public.patient_portal_audit_events OWNER TO {quoted_owner}")
+                    text(
+                        "ALTER TABLE public.patient_portal_audit_events "
+                        f"OWNER TO {quoted_owner}"
+                    )
                 )
                 connection.execute(text(f'DROP ROLE IF EXISTS "{incoming_role}"'))
                 connection.execute(text(f'DROP OWNED BY "{runtime_role}"'))
@@ -1193,10 +1202,8 @@ def test_postgresql_outbox_claim_is_exclusive_under_concurrent_workers() -> None
             )
 
         with ThreadPoolExecutor(max_workers=2) as executor:
-            results = [
-                future.result(timeout=30)
-                for future in [executor.submit(claim_one), executor.submit(claim_one)]
-            ]
+            results = [future.result(timeout=30) for future in
+                       [executor.submit(claim_one), executor.submit(claim_one)]]
 
         claimed = [result for result in results if result is not None]
         assert len(claimed) == 1, "both workers claimed the same row"
@@ -1257,9 +1264,7 @@ def test_postgresql_first_preparation_racing_legacy_create_cannot_strand_deliver
                 }
                 if prepared:
                     invite, _ = prepare_create_invite(
-                        session,
-                        1234,
-                        "Preparing Staff",
+                        session, 1234, "Preparing Staff",
                         delivery_operation_id="concurrent-first-delivery",
                         encryption_secret="e" * 32,
                         encryption_key_id="test-key",
@@ -1313,9 +1318,7 @@ def expired_postgres_invite():
     try:
         with Session(engine) as session, session.begin():
             original, _ = create_invite(
-                session,
-                1234,
-                "Preparing Staff",
+                session, 1234, "Preparing Staff",
                 clinic_id="postgres-clinic",
                 identity_proof=IdentityProof(
                     email="cleanup.race@example.com",
@@ -1334,9 +1337,7 @@ def expired_postgres_invite():
 
 def prepare_cleanup_race_resend(session, original_id):
     return prepare_resend_invite(
-        session,
-        original_id,
-        "Preparing Staff",
+        session, original_id, "Preparing Staff",
         clinic_id="postgres-clinic",
         delivery_operation_id="cleanup-race-resend",
         encryption_secret="e" * 32,
@@ -1379,7 +1380,10 @@ def test_postgresql_cleanup_locks_original_before_a_new_preparation(
             assert allow_delete.wait(timeout=10)
 
     def observe_preparation(connection, cursor, statement, parameters, context, executemany):
-        if connection.info.get("invite_review_worker") == "prepare" and "FOR UPDATE" in statement:
+        if (
+            connection.info.get("invite_review_worker") == "prepare"
+            and "FOR UPDATE" in statement
+        ):
             preparation_started.set()
 
     def clean_from_worker():
@@ -1435,9 +1439,7 @@ def test_postgresql_same_operation_first_preparations_racing_return_one_token() 
         with Session(engine) as session, session.begin():
             session.execute(text("SET LOCAL statement_timeout = '15s'"))
             invite, invite_token = prepare_create_invite(
-                session,
-                1234,
-                "Preparing Staff",
+                session, 1234, "Preparing Staff",
                 clinic_id="postgres-clinic",
                 actor_id="preparing-provider",
                 delivery_operation_id="in-flight-first-retry",
@@ -1489,9 +1491,7 @@ def test_postgresql_same_operation_resend_preparations_racing_return_one_token()
             session.connection().info["invite_retry_worker"] = worker
             session.execute(text("SET LOCAL statement_timeout = '15s'"))
             invite, invite_token = prepare_resend_invite(
-                session,
-                original_id,
-                "Preparing Staff",
+                session, original_id, "Preparing Staff",
                 clinic_id="postgres-clinic",
                 actor_id="preparing-provider",
                 delivery_operation_id="in-flight-resend-retry",
@@ -1504,9 +1504,7 @@ def test_postgresql_same_operation_resend_preparations_racing_return_one_token()
     try:
         with Session(engine) as session, session.begin():
             original, _ = create_invite(
-                session,
-                1234,
-                "Preparing Staff",
+                session, 1234, "Preparing Staff",
                 clinic_id="postgres-clinic",
                 actor_id="preparing-provider",
                 identity_proof=IdentityProof(
@@ -1856,8 +1854,7 @@ def test_postgresql_choice_rechecks_time_after_waiting_for_prompt_lock(monkeypat
             session.execute(text("SET LOCAL statement_timeout = '10s'"))
             account = session.get(PatientPortalAccount, account_id)
             expected = (
-                BookingSlotUnavailableError
-                if action == "choose_started_slot"
+                BookingSlotUnavailableError if action == "choose_started_slot"
                 else BookingPromptNotFoundError
             )
             with pytest.raises(expected):
@@ -1874,17 +1871,15 @@ def test_postgresql_choice_rechecks_time_after_waiting_for_prompt_lock(monkeypat
                     now + timedelta(seconds=1)
                 )
             else:
-                session.get(PatientPortalBookingPrompt, prompt_id).expires_at = now + timedelta(
-                    seconds=1
+                session.get(PatientPortalBookingPrompt, prompt_id).expires_at = (
+                    now + timedelta(seconds=1)
                 )
         event.listen(engine, "before_cursor_execute", observe_lock)
         with ThreadPoolExecutor(max_workers=1) as executor:
             with Session(engine) as holding, holding.begin():
-                holding.scalar(
-                    select(PatientPortalBookingPrompt)
-                    .where(PatientPortalBookingPrompt.id == prompt_id)
-                    .with_for_update()
-                )
+                holding.scalar(select(PatientPortalBookingPrompt).where(
+                    PatientPortalBookingPrompt.id == prompt_id
+                ).with_for_update())
                 worker = executor.submit(submit_choice)
                 assert lock_attempted.wait(timeout=5)
                 clock[0] = now + timedelta(seconds=2)
@@ -1922,14 +1917,8 @@ def test_postgresql_cleanup_skips_prompt_while_result_holds_parent_lock(state) -
             session.connection().info["booking_cleanup_worker"] = "result"
             session.execute(text("SET LOCAL statement_timeout = '10s'"))
             return record_choice_result(
-                session,
-                prompt_id,
-                clinic_id="postgres-clinic",
-                choice_id=choice_id,
-                result="booked",
-                actor="Sync",
-                actor_id="sync",
-                notice=POSTGRES_BOOKING_NOTICE,
+                session, prompt_id, clinic_id="postgres-clinic", choice_id=choice_id,
+                result="booked", actor="Sync", actor_id="sync", notice=POSTGRES_BOOKING_NOTICE,
             ).recorded
 
     try:
@@ -1939,14 +1928,8 @@ def test_postgresql_cleanup_skips_prompt_while_result_holds_parent_lock(state) -
             choice_id = choose_offered_slot(session, prompt_id, slot_ids[0], account=account).id
             if state == "booked":
                 record_choice_result(
-                    session,
-                    prompt_id,
-                    clinic_id="postgres-clinic",
-                    choice_id=choice_id,
-                    result="booked",
-                    actor="Sync",
-                    actor_id="sync",
-                    notice=POSTGRES_BOOKING_NOTICE,
+                    session, prompt_id, clinic_id="postgres-clinic", choice_id=choice_id,
+                    result="booked", actor="Sync", actor_id="sync", notice=POSTGRES_BOOKING_NOTICE,
                 )
                 session.get(PatientPortalBookingChoice, choice_id).starts_at = (
                     utc_now() - timedelta(days=2)

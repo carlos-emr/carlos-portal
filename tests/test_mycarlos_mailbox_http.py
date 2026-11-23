@@ -379,7 +379,6 @@ def test_download_commit_failure_preserves_the_durable_nonce_boundary(
         client.close()
         app.state.database_engine.dispose()
 
-
 def test_mailbox_routes_are_absent_with_only_m2_linking_enabled():
     app = internal_app(mycarlos_delivery_enabled=True, mycarlos_mailbox_enabled=False)
     paths = {route.path for route in app.routes}

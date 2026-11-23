@@ -20,10 +20,8 @@ def every_message(locale: str, expires: int = 600) -> dict[str, om.OutboundMessa
             code="123456", expires_in_seconds=expires, locale=locale, **KWARGS
         ),
         "reset": om.password_reset_email_message(
-            reset_url="https://example.test/reset?t=TOKEN",
-            expires_in_seconds=expires,
-            locale=locale,
-            **KWARGS,
+            reset_url="https://example.test/reset?t=TOKEN", expires_in_seconds=expires,
+            locale=locale, **KWARGS,
         ),
         "contact_change": om.contact_change_email_message(locale=locale, **KWARGS),
         "booking": om.booking_prompt_email_message(
@@ -34,9 +32,7 @@ def every_message(locale: str, expires: int = 600) -> dict[str, om.OutboundMessa
         ),
         "email_confirm": om.email_change_confirmation_email_message(
             confirmation_url="https://example.test/confirm?t=TOKEN",
-            expires_in_seconds=expires * 6,
-            locale=locale,
-            **KWARGS,
+            expires_in_seconds=expires * 6, locale=locale, **KWARGS,
         ),
         "email_requested": om.email_change_requested_email_message(locale=locale, **KWARGS),
         "sms": om.mfa_sms_message(

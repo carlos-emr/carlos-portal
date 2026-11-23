@@ -519,7 +519,8 @@ def test_the_per_client_limit_refuses_the_sixth_request_in_an_hour() -> None:
     client = client_at(app)
 
     statuses = [
-        sign_up(client, health_card_number=f"7200 000 00{index}").status_code for index in range(6)
+        sign_up(client, health_card_number=f"7200 000 00{index}").status_code
+        for index in range(6)
     ]
 
     assert statuses == [202] * 6
@@ -531,7 +532,9 @@ def test_the_per_client_limit_refuses_the_sixth_request_in_an_hour() -> None:
     )
 
 
-def test_the_per_card_limit_refuses_the_fourth_request_in_a_day_whatever_the_version_code() -> None:
+def test_the_per_card_limit_refuses_the_fourth_request_in_a_day_whatever_the_version_code() -> (
+    None
+):
     app = signup_app()
     typed_forms = ["9876543210", "9876-543-210", "9876 543 210 XY", "9876543210AB"]
 
@@ -577,10 +580,9 @@ def test_limits_are_counted_from_keyed_hashes() -> None:
 
     with app.state.session_factory() as session:
         since = utc_now() - timedelta(hours=1)
-        assert (
-            count_recent_signup_requests(session, since=since, client_reference_hash=client_hash)
-            == 1
-        )
+        assert count_recent_signup_requests(
+            session, since=since, client_reference_hash=client_hash
+        ) == 1
         assert count_recent_signup_requests(session, since=since, health_card_hash=card_hash) == 1
         with pytest.raises(ValueError):
             count_recent_signup_requests(session, since=since)
@@ -731,10 +733,8 @@ def test_expired_requests_are_purged_by_cleanup_and_by_the_next_request() -> Non
 
     # The next submission deletes what cleanup has not reached yet.
     sign_up(client_at(app))
-    assert all(
-        row.expires_at.replace(tzinfo=None) > utc_now().replace(tzinfo=None)
-        for row in stored_requests(app)
-    )
+    assert all(row.expires_at.replace(tzinfo=None) > utc_now().replace(tzinfo=None)
+               for row in stored_requests(app))
     assert len(stored_requests(app)) == 2
 
 
@@ -816,7 +816,9 @@ def test_readiness_shows_the_backlog_and_the_age_of_the_oldest_request() -> None
     sign_up(client)
     with app.state.session_factory.begin() as session:
         session.execute(
-            update(PatientPortalSignupRequest).values(created_at=utc_now() - timedelta(minutes=10))
+            update(PatientPortalSignupRequest).values(
+                created_at=utc_now() - timedelta(minutes=10)
+            )
         )
     waiting = client.get("/internal/readiness", headers=headers)
 
@@ -832,10 +834,9 @@ def test_readiness_shows_the_backlog_and_the_age_of_the_oldest_request() -> None
     assert 600 <= backlog["oldest_pending_age_seconds"] < 700
 
     switched_off = migrated_development_app(internal_health_token=INTERNAL_HEALTH_TOKEN)
-    assert (
-        "self_signup"
-        not in TestClient(switched_off).get("/internal/readiness", headers=headers).json()
-    )
+    assert "self_signup" not in TestClient(switched_off).get(
+        "/internal/readiness", headers=headers
+    ).json()
 
 
 def test_readiness_says_which_address_the_per_client_limit_counts() -> None:
@@ -847,18 +848,12 @@ def test_readiness_says_which_address_the_per_client_limit_counts() -> None:
     )
     direct = signup_app(internal_health_token=INTERNAL_HEALTH_TOKEN)
 
-    assert (
-        client_at(behind_proxy)
-        .get("/internal/readiness", headers=headers)
-        .json()["self_signup"]["client_limit_counts"]
-        == "trusted_client_ip_header"
-    )
-    assert (
-        client_at(direct)
-        .get("/internal/readiness", headers=headers)
-        .json()["self_signup"]["client_limit_counts"]
-        == "peer_address"
-    )
+    assert client_at(behind_proxy).get("/internal/readiness", headers=headers).json()[
+        "self_signup"
+    ]["client_limit_counts"] == "trusted_client_ip_header"
+    assert client_at(direct).get("/internal/readiness", headers=headers).json()["self_signup"][
+        "client_limit_counts"
+    ] == "peer_address"
 
 
 def test_start_up_warns_when_the_per_client_limit_can_only_see_the_peer(caplog) -> None:

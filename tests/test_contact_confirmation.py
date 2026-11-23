@@ -68,13 +68,16 @@ def test_confirmed_contact_change_revokes_preexisting_bearer_sessions() -> None:
     with app.state.session_factory() as session:
         portal_sessions = list(
             session.scalars(
-                select(PatientPortalSession).where(PatientPortalSession.account_id == account_id)
+                select(PatientPortalSession).where(
+                    PatientPortalSession.account_id == account_id
+                )
             )
         )
         assert portal_sessions
         assert all(row.revoked_at is not None for row in portal_sessions)
         assert all(
-            row.revoked_reason == SESSION_REVOKED_REASON_CONTACT_CHANGE for row in portal_sessions
+            row.revoked_reason == SESSION_REVOKED_REASON_CONTACT_CHANGE
+            for row in portal_sessions
         )
 
 

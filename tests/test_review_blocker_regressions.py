@@ -184,7 +184,9 @@ def test_populated_v7_database_upgrades_without_reactivating_sessions(tmp_path: 
                 )
             ).one()
             revoked_row = connection.execute(
-                text("select revoked_at, revoked_reason from patient_portal_sessions where id = 1")
+                text(
+                    "select revoked_at, revoked_reason from patient_portal_sessions where id = 1"
+                )
             ).one()
     finally:
         engine.dispose()
@@ -227,7 +229,9 @@ def test_async_routes_do_not_call_sync_session_io_directly() -> None:
                     and node.func.value.id == "session"
                     and node.func.attr in blocking_methods
                 ):
-                    violations.append(f"{self.file_name}:{node.lineno} session.{node.func.attr}")
+                    violations.append(
+                        f"{self.file_name}:{node.lineno} session.{node.func.attr}"
+                    )
                 self.generic_visit(node)
 
         AsyncSessionCallVisitor(route_file.name).visit(tree)
@@ -250,7 +254,9 @@ def test_unhandled_exception_log_omits_exception_details_and_traceback(
     response = TestClient(app, raise_server_exceptions=False).get("/test/unhandled-error")
 
     assert response.status_code == 500
-    records = [record for record in caplog.records if record.name == "carlos_patient_portal.main"]
+    records = [
+        record for record in caplog.records if record.name == "carlos_patient_portal.main"
+    ]
     assert records
     assert all(record.exc_info is None for record in records)
     assert all(secret_patient_value not in record.getMessage() for record in records)
@@ -303,23 +309,14 @@ def test_secret_bearing_dataclasses_keep_their_material_out_of_repr() -> None:
     assert "email" in rendered
 
     keys = PortalTokenKeys(
-        csrf="CSRF-KEY",
-        session="SESSION-KEY",
-        mfa="MFA-KEY",
-        password_reset="RESET-KEY",
-        email_change="CHANGE-KEY",
-        mycarlos_link="LINK-KEY",
+        csrf="CSRF-KEY", session="SESSION-KEY", mfa="MFA-KEY",
+        password_reset="RESET-KEY", email_change="CHANGE-KEY", mycarlos_link="LINK-KEY",
         mycarlos_mfa_proof="MYCARLOS-MFA-PROOF-KEY",
     )
     assert not any(
         key in repr(keys)
         for key in (
-            "CSRF-KEY",
-            "SESSION-KEY",
-            "MFA-KEY",
-            "RESET-KEY",
-            "CHANGE-KEY",
-            "LINK-KEY",
+            "CSRF-KEY", "SESSION-KEY", "MFA-KEY", "RESET-KEY", "CHANGE-KEY", "LINK-KEY",
             "MYCARLOS-MFA-PROOF-KEY",
         )
     )

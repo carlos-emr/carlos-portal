@@ -44,7 +44,9 @@ def test_unlock_secret_keyring_rotation_preserves_plaintext() -> None:
                 active_key_id="2026-07",
             )
         record = session.scalar(
-            select(PatientPortalUnlockSecret).where(PatientPortalUnlockSecret.id == record_id)
+            select(PatientPortalUnlockSecret).where(
+                PatientPortalUnlockSecret.id == record_id
+            )
         )
         assert record is not None
         assert rotated == 1
@@ -175,7 +177,9 @@ def test_rotation_leaves_records_already_on_the_active_key_untouched() -> None:
 def test_rotation_refuses_a_keyring_without_its_active_key() -> None:
     """The active-key-absent branch was untested; existing failures took the InvalidTag path."""
     with _rotation_session() as session:
-        _create(session, secret="o" * 32, key_id="2026-01", reference="any", plaintext="Any1!")
+        _create(
+            session, secret="o" * 32, key_id="2026-01", reference="any", plaintext="Any1!"
+        )
         with pytest.raises(ValueError, match="active unlock-secret encryption key is unavailable"):
             with session.begin():
                 reencrypt_unlock_secrets(

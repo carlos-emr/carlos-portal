@@ -225,7 +225,9 @@ def carlos_staff_headers(
     key_id: str = TEST_STAFF_ASSERTION_KEY_ID,
 ) -> dict[str, str]:
     assertion_options = (
-        {"key_id": key_id, "request_hash": request_hash} if request_hash is not None else {}
+        {"key_id": key_id, "request_hash": request_hash}
+        if request_hash is not None
+        else {}
     )
     return {
         "Authorization": f"Bearer {token}",
@@ -495,7 +497,9 @@ class RecordingPortalEmailSender:
         if self.fail:
             raise PortalEmailDeliveryError("simulated delivery failure")
 
-    def send_contact_change_notice(self, *, recipient: str, message_id: str | None = None) -> None:
+    def send_contact_change_notice(
+        self, *, recipient: str, message_id: str | None = None
+    ) -> None:
         message: dict[str, object] = {
             "recipient": recipient,
             "type": "contact_change_notice",

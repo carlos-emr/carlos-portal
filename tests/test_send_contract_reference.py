@@ -333,7 +333,7 @@ def test_the_worst_case_envelope_fits_the_budget_with_headroom_and_is_accepted()
     assert worst["check_envelope"] == "accept" == (reference.check_envelope(envelope) or "accept")
     assert sealed <= reference.LIMITS["envelope_sealed_max"]
     assert worst["headroom"] == reference.LIMITS["envelope_sealed_max"] - sealed
-    assert 8 * 1024 <= worst["headroom"] <= 16 * 1024  # about 10 KB of headroom, pinned
+    assert 8 * 1024 <= worst["headroom"] <= 16 * 1024  # about 9 KB of headroom, pinned
     assert len(envelope["attachments"]) == 10
 
 

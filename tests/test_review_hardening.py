@@ -49,8 +49,6 @@ def session_token_secret_for(session_secret: str) -> str:
     app derives, not the raw configured secret.
     """
     return PortalTokenKeys.derive(session_secret).session
-
-
 TEST_PASSWORD = "Stronger1!word"
 
 
@@ -546,7 +544,8 @@ def test_populated_v2_downgrade_fails_before_schema_changes(tmp_path) -> None:
             for row in connection.execute(text("pragma table_info(patient_portal_audit_events)"))
         }
         invite_columns = {
-            row[1] for row in connection.execute(text("pragma table_info(patient_portal_invites)"))
+            row[1]
+            for row in connection.execute(text("pragma table_info(patient_portal_invites)"))
         }
     assert {"actor_id", "resource_type", "resource_id"} <= columns
     assert {"created_by_id", "last_sent_by_id"} <= invite_columns

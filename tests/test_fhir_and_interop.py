@@ -608,7 +608,6 @@ def test_hl7_patient_identity_rejects_control_characters_in_names() -> None:
     The same value serialises into FHIR ``Patient.name.family`` as ``\\u0000``, which PostgreSQL
     ``text`` columns reject outright. Neither is a separator, so the whole C0/C1 range has to go.
     """
-
     def build_identity(family_name: str) -> PortalPatientInteroperabilityIdentity:
         return PortalPatientInteroperabilityIdentity(
             clinic_id="default",
@@ -913,7 +912,9 @@ def test_fhir_idle_expiry_commits_revocation_and_private_failure_audit_before_re
     assert denied.headers["content-type"].startswith("application/fhir+json")
     assert denied.json() == {
         "resourceType": "OperationOutcome",
-        "issue": [{"severity": "error", "code": "login", "diagnostics": "authentication required"}],
+        "issue": [
+            {"severity": "error", "code": "login", "diagnostics": "authentication required"}
+        ],
     }
     OperationOutcome(denied.json())
     assert token not in denied.text

@@ -140,7 +140,7 @@ revocation channel** for a device that has not seen a revocation.
 - **Text rules** (the body and every name): NFC; no control character except a line feed in a body (so
   no C0 or C1, no U+2028 or U+2029), no format character (zero-width, byte order mark, left-to-right and
   right-to-left marks, bidirectional embeddings, overrides and isolates), no private-use or surrogate code point (**unassigned code points are allowed**, so the answer does not
-  depend on an implementation's Unicode version; the categories are those of **Unicode 16.0**); a name has no line feed and no leading or trailing white space. "Empty" means
+  depend on an implementation's Unicode version; the categories are those of **Unicode 16.0**; the reference runs on its runtime's tables, Python 3.12 = 15.0, and no case depends on a changed code point); a name has no line feed and no leading or trailing white space. "Empty" means
   only Unicode White_Space characters.
 
 ## Identifiers and idempotency
@@ -199,8 +199,9 @@ number. The end-to-end vector includes the compact form with a FAKE signature of
 **Budget:** the sealed envelope is at most **256 KiB**. That is sized for the worst case the contract
 allows: ten clinic-signed copies, each carrying a manifest of up to 16 KiB (about 21 KiB as text), plus
 the text and names, with room to spare; a parser refuses a manifest over 16 KiB and an envelope over the
-budget. The fixture pins the **worst case** (ten 16 KiB manifests, a body of 8,192 escaped bytes, 120
-escaped bytes of name each): 250,878 bytes sealed, about **11 KB of headroom**, accepted by the checker.
+budget. The fixture pins the **worst case** (ten 16 KiB manifests, a body of 8,192 escaped bytes, names of 120 emoji each):
+252,851 bytes sealed, about **9 KB of headroom**, accepted by the checker. A manifest is the clinic's compact
+signed form and must match `^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$` (so it cannot escape), else `bad_manifest`.
 
 | Field | Meaning |
 |---|---|

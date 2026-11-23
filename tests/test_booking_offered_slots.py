@@ -93,18 +93,8 @@ CLINIC_TIMEZONE = ZoneInfo("America/Toronto")
 LOCATIONS = "main=Main Street Office,east=East Office"
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 MONTHS = (
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
 )
 SLOT_RADIO_PATTERN = re.compile(r'name="slot" value="(\d+)"')
 
@@ -249,7 +239,9 @@ def choose(patient: TestClient, prompt_id: int, slot_row_id: int | str | None):
     data = {"csrf_token": csrf_token_from_response(page)}
     if slot_row_id is not None:
         data["slot"] = str(slot_row_id)
-    return patient.post(f"/portal/messages/{prompt_id}/choice", data=data, follow_redirects=False)
+    return patient.post(
+        f"/portal/messages/{prompt_id}/choice", data=data, follow_redirects=False
+    )
 
 
 def pick(app, patient: TestClient, prompt_id: int, slot_id: str = "carlos:slot:1"):
@@ -489,12 +481,8 @@ def test_a_retry_matches_on_its_offered_times() -> None:
         headers=staff_headers(),
         json=prompt_request(
             offered_slots=[
-                {
-                    **entry,
-                    "starts_at": datetime.fromisoformat(entry["starts_at"])
-                    .astimezone(UTC)
-                    .isoformat(),
-                }
+                {**entry, "starts_at": datetime.fromisoformat(entry["starts_at"]).astimezone(UTC)
+                 .isoformat()}
                 for entry in default_slots()
             ]
         ),
@@ -540,12 +528,9 @@ def test_a_prompt_created_without_times_does_not_match_a_retry_with_times() -> N
     app = booking_app()
     activate_seeded_patient_account(app, TestClient(app))
     staff = TestClient(app)
-    assert (
-        staff.post(
-            PROMPTS_PATH, headers=staff_headers(), json=prompt_request(offered_slots=[])
-        ).status_code
-        == 201
-    )
+    assert staff.post(
+        PROMPTS_PATH, headers=staff_headers(), json=prompt_request(offered_slots=[])
+    ).status_code == 201
 
     retried = staff.post(PROMPTS_PATH, headers=staff_headers(), json=prompt_request())
 
@@ -785,15 +770,11 @@ def test_a_patient_cannot_choose_on_another_patients_prompt() -> None:
     )
     patient = TestClient(app)
     browser_sign_in_seeded_patient(app, patient)
-    others_prompt = (
-        TestClient(app)
-        .post(
-            "/internal/carlos/patients/5678/booking-prompts",
-            headers=staff_headers(),
-            json=prompt_request(),
-        )
-        .json()["id"]
-    )
+    others_prompt = TestClient(app).post(
+        "/internal/carlos/patients/5678/booking-prompts",
+        headers=staff_headers(),
+        json=prompt_request(),
+    ).json()["id"]
     own_prompt = create_prompt(app, operation_id="own-offer")
     others_slot = slot_row_ids(app, others_prompt)["carlos:slot:1"]
 
@@ -833,12 +814,9 @@ def test_a_withdrawn_or_expired_prompt_takes_no_choice(closed_by) -> None:
     row_id = slot_row_ids(app, prompt_id)["carlos:slot:1"]
     page = open_message(patient, prompt_id)
     if closed_by == "withdrawn":
-        assert (
-            TestClient(app)
-            .post(f"/internal/carlos/booking-prompts/{prompt_id}/withdraw", headers=staff_headers())
-            .status_code
-            == 200
-        )
+        assert TestClient(app).post(
+            f"/internal/carlos/booking-prompts/{prompt_id}/withdraw", headers=staff_headers()
+        ).status_code == 200
     else:
         move_prompt_expiry(app, prompt_id, expires_at=utc_now() - timedelta(seconds=1))
 
@@ -899,8 +877,10 @@ def test_a_patient_waiting_past_the_configured_time_is_told_to_call_if_urgent() 
     assert "We are confirming your time with the clinic." in still_waiting.text
     remaining_ms = int(re.search(r'data-booking-wait-ms="(\d+)"', still_waiting.text).group(1))
     assert 0 < remaining_ms <= 60_000
-    assert "data-booking-wait-ms=" not in overdue.text
-    assert "The clinic will confirm your time. If it is urgent, call the clinic." in overdue.text
+    assert 'data-booking-wait-ms=' not in overdue.text
+    assert (
+        "The clinic will confirm your time. If it is urgent, call the clinic." in overdue.text
+    )
     assert "We are confirming your time" not in overdue.text
 
 
@@ -1273,17 +1253,17 @@ def test_slot_unavailable_can_bring_replacement_times() -> None:
 @pytest.mark.parametrize(
     "replacements",
     [
-        pytest.param([slot("carlos:slot:9", utc_now() - timedelta(minutes=1))], id="in-the-past"),
+        pytest.param(
+            [slot("carlos:slot:9", utc_now() - timedelta(minutes=1))], id="in-the-past"
+        ),
         pytest.param([slot("carlos:slot:2", local_time(12, 11))], id="already-offered"),
         pytest.param([slot("carlos:slot:1", local_time(12, 11))], id="the-taken-time"),
         pytest.param(
             [slot(f"carlos:slot:{index + 10}", local_time(12, 8 + index)) for index in range(7)],
             id="over-the-cap",
         ),
-        pytest.param(
-            [slot("carlos:slot:9", local_time(12, 11), location_code="north")],
-            id="unknown-location",
-        ),
+        pytest.param([slot("carlos:slot:9", local_time(12, 11), location_code="north")],
+                     id="unknown-location"),
         pytest.param(
             [slot("carlos:slot:9", local_time(12, 11)), slot("carlos:slot:9", local_time(13, 11))],
             id="duplicates",
@@ -1420,19 +1400,8 @@ def test_the_update_email_carries_no_appointment_details() -> None:
     for leaked in (
         *(day.casefold() for day in WEEKDAYS),
         *(month.casefold() for month in MONTHS),
-        "10:30",
-        "minutes",
-        "phone",
-        "video",
-        "in person",
-        "main street",
-        "office",
-        "dr.",
-        "follow",
-        "booked",
-        "taken",
-        "slot",
-        "time",
+        "10:30", "minutes", "phone", "video", "in person", "main street", "office",
+        "dr.", "follow", "booked", "taken", "slot", "time",
     ):
         assert leaked not in text, leaked
 
@@ -1474,12 +1443,9 @@ def test_the_update_notice_is_not_sent_once_the_prompt_is_withdrawn() -> None:
     app, patient, prompt_id = patient_with_offer()
     assert pick(app, patient, prompt_id).status_code == 303
     assert report(app, prompt_id, only_choice(app).id, "booked").status_code == 200
-    assert (
-        TestClient(app)
-        .post(f"/internal/carlos/booking-prompts/{prompt_id}/withdraw", headers=staff_headers())
-        .status_code
-        == 200
-    )
+    assert TestClient(app).post(
+        f"/internal/carlos/booking-prompts/{prompt_id}/withdraw", headers=staff_headers()
+    ).status_code == 200
     sender = RecordingPortalEmailSender()
 
     deliver_all(app, sender)
@@ -1731,7 +1697,9 @@ def test_offered_slot_migration_downgrades_only_without_new_records(tmp_path) ->
         with pytest.raises(RuntimeError, match="choice_pending, booked or declined_all"):
             command.downgrade(config, "0014_booking_prompts")
         with engine.begin() as connection:
-            connection.execute(text("update patient_portal_booking_prompts set status = 'read'"))
+            connection.execute(
+                text("update patient_portal_booking_prompts set status = 'read'")
+            )
         command.downgrade(config, "0014_booking_prompts")
         tables = inspect(engine).get_table_names()
         assert "patient_portal_booking_offered_slots" not in tables
@@ -1814,16 +1782,10 @@ def test_stale_form_cannot_select_a_replacement_after_all_original_slots_are_del
     prompt_id = create_prompt(app, offered_slots=[default_slots()[0]])
     stale_id = slot_row_ids(app, prompt_id)["carlos:slot:1"]
     assert choose(patient, prompt_id, stale_id).status_code == 303
-    assert (
-        report(
-            app,
-            prompt_id,
-            only_choice(app).id,
-            "slot_unavailable",
-            offered_slots=[slot("replacement", SECOND)],
-        ).status_code
-        == 200
-    )
+    assert report(
+        app, prompt_id, only_choice(app).id, "slot_unavailable",
+        offered_slots=[slot("replacement", SECOND)],
+    ).status_code == 200
     assert slot_row_ids(app, prompt_id)["replacement"] != stale_id
     assert choose(patient, prompt_id, stale_id).status_code == 409
     assert pending_choices(app).json()["items"] == []
@@ -2003,12 +1965,9 @@ def test_a_result_for_a_withdrawn_pick_says_so() -> None:
     app, patient, prompt_id = patient_with_offer()
     assert pick(app, patient, prompt_id).status_code == 303
     choice_id = only_choice(app).id
-    assert (
-        TestClient(app)
-        .post(f"/internal/carlos/booking-prompts/{prompt_id}/withdraw", headers=staff_headers())
-        .status_code
-        == 200
-    )
+    assert TestClient(app).post(
+        f"/internal/carlos/booking-prompts/{prompt_id}/withdraw", headers=staff_headers()
+    ).status_code == 200
 
     withdrawn = report(app, prompt_id, choice_id, "booked")
     unknown = report(app, prompt_id, choice_id + 100, "booked")
@@ -2236,16 +2195,11 @@ def test_turning_an_account_off_clears_the_offer_of_an_expired_prompt() -> None:
     assert pick(app, patient, prompt_id).status_code == 303
     move_prompt_expiry(app, prompt_id, expires_at=utc_now() - timedelta(minutes=1))
 
-    assert (
-        TestClient(app)
-        .post(
-            "/internal/carlos/patients/1234/portal-account/access",
-            headers=staff_headers("portal.account.manage"),
-            json={"enabled": False, "reason": "staff_action"},
-        )
-        .status_code
-        == 200
-    )
+    assert TestClient(app).post(
+        "/internal/carlos/patients/1234/portal-account/access",
+        headers=staff_headers("portal.account.manage"),
+        json={"enabled": False, "reason": "staff_action"},
+    ).status_code == 200
 
     assert only_choice(app).state == "withdrawn"
     assert slot_row_ids(app, prompt_id) == {}

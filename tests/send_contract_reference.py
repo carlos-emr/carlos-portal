@@ -127,6 +127,7 @@ UUID4 = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 B64URL = re.compile(r"^[A-Za-z0-9_-]+$")
 ID_TEXT = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+MANIFEST_RE = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$")  # compact signed: payload.signature
 OPAQUE_REF = re.compile(r"^[A-Za-z0-9_-]{22}$")
 
 
@@ -587,8 +588,9 @@ def check_text(text, *, name=False):
     separator or private-use characters (C0, C1, bidirectional controls, zero-width, U+2028 and
     U+2029, and the like), and in a name no leading or trailing white space. Code points not yet
     assigned (category Cn) are ALLOWED: refusing them would make the answer depend on each
-    implementation's Unicode version. The categories are those of Unicode 16.0; a code point whose
-    category changed later is accepted or refused by the version the receiver pins."""
+    implementation's Unicode version. The categories are those of Unicode 16.0. This reference
+    uses its runtime's tables (Python 3.12 = Unicode 15.0); no case here depends on a code point
+    whose category changed between them."""
     if not isinstance(text, str):
         return "bad_text"
     if unicodedata.normalize("NFC", text) != text:
@@ -791,7 +793,7 @@ def check_envelope(obj, working=PHASES["phase1"]):
             if (
                 not isinstance(manifest, str)
                 or len(manifest.encode()) > LIMITS["manifest_max_bytes"]
-                or manifest.count(".") != 1
+                or not MANIFEST_RE.match(manifest)
             ):
                 return "bad_manifest"
             if item["media_type"] != "application/pdf":
@@ -1287,15 +1289,16 @@ def build_message():
 def worst_case_envelope():
     """The largest envelope the contract allows, measured against the 256 KiB budget: ten
     attachments each carrying a 16 KiB clinic manifest, a body of 8,192 bytes made of line feeds
-    (each escaped to two bytes), and names of 120 characters made of quotation marks (each
-    escaped to two bytes). Returns (envelope, compact_plaintext, sealed_size)."""
+    (each escaped to two bytes), and names of 120 emoji (four bytes each in UTF-8, the widest a
+    name can be; the manifest is restricted to base64url so it cannot escape). Returns
+    (envelope, compact_plaintext, sealed_size)."""
     manifest = "a" * 8191 + "." + "b" * 8192  # exactly 16 KiB (16384 bytes)
     items = []
     for i in range(10):
         items.append(
             attachment(
                 str(uuid.UUID(int=0x1000 + i, version=4)),
-                '"' * 120,
+                "\U0001f600" * 120,
                 "application/pdf",
                 6 * MIB,
                 "f" * 64,
@@ -1556,6 +1559,14 @@ def build():
     envelope_case(
         "a clinic-signed copy with a manifest over 16 KiB",
         lambda e: e["attachments"][0]["provenance"].update(manifest="a" * 8192 + "." + "b" * 9000),
+    )
+    envelope_case(
+        "a manifest with characters outside base64url (a quotation mark)",
+        lambda e: e["attachments"][0]["provenance"].update(manifest='a"b.c"d'),
+    )
+    envelope_case(
+        "a manifest with no separator",
+        lambda e: e["attachments"][0]["provenance"].update(manifest="abcdef"),
     )
     envelope_case(
         "an unknown provenance kind",
