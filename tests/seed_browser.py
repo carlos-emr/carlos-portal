@@ -347,9 +347,7 @@ def report_choice_result(result: str) -> None:
                     choice_id=choice_id,
                     result=result,
                     replacement_slots=(
-                        browser_replacement_slots(settings)
-                        if result == "slot_unavailable"
-                        else ()
+                        browser_replacement_slots(settings) if result == "slot_unavailable" else ()
                     ),
                     # As the booking-sync job records it.
                     actor="Clinic booking",

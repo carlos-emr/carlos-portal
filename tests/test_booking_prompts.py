@@ -125,27 +125,32 @@ def test_booking_eligibility_exposes_only_scope_and_boolean(state: str) -> None:
                 account.locked_by = "Synthetic Staff"
                 account.force_password_reset = True
             session.commit()
-    response = client.get(
-        "/internal/carlos/patients/1234/booking-eligibility", headers=headers()
-    )
+    response = client.get("/internal/carlos/patients/1234/booking-eligibility", headers=headers())
     assert response.status_code == 200
     assert response.json() == {
-        "clinic_id": "clinic-a", "demographic_no": 1234,
+        "clinic_id": "clinic-a",
+        "demographic_no": 1234,
         "eligible": state in {"active", "locked"},
     }
     assert "no-store" in response.headers["cache-control"]
     with app.state.session_factory() as session:
         assert list(session.scalars(select(PatientPortalBookingPrompt))) == []
         assert list(session.scalars(select(PatientPortalOutboundDelivery))) == []
-        events = list(session.scalars(select(PatientPortalAuditEvent).where(
-            PatientPortalAuditEvent.reason == "booking_eligibility_viewed"
-        )))
+        events = list(
+            session.scalars(
+                select(PatientPortalAuditEvent).where(
+                    PatientPortalAuditEvent.reason == "booking_eligibility_viewed"
+                )
+            )
+        )
         assert len(events) == 1
         assert events[0].demographic_no == 1234
         assert events[0].actor == "Front Desk"
         assert events[0].actor_id == "provider-42"
         assert (events[0].event_type, events[0].outcome, events[0].clinic_id) == (
-            "staff.action", "success", "clinic-a"
+            "staff.action",
+            "success",
+            "clinic-a",
         )
         # The row names the account it found, and only when the patient is eligible.
         expected_account = account_id if state in {"active", "locked"} else None
@@ -159,12 +164,16 @@ def test_booking_eligibility_does_not_grant_general_account_read() -> None:
     app = booking_app()
     client = TestClient(app)
     activate_seeded_patient_account(app, client)
-    assert client.get(
-        "/internal/carlos/patients/1234/booking-eligibility", headers=headers()
-    ).status_code == 200
-    assert client.get(
-        "/internal/carlos/patients/1234/portal-account", headers=headers()
-    ).status_code == 403
+    assert (
+        client.get(
+            "/internal/carlos/patients/1234/booking-eligibility", headers=headers()
+        ).status_code
+        == 200
+    )
+    assert (
+        client.get("/internal/carlos/patients/1234/portal-account", headers=headers()).status_code
+        == 403
+    )
 
 
 @pytest.mark.parametrize("permission", ["portal.account.manage", "portal.invite.manage"])
@@ -205,9 +214,7 @@ def test_booking_eligibility_ignores_another_clinics_account_for_the_same_patien
     with app.state.session_factory.begin() as session:
         session.get(PatientPortalAccount, account_id).clinic_id = "clinic-b"
 
-    response = client.get(
-        "/internal/carlos/patients/1234/booking-eligibility", headers=headers()
-    )
+    response = client.get("/internal/carlos/patients/1234/booking-eligibility", headers=headers())
 
     assert response.json() == {"clinic_id": "clinic-a", "demographic_no": 1234, "eligible": False}
 
@@ -245,9 +252,12 @@ def test_booking_eligibility_is_patient_scoped_and_creation_rechecks_account() -
     assert client.get(
         "/internal/carlos/patients/5678/booking-eligibility", headers=headers()
     ).json() == {"clinic_id": "clinic-a", "demographic_no": 5678, "eligible": False}
-    assert client.get(
-        "/internal/carlos/patients/1234/booking-eligibility", headers=headers()
-    ).json()["eligible"] is True
+    assert (
+        client.get("/internal/carlos/patients/1234/booking-eligibility", headers=headers()).json()[
+            "eligible"
+        ]
+        is True
+    )
     with app.state.session_factory() as session:
         account = session.get(PatientPortalAccount, account_id)
         account.status = "disabled"
@@ -612,9 +622,11 @@ def test_prompt_without_a_booking_phone_says_to_contact_the_clinic() -> None:
     app = booking_app()
     client = TestClient(app)
     browser_sign_in_seeded_patient(app, client)
-    prompt_id = TestClient(app).post(
-        PATH, headers=headers(), json=prompt_request(suggested_by=None, urgency="routine")
-    ).json()["id"]
+    prompt_id = (
+        TestClient(app)
+        .post(PATH, headers=headers(), json=prompt_request(suggested_by=None, urgency="routine"))
+        .json()["id"]
+    )
 
     opened = client.get(f"/portal/messages/{prompt_id}")
 
@@ -628,13 +640,16 @@ def test_a_prompt_beyond_the_listed_newest_still_opens() -> None:
     client = TestClient(app)
     browser_sign_in_seeded_patient(app, client)
     staff = TestClient(app)
-    oldest = staff.post(
-        PATH, headers=headers(), json=prompt_request(operation_id="oldest")
-    ).json()["id"]
+    oldest = staff.post(PATH, headers=headers(), json=prompt_request(operation_id="oldest")).json()[
+        "id"
+    ]
     for index in range(50):
-        assert staff.post(
-            PATH, headers=headers(), json=prompt_request(operation_id=f"newer-{index}")
-        ).status_code == 201
+        assert (
+            staff.post(
+                PATH, headers=headers(), json=prompt_request(operation_id=f"newer-{index}")
+            ).status_code
+            == 201
+        )
 
     opened = client.get(f"/portal/messages/{oldest}")
 
@@ -771,9 +786,9 @@ def test_notice_links_to_the_public_portal_and_refuses_to_guess_outside_developm
         development_settings(public_base_url="https://portal.example.test/"),
     )
     with pytest.raises(HTTPException) as unconfigured:
-        _booking_prompt_sign_in_url(request, SimpleNamespace(
-            public_base_url=None, is_development=False
-        ))
+        _booking_prompt_sign_in_url(
+            request, SimpleNamespace(public_base_url=None, is_development=False)
+        )
 
     assert public == "https://portal.example.test/"
     assert unconfigured.value.status_code == 503

@@ -67,9 +67,7 @@ def test_production_compose_separates_runtime_and_privileged_jobs() -> None:
     assert "--forwarded-allow-ips=${PORTAL_TRUSTED_PROXY_CIDR" in compose
     assert "carlos-patient-portal-maintenance" in compose
     assert "postgres:16.15-bookworm@sha256:" in compose
-    maintenance_block = compose.split("  maintenance:", 1)[1].split(
-        "  audit-maintenance:", 1
-    )[0]
+    maintenance_block = compose.split("  maintenance:", 1)[1].split("  audit-maintenance:", 1)[0]
     assert "PORTAL_MAINTENANCE_ENV_FILE" not in maintenance_block
     audit_maintenance_block = compose.split("  audit-maintenance:", 1)[1].split(
         "  database-policy:", 1
@@ -95,9 +93,7 @@ def test_production_compose_separates_runtime_and_privileged_jobs() -> None:
 
 
 def test_database_policy_explicitly_grants_every_application_table_and_sequence() -> None:
-    policy = (
-        PACKAGE_ROOT / "deploy" / "postgresql-audit-roles.sql"
-    ).read_text()
+    policy = (PACKAGE_ROOT / "deploy" / "postgresql-audit-roles.sql").read_text()
 
     for table in models.Base.metadata.tables.values():
         assert f"public.{table.name}," in policy or f"public.{table.name}\n" in policy
@@ -128,9 +124,7 @@ def test_database_policy_explicitly_grants_every_application_table_and_sequence(
 
 
 def test_database_identity_query_attests_live_tls() -> None:
-    identity_query = (
-        PACKAGE_ROOT / "deploy" / "postgresql-database-identity.sql"
-    ).read_text()
+    identity_query = (PACKAGE_ROOT / "deploy" / "postgresql-database-identity.sql").read_text()
 
     assert "pg_stat_ssl" in identity_query
     assert "pg_backend_pid()" in identity_query
@@ -151,7 +145,7 @@ def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
     assert "^[0-9a-f]{64}$" in script
     assert "PORTAL_ROLLBACK_IMAGE" in script
     assert "PORTAL_COMPOSE_OVERRIDE_FILE" in script
-    assert 'PORTAL_BIND_ADDRESS:-127.0.0.1' in script
+    assert "PORTAL_BIND_ADDRESS:-127.0.0.1" in script
     assert 'PORTAL_BIND_ADDRESS" != "127.0.0.1' in script
     assert "PORTAL_TRUSTED_PROXY_CIDR" in script
     assert "PORTAL_OUTBOX_ENV_FILE" in script
@@ -187,9 +181,7 @@ def test_production_deploy_requires_digests_and_never_auto_downgrades() -> None:
     assert "verify_database_artifacts" in migrate_block
     assert "verify_database_artifacts" in prune_block
     deploy_block = script.split("  deploy)", 1)[1].split("    ;;", 1)[0]
-    assert deploy_block.index("run --rm database-policy") < deploy_block.index(
-        "run --rm preflight"
-    )
+    assert deploy_block.index("run --rm database-policy") < deploy_block.index("run --rm preflight")
     assert deploy_block.index("run --rm preflight") < deploy_block.index("compose up --detach")
     assert script.count("--wait --wait-timeout 90") == 2
     rollback_block = script.split("  rollback)", 1)[1].split("  *)", 1)[0]
@@ -253,7 +245,7 @@ def test_production_stack_smoke_covers_success_replay_and_fail_closed_role() -> 
     assert smoke_path.stat().st_mode & 0o111
     assert "sslmode=verify-full" in smoke
     assert "postgres:16.15-bookworm@sha256:" in smoke
-    assert smoke.count('scripts/production-deploy\" deploy') == 2
+    assert smoke.count('scripts/production-deploy" deploy') == 2
     assert "production-elevated.env" in smoke
     assert "preflight accepted an elevated runtime database role" in smoke
     assert "database policy accepted an elevated maintenance role" in smoke
@@ -275,9 +267,7 @@ def test_production_stack_smoke_covers_success_replay_and_fail_closed_role() -> 
     assert smoke.count("deployment probe configuration is invalid") == 2
     assert "database policy accepted an unexpected member of privileged roles" in smoke
     assert "preflight accepted patient data owned by an undeclared database role" in smoke
-    smoke_override = (
-        REPOSITORY_ROOT / "tests" / "compose.production-smoke.yaml"
-    ).read_text()
+    smoke_override = (REPOSITORY_ROOT / "tests" / "compose.production-smoke.yaml").read_text()
     assert "POSTGRES_USER: portal_cluster_admin" in smoke_override
     assert "CREATE ROLE portal_database_admin LOGIN NOSUPERUSER" in smoke
     assert "GRANT portal_schema_owner TO portal_database_admin" in smoke
@@ -398,8 +388,7 @@ def test_reference_proxy_omits_raw_request_target_and_limits_expensive_routes() 
     assert "POST $binary_remote_addr;" in signup_key_map
     assert 'default "";' in signup_key_map
     assert (
-        "limit_req_zone $portal_signup_limit_key zone=portal_signup:10m rate=3r/m;"
-        in configuration
+        "limit_req_zone $portal_signup_limit_key zone=portal_signup:10m rate=3r/m;" in configuration
     )
     assert "location ^~ /internal/carlos/" in configuration
     assert "allow 10.0.0.0/8" not in configuration

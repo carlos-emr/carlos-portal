@@ -25,8 +25,14 @@ from carlos_patient_portal.mycarlos_availability import (
 NOW = 1_800_000_000
 OWNER = Owner(7, 11)
 SUBSCRIPTION = Subscription(
-    OWNER, UUID(int=1), UUID(int=2), UUID(int=3), PushPlatform.ANDROID_FCM,
-    remote_enabled=True, remote_consent_version=1, permission_observed_for_enrollment=True,
+    OWNER,
+    UUID(int=1),
+    UUID(int=2),
+    UUID(int=3),
+    PushPlatform.ANDROID_FCM,
+    remote_enabled=True,
+    remote_consent_version=1,
+    permission_observed_for_enrollment=True,
 )
 
 
@@ -80,14 +86,20 @@ def test_an_unset_switch_queues_nothing_and_sends_nothing(
     transaction = _Transaction()
     event = MailboxReady(OWNER, 17, NOW + 3600, inserted=True)
 
-    assert queue_new_copy(
-        transaction, event, now=NOW, server_enabled=settings.mycarlos_availability_enabled
-    ) == 0
+    assert (
+        queue_new_copy(
+            transaction, event, now=NOW, server_enabled=settings.mycarlos_availability_enabled
+        )
+        == 0
+    )
     assert (transaction.reads, transaction.puts) == (0, 0)
 
     intent = OutboxIntent(
-        OWNER, SUBSCRIPTION.destination_id, SUBSCRIPTION.platform,
-        ReadyHint(SUBSCRIPTION.subscription_id, SUBSCRIPTION.epoch, 17), NOW + 900,
+        OWNER,
+        SUBSCRIPTION.destination_id,
+        SUBSCRIPTION.platform,
+        ReadyHint(SUBSCRIPTION.subscription_id, SUBSCRIPTION.epoch, 17),
+        NOW + 900,
     )
     lease = DispatchLease(intent, UUID(int=99), NOW + 120, 1)
     current = CurrentAvailability(SUBSCRIPTION, True, True, 17)

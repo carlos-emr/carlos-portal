@@ -78,17 +78,25 @@ already pins (the same trust anchor as delivery manifests and acknowledgements):
 
 `typ: "mycarlos-send-inbox-key"`, `v`, `clinic_id`, `kid` (must equal `b64url(sha256(public_key))`),
 `public_key` (b64url, 32 bytes), `signer_kid` (the pinned signing key that signed it), `serial`
-(an integer from 1, rising with each key), `not_before`, `not_after` (Unix seconds; validity at most
-400 days) and `status` (`active` or `revoked`).
+(an integer from 1, rising with each key), `not_before`, `not_after` (Unix seconds; validity **at most 30 days**) and `status` (`active` or
+`revoked`). Statements are short-lived and re-signed by key-publish, so **expiry is the real
+revocation channel** for a device that has not seen a revocation.
 
 - The capabilities carry the statement (compact signed form, at most 2 KiB), and the portal may also
   carry earlier statements. The app **verifies the signature first**, then the rules above, and
   **seals only to an `active` key that is inside its validity** and whose `clinic_id` is the link's.
+- **No rollback.** The app persists, per link, a **high-water mark**: the highest `serial` it has ever
+  accepted and whether that serial revoked the key. It refuses any lower serial (`serial_rollback`: a
+  dishonest portal replaying an older, still-unexpired statement), a statement for another clinic
+  (`clinic_mismatch`), and **at an equal serial a revocation wins** (`revoked_wins`): an active statement
+  at the serial of a known revocation is refused. A revocation should also take a higher serial than the
+  statement it revokes.
 - **Rotation:** a new key gets a new statement with a higher `serial` and an overlapping validity; CARLOS
   keeps decrypting with the old key until nothing is waiting under it. **Revocation:** a statement with
-  `status: "revoked"` for that `kid` (and the same or higher serial); the app stops sealing to it at once.
-  A message already sealed to a key that is later revoked is still opened by CARLOS (the clinic holds
-  the key) but a compromised key is handled by the clinic's own runbook.
+  `status: "revoked"` for that `kid`; the app stops sealing to it at once.
+- **CARLOS refuses what is sealed to a revoked key** and created after the revocation, with a signed
+  `refused` / `key_revoked`; a message created before the revocation is still opened (the clinic holds the
+  key).
 - **The sealed key names which statement it was sealed to** (`sealed_key_kid` in the outer record).
   CARLOS refuses a message sealed to a `kid` it does not hold.
 - A statement that does not verify, or that names no active key, means **the app does not send** and
@@ -107,8 +115,13 @@ already pins (the same trust anchor as delivery manifests and acknowledgements):
 - **Capabilities are additive**: new fields may appear in `v: 1`; a client ignores unknown fields
   there and never sends what the capabilities do not name.
 - A new major version is a new `typ` and route set (`mycarlos-send/2`), served side by side.
-- **Canonical form:** keys sorted, no spaces, UTF-8, only strings, integers and `null`, so it equals
-  RFC 8785 for every object here.
+- **Canonical form is RFC 8785 (JCS) over I-JSON (RFC 7493):** keys sorted, no spaces, UTF-8, only
+  strings, **integers in 0..2^53-1** and `null`. A float (`1.0`, `1e3`), `NaN`, `Infinity`, an integer
+  above 2^53-1 or below 0, and a **lone surrogate** (an escape such as `\ud800` with no partner) are
+  refused at parse (`not_json` or `bad_number`, never an uncaught exception). Escaping is only `"`, `\`
+  and the controls below U+0020 (short forms `\b \t \n \f \r`, else lower-case `\u00xx`). **Implementers:
+  use a real RFC 8785 serialiser.** In Java that is not Gson, whose HTML-safe escaping (`<`, `>`, `&`, `'`
+  as `\u003c` ...) is NOT canonical and breaks every signature.
 - **What is signed, exactly.** The compact form is `b64url(payload).b64url(signature)`, unpadded. The
   **signature covers `frame(domain, payload)`**, where `payload` is the canonical bytes and `domain` is
   one of these, each ending the object's own purpose (the device key also signs request assertions and
@@ -117,13 +130,17 @@ already pins (the same trust anchor as delivery manifests and acknowledgements):
   `"mycarlos-send/1 envelope-signature"`, `"... ack-signature"`, `"... recall-signature"`,
   `"... inbox-key-signature"`. Never the base64 text, never the payload alone. The fixture gives each
   signing input as bytes.
+- **Check order, for every signed or sealed object:** (1) the signature over `frame(domain, payload)`;
+  (2) the payload is unpadded base64url, valid UTF-8 JSON under the I-JSON rules above; (3)
+  `canonical(parse(payload)) == payload` (`not_canonical`); (4) `v` is exactly 1 (`unsupported_version`),
+  before any other field is read; (5) exactly the listed fields, then the field rules.
 - **One byte string per object.** Before verifying or hashing anything, a verifier decodes the payload
   and requires `canonical(parse(bytes)) == bytes`. A payload with unsorted keys, spaces, a key twice or
   a trailing line feed is refused (`not_canonical`).
 - **Text rules** (the body and every name): NFC; no control character except a line feed in a body (so
   no C0 or C1, no U+2028 or U+2029), no format character (zero-width, byte order mark, left-to-right and
-  right-to-left marks, bidirectional embeddings, overrides and isolates), no private-use, surrogate or
-  unassigned code point; a name has no line feed and no leading or trailing white space. "Empty" means
+  right-to-left marks, bidirectional embeddings, overrides and isolates), no private-use or surrogate code point (**unassigned code points are allowed**, so the answer does not
+  depend on an implementation's Unicode version; the categories are those of **Unicode 16.0**); a name has no line feed and no leading or trailing white space. "Empty" means
   only Unicode White_Space characters.
 
 ## Identifiers and idempotency
@@ -175,10 +192,15 @@ other gets the 409 above.
 
 Canonical JSON, **signed by the device's Ed25519 key** over `frame("mycarlos-send/1
 envelope-signature", payload)`, then sealed (see "Sealing"). It holds everything personal.
+**What is sealed.** The plaintext the content key seals is the ASCII compact signed form
+`b64url(canonical payload).b64url(64-byte signature)`, unpadded (not the bare JSON); the sealed envelope is
+that plus the 16-byte tag, so its smallest size is derived (`min_sealed_size` in the fixture), not a magic
+number. The end-to-end vector includes the compact form with a FAKE signature of the right length.
 **Budget:** the sealed envelope is at most **256 KiB**. That is sized for the worst case the contract
 allows: ten clinic-signed copies, each carrying a manifest of up to 16 KiB (about 21 KiB as text), plus
 the text and names, with room to spare; a parser refuses a manifest over 16 KiB and an envelope over the
-budget.
+budget. The fixture pins the **worst case** (ten 16 KiB manifests, a body of 8,192 escaped bytes, 120
+escaped bytes of name each): 250,878 bytes sealed, about **11 KB of headroom**, accepted by the checker.
 
 | Field | Meaning |
 |---|---|
@@ -240,12 +262,13 @@ payload)`, at most 4 KiB: `v`, `typ: "mycarlos-send-ack"`, `message_id`, `clinic
 `device_key_id`, `chain_head` (of the message it is about), `state`, `reason`, `ref`, `at` and `kid`.
 
 - `state` is `collected`, `filed`, `refused`, `recalled` or `recall_refused`. `reason` is `null` except
-  for `refused` (one reason from the fixed list below) and `recall_refused` (`recall_too_late` or
+  for `refused` (one reason from the fixed list below, including `key_revoked`) and `recall_refused` (`recall_too_late` or
   `recall_unknown_message`).
 - `ref` is **22 characters of `A-Za-z0-9_-`: a random 128-bit handle**, never derived from a chart,
   message or patient id (it is shown to nobody and means nothing to the app).
 
-The app verifies it against the link's **pinned** clinic keys. It accepts only the transitions in the
+ES256 signatures are randomised, so CARLOS **stores** the acknowledgement it signed and re-issues those
+exact bytes on a repeat; it never re-signs. The app verifies it against the link's **pinned** clinic keys. It accepts only the transitions in the
 state table; an acknowledgement it cannot verify, or whose `chain_head` is not its message's, is shown as
 **unverified** and never as success.
 
@@ -388,8 +411,15 @@ pending queue). It is a **request**, said as one.
 3. **Atomic rule:** the recall handling and "accept into a chart" take the same row lock on the inbound
    row; **the first wins** and the loser reads the other's result. CARLOS answers with a signed `recalled`
    (removed from the queue) or a signed `recall_refused` (`recall_too_late` when it is already in a chart,
-   `recall_unknown_message` otherwise).
+   `recall_unknown_message` only for a message the clinic never held and the portal no longer holds).
 4. After acceptance into a chart there is no recall: the screen says to contact the clinic.
+5. **A recall that arrives before the clinic has claimed the message:** CARLOS stores the verified recall
+   keyed by (device, `message_id`, `chain_head`), so a later claim of that message is answered with a
+   signed `recalled` and nothing is filed; the portal also **withholds the message from claim while a
+   recall is pending**. `recall_unknown_message` is never the answer for a message the portal still holds;
+   it is only for a (device, `message_id`, `chain_head`) the clinic never held and the portal no longer holds.
+6. **The recall must be about that message:** its `device_key_id`, `clinic_id`, `recipient_id`,
+   `message_id` and `chain_head` must equal the message's (`recall_binding_cases`), else it is ignored.
 
 ## Limits and media types (defaults; a deployment advertises its own, never larger)
 
@@ -487,6 +517,8 @@ refuses PDFs with launch or script actions or sanitizes them by policy (`active_
 | S-14 | **Key substitution by the portal** | the inbox key is named only by a signed statement checked against the pinned clinic keys | `inbox_key_cases`; a test with a forged statement |
 | S-15 | **Nonce reuse after a crash** | the content key is never persisted; a restart is a new message and a new key | the interrupted-send rule |
 | S-16 | **Existence oracle across devices** | ids scoped to the device; the same 404 for another's or none | the idempotency rows |
+| S-18 | **Inbox-key rollback or replay** | per-link high-water serial, equal-serial revoked wins, 30-day statements, `key_revoked` refusal | `inbox_key_cases` |
+| S-19 | **Recall that lands before the claim, or about another message** | stored recall keyed by (device, message_id, chain_head), portal withholds from claim, binding check | `recall_binding_cases` |
 | S-17 | **A dishonest portal lowers limits or hides the feature** | a denial of service only; capabilities carry no key and no secret | stated residual |
 
 ## Conformance

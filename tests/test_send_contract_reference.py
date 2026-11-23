@@ -62,9 +62,12 @@ def test_every_listed_case_gives_its_expected_answer_from_the_reference_validato
     for item in FIXTURE["recall_cases"]:
         assert (reference.check_recall(item["object"]) or "accept") == item["expect"], item["name"]
     for item in FIXTURE["inbox_key_cases"]:
-        assert (reference.check_inbox_key(item["object"], item["now"]) or "accept") == item[
-            "expect"
-        ], item["name"]
+        result = reference.check_inbox_key(item["object"], item["now"], known=item["known"])
+        assert (result or "accept") == item["expect"], item["name"]
+    for item in FIXTURE["recall_binding_cases"]:
+        outer = FIXTURE["end_to_end"]["outer"]
+        result = reference.check_recall_binding(item["recall"], outer)
+        assert (result or "accept") == item["expect"], item["name"]
     for item in FIXTURE["time_cases"]:
         result = reference.check_times(item["created_at"], item["expires_at"], item["now"])
         assert (result or "accept") == item["expect"], item["name"]
@@ -93,19 +96,31 @@ def test_exactly_these_cases_are_accepted_and_every_other_is_refused_with_a_reas
         "collected",
         "filed",
         "refused with a reason",
+        "refused: key revoked",
         "recalled",
         "recall refused with a reason",
     }
     assert accepted(FIXTURE["recall_cases"]) == {"as built"}
-    assert accepted(FIXTURE["inbox_key_cases"]) == {"an active statement inside its validity"}
+    assert accepted(FIXTURE["inbox_key_cases"]) == {
+        "an active statement inside its validity",
+        "valid for exactly 30 days",
+        "the serial the app already holds",
+        "a higher serial",
+        "active at a higher serial than a revocation the app holds",
+    }
+    assert accepted(FIXTURE["recall_binding_cases"]) == {"as built"}
     assert accepted(FIXTURE["pair_cases"]) == {"as built"}
-    assert accepted(FIXTURE["compact_cases"]) == {"the canonical payload"}
+    assert accepted(FIXTURE["compact_cases"]) == {
+        "the canonical payload",
+        "the largest safe integer 2^53-1",
+    }
     for key in (
         "outer_cases",
         "envelope_cases",
         "ack_cases",
         "recall_cases",
         "inbox_key_cases",
+        "recall_binding_cases",
         "pair_cases",
         "compact_cases",
         "time_cases",
@@ -163,7 +178,14 @@ def test_the_end_to_end_message_agrees_with_itself():
         heads.append(bytes.fromhex(recomputed))
     envelope_ciphertext_size = chain["envelope_ciphertext"]["size"]
     assert outer["envelope_size"] == envelope_ciphertext_size
-    assert outer["envelope_size"] == FIXTURE["envelope"]["canonical"]["size"] + 16
+    # The sealed plaintext is the ASCII compact signed form, not the bare canonical JSON.
+    sealed = FIXTURE["envelope"]["sealed_plaintext"]
+    assert outer["envelope_size"] == sealed["size"] + 16
+    payload, signature = sealed["ascii"].split(".")
+    assert payload == reference.b64u(reference.canonical(envelope))
+    assert len(reference.base64.urlsafe_b64decode(signature + "==")) == 64
+    assert sealed["size"] == len(sealed["ascii"]) and sealed["ascii"].isascii()
+    assert outer["envelope_size"] >= FIXTURE["envelope"]["min_sealed_size"]
     assert outer["total_size"] == outer["envelope_size"] + sum(
         i["size"] for i in outer["attachments"]
     )
@@ -302,3 +324,25 @@ def test_what_the_portal_learns_is_stated_and_the_aead_bytes_are_unique_per_plac
     names = ("envelope_nonce", "chunk_nonce_a0_n0", "chunk_nonce_a1_n2")
     assert len({aead[key]["hex"] for key in names}) == 3
     assert all(len(bytes.fromhex(aead[key]["hex"])) == 12 for key in names)
+
+
+def test_the_worst_case_envelope_fits_the_budget_with_headroom_and_is_accepted():
+    worst = FIXTURE["worst_case_envelope"]
+    envelope, compact, sealed = reference.worst_case_envelope()
+    assert worst["sealed_size"] == sealed == len(compact) + 16
+    assert worst["check_envelope"] == "accept" == (reference.check_envelope(envelope) or "accept")
+    assert sealed <= reference.LIMITS["envelope_sealed_max"]
+    assert worst["headroom"] == reference.LIMITS["envelope_sealed_max"] - sealed
+    assert 8 * 1024 <= worst["headroom"] <= 16 * 1024  # about 10 KB of headroom, pinned
+    assert len(envelope["attachments"]) == 10
+
+
+def test_canonical_bytes_are_i_json_and_the_text_unassigned_rule_is_stated():
+    for bad in (1.0, float("nan"), 2**53, -1, True):
+        assert reference.is_int(bad) is False
+    assert reference.is_int(2**53 - 1) and reference.is_int(0)
+    for line in ("RFC 8785", "Gson", "2^53-1", "lone surrogate", "Unicode 16.0"):
+        assert line in DOC, line
+    for step in FIXTURE["check_order"]:
+        assert step
+    assert [step[0] for step in FIXTURE["check_order"]] == ["1", "2", "3", "4", "5"]

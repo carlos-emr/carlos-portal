@@ -38,6 +38,7 @@ import hashlib
 import json
 import re
 import unicodedata
+import uuid
 from pathlib import Path
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -65,7 +66,7 @@ LIMITS = {
     "ack_max_bytes": 4096,
     "recall_max_bytes": 1024,
     "inbox_key_statement_max_bytes": 2048,
-    "inbox_key_validity_max_days": 400,
+    "inbox_key_validity_max_days": 30,
     "outer_max_bytes": 16 * KIB,
     "chunks_per_attachment_max": 128,
     "sealed_key_bytes": 80,
@@ -129,9 +130,17 @@ ID_TEXT = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 OPAQUE_REF = re.compile(r"^[A-Za-z0-9_-]{22}$")
 
 
+MAX_SAFE_INT = 2**53 - 1  # I-JSON (RFC 7493) and RFC 8785: the largest integer every language holds
+
+
 def canonical(value):
-    """The bytes every object is hashed and signed as: sorted keys, no spaces, UTF-8, integers and
-    strings and null only (so this equals RFC 8785 for every object of this contract)."""
+    """The bytes every object is hashed and signed as: sorted keys, no spaces, UTF-8, integers in
+    0..2^53-1, strings and null only. For such objects this IS RFC 8785 (the JSON Canonicalization
+    Scheme): there are no floats, so no number formatting; key order is by UTF-16 code unit, which
+    equals code point order for the ASCII keys used here; and only `"`, `\\` and the controls
+    below U+0020 are escaped (the short forms \\b \\t \\n \\f \\r, otherwise \\u00xx lower case).
+    Implementers: use a real RFC 8785 serialiser (in Java not Gson, which also escapes <, >, & and
+    ' as \\u003c ...: that is NOT canonical and would break every signature)."""
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
         "utf-8"
     )
@@ -164,6 +173,52 @@ def signing_input(kind, payload):
     return frame(SIGN_DOMAINS[kind], payload)
 
 
+FAKE_DEVICE_SIGNATURE = bytes([0x5A]) * 64  # an Ed25519 signature is 64 bytes: FAKE, no key runs
+
+
+def sealed_plaintext(payload, signature=FAKE_DEVICE_SIGNATURE):
+    """What the content key seals as the envelope: ASCII, the compact signed form
+    `b64url(payload).b64url(signature)`, unpadded. It is NOT the bare canonical JSON; the sealed
+    envelope is this many bytes plus the 16-byte tag."""
+    return (b64u(payload) + "." + b64u(signature)).encode("ascii")
+
+
+def min_sealed_envelope_size():
+    """The smallest possible sealed envelope, derived (not a magic number): the compact signed form
+    of the smallest valid envelope (no attachments, a one character body) plus the tag."""
+    return len(sealed_plaintext(canonical(envelope_object([], body="x")))) + LIMITS["aead_tag"]
+
+
+def _refuse_number(_text):
+    raise ValueError("float, NaN or Infinity")
+
+
+def _i_json_problem(value):
+    """The I-JSON rules a parsed object must meet: strings without lone surrogates (they have no
+    UTF-8 form), integers only and within 0..2^53-1, no float anywhere."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            problem = _i_json_problem(key) or _i_json_problem(item)
+            if problem:
+                return problem
+    elif isinstance(value, list):
+        for item in value:
+            problem = _i_json_problem(item)
+            if problem:
+                return problem
+    elif isinstance(value, str):
+        if any(0xD800 <= ord(char) <= 0xDFFF for char in value):
+            return "not_json"
+    elif isinstance(value, bool) or value is None:
+        return None
+    elif isinstance(value, int):
+        if not 0 <= value <= MAX_SAFE_INT:
+            return "bad_number"
+    else:
+        return "not_json"
+    return None
+
+
 def check_compact_payload(payload_b64):
     """What a verifier does with the first half of `b64url(payload).b64url(signature)` BEFORE it
     verifies anything: unpadded base64url, JSON, and the payload must already be its own canonical
@@ -177,9 +232,14 @@ def check_compact_payload(payload_b64):
     except ValueError:
         return None, "not_base64url"
     try:
-        value = json.loads(raw.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
+        value = json.loads(
+            raw.decode("utf-8"), parse_float=_refuse_number, parse_constant=_refuse_number
+        )
+    except (ValueError, UnicodeDecodeError, RecursionError):
         return None, "not_json"
+    problem = _i_json_problem(value)
+    if problem:
+        return None, problem
     if canonical(value) != raw:
         return None, "not_canonical"
     return value, None
@@ -375,7 +435,7 @@ def inbox_key_kid(public_key):
 def inbox_key_statement(
     public_key=FAKE_INBOX_PUBLIC_KEY,
     not_before=CREATED_AT - 86_400,
-    not_after=CREATED_AT + 300 * 86_400,
+    not_after=CREATED_AT + 20 * 86_400,
     status="active",
     serial=1,
 ):
@@ -493,6 +553,7 @@ REFUSAL_REASONS = [
     "duplicate_message",
     "owner_group_missing",
     "not_enabled",
+    "key_revoked",
 ]
 # Why a recall was not honoured.
 RECALL_REFUSAL_REASONS = ["recall_too_late", "recall_unknown_message"]
@@ -500,7 +561,8 @@ ACK_STATES = ["collected", "filed", "refused", "recalled", "recall_refused"]
 
 
 def is_int(value):
-    return isinstance(value, int) and not isinstance(value, bool)
+    """An integer in 0..2^53-1 (never a bool, never a float such as 1.0)."""
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= MAX_SAFE_INT
 
 
 def version_ok(obj):
@@ -523,7 +585,10 @@ def hex64(value):
 def check_text(text, *, name=False):
     """Text the app may show: NFC, one line feed allowed in a body, no other control, format,
     separator or private-use characters (C0, C1, bidirectional controls, zero-width, U+2028 and
-    U+2029, and the like), and in a name no leading or trailing white space."""
+    U+2029, and the like), and in a name no leading or trailing white space. Code points not yet
+    assigned (category Cn) are ALLOWED: refusing them would make the answer depend on each
+    implementation's Unicode version. The categories are those of Unicode 16.0; a code point whose
+    category changed later is accepted or refused by the version the receiver pins."""
     if not isinstance(text, str):
         return "bad_text"
     if unicodedata.normalize("NFC", text) != text:
@@ -532,7 +597,7 @@ def check_text(text, *, name=False):
         category = unicodedata.category(char)
         if char == "\n" and not name:
             continue
-        if category in ("Cc", "Cf", "Zl", "Zp", "Cs", "Co", "Cn"):
+        if category in ("Cc", "Cf", "Zl", "Zp", "Cs", "Co"):
             return "forbidden_character"
     if name and text != text.strip():
         return "edge_white_space"
@@ -596,7 +661,7 @@ def check_outer(obj, working=PHASES["phase1"], now=None):
             return "bad_lifetime"
         if obj["expires_at"] - obj["created_at"] > LIMITS["lifetime_max_seconds"]:
             return "lifetime_too_long"
-    if not 49 <= obj["envelope_size"] <= LIMITS["envelope_sealed_max"]:
+    if not min_sealed_envelope_size() <= obj["envelope_size"] <= LIMITS["envelope_sealed_max"]:
         return "envelope_size"
     items = obj["attachments"]
     if not isinstance(items, list) or len(items) != obj["attachment_count"]:
@@ -809,9 +874,24 @@ def check_recall(obj):
     return None
 
 
-def check_inbox_key(obj, now):
+def check_recall_binding(recall, outer):
+    """CARLOS's check that a verified recall is about THIS message: every identifying field equal
+    to the outer record's (the recall's device_key_id must be the message's)."""
+    for field in ("message_id", "chain_head", "clinic_id", "recipient_id", "device_key_id"):
+        if recall[field] != outer[field]:
+            return "recall_" + field
+    return None
+
+
+def check_inbox_key(obj, now, *, link_clinic_id=CLINIC_ID, known=None):
     """What the app checks of a clinic inbox key statement (its signature, by a pinned clinic key,
-    is checked first, elsewhere) before it seals anything to the key."""
+    is checked first, elsewhere) before it seals anything to the key. `known` is the app's
+    persisted high-water mark for this link, {"serial": n, "revoked": bool}: the highest serial it
+    has ever accepted, and whether that serial revoked the key. A statement below it is a rollback
+    (a dishonest portal replaying an older, still-unexpired statement) and is refused; at the SAME
+    serial a revocation wins over an active statement. Statements are short-lived (at most 30 days,
+    re-signed by key-publish), so expiry is the real revocation channel for a device that has not
+    seen the revocation."""
     if not isinstance(obj, dict):
         return "not_object"
     if "v" in obj and not version_ok(obj):
@@ -828,8 +908,15 @@ def check_inbox_key(obj, now):
     raw = base64.urlsafe_b64decode(obj["public_key"] + "=")
     if obj["kid"] != inbox_key_kid(raw):
         return "kid_mismatch"
+    if obj["clinic_id"] != link_clinic_id:
+        return "clinic_mismatch"
     if not is_int(obj["serial"]) or obj["serial"] < 1:
         return "bad_serial"
+    if known is not None:
+        if obj["serial"] < known["serial"]:
+            return "serial_rollback"
+        if obj["serial"] == known["serial"] and known["revoked"] and obj["status"] == "active":
+            return "revoked_wins"
     if not is_int(obj["not_before"]) or not is_int(obj["not_after"]):
         return "bad_number"
     if obj["not_after"] <= obj["not_before"]:
@@ -929,12 +1016,40 @@ RULES = {
         "it, the clinic verifies the signature against its accepted-device table and the chain "
         "head against its own record, then answers with a signed recalled or recall_refused"
     ),
+    "recall_before_collect": (
+        "a recall can reach the clinic before it has claimed the message: the clinic's system "
+        "stores the verified recall keyed by (device, message_id, chain_head), and a later claim "
+        "of that message is answered with a signed recalled and nothing is filed; the portal also "
+        "withholds a message from claim while a recall is pending. recall_unknown_message is "
+        "never the answer for a message the portal still holds; it is for a (device, message_id, "
+        "chain_head) the clinic has never held and the portal no longer holds either"
+    ),
+    "recall_binding": (
+        "the recall's device_key_id, clinic_id, recipient_id, message_id and chain_head must all "
+        "equal those of the message it names, or it is ignored (never acted on, never an ack)"
+    ),
+    "key_revoked": (
+        "a message sealed to a kid the clinic has revoked, with created_at after the revocation, "
+        "is refused with a signed refused / key_revoked; a message created before the revocation "
+        "is still opened (the clinic holds the key)"
+    ),
     "interrupted_send": (
         "the content key lives only in memory: a restart, a lock or a crash ends the send. The "
         "app cancels what the portal holds and the patient sends again as a NEW message_id, so a "
         "nonce is never used twice under one key"
     ),
 }
+
+# What every verifier does, in this order, to every signed or sealed object. Refusing early on the
+# bytes means a later field check never runs on something that was not the signed object.
+CHECK_ORDER = [
+    "1 signature over frame(domain, payload) verifies (the compact form is split at the one '.')",
+    "2 payload is unpadded base64url, valid UTF-8 JSON with no float, NaN, Infinity, lone "
+    "surrogate or integer outside 0..2^53-1 (not_json, bad_number)",
+    "3 canonical(parse(payload)) == payload byte for byte (not_canonical)",
+    "4 v is exactly the integer 1 (unsupported_version), before any other field is read",
+    "5 exactly the listed fields, then the field rules (unknown_or_missing_field, ...)",
+]
 
 ROUTES = [
     ["GET", "/api/mycarlos/send-capabilities", "device assertion", "200; 404 when not enabled"],
@@ -1129,8 +1244,9 @@ def build_message():
     )
     envelope = envelope_object([att_a, att_b])
     envelope_bytes = canonical(envelope)
-    # The sealed envelope is the canonical bytes and the tag.
-    envelope_ciphertext = fake_bytes(0xE0, len(envelope_bytes) + tag)
+    # The sealed envelope is the ASCII compact signed form (payload and signature) and the tag.
+    envelope_compact = sealed_plaintext(envelope_bytes)
+    envelope_ciphertext = fake_bytes(0xE0, len(envelope_compact) + tag)
     head = message_head(MESSAGE_ID, envelope_ciphertext, [head_a, head_b])
     visible = [
         {
@@ -1161,10 +1277,39 @@ def build_message():
         "head": head,
         "envelope": envelope,
         "envelope_bytes": envelope_bytes,
+        "envelope_compact": envelope_compact,
         "envelope_ciphertext": envelope_ciphertext,
         "outer": outer,
         "outer_bytes": canonical(outer),
     }
+
+
+def worst_case_envelope():
+    """The largest envelope the contract allows, measured against the 256 KiB budget: ten
+    attachments each carrying a 16 KiB clinic manifest, a body of 8,192 bytes made of line feeds
+    (each escaped to two bytes), and names of 120 characters made of quotation marks (each
+    escaped to two bytes). Returns (envelope, compact_plaintext, sealed_size)."""
+    manifest = "a" * 8191 + "." + "b" * 8192  # exactly 16 KiB (16384 bytes)
+    items = []
+    for i in range(10):
+        items.append(
+            attachment(
+                str(uuid.UUID(int=0x1000 + i, version=4)),
+                '"' * 120,
+                "application/pdf",
+                6 * MIB,
+                "f" * 64,
+                "e" * 64,
+                {
+                    "delivery_id": DELIVERY_ID,
+                    "kind": "clinic-signed-copy",
+                    "manifest": manifest,
+                },
+            )
+        )
+    envelope = envelope_object(items, body="\n" * 8192)
+    compact = sealed_plaintext(canonical(envelope))
+    return envelope, compact, len(compact) + LIMITS["aead_tag"]
 
 
 def build():
@@ -1459,6 +1604,17 @@ def build():
         ("a key twice", duplicate_key),
         ("a trailing line feed", canonical_ack + b"\n"),
         ("not JSON", b"not json"),
+        ("a float 1.0 for v", b'{"v":1.0}'),
+        ("a float with an exponent", b'{"at":1e3,"v":1}'),
+        ("NaN", b'{"at":NaN,"v":1}'),
+        ("Infinity", b'{"at":Infinity,"v":1}'),
+        ("an integer of 2^100", b'{"at":' + str(2**100).encode() + b',"v":1}'),
+        ("the largest safe integer 2^53-1", b'{"at":9007199254740991,"v":1}'),
+        ("2^53", b'{"at":9007199254740992,"v":1}'),
+        ("a negative integer", b'{"at":-1,"v":1}'),
+        ("a lone surrogate in a string", b'{"ref":"\\ud800","v":1}'),
+        ("a lone surrogate in a key", b'{"\\udc00":"x","v":1}'),
+        ("an escaped pair that is a valid character", b'{"ref":"\\ud83d\\ude00","v":1}'),
     ]:
         payload = b64u(raw)
         value, reason = check_compact_payload(payload)
@@ -1484,6 +1640,7 @@ def build():
             "recall refused with a reason",
             ack_object("recall_refused", "recall_too_late", head=head.hex()),
         ),
+        ("refused: key revoked", ack_object("refused", "key_revoked", head=head.hex())),
         ("refused without a reason", ack_object("refused", None, head=head.hex())),
         ("filed with a reason", ack_object("filed", "scan_failed", head=head.hex())),
         ("an unknown reason", ack_object("refused", "because", head=head.hex())),
@@ -1514,19 +1671,39 @@ def build():
             {"name": name, "object": value, "expect": check_recall(value) or "accept"}
         )
 
+    # --- recall binding cases (CARLOS: is this recall about THIS message).
+    binding_cases = []
+    outer_for_binding = json.loads(outer_bytes)
+    for name, value in [
+        ("as built", recall),
+        ("another device_key_id", {**recall, "device_key_id": "other-device"}),
+        ("another chain_head", {**recall, "chain_head": "0" * 64}),
+        ("another message_id", {**recall, "message_id": OTHER_MESSAGE_ID}),
+        ("another clinic_id", {**recall, "clinic_id": "other-clinic"}),
+        ("another recipient_id", {**recall, "recipient_id": "other-recipient"}),
+    ]:
+        binding_cases.append(
+            {
+                "name": name,
+                "recall": value,
+                "expect": check_recall_binding(value, outer_for_binding) or "accept",
+            }
+        )
+
     # --- inbox key statement cases (checked with a clock).
     now = CREATED_AT
     statement = inbox_key_statement()
     other_key = bytes(range(1, 33))
     inbox_cases = []
 
-    def inbox_case(name, value, at=now):
+    def inbox_case(name, value, at=now, known=None):
         inbox_cases.append(
             {
                 "name": name,
                 "now": at,
+                "known": known,
                 "object": value,
-                "expect": check_inbox_key(value, at) or "accept",
+                "expect": check_inbox_key(value, at, known=known) or "accept",
             }
         )
 
@@ -1535,7 +1712,36 @@ def build():
     inbox_case("a revoked key", inbox_key_statement(status="revoked"))
     inbox_case("not yet valid", inbox_key_statement(not_before=now + 10))
     inbox_case("expired", inbox_key_statement(not_after=now - 1))
-    inbox_case("valid for more than 400 days", inbox_key_statement(not_after=now + 401 * 86_400))
+    inbox_case("valid for more than 30 days", inbox_key_statement(not_after=now + 31 * 86_400))
+    inbox_case(
+        "valid for exactly 30 days", inbox_key_statement(not_after=now - 86_400 + 30 * 86_400)
+    )
+    inbox_case("another clinic's statement", {**statement, "clinic_id": "other-clinic"})
+    inbox_case(
+        "a serial below the app's high-water mark",
+        inbox_key_statement(serial=2),
+        known={"serial": 3, "revoked": False},
+    )
+    inbox_case(
+        "the serial the app already holds",
+        inbox_key_statement(serial=3),
+        known={"serial": 3, "revoked": False},
+    )
+    inbox_case(
+        "a higher serial",
+        inbox_key_statement(serial=4),
+        known={"serial": 3, "revoked": False},
+    )
+    inbox_case(
+        "active at the same serial as a revocation the app holds",
+        inbox_key_statement(serial=3),
+        known={"serial": 3, "revoked": True},
+    )
+    inbox_case(
+        "active at a higher serial than a revocation the app holds",
+        inbox_key_statement(serial=4),
+        known={"serial": 3, "revoked": True},
+    )
     inbox_case("a kid that is not the key's hash", {**statement, "kid": inbox_key_kid(other_key)})
     inbox_case("a public key of 31 bytes", {**statement, "public_key": b64u(b"x" * 31)})
     inbox_case("a serial of zero", {**statement, "serial": 0})
@@ -1590,6 +1796,9 @@ def build():
                 "expect": check_text(text, name=as_name) or "accept",
             }
         )
+
+    worst_envelope, worst_compact, worst_sealed = worst_case_envelope()
+    envelope_compact = m["envelope_compact"]
 
     plain_pieces = {
         "plaintext_a_sha256": digest(m["plain_a"]),
@@ -1700,6 +1909,32 @@ def build():
             "canonical": encoded(envelope_bytes),
             "signing_input": encoded(envelope_input),
             "signed_by": "the device Ed25519 key",
+            "fake_signature_hex": FAKE_DEVICE_SIGNATURE.hex(),
+            "sealed_plaintext": {
+                "note": (
+                    "what the content key seals: ASCII, b64url(canonical payload) + '.' + "
+                    "b64url(64-byte signature), unpadded; the sealed envelope is this plus the "
+                    "16-byte tag. The signature here is FAKE bytes of the right length"
+                ),
+                "ascii": envelope_compact.decode("ascii"),
+                "size": len(envelope_compact),
+                "sha256": digest(envelope_compact),
+            },
+            "min_sealed_size": min_sealed_envelope_size(),
+        },
+        "worst_case_envelope": {
+            "note": (
+                "the largest envelope allowed: 10 attachments each with a 16 KiB manifest, a "
+                "body of 8,192 escaped bytes and 120 escaped bytes of name each; it must fit "
+                "the budget with headroom, and the envelope checker accepts it"
+            ),
+            "canonical_size": len(canonical(worst_envelope)),
+            "compact_size": len(worst_compact),
+            "sealed_size": worst_sealed,
+            "budget": LIMITS["envelope_sealed_max"],
+            "headroom": LIMITS["envelope_sealed_max"] - worst_sealed,
+            "check_envelope": check_envelope(worst_envelope) or "accept",
+            "sha256": digest(worst_compact),
         },
         "outer": {
             "canonical": encoded(outer_bytes),
@@ -1744,11 +1979,13 @@ def build():
         "ack_cases": ack_cases,
         "recall_cases": recall_cases,
         "inbox_key_cases": inbox_cases,
+        "recall_binding_cases": binding_cases,
         "time_cases": time_cases,
         "text_cases": text_cases,
         "states": STATES,
         "transitions": TRANSITIONS,
         "rules": RULES,
+        "check_order": CHECK_ORDER,
         "routes": ROUTES,
         "idempotency": IDEMPOTENCY,
         "portal_learns": PORTAL_LEARNS,

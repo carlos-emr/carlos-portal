@@ -78,7 +78,10 @@ class RecordingApnsTransport(ApnsTokenTransport):
     """``ApnsTokenTransport`` over a recording client and a fixed clock."""
 
     def __init__(
-        self, config: ApnsConfig, handles: DestinationHandles, *responses: int | BaseException,
+        self,
+        config: ApnsConfig,
+        handles: DestinationHandles,
+        *responses: int | BaseException,
         now: int = 1_800_000_000,
     ) -> None:
         self.http = RecordingHttpClient(*responses)

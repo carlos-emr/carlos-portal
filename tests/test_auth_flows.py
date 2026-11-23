@@ -2084,8 +2084,10 @@ def test_failed_mfa_delivery_does_not_reserve_the_full_resend_cooldown() -> None
     # The retry grace is still running, so this is throttled — but for seconds, not the full
     # 60-second window a delivered code would have reserved.
     assert immediate_retry.status_code == 429
-    assert 0 < int(immediate_retry.headers["retry-after"]) <= (
-        MFA_DELIVERY_FAILURE_RETRY_GRACE.total_seconds()
+    assert (
+        0
+        < int(immediate_retry.headers["retry-after"])
+        <= (MFA_DELIVERY_FAILURE_RETRY_GRACE.total_seconds())
     )
 
 
@@ -2315,9 +2317,7 @@ def test_pending_email_change_leaves_mfa_delivery_on_the_current_address() -> No
     )
 
     assert login_response.status_code == 200
-    mfa_message = next(
-        message for message in reversed(sender.messages) if "code" in message
-    )
+    mfa_message = next(message for message in reversed(sender.messages) if "code" in message)
     assert mfa_message["recipient"] == SEEDED_INVITE_EMAIL
 
 
@@ -2515,9 +2515,7 @@ def test_a_reset_token_cannot_be_used_against_another_account() -> None:
     with app.state.session_factory() as session:
         with session.begin():
             victim = session.scalar(
-                select(PatientPortalAccount).where(
-                    PatientPortalAccount.username == "patient.user"
-                )
+                select(PatientPortalAccount).where(PatientPortalAccount.username == "patient.user")
             )
             other = PatientPortalAccount(
                 clinic_id=victim.clinic_id,
@@ -2544,9 +2542,7 @@ def test_a_reset_token_cannot_be_used_against_another_account() -> None:
     with app.state.session_factory() as session:
         assert session.get(PatientPortalAccount, other_id).password_hash == (
             session.scalar(
-                select(PatientPortalAccount).where(
-                    PatientPortalAccount.username == "other.patient"
-                )
+                select(PatientPortalAccount).where(PatientPortalAccount.username == "other.patient")
             ).password_hash
         )
     assert (

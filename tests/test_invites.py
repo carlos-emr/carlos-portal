@@ -307,9 +307,7 @@ def test_dev_admin_invites_require_bearer_token() -> None:
 def test_dev_admin_invite_creation_rejects_oversized_json_body_after_auth() -> None:
     app = migrated_development_app()
     oversized_body = (
-        b'{"demographic_no":1234,"email":"'
-        + b"x" * web_support.MAX_JSON_BODY_BYTES
-        + b'"}'
+        b'{"demographic_no":1234,"email":"' + b"x" * web_support.MAX_JSON_BODY_BYTES + b'"}'
     )
 
     missing_token_response = TestClient(app).post(

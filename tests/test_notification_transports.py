@@ -55,8 +55,11 @@ SOURCE = Path(nt.__file__).read_text(encoding="utf-8")
 
 def send(transport, platform, **kw):
     return transport.send(
-        destination_id=kw.get("destination_id", DESTINATION), platform=platform,
-        notice=NOTICE, ttl_seconds=kw.get("ttl_seconds", 600), collapse_key=COLLAPSE,
+        destination_id=kw.get("destination_id", DESTINATION),
+        platform=platform,
+        notice=NOTICE,
+        ttl_seconds=kw.get("ttl_seconds", 600),
+        collapse_key=COLLAPSE,
     )
 
 
@@ -119,9 +122,7 @@ class RequestShapes(unittest.TestCase):
         )
         payload = json.loads(request.body)
         self.assertEqual(set(payload), {"aps", "n"})
-        self.assertEqual(
-            payload["aps"], {"alert": {"title": "myCarlos", "body": NOTICE.body}}
-        )
+        self.assertEqual(payload["aps"], {"alert": {"title": "myCarlos", "body": NOTICE.body}})
         self.assertEqual(payload["n"], NOTICE.token)
 
     def test_apns_serves_macos_too_and_uses_the_sandbox_host_only_when_configured(self):
@@ -172,9 +173,11 @@ class NoPhiAndNoDocumentContent(unittest.TestCase):
 
     def test_no_request_carries_the_portal_destination_id(self):
         for request in self.requests():
-            blob = request.body.decode("utf-8") + " ".join(
-                f"{k}={v}" for k, v in request.headers.items()
-            ) + request.url
+            blob = (
+                request.body.decode("utf-8")
+                + " ".join(f"{k}={v}" for k, v in request.headers.items())
+                + request.url
+            )
             for forbidden in (str(DESTINATION), DESTINATION.hex):
                 self.assertNotIn(forbidden, blob)
 
@@ -185,11 +188,22 @@ class NoPhiAndNoDocumentContent(unittest.TestCase):
         ids or the count), nothing of the five v1 fields is there; only the portal's key
         and ``resolve_notice_token`` turn the token back into a sequence.
         """
-        needles = [str(SUBSCRIPTION_ID), SUBSCRIPTION_ID.hex, str(EPOCH), EPOCH.hex,
-                   "documents_ready", "subscription", "epoch", "sequence", "version"]
+        needles = [
+            str(SUBSCRIPTION_ID),
+            SUBSCRIPTION_ID.hex,
+            str(EPOCH),
+            EPOCH.hex,
+            "documents_ready",
+            "subscription",
+            "epoch",
+            "sequence",
+            "version",
+        ]
         for request in self.requests():
-            blob = request.body.decode("utf-8") + request.url + " ".join(
-                f"{k}={v}" for k, v in request.headers.items()
+            blob = (
+                request.body.decode("utf-8")
+                + request.url
+                + " ".join(f"{k}={v}" for k, v in request.headers.items())
             )
             for needle in needles:
                 self.assertNotIn(needle, blob)
@@ -215,9 +229,28 @@ class NoPhiAndNoDocumentContent(unittest.TestCase):
                 text = text.replace(variable, "")
             words = set(re.findall(r"[A-Za-z]{4,}", text))
             allowed = {
-                "myCarlos", "document", "available", "message", "notification", "title", "body",
-                "data", "android", "collapse", "priority", "HIGH", "alert", "toast", "visual",
-                "binding", "template", "ToastGeneric", "text", "launch", "version", "encoding",
+                "myCarlos",
+                "document",
+                "available",
+                "message",
+                "notification",
+                "title",
+                "body",
+                "data",
+                "android",
+                "collapse",
+                "priority",
+                "HIGH",
+                "alert",
+                "toast",
+                "visual",
+                "binding",
+                "template",
+                "ToastGeneric",
+                "text",
+                "launch",
+                "version",
+                "encoding",
                 "token",
             } | set(NOTICE.body.replace(".", "").split())
             self.assertLessEqual(words - allowed, set(), words - allowed)
@@ -231,9 +264,11 @@ class NoPhiAndNoDocumentContent(unittest.TestCase):
         ):
             send(transport, platform)
             transport.send(
-                destination_id=DESTINATION, platform=platform,
+                destination_id=DESTINATION,
+                platform=platform,
                 notice=GenericNotice(notice_token(KEYS, other)),
-                ttl_seconds=600, collapse_key=COLLAPSE,
+                ttl_seconds=600,
+                collapse_key=COLLAPSE,
             )
             first, second = (r.body.decode() for r in transport.requests)
             self.assertNotEqual(first, second)
@@ -307,8 +342,13 @@ class RetryClassification(unittest.TestCase):
 
     def test_dispatch_retries_a_5xx_and_revokes_on_a_gone_destination(self):
         subscription = Subscription(
-            OWNER, SUBSCRIPTION_ID, EPOCH, DESTINATION, PushPlatform.ANDROID_FCM,
-            remote_enabled=True, remote_consent_version=1,
+            OWNER,
+            SUBSCRIPTION_ID,
+            EPOCH,
+            DESTINATION,
+            PushPlatform.ANDROID_FCM,
+            remote_enabled=True,
+            remote_consent_version=1,
             permission_observed_for_enrollment=True,
         )
         intent = OutboxIntent(OWNER, DESTINATION, PushPlatform.ANDROID_FCM, HINT, NOW + 600)
@@ -319,11 +359,13 @@ class RetryClassification(unittest.TestCase):
         self.assertEqual(retried.retry_at, NOW + 30)
         gone = dispatch(lease, current, fcm(404), now=NOW, server_enabled=True, notice_keys=KEYS)
         self.assertTrue(gone.revoke_destination)
-        accepted = dispatch(lease, current, fcm(200), now=NOW,
-            server_enabled=True, notice_keys=KEYS)
+        accepted = dispatch(
+            lease, current, fcm(200), now=NOW, server_enabled=True, notice_keys=KEYS
+        )
         self.assertEqual(accepted.status, "provider_accepted")
-        permanent = dispatch(lease, current, fcm(403), now=NOW,
-            server_enabled=True, notice_keys=KEYS)
+        permanent = dispatch(
+            lease, current, fcm(403), now=NOW, server_enabled=True, notice_keys=KEYS
+        )
         self.assertEqual(permanent.status, "permanent_failure")
         self.assertIsNone(permanent.retry_at)
 
@@ -348,8 +390,10 @@ class DestinationAndInputGuards(unittest.TestCase):
         idn = "https://db5.notify.windows.com\u2024evil.example/x"
         for transport, platform in (
             (wns(200, handle=idn), PushPlatform.WINDOWS_WNS),
-            (wns(200, handle="https://xn--db5-notify.windows.com.evil.example/x"),
-             PushPlatform.WINDOWS_WNS),
+            (
+                wns(200, handle="https://xn--db5-notify.windows.com.evil.example/x"),
+                PushPlatform.WINDOWS_WNS,
+            ),
         ):
             self.assertIs(send(transport, platform), ProviderResult.INVALID_DESTINATION)
             self.assertEqual(transport.requests, [])
@@ -364,8 +408,11 @@ class DestinationAndInputGuards(unittest.TestCase):
         for key in ("", "x" * 65, "caf\u00e9" * 4, "\u2603"):
             with self.assertRaises(ValueError):
                 fcm(200).send(
-                    destination_id=DESTINATION, platform=PushPlatform.ANDROID_FCM,
-                    notice=NOTICE, ttl_seconds=60, collapse_key=key,
+                    destination_id=DESTINATION,
+                    platform=PushPlatform.ANDROID_FCM,
+                    notice=NOTICE,
+                    ttl_seconds=60,
+                    collapse_key=key,
                 )
 
     def test_config_validation_refuses_bad_values(self):
@@ -382,15 +429,23 @@ class DestinationAndInputGuards(unittest.TestCase):
 
     def test_dispatch_reports_a_miswired_adapter_as_a_transport_error_not_a_retry(self):
         subscription = Subscription(
-            OWNER, SUBSCRIPTION_ID, EPOCH, DESTINATION, PushPlatform.WINDOWS_WNS,
-            remote_enabled=True, remote_consent_version=1,
+            OWNER,
+            SUBSCRIPTION_ID,
+            EPOCH,
+            DESTINATION,
+            PushPlatform.WINDOWS_WNS,
+            remote_enabled=True,
+            remote_consent_version=1,
             permission_observed_for_enrollment=True,
         )
         intent = OutboxIntent(OWNER, DESTINATION, PushPlatform.WINDOWS_WNS, HINT, NOW + 600)
         decision = dispatch(
             DispatchLease(intent, UUID(int=5), NOW + 60, 1),
             CurrentAvailability(subscription, True, True, HINT.sequence),
-            fcm(200), now=NOW, server_enabled=True, notice_keys=KEYS,
+            fcm(200),
+            now=NOW,
+            server_enabled=True,
+            notice_keys=KEYS,
         )
         self.assertEqual(decision.status, "transport_error:TypeError")
         self.assertIsNone(decision.retry_at)
@@ -399,8 +454,18 @@ class DestinationAndInputGuards(unittest.TestCase):
 class NothingIsLoggedAndNothingIsWired(unittest.TestCase):
     def test_the_module_has_no_logging_print_or_environment_access(self):
         needles = (
-            "import logging", "logging.", "print(", "getLogger", "os.environ", "getenv", "open(",
-            "read_text", "read_bytes", "import socket", "import urllib.request", "import requests",
+            "import logging",
+            "logging.",
+            "print(",
+            "getLogger",
+            "os.environ",
+            "getenv",
+            "open(",
+            "read_text",
+            "read_bytes",
+            "import socket",
+            "import urllib.request",
+            "import requests",
             "import httpx",
         )
         for needle in needles:
@@ -416,7 +481,8 @@ class NothingIsLoggedAndNothingIsWired(unittest.TestCase):
                 send(apns(410), PushPlatform.IOS_APNS)
                 send(wns(404), PushPlatform.WINDOWS_WNS)
                 for transport, platform in (
-                    (fcm(503), PushPlatform.ANDROID_FCM), (apns(429), PushPlatform.IOS_APNS),
+                    (fcm(503), PushPlatform.ANDROID_FCM),
+                    (apns(429), PushPlatform.IOS_APNS),
                 ):
                     with self.assertRaises(TransportFailure):
                         send(transport, platform)
@@ -425,7 +491,8 @@ class NothingIsLoggedAndNothingIsWired(unittest.TestCase):
 
     def test_the_destination_id_never_reaches_an_exception_message(self):
         for transport, platform in (
-            (fcm(503), PushPlatform.ANDROID_FCM), (apns(500), PushPlatform.IOS_APNS),
+            (fcm(503), PushPlatform.ANDROID_FCM),
+            (apns(500), PushPlatform.IOS_APNS),
             (wns(TimeoutError()), PushPlatform.WINDOWS_WNS),
         ):
             with self.assertRaises(TransportFailure) as caught:

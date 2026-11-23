@@ -75,9 +75,7 @@ def test_database_error_details_stay_out_of_uvicorn_logs_after_safe_application_
     async def request_over_memory():
         client_protocol = h11.Connection(h11.CLIENT)
         request_headers = [(b"host", b"testserver"), (b"accept", b"application/json")]
-        request = h11.Request(
-            method=b"GET", target=path.encode(), headers=request_headers
-        )
+        request = h11.Request(method=b"GET", target=path.encode(), headers=request_headers)
         wire = client_protocol.send(request) + client_protocol.send(h11.EndOfMessage())
         server_protocol = h11.Connection(h11.SERVER)
         server_protocol.receive_data(wire)
