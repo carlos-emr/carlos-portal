@@ -570,8 +570,15 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_another": "Proszę utworzyć kolejny kod",
     "mycarlos_linked": "Połączono",
     "mycarlos_last_seen": "Ostatnia aktywność",
-    "mycarlos_empty": (
-        "Brak połączonych urządzeń. Aby dodać urządzenie, proszę wybrać „Proszę połączyć myCarlos”."
+    "mycarlos_devices_moved": (
+        "Połączonymi urządzeniami można zarządzać na stronie „Proszę połączyć myCarlos”."
+    ),
+    "mycarlos_status_active": "Aktywne",
+    "mycarlos_status_stale": "Dawno niewidziane",
+    "mycarlos_devices_empty_title": "Nie ma jeszcze połączonych urządzeń",
+    "mycarlos_devices_empty_body": (
+        "Proszę utworzyć kod, a następnie wpisać go w myCarlos, aby połączyć urządzenie "
+        "z tym kontem."
     ),
     "mycarlos_remove_question": "Usunąć to urządzenie?",
     "mycarlos_remove_effect": (

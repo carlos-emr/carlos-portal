@@ -228,8 +228,8 @@
                 </form>
               </section>
             </div>
-            {% if mycarlos_enabled and mycarlos %}
-              {% include "_mycarlos_devices.jinja" %}
+            {% if mycarlos_enabled %}
+              <p class="mycarlos-devices-moved"><a href="{{ url_for('portal_mycarlos') }}#mycarlos-devices-heading">{{ text.mycarlos_devices_moved }}</a></p>
             {% endif %}
           {% elif active_module == "email-passwords" %}
             <header class="module-header">

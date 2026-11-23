@@ -108,6 +108,7 @@ def register_mycarlos_portal_routes(
         code_display: str | None = None,
         qr_png_data_uri: str | None = None,
         confirmation_key: str | None = None,
+        notice: str | None = None,
     ) -> Response:
         view = assemble_mycarlos_devices(
             session,
@@ -136,6 +137,7 @@ def register_mycarlos_portal_routes(
             active_module="mycarlos",
             authenticated_session=authenticated,
             mycarlos=view,
+            account_notice=notice,
             status_code=status_code,
         )
         response.headers["Cache-Control"] = "no-store"
@@ -181,11 +183,18 @@ def register_mycarlos_portal_routes(
     def linking_page(
         request: Request,
         session: Annotated[Session, function_scoped_database_dependency(database)],
+        status: str | None = None,
     ) -> Response:
         authenticated = deps.get_portal_cookie_session_or_redirect(request, session)
         if isinstance(authenticated, RedirectResponse):
             return authenticated
-        return render(request, session, authenticated)
+        # The one notice this page can carry: a device was removed (it was Account's).
+        notice = (
+            portal_text(request_locale(request))["mycarlos_removed"]
+            if status == "mycarlos-device-removed"
+            else None
+        )
+        return render(request, session, authenticated, notice=notice)
 
     def issue_code(request: Request, session: Session) -> Response:
         authenticated = authenticate_mutation(request, session)
@@ -357,8 +366,10 @@ def register_mycarlos_portal_routes(
             resource_id=str(device.id),
         )
         session.commit()
+        # Back to the list the device was removed from, with the focus on its heading.
         return RedirectResponse(
-            f"{request.url_for('portal_account').path}?status=mycarlos-device-removed",
+            f"{request.url_for('portal_mycarlos').path}?status=mycarlos-device-removed"
+            "#mycarlos-devices-heading",
             status_code=303,
         )
 

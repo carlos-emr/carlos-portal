@@ -515,3 +515,45 @@ if (bookingStatus instanceof HTMLElement) {
     }, remainingMs);
   }
 }
+
+// Linked devices (issue 100): each moment is first the written date (what a page without script, and a
+// screen reader, get). Where the browser can say it as a relative time ("3 days ago", in the
+// page's language), that is what is shown; the written date stays as the title (hover) and is
+// read after it by a screen reader.
+const relativeUnits = [
+  ["year", 365 * 24 * 60 * 60 * 1000],
+  ["month", 30 * 24 * 60 * 60 * 1000],
+  ["day", 24 * 60 * 60 * 1000],
+  ["hour", 60 * 60 * 1000],
+  ["minute", 60 * 1000],
+];
+const showRelativeTimes = () => {
+  if (typeof Intl === "undefined" || typeof Intl.RelativeTimeFormat !== "function") {
+    return;
+  }
+  // Nothing to do where there is no page to read (the client tests run this file against a
+  // reduced document).
+  if (!document.documentElement || typeof document.querySelectorAll !== "function") {
+    return;
+  }
+  const formatter = new Intl.RelativeTimeFormat(document.documentElement.lang || undefined, {
+    numeric: "auto",
+  });
+  for (const element of document.querySelectorAll("time[data-relative]")) {
+    const moment = Date.parse(element.getAttribute("datetime") || "");
+    if (Number.isNaN(moment) || element.dataset.relativeDone === "1") {
+      continue;
+    }
+    const written = element.textContent;
+    const elapsed = moment - Date.now();
+    const [unit, size] = relativeUnits.find(([, ms]) => Math.abs(elapsed) >= ms)
+      || ["minute", 60 * 1000];
+    element.textContent = formatter.format(Math.round(elapsed / size), unit);
+    element.dataset.relativeDone = "1";
+    const full = document.createElement("span");
+    full.className = "mycarlos-time-full";
+    full.textContent = ` (${written})`;
+    element.append(full);
+  }
+};
+showRelativeTimes();
