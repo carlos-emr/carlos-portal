@@ -433,6 +433,7 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_not_seen": "尚未連線",
     "mycarlos_mfa_required": "連結或移除裝置之前，請先驗證您的登入。",
     "mycarlos_verify": "驗證登入",
+    "mycarlos_verify_to_create": "驗證登入後建立連結碼",
     "mycarlos_portal_address": "入口網站網址",
     "mycarlos_qr_label": "在 myCarlos 中掃描",
     "mycarlos_qr_alt": "用於將 myCarlos 連結至此入口網站的 QR 碼。",

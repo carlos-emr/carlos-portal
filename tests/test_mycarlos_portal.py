@@ -471,6 +471,50 @@ def test_linked_devices_empty_card_points_to_verify_when_a_step_up_is_needed():
     verify = re.search(r'<button[^>]*id="mycarlos-link-action"[^>]*>([^<]+)</button>', link_page)
     assert verify is not None and verify.group(1) == MYCARLOS_TEXT_CATALOG["en"]["mycarlos_verify"]
     assert 'action="/portal/mycarlos/code"' not in link_page
+    # The label says what the link leads to: the Verify step, not "Create a code".
+    card_link = re.search(
+        r'<a class="primary-action" href="#mycarlos-link-action">([^<]+)</a>', link_page
+    )
+    assert card_link is not None
+    assert card_link.group(1) == MYCARLOS_TEXT_CATALOG["en"]["mycarlos_verify_to_create"]
+    assert card_link.group(1) == "Verify sign-in to create a code"
+
+
+def _action_anchor_has_a_target(page_text):
+    """The empty card's link goes to #mycarlos-link-action: if on the page, one element is it."""
+    if 'href="#mycarlos-link-action"' not in page_text:
+        return True
+    return page_text.count('id="mycarlos-link-action"') == 1
+
+
+def test_the_empty_card_link_always_has_exactly_one_target_or_is_not_there():
+    # Normal state (Create a code), MFA state (Verify), a code just issued (another code), and the
+    # removal confirmation, which shows no list at all: never a link to nothing, never two targets.
+    app, client, sms, account_id = make_portal()
+    sign_in(client, sms)
+    normal = client.get("/portal/mycarlos").text
+    assert 'href="#mycarlos-link-action"' in normal and _action_anchor_has_a_target(normal)
+    csrf = form_token(client)
+    issued = client.post("/portal/mycarlos/code", data={"csrf_token": csrf}).text
+    assert 'href="#mycarlos-link-action"' in issued and _action_anchor_has_a_target(issued)
+    assert MYCARLOS_TEXT_CATALOG["en"]["mycarlos_another"] in issued
+    key = stored_device(app, account_id, "FAKE confirm card", "FAKE confirm phone")
+    confirmation = client.get(f"/portal/account/mycarlos/devices/{key}/remove").text
+    # No devices section, so no card and no link: nothing can point at a missing button.
+    assert "mycarlos-devices-heading" not in confirmation
+    assert 'href="#mycarlos-link-action"' not in confirmation
+    app2, client2, sms2, _account2 = make_portal(require_mfa=False)
+    sign_in(client2, sms2, mfa=False)
+    needs_verify = client2.get("/portal/mycarlos").text
+    assert 'href="#mycarlos-link-action"' in needs_verify
+    assert _action_anchor_has_a_target(needs_verify)
+
+
+@pytest.mark.parametrize("locale", sorted(MYCARLOS_TEXT_CATALOG))
+def test_the_verify_to_create_label_exists_in_every_language_and_differs_from_create(locale):
+    text = MYCARLOS_TEXT_CATALOG[locale]
+    assert text["mycarlos_verify_to_create"].strip()
+    assert text["mycarlos_verify_to_create"] != text["mycarlos_create"]
 
 
 def test_removing_a_device_comes_back_to_the_link_page_with_the_result_announced():

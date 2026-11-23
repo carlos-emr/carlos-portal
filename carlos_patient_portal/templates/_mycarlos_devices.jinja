@@ -33,7 +33,8 @@
     <div class="mycarlos-device-card mycarlos-devices-empty">
       <h3>{{ text.mycarlos_devices_empty_title }}</h3>
       <p>{{ text.mycarlos_devices_empty_body }}</p>
-      <a class="primary-action" href="#mycarlos-link-action">{{ text.mycarlos_create }}</a>
+      {# The target is the page's one action: Create a code, or Verify sign-in first; the label says which. #}
+      <a class="primary-action" href="#mycarlos-link-action">{{ text.mycarlos_verify_to_create if mycarlos.mfa_required else text.mycarlos_create }}</a>
     </div>
   {% endif %}
 </section>

@@ -527,6 +527,17 @@ const relativeUnits = [
   ["hour", 60 * 60 * 1000],
   ["minute", 60 * 1000],
 ];
+// "3 days ago", "last month", "now": whole units, rounded down, so 45 days is "last month", never "2
+// months ago"; a moment in the future (a device clock ahead of the portal's) or under a minute ago
+// is "now", never "in 3 minutes".
+const relativeText = (formatter, elapsed) => {
+  if (elapsed > -60 * 1000) {
+    return formatter.format(0, "second");
+  }
+  const age = -elapsed;
+  const [unit, size] = relativeUnits.find(([, ms]) => age >= ms);
+  return formatter.format(-Math.floor(age / size), unit);
+};
 const showRelativeTimes = () => {
   if (typeof Intl === "undefined" || typeof Intl.RelativeTimeFormat !== "function") {
     return;
@@ -545,10 +556,7 @@ const showRelativeTimes = () => {
       continue;
     }
     const written = element.textContent;
-    const elapsed = moment - Date.now();
-    const [unit, size] = relativeUnits.find(([, ms]) => Math.abs(elapsed) >= ms)
-      || ["minute", 60 * 1000];
-    element.textContent = formatter.format(Math.round(elapsed / size), unit);
+    element.textContent = relativeText(formatter, moment - Date.now());
     element.dataset.relativeDone = "1";
     const full = document.createElement("span");
     full.className = "mycarlos-time-full";

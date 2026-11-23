@@ -567,6 +567,7 @@ MYCARLOS_TEXT: dict[str, str] = {
         "Verifique su inicio de sesión antes de vincular o quitar un dispositivo."
     ),
     "mycarlos_verify": "Verificar inicio de sesión",
+    "mycarlos_verify_to_create": "Verificar el inicio de sesión para crear un código",
     "mycarlos_portal_address": "Dirección del portal",
     "mycarlos_qr_label": "Escanear en myCarlos",
     "mycarlos_qr_alt": "Código QR para vincular myCarlos con este portal.",

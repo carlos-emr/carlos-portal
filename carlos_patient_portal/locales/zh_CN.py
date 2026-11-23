@@ -428,6 +428,7 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_not_seen": "尚未连接",
     "mycarlos_mfa_required": "关联或移除设备前，请先验证您的登录。",
     "mycarlos_verify": "验证登录",
+    "mycarlos_verify_to_create": "验证登录后创建关联码",
     "mycarlos_portal_address": "门户网站网址",
     "mycarlos_qr_label": "在 myCarlos 中扫描",
     "mycarlos_qr_alt": "用于将 myCarlos 关联到此门户网站的二维码。",

@@ -599,6 +599,7 @@ MYCARLOS_TEXT: dict[str, str] = {
         "Proszę potwierdzić logowanie przed połączeniem lub usunięciem urządzenia."
     ),
     "mycarlos_verify": "Proszę potwierdzić logowanie",
+    "mycarlos_verify_to_create": "Proszę potwierdzić logowanie, aby utworzyć kod",
     "mycarlos_portal_address": "Adres portalu",
     "mycarlos_qr_label": "Proszę zeskanować w myCarlos",
     "mycarlos_qr_alt": "Kod QR do połączenia myCarlos z tym portalem.",
