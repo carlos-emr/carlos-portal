@@ -28,6 +28,7 @@ const { isIP } = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { assertNoSeriousAxeIssues } = require('./patient-portal-axe');
 const { readCapturedMfaCode } = require('./patient-portal-mail-capture');
 
 const allowNonLocalBaseUrl = (
@@ -175,6 +176,7 @@ async function assertAccessiblePage(page, surface) {
   assert(problems.imagesWithoutAlt === 0, `${surface} has an image without alt text`);
   assert(problems.unnamedControls.length === 0,
     `${surface} has unnamed controls: ${problems.unnamedControls.join(', ')}`);
+  await assertNoSeriousAxeIssues(page, surface);
 }
 
 // Stands in for the CARLOS polling job: reports a result for the patient's pending pick on the
@@ -1247,7 +1249,7 @@ function screenshotPath(name) {
     );
 
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.getByRole('link', { name: 'Account', exact: true }).click();
+    await page.locator('.module-nav').getByRole('link', { name: 'Account', exact: true }).click();
     await page.waitForURL((url) => url.pathname === portalPathname('/portal/account'));
     await page.getByRole('heading', { name: 'Account' }).waitFor();
     await assertAccessiblePage(page, 'account page');
@@ -1341,7 +1343,7 @@ function screenshotPath(name) {
       path: screenshotPath('patient-portal-account-mobile'),
       fullPage: true,
     });
-    await page.getByRole('link', { name: 'Messages', exact: true }).click();
+    await page.locator('.module-nav').getByRole('link', { name: 'Messages', exact: true }).click();
     await page.waitForURL((url) => url.pathname === portalPathname('/portal/messages'));
     await page.getByRole('heading', { name: 'Messages' }).waitFor();
     await assertAccessiblePage(page, 'messages page');
@@ -1463,7 +1465,7 @@ function screenshotPath(name) {
       await page.locator('.message-badge').count() === 0,
       'opened booking prompts should no longer be marked new'
     );
-    await page.getByRole('link', { name: 'Help', exact: true }).click();
+    await page.locator('.module-nav').getByRole('link', { name: 'Help', exact: true }).click();
     await page.waitForURL((url) => url.pathname === portalPathname('/portal/help'));
     await page.getByRole('heading', { name: 'Help' }).waitFor();
     await assertAccessiblePage(page, 'help page');

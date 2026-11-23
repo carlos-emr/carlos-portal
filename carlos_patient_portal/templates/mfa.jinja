@@ -3,14 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ service_name }}</title>
+  <title>{{ text.mfa_heading }} - {{ service_name }}</title>
   {% include "_head_assets.jinja" %}
   <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
   <script src="{{ url_for('static', path='/portal.js') }}" defer></script>
 </head>
 <body>
-  <main class="app-shell">
-    <section class="portal-screen" aria-label="{{ text.mfa_heading }}">
+  {% from "_skip_link.jinja" import skip_link %}{{ skip_link(text) }}
+  {% include "_live_status.jinja" %}
+  <div class="app-shell">
+    <div class="portal-screen">
       <header class="patient-topbar mfa-topbar">
         <div class="brand-lockup">
           <img src="{{ url_for('static', path='/carlos-birdman.png') }}" alt="{{ text.logo_alt }}" class="brand-logo">
@@ -51,11 +53,13 @@
         >{{ text.help }}</button>
       </header>
 
+      <main id="main-content" tabindex="-1">
+
       <div class="auth-layout">
         <section class="auth-panel" aria-labelledby="mfa-title">
           <h1 id="mfa-title">{{ text.mfa_heading }}</h1>
           {% if error_message %}
-            <p class="form-error" role="alert">{{ error_message }}</p>
+            <p class="form-error" role="alert" id="mfa-error">{{ error_message }}</p>
           {% endif %}
           {% if notice_message %}
             <p class="form-notice" role="status">{{ notice_message }}</p>
@@ -74,6 +78,7 @@
                   inputmode="numeric"
                   required
                 autocomplete="one-time-code"
+                {% if error_message %}aria-invalid="true" aria-describedby="mfa-error"{% endif %}
                 maxlength="16"
               >
             </label>
@@ -131,8 +136,9 @@
           <button class="primary-action" type="button" data-modal-close>{{ text.modal_close }}</button>
         </section>
       </div>
-    </section>
-  </main>
+      </main>
+    </div>
+  </div>
   {% include "_page_footer.jinja" %}
 </body>
 </html>

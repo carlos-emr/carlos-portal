@@ -213,6 +213,7 @@ TEXT: dict[str, str] = {
     "incorrect_username_or_password": "用户名或密码不正确",
     "invite_code": "邀请码",
     "language_aria_label": "语言",
+    "skip_to_content": "跳到主要内容",
     "logo_alt": "CARLOS",
     "logout": "退出登录",
     "message_back": "返回消息列表",
