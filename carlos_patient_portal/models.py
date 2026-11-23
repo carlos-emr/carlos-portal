@@ -85,6 +85,9 @@ AUDIT_EVENT_RETENTION_POLICY_OVERRIDE = "retention.policy_override"
 AUDIT_EVENT_SESSION_LOGOUT = "session.logout"
 # A self sign-up request from the public page (carlos-portal#15), stored or refused by a limit.
 AUDIT_EVENT_SIGNUP_REQUEST = "signup.request"
+# CARLOS collecting a stored request, and reporting what it did with it (carlos-portal#16).
+AUDIT_EVENT_SIGNUP_CLAIM = "signup.claim"
+AUDIT_EVENT_SIGNUP_RESULT = "signup.result"
 AUDIT_EVENT_STAFF_ACTION = "staff.action"
 AUDIT_EVENT_FHIR_READ = "fhir.read"
 AUDIT_EVENT_FHIR_SEARCH = "fhir.search"
@@ -196,6 +199,10 @@ MAX_UNLOCK_SECRET_REVOKE_REASON_LENGTH = 64
 UNLOCK_SECRET_NONCE_LENGTH = 12
 OUTBOX_NONCE_LENGTH = 12
 SIGNUP_REQUEST_NONCE_LENGTH = 12
+# What CARLOS reports for a claimed sign-up request (carlos-portal#16).
+SIGNUP_RESULT_MATCHED = "matched"
+SIGNUP_RESULT_NO_MATCH = "no_match"
+SIGNUP_RESULT_INELIGIBLE = "ineligible"
 MAX_INVITE_DELIVERY_OPERATION_ID_LENGTH = 64
 MAX_INVITE_DELIVERY_REFERENCE_LENGTH = 128
 MAX_BOOKING_PROMPT_OPERATION_ID_LENGTH = 64
@@ -1620,7 +1627,14 @@ class PatientPortalSignupRequest(Base):
     email address already on file. The health card number, date of birth and typed email exist
     only inside `encrypted_payload`, encrypted with the outbox keyring. `health_card_hash` is the
     same keyed hash the `signup.request` audit events carry, so a later claim or result can be
-    audited without decrypting. A row lives until CARLOS reports a result or `expires_at` passes.
+    audited without decrypting. A row lives until `expires_at` passes.
+
+    CARLOS collects a request under a lease (carlos-portal#16): `lease_token_hash` is the SHA-256
+    of the token only the claiming call was given, and `lease_expires_at` is when another claim may
+    take the request. Reporting a result deletes the encrypted details (`encrypted_payload` and
+    `encryption_nonce` become NULL, which a CHECK ties to `result`) and keeps what an identical
+    repeat needs to be answered as a repeat: the lease, the result, and the invite id. The row is
+    then deleted with the rest at `expires_at`.
     """
 
     __tablename__ = "patient_portal_signup_requests"
@@ -1645,7 +1659,31 @@ class PatientPortalSignupRequest(Base):
             EXPIRY_AFTER_CREATION_SQL,
             name="ck_pp_signup_requests_expiry_after_creation",
         ),
-        # The backlog count, the expiry purge, and (carlos-portal#16) the claim all filter on it.
+        CheckConstraint(
+            f"lease_token_hash is null or length(lease_token_hash) = {HASH_LENGTH}",
+            name="ck_pp_signup_requests_lease_token_hash_length",
+        ),
+        CheckConstraint(
+            "(lease_token_hash is null) = (lease_expires_at is null)",
+            name="ck_pp_signup_requests_lease_complete",
+        ),
+        CheckConstraint(
+            "result is null or result in ('matched', 'no_match', 'ineligible')",
+            name="ck_pp_signup_requests_result_values",
+        ),
+        # A reported request holds a result, never its details; an open one holds its details.
+        CheckConstraint(
+            "(result is null and encrypted_payload is not null and encryption_nonce is not null "
+            "and invite_id is null and resulted_at is null) or "
+            "(result = 'matched' and encrypted_payload is null and encryption_nonce is null "
+            "and invite_id is not null and invite_id > 0 and resulted_at is not null "
+            "and lease_token_hash is not null) or "
+            "(result in ('no_match', 'ineligible') and encrypted_payload is null "
+            "and encryption_nonce is null and invite_id is null and resulted_at is not null "
+            "and lease_token_hash is not null)",
+            name="ck_pp_signup_requests_result_shape",
+        ),
+        # The backlog count, the expiry purge, and the claim all filter on it.
         Index("ix_pp_signup_requests_expires", "expires_at"),
         # CARLOS reports a result by id. A reused id could delete a newer patient's request.
         {"sqlite_autoincrement": True},
@@ -1654,8 +1692,9 @@ class PatientPortalSignupRequest(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     clinic_id: Mapped[str] = mapped_column(String(MAX_CLINIC_ID_LENGTH), nullable=False)
     health_card_hash: Mapped[str] = mapped_column(String(HASH_LENGTH), nullable=False)
-    encrypted_payload: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    encryption_nonce: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    # NULL once CARLOS has reported a result: the details are deleted, the row is not.
+    encrypted_payload: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    encryption_nonce: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     encryption_key_id: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -1663,6 +1702,16 @@ class PatientPortalSignupRequest(Base):
         nullable=False,
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    lease_token_hash: Mapped[str | None] = mapped_column(String(HASH_LENGTH), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    result: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # The invite CARLOS made for a match. Not a foreign key, as the audit trail's invite_id is not:
+    # the portal checks the invite exists in this clinic when the result arrives.
+    invite_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    resulted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class PatientPortalAuditEvent(Base):
@@ -1698,7 +1747,7 @@ class PatientPortalAuditEvent(Base):
                 "'login', 'mfa.challenge', 'mfa.delivery', 'mfa.resend', 'mfa.verify', "
                 "'password_reset.complete', 'password_reset.delivery', "
                 "'password_reset.request', 'retention.policy_override', 'session.logout', "
-                "'signup.request', "
+                "'signup.request', 'signup.claim', 'signup.result', "
                 "'staff.action', "
                 "'fhir.read', 'fhir.search', "
                 "'booking_prompt.create', 'booking_prompt.delivery', 'booking_prompt.list', "

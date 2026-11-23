@@ -765,7 +765,7 @@ one another permission, is a reviewed code change:
 | Job | Shown as | May hold | Routes |
 | --- | --- | --- | --- |
 | `booking-sync` | Clinic booking | `portal.booking_prompt.sync` | the two booking sync endpoints |
-| `signup-poll` | Patient self sign-up | `portal.signup.manage`, `portal.invite.manage` | none yet |
+| `signup-poll` | Patient self sign-up | `portal.signup.manage`, `portal.invite.manage` | the two sign-up request endpoints (claim and result); the invite routes still take staff only |
 | `key-publish` | Clinic signing keys | `portal.mycarlos.clinic_keys.publish` | `PUT /internal/carlos/mycarlos/clinic-keys`, only while Send to myCarlos is on |
 
 A job call carries the same Bearer service token and, instead of the staff header, an
@@ -1292,6 +1292,7 @@ are indistinguishable to the caller.
 | `PATIENT_PORTAL_SELF_SIGNUP_QUEUE_MAX_PENDING` | `1000` | Unexpired requests waiting for CARLOS. |
 | `PATIENT_PORTAL_SELF_SIGNUP_QUEUE_RETRY_AFTER_SECONDS` | `300` | `Retry-After` on the full-backlog `503`. |
 | `PATIENT_PORTAL_SELF_SIGNUP_RESPONSE_FLOOR_MS` | `250` | Minimum time for every answered request. |
+| `PATIENT_PORTAL_SELF_SIGNUP_CLAIM_LEASE_SECONDS` | `300` | How long CARLOS's claim leases a request (30 to 3600). |
 
 - **Rate limits** live in the database, so every web worker shares them. They are counted from
   `signup.request` audit events, as activation failures are, under one PostgreSQL transaction
@@ -1314,6 +1315,52 @@ are indistinguishable to the caller.
   request is older than a few polling intervals. The backlog never makes the service unready.
 - The reference nginx configuration limits `/auth/sign-up` submissions at the edge as well. Only a
   POST counts, so opening the page again after a typo never uses the budget.
+
+### Internal claim and result API (carlos-portal#16)
+
+CARLOS polls; the portal never calls CARLOS. Both routes take only the `signup-poll` job claiming
+`portal.signup.manage`, scoped to the portal's clinic. Staff are refused whatever they hold, as is
+every other job, and `portal.signup.manage` is a job-only permission: a staff assertion carrying it
+is refused on every route.
+
+- `POST /internal/carlos/signup-requests/claim` with `{"limit": 1 to 50}` (default 10) leases up to
+  that many pending requests, oldest first, and returns `items` of `request_id`, `lease_token`,
+  `lease_expires_at`, `requested_at`, and the decrypted `health_card_number` (as stored: spaces and
+  dashes removed, upper case), `date_of_birth` (`YYYY-MM-DD`) and `email`. This response is the only
+  place those details leave the portal. A request is taken with `FOR UPDATE SKIP LOCKED`, so two
+  pollers never receive the same one at once. A request past its TTL, or under a lease that is still
+  running, is never returned; once a lease has run out the request is claimable again, under a new
+  token. The lease token is shown once and stored only as its SHA-256. While
+  `PATIENT_PORTAL_SELF_SIGNUP_ENABLED` is off the claim is `404`, as an unknown path. A request whose
+  details cannot be read (its key left the keyring) is skipped and audited as a failed claim.
+- `POST /internal/carlos/signup-requests/{id}/result` with `{"lease_token": ..., "result":
+  "matched" | "no_match" | "ineligible", "invite_id": ...}` ends the request and deletes its stored
+  details (the encrypted payload and nonce become `NULL`, which a CHECK ties to the result). The
+  `invite_id` is required with `matched` and refused with the others (`422`). A match must name an
+  invite of this clinic that was created after the request was stored and that carries the identity
+  proof of exactly what the patient typed (same email, date of birth and health card number,
+  compared as activation compares them); anything else is `422` `sign-up result is invalid`,
+  whatever the reason. It is idempotent per request: the same result again returns `200` with
+  `recorded: false` and changes and audits nothing; a different result (or invite) is `409`
+  `sign-up request already has a different result`; a lease that ran out before the result arrived is
+  `409` `sign-up request lease expired` (the details stay, and the request can be claimed again).
+  An unknown id, another clinic's request, a request never leased, and a wrong lease token are one
+  and the same `404` `sign-up request not found`. A result is still accepted while self sign-up is
+  switched off, so details already leased can be deleted. The reported row stays, without its
+  details, until its own expiry, so that a repeat can be answered as one.
+- **Audit.** A claim writes one `signup.claim` event per leased request, and a result one
+  `signup.result` event (with the invite id and the result in `reason`); both name the job as the
+  system actor (`Patient self sign-up`, `job:signup-poll`) with the call's key id and assertion id,
+  and carry the keyed health-card hash in `resource_id`, as `signup.request` does. An empty claim
+  and a repeated result write nothing. Failed calls are audited as for every internal route. No raw
+  health card number, date of birth, email or lease token is ever audited or logged.
+- **Backlog and cleanup.** Reported requests no longer count toward the backlog. The expiry purge
+  keeps a request whose lease is still running past its TTL, so its result can still be recorded.
+- Migration `0025_signup_claim` follows `0024_avail_device_removed`. It adds the lease and result
+  columns to the signup table and the `signup.claim` and `signup.result` audit event types; the id
+  is the next free one at the time of writing and is to be renumbered at merge if another revision
+  has taken it. Downgrade is refused while a reported request or an audit event of either new type
+  exists.
 
 ## Patient Auth API
 
