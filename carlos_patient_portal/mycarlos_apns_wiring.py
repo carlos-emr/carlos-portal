@@ -13,6 +13,7 @@ request). Nothing here logs, prints or returns key material.
 
 from __future__ import annotations
 
+import logging
 from base64 import urlsafe_b64decode
 from collections.abc import Callable
 from time import time
@@ -30,7 +31,13 @@ from carlos_patient_portal.notification_transports import (
     HttpClient,
 )
 
-__all__ = ["HttpClient", "availability_dispatch_for"]
+__all__ = ["APNS_AUTH_REJECTED", "HttpClient", "availability_dispatch_for"]
+
+logger = logging.getLogger(__name__)
+
+# The failure category operations see when Apple answers 403 (a key or provider-token fault that
+# hits every destination at once).
+APNS_AUTH_REJECTED = "apns_auth_rejected"
 
 
 def availability_dispatch_for(
@@ -39,6 +46,7 @@ def availability_dispatch_for(
     http_client: HttpClient | None,
     *,
     clock: Callable[[], int] | None = None,
+    record_failure: Callable[[str], None] | None = None,
 ) -> AvailabilityDispatch | None:
     """The worker's config, or None while iPhone push is off.
 
@@ -67,7 +75,24 @@ def availability_dispatch_for(
     )
     encoded = settings.secret_value("mycarlos_notice_token_key") or ""
     notice_key = urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
-    transport = ApnsTokenTransport(config, http_client, handles, signer, now, environments=handles)
+
+    def auth_rejected() -> None:
+        # Class only: no token, key id, destination or Apple text. The cached provider token is
+        # dropped so the next push signs a fresh one (a clock slip or a rotation cures itself).
+        signer.invalidate()
+        logger.error("APNs rejected the provider token (%s)", APNS_AUTH_REJECTED)
+        if record_failure is not None:
+            record_failure(APNS_AUTH_REJECTED)
+
+    transport = ApnsTokenTransport(
+        config,
+        http_client,
+        handles,
+        signer,
+        now,
+        environments=handles,
+        on_auth_rejected=auth_rejected,
+    )
     return AvailabilityDispatch(
         {PushPlatform.IOS_APNS: transport},
         NoticeKeys(notice_key),

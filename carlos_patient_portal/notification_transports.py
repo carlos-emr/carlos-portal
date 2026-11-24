@@ -308,6 +308,7 @@ class ApnsTokenTransport:
         jwts: ProviderJwtSource,
         clock: Callable[[], int],
         environments: ApnsEnvironments | None = None,
+        on_auth_rejected: Callable[[], None] | None = None,
     ) -> None:
         self._config = config
         self._http = http
@@ -315,6 +316,10 @@ class ApnsTokenTransport:
         self._jwts = jwts
         self._clock = clock
         self._environments = environments
+        # Called once per 403 (InvalidProviderToken, ExpiredProviderToken and the other
+        # authentication faults): a key or token problem is platform-wide, so operations must see
+        # it and the next push must sign a fresh provider token. The intent stays permanent.
+        self._on_auth_rejected = on_auth_rejected
 
     def build_request(
         self,
@@ -378,8 +383,13 @@ class ApnsTokenTransport:
             collapse_key=collapse_key,
             sandbox=sandbox,
         )
-        # 410: the token is no longer active. 400 (BadDeviceToken and the rest) is permanent.
-        return _classify(_post(self._http, request).status, frozenset({410}))
+        status = _post(self._http, request).status
+        if status == 403 and self._on_auth_rejected is not None:
+            self._on_auth_rejected()
+        # 410: the token is no longer active. 400 (BadDeviceToken and the rest, including our own
+        # mistakes such as BadCollapseId) is permanent without revoking anything; 403 is permanent
+        # for this push but is also reported through ``on_auth_rejected``.
+        return _classify(status, frozenset({410}))
 
 
 # --- WNS (Windows) ----------------------------------------------------------------------------

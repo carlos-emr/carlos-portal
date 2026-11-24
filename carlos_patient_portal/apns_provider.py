@@ -20,6 +20,7 @@ error carries a fixed code only.
 from __future__ import annotations
 
 import base64
+import errno
 import json
 import os
 import re
@@ -52,25 +53,37 @@ class ApnsKeyError(Exception):
 
 
 def _load_key(path: Path) -> ec.EllipticCurvePrivateKey:
-    """The key in `path`, after the file checks. Raises ``ApnsKeyError`` with a fixed code."""
+    """The key in `path`, after the file checks. Raises ``ApnsKeyError`` with a fixed code.
+
+    The file is opened without following a link and every check is made on the open descriptor
+    (type, owner, mode, size), so the file that is checked is the file that is read: nothing can
+    be swapped between a check and the open.
+    """
     try:
-        info = os.lstat(path)
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     except FileNotFoundError:
         raise ApnsKeyError("apns_key_missing") from None
-    except OSError:
+    except OSError as exc:
+        # ELOOP: the last path component is a link; EISDIR and the like are not regular files.
+        if exc.errno == errno.ELOOP:
+            raise ApnsKeyError("apns_key_not_a_regular_file") from None
         raise ApnsKeyError("apns_key_unreadable") from None
-    # A link could point anywhere (and be swapped); only the regular file itself is accepted.
-    if not stat.S_ISREG(info.st_mode):
-        raise ApnsKeyError("apns_key_not_a_regular_file")
-    if info.st_mode & 0o077:
-        raise ApnsKeyError("apns_key_permissions_too_open")
-    if info.st_size == 0 or info.st_size > MAX_KEY_FILE_BYTES:
-        raise ApnsKeyError("apns_key_size")
     try:
-        with open(path, "rb") as handle:  # noqa: PTH123
-            data = handle.read(MAX_KEY_FILE_BYTES + 1)
-    except OSError:
-        raise ApnsKeyError("apns_key_unreadable") from None
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise ApnsKeyError("apns_key_not_a_regular_file")
+        if info.st_uid != os.geteuid():
+            raise ApnsKeyError("apns_key_wrong_owner")
+        if info.st_mode & 0o077:
+            raise ApnsKeyError("apns_key_permissions_too_open")
+        if info.st_size == 0 or info.st_size > MAX_KEY_FILE_BYTES:
+            raise ApnsKeyError("apns_key_size")
+        try:
+            data = os.read(descriptor, MAX_KEY_FILE_BYTES + 1)
+        except OSError:
+            raise ApnsKeyError("apns_key_unreadable") from None
+    finally:
+        os.close(descriptor)
     try:
         key = serialization.load_pem_private_key(data, password=None)
     except (ValueError, TypeError, UnsupportedAlgorithm):
@@ -129,8 +142,13 @@ class ApnsProviderJwtSigner:
         signature = r.to_bytes(32, "big") + s.to_bytes(32, "big")
         return f"{header}.{claims}.{_b64url(signature)}"
 
+    def invalidate(self) -> None:
+        """Forget the cached provider token, so the next push signs a new one (Apple said 403)."""
+        with self._lock:
+            self._token = None
+
     def provider_token(self) -> str:
-        now = self._clock()
+        now = int(self._clock())
         with self._lock:
             if self._token is None or not 0 <= now - self._issued_at < TOKEN_REUSE_SECONDS:
                 self._token = self._sign(now)
