@@ -67,6 +67,7 @@ def upgrade() -> None:
         sa.Column("environment", sa.String(10), nullable=False),
         sa.Column("key_id", sa.String(64), nullable=False),
         sa.Column("nonce", sa.LargeBinary(12), nullable=False),
+        # 200 hex characters (the route's token cap) + the 16-byte AES-GCM tag = 216 bytes <= 256.
         sa.Column("ciphertext", sa.LargeBinary(256), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),

@@ -2446,6 +2446,8 @@ class PatientPortalMyCarlosPushHandle(Base):
     environment: Mapped[str] = mapped_column(String(10), nullable=False)
     key_id: Mapped[str] = mapped_column(String(64), nullable=False)
     nonce: Mapped[bytes] = mapped_column(LargeBinary(12), nullable=False)
+    # 256 bytes holds the longest token the route accepts: 200 hex characters + the 16-byte AES-GCM
+    # tag = 216. Raise the column (and the migration) together with the token cap, never one alone.
     ciphertext: Mapped[bytes] = mapped_column(LargeBinary(256), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False

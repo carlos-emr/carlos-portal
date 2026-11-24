@@ -97,6 +97,7 @@ from carlos_patient_portal.routes.signup import register_signup_routes
 from carlos_patient_portal.runtime import (
     FhirApiError,
     InMemoryRateLimiter,
+    PortalOperationalMetrics,
     PortalRuntime,
     RouteDependencies,
     auth_policy_from_settings,
@@ -241,6 +242,7 @@ def build_portal_runtime(
         max_requests=settings.auth_rate_limit_max_requests,
         max_buckets=settings.rate_limit_max_buckets,
     )
+    metrics = PortalOperationalMetrics()
     return PortalRuntime(
         settings=settings,
         database_engine=database_engine,
@@ -265,8 +267,9 @@ def build_portal_runtime(
         # iPhone push: None while it is off; a bad key file or a missing HTTP client stops the
         # portal here, at start-up.
         availability_dispatch=availability_dispatch_for(
-            settings, session_factory, apns_http_client
+            settings, session_factory, apns_http_client, record_failure=metrics.record_failure
         ),
+        operational_metrics=metrics,
     )
 
 
