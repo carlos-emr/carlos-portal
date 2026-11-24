@@ -55,12 +55,13 @@ class ApnsKeyError(Exception):
 def _load_key(path: Path) -> ec.EllipticCurvePrivateKey:
     """The key in `path`, after the file checks. Raises ``ApnsKeyError`` with a fixed code.
 
-    The file is opened without following a link and every check is made on the open descriptor
-    (type, owner, mode, size), so the file that is checked is the file that is read: nothing can
-    be swapped between a check and the open.
+    The file is opened without following a link and without blocking (a FIFO with no writer would
+    otherwise hang start-up), and every check is made on the open descriptor (type, owner, mode,
+    size), so the file that is checked is the file that is read: nothing can be swapped between a
+    check and the open. A FIFO or device is refused as not a regular file.
     """
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
     except FileNotFoundError:
         raise ApnsKeyError("apns_key_missing") from None
     except OSError as exc:
@@ -79,9 +80,21 @@ def _load_key(path: Path) -> ec.EllipticCurvePrivateKey:
         if info.st_size == 0 or info.st_size > MAX_KEY_FILE_BYTES:
             raise ApnsKeyError("apns_key_size")
         try:
-            data = os.read(descriptor, MAX_KEY_FILE_BYTES + 1)
+            # Until end of file, at most one byte past the cap: a short read must not look like
+            # a truncated key.
+            chunks: list[bytes] = []
+            total = 0
+            while total <= MAX_KEY_FILE_BYTES:
+                chunk = os.read(descriptor, MAX_KEY_FILE_BYTES + 1 - total)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+            data = b"".join(chunks)
         except OSError:
             raise ApnsKeyError("apns_key_unreadable") from None
+        if len(data) > MAX_KEY_FILE_BYTES:
+            raise ApnsKeyError("apns_key_size")
     finally:
         os.close(descriptor)
     try:
