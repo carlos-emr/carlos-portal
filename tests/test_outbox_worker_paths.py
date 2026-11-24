@@ -353,13 +353,27 @@ def test_the_heartbeat_keeps_renewing_until_it_is_stopped(portal, monkeypatch):
         return True
 
     monkeypatch.setattr(outbox, "_renew_delivery_lease", renewed)
-    outbox._renew_delivery_lease_until_stopped(
-        app.state.session_factory,
-        stop=stop,
-        delivery_id=1,
-        expected_attempt_count=1,
-        lease_seconds=0,
+    # lease_seconds=0 gives the loop its 0.1 s floor between renewals, so three take about 0.3 s.
+    # On a thread, so that a heartbeat that never stops fails the test instead of hanging the suite.
+    heartbeat = Thread(
+        target=outbox._renew_delivery_lease_until_stopped,
+        kwargs={
+            "session_factory": app.state.session_factory,
+            "stop": stop,
+            "delivery_id": 1,
+            "expected_attempt_count": 1,
+            "lease_seconds": 0,
+        },
+        daemon=True,
     )
+    heartbeat.start()
+    try:
+        heartbeat.join(timeout=5)
+        ended = not heartbeat.is_alive()
+    finally:
+        stop.set()
+        heartbeat.join(timeout=5)
+    assert ended, "the heartbeat did not end after it was stopped"
     assert len(calls) == 3
 
 
