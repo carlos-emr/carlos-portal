@@ -26,6 +26,12 @@ a decision):
   ``INVALID_DESTINATION``;
 * any other 4xx (including 400, 401 and 403) -> ``PERMANENT_FAILURE`` (never retried);
 * any other status -> ``PERMANENT_FAILURE`` as well.
+
+The APNs adapter sends a visible alert with a *localization key* and the opaque notice token and
+no text at all (iPhone push, piece 7): the phone looks the sentence up in its own strings, in the
+patient's own language, so neither the portal nor Apple ever sees wording or a name. It sends to
+the host the destination's token was made for (sandbox or production) when it is given the
+destination's environment.
 """
 
 from __future__ import annotations
@@ -53,6 +59,9 @@ APNS_PRODUCTION_HOST = "https://api.push.apple.com"
 APNS_SANDBOX_HOST = "https://api.sandbox.push.apple.com"
 WNS_HOST_SUFFIX = ".notify.windows.com"
 MAX_COLLAPSE_KEY_BYTES = 64
+# The key the phone looks up in its own strings (myCarlos's Fluent id `native-notice-arrival`:
+# "A new document is waiting. Unlock myCarlos to see it."). The portal sends the key, never text.
+APNS_ALERT_LOC_KEY = "native-notice-arrival"
 _FCM_TOKEN = re.compile(r"[A-Za-z0-9_:\-.]{20,4096}")
 _APNS_TOKEN = re.compile(r"[0-9a-fA-F]{64,200}")
 _PROJECT_ID = re.compile(r"[a-z][a-z0-9\-]{4,28}[a-z0-9]")
@@ -100,6 +109,13 @@ class DestinationHandles(Protocol):
     token, APNs device token, WNS channel URI), or None when it is unknown or revoked."""
 
     def handle_for(self, destination_id: UUID) -> str | None: ...
+
+
+class ApnsEnvironments(Protocol):
+    """The APNs environment a destination's token was made for: ``sandbox`` (a development build)
+    or ``production`` (TestFlight and the App Store), or None when unknown."""
+
+    def environment_for(self, destination_id: UUID) -> str | None: ...
 
 
 class BearerTokenSource(Protocol):
@@ -277,24 +293,43 @@ class FcmV1Transport:
 
 
 class ApnsTokenTransport:
-    """POST /3/device/<token> over HTTP/2 with ``authorization: bearer <provider JWT>``."""
+    """POST /3/device/<token> over HTTP/2 with ``authorization: bearer <provider JWT>``.
+
+    The alert carries ``loc-key`` and the opaque token ``n`` only. The host is the destination's
+    own environment when ``environments`` is given (a token sent to the wrong host is refused by
+    Apple, so the answer here would be a permanent failure); without it, ``config.sandbox``.
+    """
 
     def __init__(
-        self, config: ApnsConfig, http: HttpClient, handles: DestinationHandles,
-        jwts: ProviderJwtSource, clock: Callable[[], int],
+        self,
+        config: ApnsConfig,
+        http: HttpClient,
+        handles: DestinationHandles,
+        jwts: ProviderJwtSource,
+        clock: Callable[[], int],
+        environments: ApnsEnvironments | None = None,
     ) -> None:
         self._config = config
         self._http = http
         self._handles = handles
         self._jwts = jwts
         self._clock = clock
+        self._environments = environments
 
     def build_request(
-        self, *, handle: str, notice: GenericNotice, ttl_seconds: int, collapse_key: str
+        self,
+        *,
+        handle: str,
+        notice: GenericNotice,
+        ttl_seconds: int,
+        collapse_key: str,
+        sandbox: bool | None = None,
     ) -> HttpRequest:
-        host = APNS_SANDBOX_HOST if self._config.sandbox else APNS_PRODUCTION_HOST
+        use_sandbox = self._config.sandbox if sandbox is None else sandbox
+        host = APNS_SANDBOX_HOST if use_sandbox else APNS_PRODUCTION_HOST
+        # No text: the phone's own strings say it. `n` is the opaque notice token.
         payload = {
-            "aps": {"alert": {"title": notice.title, "body": notice.body}},
+            "aps": {"alert": {"loc-key": APNS_ALERT_LOC_KEY}},
             "n": _hint_text(notice),
         }
         return HttpRequest(
@@ -308,6 +343,7 @@ class ApnsTokenTransport:
                 # pair is required together; never send priority 10 with a background push.
                 "apns-priority": "10",
                 "apns-expiration": str(self._clock() + ttl_seconds),
+                # One per destination, so a pile of arrivals shows one notice.
                 "apns-collapse-id": collapse_key,
                 "content-type": "application/json",
             },
@@ -315,8 +351,13 @@ class ApnsTokenTransport:
         )
 
     def send(
-        self, *, destination_id: UUID, platform: PushPlatform, notice: GenericNotice,
-        ttl_seconds: int, collapse_key: str,
+        self,
+        *,
+        destination_id: UUID,
+        platform: PushPlatform,
+        notice: GenericNotice,
+        ttl_seconds: int,
+        collapse_key: str,
     ) -> ProviderResult:
         _check_send(
             platform, (PushPlatform.IOS_APNS, PushPlatform.MACOS_APNS), ttl_seconds, collapse_key
@@ -324,8 +365,18 @@ class ApnsTokenTransport:
         handle = self._handles.handle_for(destination_id)
         if handle is None or not _APNS_TOKEN.fullmatch(handle):
             return ProviderResult.INVALID_DESTINATION
+        sandbox: bool | None = None
+        if self._environments is not None:
+            environment = self._environments.environment_for(destination_id)
+            if environment not in ("sandbox", "production"):
+                return ProviderResult.INVALID_DESTINATION
+            sandbox = environment == "sandbox"
         request = self.build_request(
-            handle=handle, notice=notice, ttl_seconds=ttl_seconds, collapse_key=collapse_key
+            handle=handle,
+            notice=notice,
+            ttl_seconds=ttl_seconds,
+            collapse_key=collapse_key,
+            sandbox=sandbox,
         )
         # 410: the token is no longer active. 400 (BadDeviceToken and the rest) is permanent.
         return _classify(_post(self._http, request).status, frozenset({410}))

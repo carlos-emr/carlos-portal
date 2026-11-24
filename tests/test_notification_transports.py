@@ -119,10 +119,12 @@ class RequestShapes(unittest.TestCase):
         )
         payload = json.loads(request.body)
         self.assertEqual(set(payload), {"aps", "n"})
-        self.assertEqual(
-            payload["aps"], {"alert": {"title": "myCarlos", "body": NOTICE.body}}
-        )
+        # A localization key and nothing else: no text, so no wording and no name leave the portal.
+        self.assertEqual(payload["aps"], {"alert": {"loc-key": nt.APNS_ALERT_LOC_KEY}})
+        self.assertEqual(nt.APNS_ALERT_LOC_KEY, "native-notice-arrival")
         self.assertEqual(payload["n"], NOTICE.token)
+        self.assertNotIn(NOTICE.body.encode(), request.body)
+        self.assertNotIn(b"myCarlos", request.body)
 
     def test_apns_serves_macos_too_and_uses_the_sandbox_host_only_when_configured(self):
         sandbox = nt.ApnsConfig("FAKETEAM01", "FAKEKEYID1", Path("/x.p8"), "ca.example.fake", True)
@@ -218,7 +220,7 @@ class NoPhiAndNoDocumentContent(unittest.TestCase):
                 "myCarlos", "document", "available", "message", "notification", "title", "body",
                 "data", "android", "collapse", "priority", "HIGH", "alert", "toast", "visual",
                 "binding", "template", "ToastGeneric", "text", "launch", "version", "encoding",
-                "token",
+                "token", "native", "notice", "arrival",
             } | set(NOTICE.body.replace(".", "").split())
             self.assertLessEqual(words - allowed, set(), words - allowed)
 
@@ -432,15 +434,20 @@ class NothingIsLoggedAndNothingIsWired(unittest.TestCase):
                 send(transport, platform)
             self.assertNotIn(str(DESTINATION), str(caught.exception))
 
-    def test_nothing_in_the_application_imports_the_adapters_yet(self):
+    def test_only_the_iphone_push_wiring_imports_the_adapters(self):
+        # FCM and WNS are still unwired; the APNs transport is built by exactly two modules: the
+        # key start-up check and signer, and the settings wiring (iPhone push, piece 7).
+        wired = {"notification_transports.py", "apns_provider.py", "mycarlos_apns_wiring.py"}
         package = Path(nt.__file__).parent
         for path in package.rglob("*.py"):
-            if path.name == "notification_transports.py":
+            if path.name in wired:
                 continue
             self.assertNotIn("notification_transports", path.read_text(encoding="utf-8"), path.name)
         settings = (package / "config.py").read_text(encoding="utf-8")
         self.assertNotIn("fcm", settings.lower())
-        self.assertNotIn("apns", settings.lower())
+        wiring = (package / "mycarlos_apns_wiring.py").read_text(encoding="utf-8")
+        self.assertNotIn("Fcm", wiring)
+        self.assertNotIn("Wns", wiring)
 
 
 if __name__ == "__main__":
