@@ -154,9 +154,10 @@ def bind(
     """Stores the token for this device's live destination; True when it is new, False when it
     replaced an earlier one.
 
-    A destination the device does not hold (unknown, another device's, revoked, or enrolled for
-    another platform) is `not_found`: the answer does not say which. The caller holds the device
-    row's lock, as enrollment and revocation do, so a revocation cannot interleave.
+    A destination the device does not hold (unknown, another device's, revoked, enrolled for
+    another platform, or not opted in to remote notices) is `not_found`: the answer does not say
+    which. The caller holds the device row's lock, as enrollment and revocation do, so a
+    revocation cannot interleave.
     """
     if not session.in_transaction():
         raise AvailabilityError("transaction_required")
@@ -169,6 +170,7 @@ def bind(
     if (
         subscription is None
         or subscription.revoked_at is not None
+        or not subscription.remote_enabled
         or (subscription.account_id, subscription.device_id) != (owner.account_id, owner.device_id)
         or subscription.platform != platform
     ):
