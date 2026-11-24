@@ -6,7 +6,7 @@ sender; nothing leaves the process.
 
 import logging
 from datetime import UTC, timedelta
-from threading import Event
+from threading import Event, Thread
 
 import pytest
 from fastapi.testclient import TestClient
@@ -318,14 +318,26 @@ def test_the_heartbeat_stops_when_it_has_lost_the_row(portal, monkeypatch):
     app, _ = portal
     calls = []
     monkeypatch.setattr(outbox, "_renew_delivery_lease", lambda *a, **k: calls.append(1) or False)
+    stop = Event()
     # It ends by itself, without being told to stop, as soon as a renewal says the row is gone.
-    outbox._renew_delivery_lease_until_stopped(
-        app.state.session_factory,
-        stop=Event(),
-        delivery_id=1,
-        expected_attempt_count=1,
-        lease_seconds=0,
+    # (Run on a thread so that a heartbeat that never ends fails the test instead of hanging it.)
+    heartbeat = Thread(
+        target=outbox._renew_delivery_lease_until_stopped,
+        kwargs={
+            "session_factory": app.state.session_factory,
+            "stop": stop,
+            "delivery_id": 1,
+            "expected_attempt_count": 1,
+            "lease_seconds": 0,
+        },
+        daemon=True,
     )
+    heartbeat.start()
+    heartbeat.join(timeout=5)
+    ended_by_itself = not heartbeat.is_alive()
+    stop.set()
+    heartbeat.join(timeout=5)
+    assert ended_by_itself
     assert calls == [1]
 
 
@@ -361,13 +373,24 @@ def test_a_database_error_ends_the_heartbeat_and_keeps_its_text_out_of_the_log(
 
     monkeypatch.setattr(outbox, "_renew_delivery_lease", broken)
     caplog.set_level(logging.ERROR, logger="carlos_patient_portal.delivery_outbox")
-    outbox._renew_delivery_lease_until_stopped(
-        app.state.session_factory,
-        stop=Event(),
-        delivery_id=42,
-        expected_attempt_count=1,
-        lease_seconds=0,
+    stop = Event()
+    heartbeat = Thread(
+        target=outbox._renew_delivery_lease_until_stopped,
+        kwargs={
+            "session_factory": app.state.session_factory,
+            "stop": stop,
+            "delivery_id": 42,
+            "expected_attempt_count": 1,
+            "lease_seconds": 0,
+        },
+        daemon=True,
     )
+    heartbeat.start()
+    heartbeat.join(timeout=5)
+    ended_by_itself = not heartbeat.is_alive()
+    stop.set()
+    heartbeat.join(timeout=5)
+    assert ended_by_itself, "the heartbeat kept going after a database error"
     text = " ".join(record.getMessage() for record in caplog.records)
     assert "delivery 42" in text and "SQLAlchemyError" in text
     assert "FAKE-parameter-value" not in text and "FAKE-statement" not in text
