@@ -4,10 +4,18 @@
 """What the patient's myCarlos linking pages refuse, say, and leave untouched (FAKE data only)."""
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from carlos_patient_portal.auth import MfaDeliveryUnavailableError, MfaRateLimitedError
+from carlos_patient_portal import web_support
+from carlos_patient_portal.auth import (
+    MfaDeliveryUnavailableError,
+    MfaRateLimitedError,
+    create_patient_session,
+    hash_auth_token,
+)
+from carlos_patient_portal.credentials import hash_password
 from carlos_patient_portal.email_delivery import PortalEmailDeliveryError
 from carlos_patient_portal.i18n import MYCARLOS_TEXT_CATALOG
 from carlos_patient_portal.models import (
@@ -18,12 +26,24 @@ from carlos_patient_portal.models import (
     PatientPortalClinicKey,
     PatientPortalMyCarlosDevice,
     PatientPortalSession,
+    utc_now,
 )
 from carlos_patient_portal.mycarlos_links import LinkingPausedError
 from carlos_patient_portal.routes import mycarlos_portal
+from carlos_patient_portal.runtime import auth_policy_from_settings
 from carlos_patient_portal.sms_delivery import PortalSmsDeliveryError
+from carlos_patient_portal.token_keys import PortalTokenKeys
+from tests import delivery_contract_reference as ref
 from tests import test_mycarlos_portal as portal_tests
-from tests.support import RecordingPortalEmailSender, get_csrf_token, migrated_development_app
+from tests.support import (
+    NON_DEVELOPMENT_SESSION_SECRET,
+    STRONG_PASSWORD,
+    RecordingPortalEmailSender,
+    RecordingPortalSmsSender,
+    get_csrf_token,
+    migrated_development_app,
+    migrated_staging_app,
+)
 from tests.test_mycarlos_portal import (
     code_count,
     form_token,
@@ -147,6 +167,9 @@ def test_a_session_whose_account_is_gone_is_refused_not_served(monkeypatch):
     monkeypatch.setattr(Session, "commit", commit_then_lose_the_account)
     refused = client.post(CODE, data={"csrf_token": csrf}, follow_redirects=False)
     assert refused.status_code == 401
+    # The answer is the portal's own error page, with no account, session or code in it.
+    assert refused.headers["content-type"].startswith("text/html")
+    assert "FAKE" not in refused.text and "fake.patient" not in refused.text
     assert code_count(app) == 0
 
 
@@ -214,20 +237,40 @@ def test_a_step_up_the_challenge_refuses_says_so_and_sends_nothing(monkeypatch, 
     assert len(sms.messages) == sent
 
 
-@pytest.mark.parametrize("failure", [PortalSmsDeliveryError, PortalEmailDeliveryError])
-def test_a_code_that_could_not_be_delivered_is_a_503_and_the_failure_is_recorded(
-    monkeypatch, failure
+@pytest.mark.parametrize(
+    "failure,method",
+    [(PortalSmsDeliveryError, "sms"), (PortalEmailDeliveryError, "email")],
+)
+def test_a_code_that_could_not_be_delivered_is_a_503_and_its_send_slot_is_given_back(
+    monkeypatch, failure, method
 ):
+    mail = RecordingPortalEmailSender()
+    if method == "email":
+        monkeypatch.setattr(
+            portal_tests,
+            "migrated_development_app",
+            lambda **options: migrated_development_app(email_sender=mail, **options),
+        )
     app, client, sms = password_only()
+    if method == "email":
+        with app.state.session_factory() as session, session.begin():
+            session.scalar(select(PatientPortalAccount)).phone_number = None
 
     def cannot_send(*args, **kwargs):
         raise failure("FAKE provider detail")
 
     monkeypatch.setattr(mycarlos_portal, "send_mfa_challenge", cannot_send)
+    began = utc_now()
     refused = step_up(client)
     assert refused.status_code == 503
     assert say("mycarlos_unavailable") in refused.text
     assert "FAKE provider detail" not in refused.text
+    # The failure is recorded: the slot reserved for the send is not left held as if it had gone
+    # out, or a failing provider would lock the patient out for the whole window.
+    with app.state.session_factory() as session:
+        account = session.scalar(select(PatientPortalAccount))
+        sent_at = getattr(account, f"last_mfa_{method}_sent_at")
+    assert sent_at is None or sent_at.replace(tzinfo=None) < began.replace(tzinfo=None)
 
 
 # ---- removing a device ----
@@ -295,3 +338,132 @@ def test_a_linking_form_that_carries_anything_but_its_token_is_refused_whole(pat
     assert refused.status_code == 400
     assert code_count(app) == 0
     assert len(sms.messages) == 1  # the sign-in code only
+
+
+def test_a_code_needs_the_step_up_first_and_the_refusal_is_written_down():
+    app, client, sms = password_only()
+    refused = client.post(CODE, data={"csrf_token": form_token(client)})
+    assert refused.status_code == 403
+    assert say("mycarlos_mfa_required") in refused.text
+    assert code_count(app) == 0 and not sms.messages
+    assert refusals(app) == ["mfa_required"]
+
+
+# ---- production: no proof of a code sent by email ----
+
+
+def browser_session(app, *, email_sender=None):
+    """A browser with a live session for the one FAKE account, and the means to forge proofs.
+
+    The session is made directly, so the test controls which MFA proof cookie it carries.
+    """
+    settings = app.state.settings
+    keys = PortalTokenKeys.derive(settings.session_secret.get_secret_value())
+    with app.state.session_factory() as session, session.begin():
+        account = PatientPortalAccount(
+            clinic_id=settings.clinic_id,
+            demographic_no=7003,
+            username="fake.prod",
+            email="fake.prod@example.test",
+            phone_number="+15555550124",
+            preferred_mfa_method="sms",
+            password_hash=hash_password(STRONG_PASSWORD),
+            status="active",
+        )
+        session.add(account)
+        key = ref.ClinicKey("FAKE portal prod", settings.clinic_id)
+        session.add(
+            PatientPortalClinicKey(
+                kid=key.kid,
+                clinic_id=key.clinic_id,
+                spki=key.spki,
+                status="active",
+                published_at=utc_now(),
+            )
+        )
+        session.flush()
+        token = create_patient_session(
+            session,
+            account,
+            policy=auth_policy_from_settings(settings),
+            session_token_secret=keys.session,
+            now=utc_now(),
+        )
+    client = TestClient(app, base_url="https://portal.example.test")
+    client.cookies.set(web_support.PORTAL_SESSION_COOKIE_NAME, token, domain="portal.example.test")
+    return client, keys, token
+
+
+def proof_for(keys, token, method):
+    digest = hash_auth_token(keys.mycarlos_mfa_proof, f"mycarlos-mfa-session-v1:{method}", token)
+    return f"{method}.{digest}"
+
+
+def present(client, proof):
+    client.cookies.set(
+        web_support.PORTAL_MFA_PROOF_COOKIE_NAME,
+        proof,
+        domain="portal.example.test",
+        path="/portal",
+    )
+
+
+def production_app(**senders):
+    return migrated_staging_app(
+        mycarlos_delivery_enabled=True, public_base_url="https://portal.example.test", **senders
+    )
+
+
+def test_in_production_a_proof_of_a_code_sent_by_email_is_not_accepted():
+    app = production_app(
+        sms_sender=RecordingPortalSmsSender(), email_sender=RecordingPortalEmailSender()
+    )
+    client, keys, token = browser_session(app)
+    present(client, proof_for(keys, token, "email"))
+    refused = client.post(CODE, data={"csrf_token": form_token(client)})
+    assert refused.status_code == 403
+    assert say("mycarlos_mfa_required") in refused.text
+    assert code_count(app) == 0
+    assert refusals(app) == ["mfa_required"]
+
+
+def test_the_same_forged_proof_by_sms_is_accepted_in_production_and_by_email_in_development():
+    # The two controls: the refusal above is about the channel, not about the forged cookie.
+    app = production_app(sms_sender=RecordingPortalSmsSender())
+    client, keys, token = browser_session(app)
+    present(client, proof_for(keys, token, "sms"))
+    issued = client.post(CODE, data={"csrf_token": form_token(client)})
+    assert issued.status_code == 200 and code_count(app) == 1
+
+    development = migrated_development_app(
+        sms_sender=RecordingPortalSmsSender(),
+        mycarlos_delivery_enabled=True,
+        public_base_url="https://portal.example.test",
+        session_secret=NON_DEVELOPMENT_SESSION_SECRET,
+    )
+    client, keys, token = browser_session(development)
+    present(client, proof_for(keys, token, "email"))
+    issued = client.post(CODE, data={"csrf_token": form_token(client)})
+    assert issued.status_code == 200 and code_count(development) == 1
+
+
+def test_in_production_a_step_up_for_an_account_with_no_phone_never_falls_back_to_email(
+    monkeypatch,
+):
+    # The challenge itself would also refuse email in production; this pins that the page does
+    # not even ask it to, so the two checks cannot fail together.
+    asked = []
+    monkeypatch.setattr(
+        mycarlos_portal,
+        "create_mfa_challenge",
+        lambda *args, **kwargs: asked.append(kwargs.get("delivery_method")),
+    )
+    mail = RecordingPortalEmailSender()
+    app = production_app(email_sender=mail)
+    client, keys, token = browser_session(app)
+    with app.state.session_factory() as session, session.begin():
+        session.scalar(select(PatientPortalAccount)).phone_number = None
+    refused = step_up(client)
+    assert refused.status_code == 409
+    assert say("mycarlos_unavailable") in refused.text
+    assert not mail.messages and asked == []
