@@ -18,9 +18,11 @@ from starlette.requests import Request
 
 from carlos_patient_portal import internal_routes
 from carlos_patient_portal.auth import AccountNotFoundError
+from carlos_patient_portal.invites import PendingInviteExistsError
 from carlos_patient_portal.models import (
     PatientPortalAccount,
     PatientPortalAuditEvent,
+    PatientPortalInvite,
     PatientPortalUnlockSecret,
 )
 from carlos_patient_portal.unlock_secrets import UnlockSecretNotFoundError
@@ -113,23 +115,82 @@ def test_an_invite_for_a_patient_who_already_has_an_account_is_a_conflict(app, c
     )
 
 
-def test_a_second_invite_while_one_is_pending_is_a_conflict_on_the_prepared_route(client):
-    number = patient()
-    assert (
-        client.post(
-            INVITES.format(number) + "/prepare",
-            headers=MANAGE,
-            json=prepare(number, "invite-email:first"),
-        ).status_code
-        == 201
-    )
-    # The first is only prepared; a different operation cannot take its place.
-    refused = client.post(
+def invites_stored(app, number):
+    with app.state.session_factory() as session:
+        return session.scalar(
+            select(func.count())
+            .select_from(PatientPortalInvite)
+            .where(PatientPortalInvite.demographic_no == number)
+        )
+
+
+def prepared(client, number, operation):
+    return client.post(
         INVITES.format(number) + "/prepare",
         headers=MANAGE,
-        json=prepare(number, "invite-email:second"),
+        json=prepare(number, operation),
     )
-    assert refused.status_code == 409
+
+
+def test_a_second_operation_while_one_is_being_prepared_is_told_to_wait_and_stores_nothing(
+    app, client
+):
+    number = patient()
+    assert prepared(client, number, "invite-email:first").status_code == 201
+    refused = prepared(client, number, "invite-email:second")
+    assert (refused.status_code, refused.json()["detail"]) == (
+        409,
+        "another invite delivery is being prepared",
+    )
+    assert invites_stored(app, number) == 1
+
+
+def test_the_same_operation_with_other_details_is_a_conflict_and_stores_nothing(app, client):
+    number = patient()
+    assert prepared(client, number, "invite-email:same").status_code == 201
+    other = {**prepare(number, "invite-email:same"), "email": "someone.else@example.com"}
+    refused = client.post(INVITES.format(number) + "/prepare", headers=MANAGE, json=other)
+    assert (refused.status_code, refused.json()["detail"]) == (
+        409,
+        "invite preparation conflicts",
+    )
+    assert invites_stored(app, number) == 1
+
+
+def test_a_new_preparation_for_a_patient_with_a_pending_invite_says_one_is_pending(app, client):
+    number = patient()
+    first = prepared(client, number, "invite-email:one")
+    committed = client.post(
+        f"/internal/carlos/invites/{first.json()['id']}/commit-delivery",
+        headers=MANAGE,
+        json={"delivery_operation_id": "invite-email:one", "delivery_reference": "msg:1"},
+    )
+    assert committed.status_code == 200
+    refused = prepared(client, number, "invite-email:two")
+    assert (refused.status_code, refused.json()["detail"]) == (
+        409,
+        "pending invite already exists",
+    )
+    assert invites_stored(app, number) == 1
+
+
+def test_a_direct_invite_that_loses_the_race_for_the_patients_slot_says_one_is_pending(
+    app, client, monkeypatch
+):
+    number = patient()
+
+    def lost(*args, **kwargs):
+        raise PendingInviteExistsError()
+
+    monkeypatch.setattr(internal_routes, "create_invite", lost)
+    refused = client.post(
+        INVITES.format(number), headers=MANAGE, json=invite_request(demographic_no=number)
+    )
+    assert (refused.status_code, refused.json()["detail"]) == (
+        409,
+        "pending invite already exists",
+    )
+    assert invites_stored(app, number) == 0
 
 
 @pytest.mark.parametrize(
@@ -216,8 +277,11 @@ def test_an_unlock_or_an_access_change_for_a_patient_with_no_account_is_not_foun
         headers=carlos_headers("portal.account.manage"),
         json={"enabled": False},
     )
-    assert unlock.status_code == access.status_code == 404
-    assert unlock.json()["detail"] == access.json()["detail"]
+    for refused in (unlock, access):
+        assert (refused.status_code, refused.json()["detail"]) == (
+            404,
+            internal_routes.INTERNAL_ACCOUNT_NOT_FOUND_DETAIL,
+        )
 
 
 def test_an_account_that_goes_away_while_it_is_unlocked_or_changed_is_not_found(
@@ -240,7 +304,11 @@ def test_an_account_that_goes_away_while_it_is_unlocked_or_changed_is_not_found(
         headers=carlos_headers("portal.account.manage"),
         json={"enabled": False},
     )
-    assert unlock.status_code == access.status_code == 404
+    for refused in (unlock, access):
+        assert (refused.status_code, refused.json()["detail"]) == (
+            404,
+            internal_routes.INTERNAL_ACCOUNT_NOT_FOUND_DETAIL,
+        )
 
 
 def test_an_access_change_the_domain_refuses_is_a_422_that_changes_nothing(
@@ -395,6 +463,8 @@ def test_a_conflict_that_is_not_a_repeated_reference_is_a_server_error_and_store
         json=secret_body(f"msg-conflict-{number}"),
     )
     assert failed.status_code == 500
+    # The same plain answer every unhandled error gets: nothing of the cause.
+    assert failed.json() == {"detail": "the request could not be completed"}
     assert "FAKE" not in failed.text
     assert count(app, PatientPortalUnlockSecret) == before
 
@@ -416,7 +486,23 @@ def test_a_secret_that_vanishes_before_it_is_revoked_is_not_found(client, monkey
         headers=SECRETS,
         json={"reason": "recalled"},
     )
-    assert refused.status_code == 404
+    assert (refused.status_code, refused.json()["detail"]) == (
+        404,
+        internal_routes.UNLOCK_SECRET_NOT_FOUND_DETAIL,
+    )
+
+
+@pytest.mark.parametrize("action", ["publish", "revoke"])
+def test_a_secret_that_is_not_there_is_not_found_to_publish_or_to_revoke(client, action):
+    refused = client.post(
+        f"/internal/carlos/unlock-secrets/99999999/{action}",
+        headers=SECRETS,
+        **({"json": {"reason": "recalled"}} if action == "revoke" else {}),
+    )
+    assert (refused.status_code, refused.json()["detail"]) == (
+        404,
+        internal_routes.UNLOCK_SECRET_NOT_FOUND_DETAIL,
+    )
 
 
 # ---- the record of what was refused ----
