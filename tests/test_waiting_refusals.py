@@ -4,6 +4,7 @@ an assertion that has ended, a body that is not exactly the question, a key givi
 and the transaction guards. Every refused ask is the same 404. FAKE keys and devices only.
 """
 
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -25,6 +26,7 @@ from tests.test_mycarlos_waiting_routes import (  # noqa: F401  (portal is a fix
     KEYS_PATH,
     WAITING_PATH,
     A,
+    B,
     WaitingKey,
     ask,
     device_id,
@@ -199,3 +201,27 @@ def test_a_device_that_is_not_active_cannot_register_a_key(portal) -> None:
                 now=datetime.fromtimestamp(NOW, tz=UTC),
             )
         assert refused.value.code == "device_inactive"
+
+
+@pytest.mark.parametrize("names", ["another-device", "nobody"])
+def test_a_body_naming_another_key_is_refused_before_anything_is_answered(portal, names) -> None:
+    app, client, clock = portal
+    key = WaitingKey(f"signer-{names}")
+    register(client, A, key)
+    if names == "another-device":
+        other = WaitingKey("other-device-key")
+        register(client, B, other)
+    else:
+        other = WaitingKey("never-registered-key")
+    body = json.dumps({"key_id": other.key_id}).encode()
+    refused = ask(client, key, body=body)
+    assert (refused.status_code, refused.json()) == (404, NOT_FOUND)
+    # The refusal comes before the answer: no answer was recorded, so the spacing clock never began.
+    assert keys(app, A)[0].last_answered_at is None
+    if names == "another-device":
+        assert keys(app, B)[0].last_answered_at is None
+    # A normal ask by the same key, right after, is answered and not told to wait.
+    assert ask(client, key).status_code == 200
+    # And the key it named, if it exists, is untouched by the other's ask.
+    if names == "another-device":
+        assert ask(client, other).status_code == 200
