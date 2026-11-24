@@ -12,6 +12,13 @@ answered only once its tombstone is committed, so the device may then drop it fr
 (P4). Nothing here sends; the dispatch worker (P2) does, and only with credentials.
 Responses carry the device's own subscription ids and settings, nothing about the patient.
 
+The push handle (iPhone push, piece 6): `POST /api/mycarlos/availability/handles`
+`{destination_id, platform: "ios_apns", environment: "sandbox"|"production", token}` binds the
+device's Apple token (64 to 200 hex characters) to a destination it enrolled. 201 `{}` new, 200 `{}`
+replaced, 404 an unknown, other, revoked or other-platform destination, 400 `invalid_handle`,
+`invalid_environment` or `invalid_platform`, 503 `handles_unavailable` (no encryption keyring
+configured), 413 a body over 1 KiB. The token is stored encrypted and never returned.
+
 What each revocation answer means for the device's queued entry (myCarlos
 `pending_revocations`, which shares 64 places with its active destinations, so an entry that can
 never be cleared must be dropped):
@@ -61,6 +68,12 @@ from carlos_patient_portal.mycarlos_availability_store import (
     revoke,
     subscriptions_for_owner,
 )
+from carlos_patient_portal.mycarlos_push_handles import (
+    HandleKeys,
+    HandleRefusal,
+    HandleRequest,
+    bind,
+)
 from carlos_patient_portal.mycarlos_waiting import (
     WAITING_ASSERTION_HEADER,
     WAITING_KEYS_PATH,
@@ -84,7 +97,9 @@ from carlos_patient_portal.staff_identity import staff_request_hash
 
 SUBSCRIPTIONS_PATH = "/api/mycarlos/availability/subscriptions"
 REVOCATIONS_PATH = "/api/mycarlos/availability/revocations"
+HANDLES_PATH = "/api/mycarlos/availability/handles"
 MAX_ENROLLMENT_BODY = 1024
+MAX_HANDLE_BODY = 1024
 MAX_REVOCATION_BODY = 1024
 MAX_WAITING_BODY = 256
 NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
@@ -98,6 +113,7 @@ ENROLLMENT_FIELDS = frozenset(
     }
 )
 REVOCATION_FIELDS = frozenset({"platform", "destination_id"})
+HANDLE_FIELDS = frozenset({"destination_id", "platform", "environment", "token"})
 REFUSAL_STATUS = {
     "invalid_enrollment": 400,
     "invalid_platform": 400,
@@ -108,6 +124,10 @@ REFUSAL_STATUS = {
     "destination_capacity": 409,
     "device_inactive": 403,
     "not_found": 404,
+    # The push handle route (iPhone push piece 6).
+    "invalid_handle": 400,
+    "invalid_environment": 400,
+    "handles_unavailable": 503,
 }
 
 
@@ -200,6 +220,24 @@ def parse_revocation(body: bytes) -> RevocationRequest:
     return RevocationRequest(platform=value["platform"], destination_id=value["destination_id"])
 
 
+def parse_handle_request(body: bytes) -> HandleRequest:
+    """The exact four fields, all strings; anything else is refused (the token is never echoed)."""
+    try:
+        value = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        raise HandleRefusal("invalid_handle") from None
+    if not isinstance(value, dict) or set(value) != HANDLE_FIELDS:
+        raise HandleRefusal("invalid_handle")
+    if any(type(value[name]) is not str for name in HANDLE_FIELDS):
+        raise HandleRefusal("invalid_handle")
+    return HandleRequest(
+        destination_id=value["destination_id"],
+        platform=value["platform"],
+        environment=value["environment"],
+        token=value["token"],
+    )
+
+
 async def _bounded_body(request: Request, maximum: int) -> bytes:
     body = bytearray()
     async for chunk in request.stream():
@@ -269,9 +307,7 @@ def register_mycarlos_availability_routes(app: FastAPI, runtime: PortalRuntime) 
 
     @app.get(SUBSCRIPTIONS_PATH, include_in_schema=runtime.settings.is_development)
     async def list_subscriptions(request: Request) -> Response:
-        def operation(session: Session, owner: Owner, body: bytes) -> Response:
-            if body:
-                raise EnrollmentRefusal("invalid_enrollment")
+        def operation(session: Session, owner: Owner, _body: bytes) -> Response:
             rows = subscriptions_for_owner(session, owner, include_revoked=True)
             return _response({"subscriptions": [subscription_record(row) for row in rows]})
 
@@ -290,9 +326,7 @@ def register_mycarlos_availability_routes(app: FastAPI, runtime: PortalRuntime) 
         include_in_schema=runtime.settings.is_development,
     )
     async def revoke_subscription(request: Request, subscription_id: str) -> Response:
-        def operation(session: Session, owner: Owner, body: bytes) -> Response:
-            if body:
-                raise EnrollmentRefusal("invalid_enrollment")
+        def operation(session: Session, owner: Owner, _body: bytes) -> Response:
             row = revoke(session, owner, subscription_id, by="device")
             return _response(subscription_record(row))
 
@@ -308,6 +342,25 @@ def register_mycarlos_availability_routes(app: FastAPI, runtime: PortalRuntime) 
 
         return await call(request, MAX_REVOCATION_BODY, operation)
 
+    @app.post(HANDLES_PATH, include_in_schema=runtime.settings.is_development)
+    async def bind_push_handle(request: Request) -> Response:
+        # Binds the device's Apple token to a destination it enrolled. Nothing sensitive comes
+        # back: 201 with {} for a new token, 200 with {} when it replaced one, 404 for a
+        # destination that is unknown, another device's, revoked or of another platform.
+        def operation(session: Session, owner: Owner, body: bytes) -> Response:
+            keyring = runtime.settings.resolved_outbox_keyring
+            if not keyring:
+                raise HandleRefusal("handles_unavailable")
+            created = bind(
+                session,
+                owner,
+                parse_handle_request(body),
+                HandleKeys(keyring, runtime.settings.outbox_active_key_id),
+            )
+            return _response({}, 201 if created else 200)
+
+        return await call(request, MAX_HANDLE_BODY, operation)
+
     # --- The waiting key (carlos-portal#87) -------------------------------------------------
     # Registered and given up with the device key, like every device route.
 
@@ -322,9 +375,7 @@ def register_mycarlos_availability_routes(app: FastAPI, runtime: PortalRuntime) 
 
     @app.delete(WAITING_KEYS_PATH + "/{key_id}", include_in_schema=runtime.settings.is_development)
     async def revoke_waiting_key(request: Request, key_id: str) -> Response:
-        def operation(session: Session, owner: Owner, body: bytes) -> Response:
-            if body:
-                raise WaitingRefusal("invalid_waiting_key")
+        def operation(session: Session, owner: Owner, _body: bytes) -> Response:
             row = revoke_for_device(session, owner, key_id)
             return _response({"key_id": row.key_id, "revoked": True})
 

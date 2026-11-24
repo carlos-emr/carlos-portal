@@ -2393,3 +2393,63 @@ class PatientPortalMyCarlosWaitingKey(Base):
     )
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_by: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+
+# --- The push handle (carlos-portal, iPhone push piece 6) ---------------------------------------
+# The provider's own handle for a destination (an APNs device token), kept apart from the policy
+# tables and encrypted at rest. A destination has at most one, and a new token replaces the old.
+MYCARLOS_PUSH_HANDLE_PLATFORMS = ("ios_apns", "macos_apns")
+MYCARLOS_PUSH_HANDLE_ENVIRONMENTS = ("sandbox", "production")
+
+
+class PatientPortalMyCarlosPushHandle(Base):
+    """The encrypted APNs device token of one live destination.
+
+    The token is AES-GCM encrypted under a key derived from the portal's keyring (`key_id` names
+    the keyring entry, so a rotation can still read old rows); the destination, platform and
+    environment are bound in as associated data, so a row copied under another destination or
+    environment does not decrypt. The row goes with the destination's revocation and with an APNs
+    410. Nothing here names a patient or a document.
+    """
+
+    __tablename__ = "patient_portal_mycarlos_push_handles"
+    __table_args__ = (
+        CheckConstraint(
+            f"platform in ({_sql_list(MYCARLOS_PUSH_HANDLE_PLATFORMS)})",
+            name="ck_pp_mycarlos_push_handles_platform",
+        ),
+        CheckConstraint(
+            f"environment in ({_sql_list(MYCARLOS_PUSH_HANDLE_ENVIRONMENTS)})",
+            name="ck_pp_mycarlos_push_handles_environment",
+        ),
+        CheckConstraint(
+            f"length(destination_id) = {UUID_TEXT_LENGTH}",
+            name="ck_pp_mycarlos_push_handles_destination",
+        ),
+        CheckConstraint("length(nonce) = 12", name="ck_pp_mycarlos_push_handles_nonce"),
+        Index("ux_pp_mycarlos_push_handles_destination", "destination_id", unique=True),
+        Index("ix_pp_mycarlos_push_handles_device", "device_id"),
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    destination_id: Mapped[str] = mapped_column(String(UUID_TEXT_LENGTH), nullable=False)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey(ACCOUNT_FOREIGN_KEY_TARGET, name="fk_pp_mycarlos_push_handles_account"),
+        nullable=False,
+    )
+    device_id: Mapped[int] = mapped_column(
+        ForeignKey("patient_portal_mycarlos_devices.id", name="fk_pp_mycarlos_push_handles_device"),
+        nullable=False,
+    )
+    platform: Mapped[str] = mapped_column(String(16), nullable=False)
+    environment: Mapped[str] = mapped_column(String(10), nullable=False)
+    key_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    nonce: Mapped[bytes] = mapped_column(LargeBinary(12), nullable=False)
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary(256), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
