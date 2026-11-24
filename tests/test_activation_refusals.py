@@ -9,6 +9,7 @@ failures.
 """
 
 import itertools
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from uuid import uuid4
@@ -59,6 +60,14 @@ ROOMY = ActivationRateLimit(
     failure_window=timedelta(minutes=15), max_failures_per_invite=50, max_failures_per_client=50
 )
 PATIENTS = itertools.count(5000)
+
+
+@contextmanager
+def refused_exactly(error_type=ActivationError):
+    """The refusal must be this very class; a subclass would answer the patient differently."""
+    with pytest.raises(error_type) as caught:
+        yield caught
+    assert type(caught.value) is error_type
 
 
 @pytest.fixture(scope="module")
@@ -223,7 +232,7 @@ def test_too_many_failures_for_one_invite_or_one_client_throttle_with_the_longer
     other_client = client_reference()
     with app.state.session_factory() as session, session.begin():
         for _ in range(LIMIT.max_failures_per_invite):
-            with pytest.raises(ActivationError):
+            with refused_exactly():
                 activate(session, code, client=client, username="x", rate_limit=LIMIT)
         # The invite has used its failures: even a right request from a new client waits.
         with pytest.raises(ActivationThrottledError) as raised:
@@ -247,7 +256,7 @@ def test_one_client_that_keeps_failing_is_throttled_across_different_invites(app
     _, fresh = issue(app)
     with app.state.session_factory() as session, session.begin():
         for code in codes:
-            with pytest.raises(ActivationError):
+            with refused_exactly():
                 activate(session, code, client=client, username="x", rate_limit=LIMIT)
         with pytest.raises(ActivationThrottledError):
             activate(session, fresh, client=client, rate_limit=LIMIT)
@@ -312,7 +321,7 @@ def test_malformed_details_are_refused_alike_and_counted_and_leave_the_invite_pe
     number, code = issue(app)
     client = client_reference()
     with app.state.session_factory() as session, session.begin():
-        with pytest.raises(ActivationError):
+        with refused_exactly():
             activate(session, code, client=client, **changes)
         assert failures(session, client=client) == 1
         assert accounts_for(session, number) == 0
@@ -352,11 +361,13 @@ def test_a_password_the_policy_refuses_is_told_apart_and_counted(app):
             "fake.patient1-Zq7!xx",  # holds the username it is for
             "test-clinic-Zq7!kkk",  # holds the clinic
             "1980-05-20-Zq7!kkk",  # holds the date of birth
+            "plover-ABCD12345678-vortex",  # holds the health card number
+            "plover-abcd-1234-5678-vortex",  # and so does this, typed with its dashes
         ):
             username = "fake.patient1"
             with pytest.raises(ActivationPasswordRejectedError):
                 activate(session, code, client=client, username=username, password=password)
-        assert failures(session, client=client) == 6
+        assert failures(session, client=client) == 8
         assert accounts_for(session, number) == 0
         assert invite_status(session, code) == INVITE_STATUS_PENDING
 
@@ -367,7 +378,7 @@ def test_a_health_card_that_is_not_a_card_cannot_prove_anyone_and_is_refused_as_
     number, code = issue(app)
     client = client_reference()
     with app.state.session_factory() as session, session.begin():
-        with pytest.raises(ActivationError):
+        with refused_exactly():
             activate(
                 session,
                 code,
@@ -391,7 +402,7 @@ def test_a_code_nobody_was_given_or_a_wrong_detail_is_one_refusal_and_creates_no
             {"identity_proof": seeded_identity_proof(health_card_number="ZZZZ 9999-0000")},
             {"proof_secret": "p" * len(IDENTITY_PROOF_SECRET)},
         ):
-            with pytest.raises(ActivationError):
+            with refused_exactly():
                 activate(session, changes.pop("invite_code", code), **changes)
         assert accounts_for(session, number) == 0
         assert invite_status(session, code) == INVITE_STATUS_PENDING
@@ -413,14 +424,34 @@ def test_an_expired_or_already_used_invite_cannot_be_redeemed(app):
             invite.expires_at = utc_now() - timedelta(seconds=1)
     with app.state.session_factory() as session, session.begin():
         for code in (expired, used):
-            with pytest.raises(ActivationError):
+            with refused_exactly():
                 activate(session, code)
+
+
+def test_an_accepted_invite_is_refused_even_when_its_patient_has_no_account_now(app):
+    """The status alone refuses it: nothing else (no account for this patient) would."""
+    number, code = issue(app)
+    with app.state.session_factory() as session, session.begin():
+        activate(session, code)
+    with app.state.session_factory() as session, session.begin():
+        # The account that spent the invite now belongs to another patient number.
+        session.scalar(
+            select(PatientPortalAccount).where(PatientPortalAccount.demographic_no == number)
+        ).demographic_no = number + 100_000
+    client = client_reference()
+    with app.state.session_factory() as session, session.begin():
+        assert accounts_for(session, number) == 0
+        assert invite_status(session, code) == INVITE_STATUS_ACCEPTED
+        with refused_exactly():
+            activate(session, code, client=client)
+        assert failures(session, client=client) == 1
+        assert accounts_for(session, number) == 0
 
 
 def test_an_invite_cannot_be_redeemed_through_another_clinics_runtime(app):
     number, code = issue(app)
     with app.state.session_factory() as session, session.begin():
-        with pytest.raises(ActivationError):
+        with refused_exactly():
             activate(session, code, expected_clinic_id="another-clinic")
         assert accounts_for(session, number) == 0
         assert invite_status(session, code) == INVITE_STATUS_PENDING
@@ -450,7 +481,7 @@ def test_a_patient_who_already_has_an_account_cannot_activate_a_second(app):
     give_the_patient_an_account(app, number)
     client = client_reference()
     with app.state.session_factory() as session, session.begin():
-        with pytest.raises(ActivationError):
+        with refused_exactly():
             activate(session, code, client=client)
         assert failures(session, client=client) == 1
         assert accounts_for(session, number) == 1
@@ -515,7 +546,7 @@ def test_two_requests_for_one_patient_at_once_leave_one_account_and_the_loser_is
     lose_the_race(monkeypatch, "find_account_id_for_patient")
     client = client_reference()
     with app.state.session_factory() as session, session.begin():
-        with pytest.raises(ActivationError) as raised:
+        with refused_exactly() as raised:
             activate(session, code, client=client)
         assert isinstance(raised.value.__cause__, IntegrityError)
         assert failures(session, client=client) == 1
