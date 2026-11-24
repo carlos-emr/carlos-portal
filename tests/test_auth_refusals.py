@@ -11,7 +11,13 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from carlos_patient_portal import auth, main
-from carlos_patient_portal.models import PatientPortalAccount, utc_now
+from carlos_patient_portal.models import (
+    PatientPortalAccount,
+    PatientPortalMfaChallenge,
+    PatientPortalOutboundDelivery,
+    PatientPortalSession,
+    utc_now,
+)
 from carlos_patient_portal.token_keys import PortalTokenKeys
 from tests.support import (
     STRONG_PASSWORD,
@@ -25,14 +31,14 @@ from tests.support import (
     "secret,token", [("", "token"), ("   ", "token"), ("secret", ""), ("secret", "  ")]
 )
 def test_a_blank_secret_or_token_is_never_hashed(secret, token):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="must not be blank"):
         auth.hash_auth_token(secret, "session", token)
 
 
 def test_a_delivery_method_must_be_email_or_sms():
     assert auth.normalize_mfa_delivery_method(None) == "email"
     assert auth.normalize_mfa_delivery_method(" SMS ") == "sms"
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="email or sms"):
         auth.normalize_mfa_delivery_method("pigeon")
 
 
@@ -51,17 +57,17 @@ def test_phone_numbers_become_international_form(number, expected):
 
 
 @pytest.mark.parametrize(
-    "number",
+    "number,message",
     [
-        "5" * 40,  # too long
-        "555-0100",  # no area code, not international
-        "20 7946 0000 12",  # not international and not a North American length
-        "+1234567",  # fewer than 8 digits
-        "+1234567890123456",  # more than 15 digits
+        ("5" * 40, "characters or fewer"),
+        ("555-0100", "international format"),  # no area code, not international
+        ("20 7946 0000 12", "international format"),  # not a North American length
+        ("+1234567", "between 8 and 15 digits"),
+        ("+1234567890123456", "between 8 and 15 digits"),
     ],
 )
-def test_phone_numbers_that_cannot_be_made_international_are_refused(number):
-    with pytest.raises(ValueError):
+def test_phone_numbers_that_cannot_be_made_international_are_refused(number, message):
+    with pytest.raises(ValueError, match=message):
         auth.normalize_phone_number(number)
 
 
@@ -102,6 +108,15 @@ def resend(session, payload, keys, policy, *, token=None, method="email"):
     )
 
 
+def nothing_issued(app):
+    """What a refused verify or resend leaves behind: no session, no new delivery."""
+    with app.state.session_factory() as session:
+        sessions = len(session.scalars(select(PatientPortalSession)).all())
+        deliveries = len(session.scalars(select(PatientPortalOutboundDelivery)).all())
+        challenge = session.scalar(select(PatientPortalMfaChallenge))
+        return sessions, deliveries, challenge.code_hash, challenge.status, challenge.verified_at
+
+
 def test_an_unknown_challenge_token_is_not_found_for_verify_and_resend():
     app, payload, keys, policy = signed_in()
     with app.state.session_factory() as session:
@@ -116,22 +131,28 @@ def test_a_locked_account_gets_neither_a_session_nor_a_new_code():
     with app.state.session_factory() as session, session.begin():
         account = session.scalar(select(PatientPortalAccount))
         account.locked_at, account.locked_by = utc_now(), "staff"
+    before = nothing_issued(app)
     with app.state.session_factory() as session:
         with pytest.raises(auth.AccountLockedError):
             verify(session, payload, keys, policy)
         with pytest.raises(auth.AccountLockedError):
             resend(session, payload, keys, policy)
+    assert nothing_issued(app) == before
+    assert before[0] == 0
 
 
 def test_an_account_that_must_reset_its_password_gets_neither_a_session_nor_a_new_code():
     app, payload, keys, policy = signed_in()
     with app.state.session_factory() as session, session.begin():
         session.scalar(select(PatientPortalAccount)).force_password_reset = True
+    before = nothing_issued(app)
     with app.state.session_factory() as session:
         with pytest.raises(auth.PasswordResetRequiredError):
             verify(session, payload, keys, policy)
         with pytest.raises(auth.PasswordResetRequiredError):
             resend(session, payload, keys, policy)
+    assert nothing_issued(app) == before
+    assert before[0] == 0
 
 
 def test_a_disabled_account_has_no_challenge_to_answer():
@@ -159,9 +180,9 @@ def test_a_code_cannot_be_resent_by_email_where_the_policy_forbids_it():
 def test_a_delivery_outcome_is_only_success_or_failure():
     app, *_ = signed_in()
     with app.state.session_factory() as session:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="success or failure"):
             auth.record_mfa_delivery_outcome(session, delivery=None, outcome="maybe")
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="success or failure"):
             auth.record_password_reset_delivery_outcome(
                 session, result=auth.PasswordResetRequestResult(None, None), outcome="maybe"
             )
@@ -194,16 +215,21 @@ def test_a_password_cannot_be_reset_with_a_token_nobody_issued():
             )
 
 
-def test_a_session_check_needs_a_positive_idle_timeout_and_a_known_token():
+def test_a_session_check_needs_a_positive_idle_timeout():
     app, _, keys, _ = signed_in()
     with app.state.session_factory() as session:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="idle_timeout must be positive"):
             auth.authenticate_session_token(
                 session,
                 session_token="whatever",
                 session_token_secret=keys.session,
                 idle_timeout=timedelta(0),
             )
+
+
+def test_a_session_that_was_never_issued_cannot_be_logged_out():
+    app, _, keys, _ = signed_in()
+    with app.state.session_factory() as session:
         with pytest.raises(auth.PortalSessionInvalidError):
             auth.logout_patient_session(
                 session,
@@ -228,7 +254,7 @@ def test_staff_actions_on_an_unknown_account_are_not_found():
 def test_a_staff_access_change_needs_a_short_reason(reason):
     app, *_ = signed_in()
     with app.state.session_factory() as session:
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="1 to 64 characters"):
             auth.set_patient_account_access(
                 session, 1, "staff", enabled=False, clinic_id=TEST_CLINIC_ID, reason=reason
             )
