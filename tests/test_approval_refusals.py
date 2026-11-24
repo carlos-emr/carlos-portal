@@ -90,8 +90,8 @@ def test_a_device_that_asks_too_often_is_told_to_wait(approval_http):
     statuses = []
     for _ in range(7):
         statuses.append(post(client, signed_intent(request_id=str(uuid4()))).status_code)
-    assert statuses[:5] == [201] * 5
-    assert 429 in statuses[5:]
+    # The sixth request in the window is the first one told to wait, and it stays refused.
+    assert statuses == [201] * 5 + [429] * 2
 
 
 def test_reading_a_request_that_is_not_there_or_not_asked_properly_says_not_found(approval_http):
@@ -122,8 +122,8 @@ def test_an_approval_for_a_challenge_nobody_issued_is_not_found(approval_http):
     assert refused.status_code == 400
 
 
-def test_a_removed_device_is_told_so_and_a_wrong_recipient_is_refused(approval_http):
-    app, client = approval_http
+def test_a_request_signed_for_another_recipient_is_refused(approval_http):
+    _, client = approval_http
     assert post_intent(client).status_code == 201
     path = PUBLIC + "/" + REQUEST
     claims = {
@@ -143,7 +143,13 @@ def test_a_removed_device_is_told_so_and_a_wrong_recipient_is_refused(approval_h
             "Content-Type": "application/json",
         },
     )
-    assert wrong.status_code in (403, 404)
+    assert (wrong.status_code, code(wrong)) == (403, "recipient_mismatch")
+
+
+def test_a_removed_device_is_told_so(approval_http):
+    app, client = approval_http
+    assert post_intent(client).status_code == 201
+    path = PUBLIC + "/" + REQUEST
     with app.state.session_factory() as s, s.begin():
         device = s.scalar(select(PatientPortalMyCarlosDevice))
         device.status, device.removed_by = "removed", "staff"
