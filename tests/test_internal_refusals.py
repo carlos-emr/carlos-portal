@@ -32,8 +32,15 @@ from tests.test_mycarlos_internal_routes import device_key_id, mycarlos_app, sta
 
 PATIENTS = itertools.count(7100)
 INVITES = "/internal/carlos/patients/{}/invites"
-MANAGE = carlos_headers("portal.invite.manage")
-SECRETS = carlos_headers("portal.secret.manage")
+
+
+def manage():
+    """Staff headers made for this request: an assertion is short-lived, and the suite runs long."""
+    return carlos_headers("portal.invite.manage")
+
+
+def secrets():
+    return carlos_headers("portal.secret.manage")
 
 
 @pytest.fixture(scope="module")
@@ -53,7 +60,7 @@ def patient() -> int:
 
 def create_invite(client, number):
     created = client.post(
-        INVITES.format(number), headers=MANAGE, json=invite_request(demographic_no=number)
+        INVITES.format(number), headers=manage(), json=invite_request(demographic_no=number)
     )
     assert created.status_code == 201, created.text
     return created.json()
@@ -93,7 +100,7 @@ def test_a_prepared_invite_must_name_the_patient_the_route_names(client):
     number = patient()
     refused = client.post(
         INVITES.format(number) + "/prepare",
-        headers=MANAGE,
+        headers=manage(),
         json=prepare(number + 1, "invite-email:scope-1"),
     )
     assert (refused.status_code, refused.json()["detail"]) == (400, "demographic scope mismatch")
@@ -108,7 +115,7 @@ def test_an_invite_for_a_patient_who_already_has_an_account_is_a_conflict(app, c
         if route
         else invite_request(demographic_no=number)
     )
-    refused = client.post(INVITES.format(number) + route, headers=MANAGE, json=body)
+    refused = client.post(INVITES.format(number) + route, headers=manage(), json=body)
     assert (refused.status_code, refused.json()["detail"]) == (
         409,
         "portal account already exists",
@@ -127,7 +134,7 @@ def invites_stored(app, number):
 def prepared(client, number, operation):
     return client.post(
         INVITES.format(number) + "/prepare",
-        headers=MANAGE,
+        headers=manage(),
         json=prepare(number, operation),
     )
 
@@ -149,7 +156,7 @@ def test_the_same_operation_with_other_details_is_a_conflict_and_stores_nothing(
     number = patient()
     assert prepared(client, number, "invite-email:same").status_code == 201
     other = {**prepare(number, "invite-email:same"), "email": "someone.else@example.com"}
-    refused = client.post(INVITES.format(number) + "/prepare", headers=MANAGE, json=other)
+    refused = client.post(INVITES.format(number) + "/prepare", headers=manage(), json=other)
     assert (refused.status_code, refused.json()["detail"]) == (
         409,
         "invite preparation conflicts",
@@ -162,7 +169,7 @@ def test_a_new_preparation_for_a_patient_with_a_pending_invite_says_one_is_pendi
     first = prepared(client, number, "invite-email:one")
     committed = client.post(
         f"/internal/carlos/invites/{first.json()['id']}/commit-delivery",
-        headers=MANAGE,
+        headers=manage(),
         json={"delivery_operation_id": "invite-email:one", "delivery_reference": "msg:1"},
     )
     assert committed.status_code == 200
@@ -184,7 +191,7 @@ def test_a_direct_invite_that_loses_the_race_for_the_patients_slot_says_one_is_p
 
     monkeypatch.setattr(internal_routes, "create_invite", lost)
     refused = client.post(
-        INVITES.format(number), headers=MANAGE, json=invite_request(demographic_no=number)
+        INVITES.format(number), headers=manage(), json=invite_request(demographic_no=number)
     )
     assert (refused.status_code, refused.json()["detail"]) == (
         409,
@@ -207,19 +214,19 @@ def test_a_direct_invite_that_loses_the_race_for_the_patients_slot_says_one_is_p
     ids=["prepare resend", "resend", "revoke", "commit delivery"],
 )
 def test_an_invite_that_is_not_this_clinics_or_not_there_is_not_found(client, path, body):
-    refused = client.post(path.format(99_999_999), headers=MANAGE, json=body)
+    refused = client.post(path.format(99_999_999), headers=manage(), json=body)
     assert (refused.status_code, refused.json()["detail"]) == (404, "invite not found")
 
 
 def test_an_invite_that_was_revoked_cannot_be_prepared_for_resend(client):
     invite = create_invite(client, patient())
     assert (
-        client.post(f"/internal/carlos/invites/{invite['id']}/revoke", headers=MANAGE).status_code
+        client.post(f"/internal/carlos/invites/{invite['id']}/revoke", headers=manage()).status_code
         == 200
     )
     refused = client.post(
         f"/internal/carlos/invites/{invite['id']}/resend/prepare",
-        headers=MANAGE,
+        headers=manage(),
         json={"delivery_operation_id": "op:after-revoke"},
     )
     assert (refused.status_code, refused.json()["detail"]) == (409, "invite cannot be resent")
@@ -229,13 +236,13 @@ def test_an_invite_cannot_be_committed_for_an_operation_it_was_not_prepared_for(
     number = patient()
     prepared = client.post(
         INVITES.format(number) + "/prepare",
-        headers=MANAGE,
+        headers=manage(),
         json=prepare(number, "invite-email:right"),
     )
     assert prepared.status_code == 201
     refused = client.post(
         f"/internal/carlos/invites/{prepared.json()['id']}/commit-delivery",
-        headers=MANAGE,
+        headers=manage(),
         json={"delivery_operation_id": "invite-email:wrong", "delivery_reference": "msg:1"},
     )
     assert (refused.status_code, refused.json()["detail"]) == (409, "invite delivery conflicts")
@@ -256,7 +263,7 @@ def test_an_accepted_invite_cannot_be_revoked(app, client):
         },
     )
     assert activated.status_code == 201, activated.text
-    refused = client.post(f"/internal/carlos/invites/{invite['id']}/revoke", headers=MANAGE)
+    refused = client.post(f"/internal/carlos/invites/{invite['id']}/revoke", headers=manage())
     assert (refused.status_code, refused.json()["detail"]) == (
         409,
         "accepted invite cannot be revoked",
@@ -361,19 +368,19 @@ def test_a_revoked_source_reference_cannot_be_asked_for_again(client):
     number = patient()
     created = client.post(
         f"/internal/carlos/patients/{number}/unlock-secrets",
-        headers=SECRETS,
+        headers=secrets(),
         json=secret_body(f"msg-{number}"),
     )
     assert created.status_code == 201
     revoked = client.post(
         f"/internal/carlos/unlock-secrets/{created.json()['id']}/revoke",
-        headers=SECRETS,
+        headers=secrets(),
         json={"reason": "recalled"},
     )
     assert revoked.status_code == 200
     again = client.post(
         f"/internal/carlos/patients/{number}/unlock-secrets",
-        headers=SECRETS,
+        headers=secrets(),
         json=secret_body(f"msg-{number}"),
     )
     assert (again.status_code, again.json()["detail"]) == (409, "source reference was revoked")
@@ -398,14 +405,14 @@ def test_two_requests_for_one_reference_at_once_never_hand_one_patient_anothers_
     reference = f"msg-race-{owner}"
     created = client.post(
         f"/internal/carlos/patients/{owner}/unlock-secrets",
-        headers=SECRETS,
+        headers=secrets(),
         json=secret_body(reference),
     )
     assert created.status_code == 201
     lose_the_race(monkeypatch)
     refused = client.post(
         f"/internal/carlos/patients/{other}/unlock-secrets",
-        headers=SECRETS,
+        headers=secrets(),
         json=secret_body(reference),
     )
     assert (refused.status_code, refused.json()["detail"]) == (
@@ -422,26 +429,26 @@ def test_a_lost_race_for_a_revoked_reference_is_refused_and_for_a_pending_one_re
     reference = f"msg-race-{number}"
     first = client.post(
         f"/internal/carlos/patients/{number}/unlock-secrets",
-        headers=SECRETS,
+        headers=secrets(),
         json=secret_body(reference),
     )
     lose_the_race(monkeypatch)
     repeated = client.post(
         f"/internal/carlos/patients/{number}/unlock-secrets",
-        headers=SECRETS,
+        headers=secrets(),
         json=secret_body(reference),
     )
     assert repeated.status_code == 201 and repeated.json()["created"] is False
     assert repeated.json()["id"] == first.json()["id"]
     client.post(
         f"/internal/carlos/unlock-secrets/{first.json()['id']}/revoke",
-        headers=SECRETS,
+        headers=secrets(),
         json={"reason": "recalled"},
     )
     lose_the_race(monkeypatch)
     refused = client.post(
         f"/internal/carlos/patients/{number}/unlock-secrets",
-        headers=SECRETS,
+        headers=secrets(),
         json=secret_body(reference),
     )
     assert (refused.status_code, refused.json()["detail"]) == (409, "source reference was revoked")
@@ -459,7 +466,7 @@ def test_a_conflict_that_is_not_a_repeated_reference_is_a_server_error_and_store
     before = count(app, PatientPortalUnlockSecret)
     failed = client.post(
         f"/internal/carlos/patients/{number}/unlock-secrets",
-        headers=SECRETS,
+        headers=secrets(),
         json=secret_body(f"msg-conflict-{number}"),
     )
     assert failed.status_code == 500
@@ -473,7 +480,7 @@ def test_a_secret_that_vanishes_before_it_is_revoked_is_not_found(client, monkey
     number = patient()
     created = client.post(
         f"/internal/carlos/patients/{number}/unlock-secrets",
-        headers=SECRETS,
+        headers=secrets(),
         json=secret_body(f"msg-vanish-{number}"),
     )
 
@@ -483,7 +490,7 @@ def test_a_secret_that_vanishes_before_it_is_revoked_is_not_found(client, monkey
     monkeypatch.setattr(internal_routes, "revoke_unlock_secret", gone)
     refused = client.post(
         f"/internal/carlos/unlock-secrets/{created.json()['id']}/revoke",
-        headers=SECRETS,
+        headers=secrets(),
         json={"reason": "recalled"},
     )
     assert (refused.status_code, refused.json()["detail"]) == (
@@ -496,7 +503,7 @@ def test_a_secret_that_vanishes_before_it_is_revoked_is_not_found(client, monkey
 def test_a_secret_that_is_not_there_is_not_found_to_publish_or_to_revoke(client, action):
     refused = client.post(
         f"/internal/carlos/unlock-secrets/99999999/{action}",
-        headers=SECRETS,
+        headers=secrets(),
         **({"json": {"reason": "recalled"}} if action == "revoke" else {}),
     )
     assert (refused.status_code, refused.json()["detail"]) == (
@@ -539,7 +546,7 @@ def test_a_refusal_is_still_a_refusal_when_the_audit_row_cannot_be_written(
     monkeypatch.setattr(internal_routes, "record_audit_event", cannot_write)
     before = count(app, PatientPortalAuditEvent)
     with caplog.at_level(logging.ERROR, logger=internal_routes.logger.name):
-        refused = client.post("/internal/carlos/invites/99999999/revoke", headers=MANAGE)
+        refused = client.post("/internal/carlos/invites/99999999/revoke", headers=manage())
     assert refused.status_code == 404
     assert count(app, PatientPortalAuditEvent) == before
     # Loud in the log, but only the error's kind: never its text, which can hold patient values.
