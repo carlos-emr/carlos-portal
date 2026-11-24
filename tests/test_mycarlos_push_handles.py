@@ -259,6 +259,20 @@ def test_a_destination_the_device_does_not_hold_is_not_found_whatever_the_reason
     assert handles.handle_for(UUID(mine)) == TOKEN_A
 
 
+def test_a_destination_that_is_not_opted_in_gets_no_token_stored(portal) -> None:
+    app, client = portal
+    destination = str(uuid4())
+    created = post(
+        client,
+        A,
+        enrollment(platform="ios_apns", destination_id=destination, remote_enabled=False),
+    )
+    assert created.status_code == 201, created.text
+    answer = post_handle(client, A, handle_body(destination))
+    assert (answer.status_code, answer.json()) == (404, {"detail": "not found"})
+    assert rows(app) == []
+
+
 def test_the_request_is_signed_bounded_and_has_no_query(portal) -> None:
     _app, client = portal
     destination = enroll_ios(client, A)
