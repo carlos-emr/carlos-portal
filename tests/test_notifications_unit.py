@@ -71,17 +71,27 @@ def test_a_code_is_not_silently_dropped_where_its_channel_is_not_configured(meth
     notifications.send_mfa_challenge(runtime(development=True), delivery(method))
 
 
-def test_a_reset_or_confirmation_link_carries_its_token_in_the_fragment():
+@pytest.mark.parametrize(
+    "build,keyword,path",
+    [
+        (
+            notifications.build_password_reset_url,
+            "reset_token",
+            "/auth/password-reset/complete",
+        ),
+        (
+            notifications.build_email_change_confirmation_url,
+            "confirmation_token",
+            "/auth/email-change/confirm",
+        ),
+    ],
+)
+def test_a_reset_or_confirmation_link_carries_its_token_in_the_fragment(build, keyword, path):
     token = "a b/c+d"
-    for build, path in (
-        (notifications.build_password_reset_url, "/auth/password-reset/complete"),
-        (notifications.build_email_change_confirmation_url, "/auth/email-change/confirm"),
-    ):
-        keyword = "reset_token" if "reset" in path else "confirmation_token"
-        settings = production_settings(public_base_url="https://portal.example.test/patients/")
-        url = build(None, settings=settings, **{keyword: token})
-        assert url == f"https://portal.example.test/patients{path}#token={quote(token, safe='')}"
-        assert "?" not in url
+    settings = production_settings(public_base_url="https://portal.example.test/patients/")
+    url = build(None, settings=settings, **{keyword: token})
+    assert url == f"https://portal.example.test/patients{path}#token={quote(token, safe='')}"
+    assert "?" not in url
 
 
 def test_a_link_is_built_from_the_request_only_in_development():
@@ -95,14 +105,25 @@ def test_a_link_is_built_from_the_request_only_in_development():
     assert url == "http://localhost:8000/auth/email-change/confirm#token=t"
 
 
-def test_a_link_is_refused_outside_development_when_no_public_address_is_set():
+@pytest.mark.parametrize(
+    "build,keyword,message",
+    [
+        (notifications.build_password_reset_url, "reset_token", "password reset"),
+        (
+            notifications.build_email_change_confirmation_url,
+            "confirmation_token",
+            "email-change confirmation",
+        ),
+    ],
+)
+def test_a_link_is_refused_outside_development_when_no_public_address_is_set(
+    build, keyword, message
+):
     settings = SimpleNamespace(public_base_url=None, is_development=False)
-    with pytest.raises(PortalEmailDeliveryError, match="password reset"):
-        notifications.build_password_reset_url(None, settings=settings, reset_token="t")
-    with pytest.raises(PortalEmailDeliveryError, match="email-change confirmation"):
-        notifications.build_email_change_confirmation_url(
-            None, settings=settings, confirmation_token="t"
-        )
+    # A request's Host header must never decide where a reset or confirmation link points.
+    request = SimpleNamespace(base_url="http://evil.test/")
+    with pytest.raises(PortalEmailDeliveryError, match=message):
+        build(request, settings=settings, **{keyword: "t"})
 
 
 def test_a_password_reset_email_goes_to_the_recipient_with_its_lifetime():
