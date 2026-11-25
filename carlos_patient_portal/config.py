@@ -553,6 +553,9 @@ class Settings(BaseSettings):
     # CARLOS's claim (carlos-portal#16) leases a request for this long. A poller that stops before
     # reporting its result releases the request to the next claim once the lease has run out.
     self_signup_claim_lease_seconds: int = Field(default=5 * 60, ge=30, le=60 * 60)
+    # How long after an invite was last sent the sign-up job may ask for a new code for it (the
+    # portal's clock). The CARLOS design suggests 30 minutes.
+    self_signup_invite_resend_cooldown_seconds: int = Field(default=30 * 60, ge=60, le=24 * 60 * 60)
     # Every answered request takes at least this long, so a stored request and one refused by a
     # rate limit cannot be told apart by timing. 0 turns the floor off (tests only).
     self_signup_response_floor_ms: int = Field(default=250, ge=0, le=5_000)

@@ -186,7 +186,7 @@ def test_registered_jobs_have_well_formed_names_display_names_and_permissions() 
     }
 
 
-def test_only_the_four_signup_routes_are_open_to_the_signup_job() -> None:
+def test_only_the_six_signup_routes_are_open_to_the_signup_job() -> None:
     app = internal_app()
     jobs = {
         getattr(dependency.call, internal_routes.CALLER_POLICY_ATTRIBUTE).job
@@ -212,6 +212,8 @@ def test_only_the_four_signup_routes_are_open_to_the_signup_job() -> None:
         "/internal/carlos/signup-requests/{request_id}/result",
         "/internal/carlos/signup-requests/{request_id}/invite/prepare",
         "/internal/carlos/signup-requests/{request_id}/invite/commit-delivery",
+        "/internal/carlos/signup-requests/{request_id}/invite/resend",
+        "/internal/carlos/signup-requests/{request_id}/invite/resend/commit-delivery",
     }
 
 
