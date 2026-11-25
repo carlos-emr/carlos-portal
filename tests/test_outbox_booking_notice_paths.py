@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from carlos_patient_portal import delivery_outbox as outbox
+from carlos_patient_portal.booking_offers import CLOSED_AFTER_EXPIRY_NOTICE
 from carlos_patient_portal.models import (
     AUDIT_OUTCOME_SUCCESS,
     BOOKING_PROMPT_STATUS_READ,
@@ -295,3 +296,96 @@ def test_an_outcome_for_a_prompt_that_no_longer_exists_records_nothing(prompt) -
             == events_before + 1
         )
         assert session.get(PatientPortalBookingPrompt, prompt_id).notified_at is not None
+
+
+# --- suggested additions (agent 4's review): the survivors of four mutants ---------------------
+
+
+def add_choice(app, prompt_id: int, *, state: str, starts_in: timedelta, result_ago=None) -> None:  # noqa: ANN001
+    with app.state.session_factory.begin() as session:
+        session.add(
+            PatientPortalBookingChoice(
+                prompt_id=prompt_id,
+                clinic_id="clinic-a",
+                slot_id=f"carlos:slot:{state}",
+                starts_at=utc_now() + starts_in,
+                duration_minutes=30,
+                visit_mode="phone",
+                state=state,
+                chosen_at=utc_now() - timedelta(days=2),
+                result_at=None if state == "pending" else utc_now() - (result_ago or timedelta(0)),
+            )
+        )
+
+
+def test_a_booked_prompts_time_must_be_in_the_booked_state_to_count(prompt) -> None:  # noqa: ANN001
+    app, prompt_id, _ = prompt
+    change_prompt(app, prompt_id, status="booked", read_at=utc_now())
+    # A coming time that is only pending (or taken) is not a booked time.
+    add_choice(app, prompt_id, state="pending", starts_in=timedelta(days=3))
+    assert recipient_of(app, UPDATE, prompt_id) is None
+    add_choice(app, prompt_id, state="booked", starts_in=timedelta(days=3))
+    assert recipient_of(app, UPDATE, prompt_id) is not None
+
+
+def test_a_pick_that_fell_through_after_the_expiry_is_still_told_for_a_while(
+    prompt,  # noqa: ANN001
+) -> None:
+    app, prompt_id, _ = prompt
+    with app.state.session_factory.begin() as session:
+        row = session.get(PatientPortalBookingPrompt, prompt_id)
+        row.created_at = utc_now() - timedelta(days=40)
+        row.expires_at = utc_now() - timedelta(days=30)
+    assert recipient_of(app, UPDATE, prompt_id) is None
+    # Reported taken after the expiry, recently: the patient was waiting on it and is told.
+    add_choice(
+        app,
+        prompt_id,
+        state="slot_unavailable",
+        starts_in=timedelta(days=3),
+        result_ago=timedelta(hours=1),
+    )
+    assert recipient_of(app, UPDATE, prompt_id) is not None
+
+
+def test_a_pick_that_fell_through_long_ago_is_not_told(prompt) -> None:  # noqa: ANN001
+    app, prompt_id, _ = prompt
+    with app.state.session_factory.begin() as session:
+        row = session.get(PatientPortalBookingPrompt, prompt_id)
+        row.created_at = utc_now() - timedelta(days=400)
+        row.expires_at = utc_now() - timedelta(days=300)
+    add_choice(
+        app,
+        prompt_id,
+        state="slot_unavailable",
+        starts_in=timedelta(days=3),
+        result_ago=CLOSED_AFTER_EXPIRY_NOTICE + timedelta(days=1),
+    )
+    assert recipient_of(app, UPDATE, prompt_id) is None
+
+
+def test_an_update_notice_outcome_is_marked_as_one_and_does_not_move_notified_at(
+    prompt,  # noqa: ANN001
+) -> None:
+    app, prompt_id, account_id = prompt
+    with app.state.session_factory.begin() as session:
+        delivery = outbox._enqueue_booking_notice(
+            session,
+            kind=OUTBOX_KIND_BOOKING_PROMPT_UPDATE,
+            account_id=account_id,
+            booking_prompt_id=prompt_id,
+            sign_in_url="https://portal.example.test/x",
+            encryption_secret=OUTBOX_ENCRYPTION_SECRET,
+            encryption_key_id=outbox.OUTBOX_KEY_ID,
+        )
+        outbox._record_booking_prompt_delivery(session, delivery, outcome=AUDIT_OUTCOME_SUCCESS)
+        outbox._record_booking_prompt_delivery(
+            session, delivery, outcome=AUDIT_OUTCOME_SUCCESS, reason="x"
+        )
+        assert session.get(PatientPortalBookingPrompt, prompt_id).notified_at is None
+        reasons = session.scalars(
+            select(PatientPortalAuditEvent.reason)
+            .where(PatientPortalAuditEvent.resource_id == str(prompt_id))
+            .order_by(PatientPortalAuditEvent.id)
+        ).all()
+        assert reasons[-2:] == ["update_notice", "update_notice:x"]
