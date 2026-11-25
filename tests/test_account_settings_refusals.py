@@ -199,6 +199,34 @@ def test_email_is_refused_as_a_factor_where_it_is_not_allowed(factory) -> None: 
         assert account.preferred_mfa_method == "email"
 
 
+def test_a_factor_whose_delivery_is_not_available_is_refused_and_changes_nothing(
+    factory,  # noqa: ANN001
+) -> None:
+    """Text messages need a phone number on the account: without one the switch is refused, the
+    stored preference stays, and with a number it is made."""
+    with factory() as session, session.begin():
+        account = add_account(session, preferred_mfa_method="email", phone_number=None)
+        with pytest.raises(AccountSettingsValidationError):
+            update_account_mfa_method(
+                session,
+                account,
+                current_password=STRONG_PASSWORD,
+                preferred_mfa_method="sms",
+                max_failed_password_attempts=5,
+            )
+        assert account.preferred_mfa_method == "email"
+        account.phone_number = "+14165551234"
+        session.flush()  # the settings step reloads the row from the database
+        update_account_mfa_method(
+            session,
+            account,
+            current_password=STRONG_PASSWORD,
+            preferred_mfa_method="sms",
+            max_failed_password_attempts=5,
+        )
+        assert account.preferred_mfa_method == "sms"
+
+
 # --- contact reviews ---------------------------------------------------------------------------
 
 
@@ -258,6 +286,26 @@ def test_a_review_for_another_patient_than_its_account_is_not_found(factory) -> 
         with pytest.raises(ContactReviewNotFoundError):
             decide(session, review.id)
         assert review.status == "pending"
+
+
+def test_a_review_that_was_decided_is_idempotent_for_the_same_decision_only(
+    factory,  # noqa: ANN001
+) -> None:
+    with factory() as session, session.begin():
+        account = add_account(session)
+        review = add_review(session, account)
+        decided = decide(session, review.id, approve=True)
+        assert decided.review_decision == "approved"
+        reviewed_at = decided.reviewed_at.replace(tzinfo=None)
+        # The same decision again (a retry after a lost answer) returns it and changes nothing.
+        again = decide(session, review.id, approve=True, reviewer="FAKE Another Reviewer")
+        assert again is decided
+        assert again.reviewed_at.replace(tzinfo=None) == reviewed_at
+        assert again.reviewed_by == "FAKE Reviewer"
+        # The other decision is a conflict, and the first one stands.
+        with pytest.raises(ContactReviewConflictError):
+            decide(session, review.id, approve=False)
+        assert review.review_decision == "approved"
 
 
 def test_a_review_decided_against_an_old_revision_is_a_conflict(factory) -> None:  # noqa: ANN001
