@@ -7,7 +7,9 @@ Apple's push service accepts HTTP/2 only (over TLS, with ALPN ``h2``), so the po
 transport needs a client that speaks it. This is the one place that builds it, as the
 ``HttpClient`` the transports already use (``notification_transports.HttpClient``): one request,
 one response with only a status code read, a transport loss raised as ``TimeoutError`` or
-``ConnectionError``, no redirect followed, no retry, no log line.
+``ConnectionError``, no redirect followed, no retry, and no log line (the HTTP libraries' own log
+records, which carry the device token and the provider token, are shut off: see
+`silence_http_libraries`).
 
 The client is ``httpx2`` with its ``http2`` extra (``h2``, ``hpack`` and ``hyperframe``), a
 runtime dependency of the portal and hash-locked like the others. Everything about a request
@@ -21,11 +23,30 @@ the first push.
 
 from __future__ import annotations
 
+import logging
 import ssl
+import weakref
 from importlib import import_module
 
 from carlos_patient_portal.apns_provider import ApnsKeyError
 from carlos_patient_portal.notification_transports import HttpRequest, HttpResponse
+
+# The libraries under the client log what they do: `httpx2` writes every request at INFO with the
+# full URL (the device token is in the path), and `httpcore2` at DEBUG traces the headers (the
+# provider token is one). The portal logs no provider detail, so these loggers are shut: records
+# stop at the first of them (no propagation to the application's handlers) and are dropped there,
+# whatever level an application's logging configuration gives their children.
+_QUIET_LOGGERS = ("httpx2", "httpcore2", "h2", "hpack")
+
+
+def silence_http_libraries() -> None:
+    """Keeps the HTTP libraries' log records out of every handler. Safe to call again."""
+    for name in _QUIET_LOGGERS:
+        logger = logging.getLogger(name)
+        logger.setLevel(logging.WARNING)
+        logger.propagate = False
+        if not any(isinstance(handler, logging.NullHandler) for handler in logger.handlers):
+            logger.addHandler(logging.NullHandler())
 
 
 def require_http2() -> None:
@@ -49,6 +70,7 @@ class Http2Client:
 
     def __init__(self, *, verify: ssl.SSLContext | bool = True) -> None:
         require_http2()
+        silence_http_libraries()
         import httpx2
 
         self._httpx = httpx2
@@ -61,6 +83,9 @@ class Http2Client:
             # A pool of one host with a few connections: pushes to Apple are one host.
             limits=httpx2.Limits(max_connections=4, max_keepalive_connections=2),
         )
+        # Closed when this object is collected or the process ends, so the connection to Apple is
+        # not left to the operating system.
+        weakref.finalize(self, self._client.close)
 
     def __repr__(self) -> str:
         return "Http2Client[REDACTED]"

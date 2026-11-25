@@ -7,6 +7,7 @@ the machine; every value is FAKE."""
 
 from __future__ import annotations
 
+import logging
 import socket
 import ssl
 import threading
@@ -298,3 +299,79 @@ def test_a_portal_without_the_http2_packages_refuses_to_start_with_push_on(
     assert raised.value.code == "apns_http2_unavailable"
     with pytest.raises(ApnsKeyError):
         Http2Client()
+
+
+# --- what the HTTP libraries would log ------------------------------------------------
+
+
+@pytest.fixture
+def loud_libraries() -> Iterator[None]:
+    """The HTTP libraries' loggers as an application leaves them by default (open), put back."""
+    names = ("httpx2", "httpcore2", "h2", "hpack")
+    saved = [
+        (
+            logging.getLogger(n),
+            logging.getLogger(n).level,
+            logging.getLogger(n).propagate,
+            list(logging.getLogger(n).handlers),
+        )
+        for n in names
+    ]
+    for logger, *_ in saved:
+        logger.setLevel(logging.NOTSET)
+        logger.propagate = True
+        logger.handlers = []
+    try:
+        yield
+    finally:
+        for logger, level, propagate, handlers in saved:
+            logger.setLevel(level)
+            logger.propagate = propagate
+            logger.handlers = handlers
+
+
+def texts(caplog: pytest.LogCaptureFixture) -> str:
+    return "\n".join(record.getMessage() for record in caplog.records)
+
+
+def test_the_libraries_would_log_the_device_token_if_they_were_left_open(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, loud_libraries: None
+) -> None:
+    # The control: without the client's own silencing, httpx2 writes the URL, token and all.
+    import httpx2
+
+    with h2_server(tmp_path) as (port, _, context):
+        caplog.set_level(logging.DEBUG)
+        with httpx2.Client(http2=True, verify=context) as plain:
+            plain.post(push(port).url, headers=dict(push(port).headers), content=b"x")
+    assert "ab" * 32 in texts(caplog)
+
+
+def test_the_client_keeps_the_device_token_and_the_provider_token_out_of_every_log(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, loud_libraries: None
+) -> None:
+    with h2_server(tmp_path) as (port, _, context):
+        caplog.set_level(logging.DEBUG)
+        # An application whose logging gives a library logger a level of its own.
+        for name in (
+            "httpx2",
+            "httpcore2",
+            "httpcore2.http2",
+            "httpcore2.connection",
+            "h2",
+            "hpack",
+        ):
+            logging.getLogger(name).setLevel(logging.DEBUG)
+        client = Http2Client(verify=context)
+        # Silenced at the top: a child that an application opens still ends at its parent.
+        logging.getLogger("httpcore2.http2").setLevel(logging.DEBUG)
+        assert client.send(push(port), timeout=5) == HttpResponse(200)
+        client.close()
+    logged = texts(caplog)
+    assert "ab" * 32 not in logged
+    assert "FAKE-provider-token" not in logged
+    assert "/3/device/" not in logged
+    assert not any(
+        record.name.split(".")[0] in {"httpx2", "httpcore2", "h2", "hpack"}
+        for record in caplog.records
+    )
