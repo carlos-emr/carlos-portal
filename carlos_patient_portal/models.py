@@ -1687,6 +1687,9 @@ class PatientPortalSignupRequest(Base):
             "prepared_invite_id is null or prepared_invite_id > 0",
             name="ck_pp_signup_requests_prepared_invite_positive",
         ),
+        # One invite belongs to one request: two requests can never share a prepared invite (the
+        # NULLs of requests without one do not collide).
+        Index("uq_pp_signup_requests_prepared_invite", "prepared_invite_id", unique=True),
         # The backlog count, the expiry purge, and the claim all filter on it.
         Index("ix_pp_signup_requests_expires", "expires_at"),
         # CARLOS reports a result by id. A reused id could delete a newer patient's request.

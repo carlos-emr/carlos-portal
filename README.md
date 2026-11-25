@@ -1356,8 +1356,12 @@ is refused on every route.
     **The identity proof is the request's own**: the invite carries the hashes of the email, date of
     birth and health card number the patient typed, copied from the stored details; the call cannot
     name or change them (any such field is `422`). The invite is created by `Patient self sign-up`
-    (`job:signup-poll`), so staff can tell it apart in lists and revoke it like any other. The
-    invite's id is recorded on the request. Preparing again with the same `delivery_operation_id`
+    (`job:signup-poll`), so staff can tell it apart in lists and revoke it like any other. Its
+    audit rows (the preparation, a token handed out again on a retry, an abandoned preparation it
+    retires, the delivery that releases it) name the actor as **`system`** with the actor id
+    `job:signup-poll`, never `staff`: no person made it. (The invite layer takes an `actor_type` of
+    `staff`, the default, or `system`; anything else is refused.) The invite's id is recorded on the
+    request, and no two requests can hold the same invite (a unique index, migration 0027). Preparing again with the same `delivery_operation_id`
     returns the same invite and token; another operation for a request that has one is `409`
     `sign-up request invite conflicts`. The invite layer's own `409`s apply (`portal account already
     exists`, `pending invite already exists`, `invite preparation conflicts`), and `503`
