@@ -504,6 +504,95 @@ def test_nothing_identifying_reaches_the_audit_trail_or_the_logs(caplog) -> None
 
 
 # --------------------------------------------------------------------------------------------
+# Who the audit trail says made the invite
+# --------------------------------------------------------------------------------------------
+
+
+def test_an_invite_the_job_makes_is_audited_as_the_system_never_as_staff() -> None:
+    app = signup_app()
+    client, [(request_id, token)] = leased(app)
+    assert prepare(client, request_id, token).status_code == 201
+    # A retry that is handed the same token again is audited too.
+    assert prepare(client, request_id, token).status_code == 201
+    assert commit(client, request_id, token).status_code == 200
+
+    [invite] = invites(app)
+    rows = [row for row in audit_rows(app) if row.invite_id == invite.id]
+    # Preparation, its token handed out again, and the delivery that released it.
+    assert len(rows) >= 3
+    for row in rows:
+        assert row.actor_type == "system", (row.event_type, row.reason)
+        assert row.actor_id == "job:signup-poll"
+        assert row.actor == "Patient self sign-up"
+    assert not [row for row in audit_rows(app) if row.actor_type == "staff"]
+
+
+def test_the_invite_layer_keeps_staff_as_the_default_and_takes_only_staff_or_system() -> None:
+    from carlos_patient_portal.invites import activate_prepared_invite, prepare_create_invite
+
+    app = signup_app()
+    keys = {"primary": "k" * 32}
+
+    def prepare_as(actor_type: str | None, operation: str, demographic_no: int):
+        extra = {} if actor_type is None else {"actor_type": actor_type}
+        with app.state.session_factory() as session, session.begin():
+            invite, _token = prepare_create_invite(
+                session,
+                demographic_no,
+                "Front Desk",
+                delivery_operation_id=operation,
+                identity_proof=typed_identity(),
+                proof_secret=IDENTITY_PROOF_SECRET,
+                encryption_secret="k" * 32,
+                encryption_key_id="primary",
+                encryption_keys=keys,
+                clinic_id=CLINIC,
+                **extra,
+            )
+            return invite.id
+
+    staff_id = prepare_as(None, "op-staff", 7001)
+    system_id = prepare_as("system", "op-system", 7002)
+    by_invite = {row.invite_id: row.actor_type for row in audit_rows(app)}
+    assert by_invite[staff_id] == "staff"
+    assert by_invite[system_id] == "system"
+    for refused in ("patient", "", "STAFF", "job"):
+        with pytest.raises(ValueError, match="staff or system"):
+            prepare_as(refused, f"op-{refused}", 7003)
+    with pytest.raises(ValueError, match="staff or system"):
+        with app.state.session_factory() as session, session.begin():
+            activate_prepared_invite(
+                session,
+                system_id,
+                delivery_operation_id="op-system",
+                delivery_reference="ref",
+                clinic_id=CLINIC,
+                actor="Front Desk",
+                actor_type="patient",
+            )
+
+
+# --------------------------------------------------------------------------------------------
+# One request per invite
+# --------------------------------------------------------------------------------------------
+
+
+def test_two_requests_can_never_share_a_prepared_invite() -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    app = signup_app()
+    client, [(first, first_token), (second, _second_token)] = leased(app, 2)
+    assert prepare(client, first, first_token).status_code == 201
+    [invite] = invites(app)
+    assert {row.id: row.prepared_invite_id for row in stored_rows(app)}[first] == invite.id
+
+    with pytest.raises(IntegrityError):
+        update_row(app, second, prepared_invite_id=invite.id)
+    # Requests that hold none do not collide with each other.
+    assert [row.prepared_invite_id for row in stored_rows(app)].count(None) == 1
+
+
+# --------------------------------------------------------------------------------------------
 # The migration
 # --------------------------------------------------------------------------------------------
 
@@ -532,6 +621,10 @@ def test_the_migration_round_trips_and_refuses_a_downgrade_over_a_prepared_invit
         command.upgrade(config, "head")
         columns = {c["name"] for c in inspect(engine).get_columns("patient_portal_signup_requests")}
         assert "prepared_invite_id" in columns
+        indexes = {
+            i["name"]: i for i in inspect(engine).get_indexes("patient_portal_signup_requests")
+        }
+        assert indexes["uq_pp_signup_requests_prepared_invite"]["unique"]
         with engine.begin() as connection:
             connection.execute(
                 text("update patient_portal_signup_requests set prepared_invite_id = 5")

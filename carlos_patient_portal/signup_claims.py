@@ -566,6 +566,8 @@ def prepare_signup_invite(  # NOSONAR
         encryption_key_id=encryption_key_id,
         encryption_keys=encryption_keys,
         clinic_id=clinic_id,
+        # No person makes this invite: its audit rows say so (the job's id stays the actor id).
+        actor_type=AUDIT_ACTOR_TYPE_SYSTEM,
     )
     signup_request.prepared_invite_id = invite.id
     session.flush()
@@ -606,6 +608,7 @@ def commit_signup_invite(  # NOSONAR
         clinic_id=clinic_id,
         actor=actor,
         actor_id=actor_id,
+        actor_type=AUDIT_ACTOR_TYPE_SYSTEM,
     )
 
 
