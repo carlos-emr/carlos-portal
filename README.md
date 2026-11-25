@@ -1293,6 +1293,7 @@ are indistinguishable to the caller.
 | `PATIENT_PORTAL_SELF_SIGNUP_QUEUE_RETRY_AFTER_SECONDS` | `300` | `Retry-After` on the full-backlog `503`. |
 | `PATIENT_PORTAL_SELF_SIGNUP_RESPONSE_FLOOR_MS` | `250` | Minimum time for every answered request. |
 | `PATIENT_PORTAL_SELF_SIGNUP_CLAIM_LEASE_SECONDS` | `300` | How long CARLOS's claim leases a request (30 to 3600). |
+| `PATIENT_PORTAL_SELF_SIGNUP_INVITE_RESEND_COOLDOWN_SECONDS` | `1800` | How long after an invite was last sent the job may ask for a new code (60 to 86400). |
 
 - **Rate limits** live in the database, so every web worker shares them. They are counted from
   `signup.request` audit events, as activation failures are, under one PostgreSQL transaction
@@ -1370,6 +1371,26 @@ is refused on every route.
     "delivery_operation_id", "delivery_reference"}` releases that invite once CARLOS has durably
     queued its email. It names no invite: only the request's own can be committed (`409` `sign-up
     request invite conflicts` if none was prepared).
+  - `POST /internal/carlos/signup-requests/{id}/invite/resend` with `{"lease_token", "demographic_no",
+    "delivery_operation_id"}` asks for a **new code for the invite the patient already holds**, so a
+    patient who deleted the email is not stranded for the invite's seven days. It needs the same
+    lease and the same job, and works on the patient's one *pending* invite (the caller names the
+    patient, as for a first invite) **only if that invite carries exactly the details this request
+    holds** (the email, date of birth and health card number the patient typed, compared as
+    activation compares them): another person's invite, a revoked or used one, and a patient with
+    none are one and the same `409` `sign-up request invite conflicts`. Inside the cool-down
+    (`PATIENT_PORTAL_SELF_SIGNUP_INVITE_RESEND_COOLDOWN_SECONDS`, 30 minutes by default, measured by
+    the **portal's** clock from when that invite was last sent) nothing is prepared and the answer
+    is `429` `invite resend too soon` with `Retry-After` in seconds. After it, a replacement is
+    prepared the way a staff resend is (`201`, the one-time `invite_token`; the old code keeps
+    working) and the same `delivery_operation_id` returns the same replacement and token.
+  - `POST /internal/carlos/signup-requests/{id}/invite/resend/commit-delivery` with `{"lease_token",
+    "delivery_operation_id", "delivery_reference"}` releases it once CARLOS has durably queued the
+    email: the old invite becomes `superseded` (**its code stops working**), the replacement is the
+    patient's one pending invite, and it becomes this request's own invite, so a match is still
+    reported only with the invite that belongs to the request (the retired one is `422`). It names
+    no invite and refuses a replacement that does not carry this request's details (`409`). Both
+    resend routes audit as the `system` actor, like the first invite.
   - Both need the request's lease token, as the result does, and answer the same refusals: one `404`
     for an unknown id, another clinic's request, a request never leased or a wrong token; `409`
     `sign-up request lease expired`; `409` `sign-up request already has a result`. Refusals of the

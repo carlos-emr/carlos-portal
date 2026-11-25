@@ -30,7 +30,7 @@ The refusals' `detail` texts are part of the contract and carry no request detai
 """
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Path, status
@@ -50,12 +50,15 @@ from carlos_patient_portal.internal_routes import (
     invite_payload,
 )
 from carlos_patient_portal.invites import (
+    AcceptedInviteError,
     AccountAlreadyExistsError,
     InviteNotFoundError,
     InvitePreparationConflictError,
     InvitePreparationInProgressError,
     InvitePreparationKeyUnavailableError,
     PendingInviteExistsError,
+    RevokedInviteError,
+    SupersededInviteError,
 )
 from carlos_patient_portal.job_identity import JobPrincipal
 from carlos_patient_portal.models import (
@@ -67,6 +70,7 @@ from carlos_patient_portal.models import (
 from carlos_patient_portal.runtime import MAX_DATABASE_ID
 from carlos_patient_portal.signup_claims import (
     MAX_SIGNUP_CLAIM_BATCH,
+    SignupInviteTooSoonError,
     SignupInviteUnavailableError,
     SignupLeaseExpiredError,
     SignupRequestClosedError,
@@ -76,7 +80,9 @@ from carlos_patient_portal.signup_claims import (
     SignupResultRefusal,
     claim_signup_requests,
     commit_signup_invite,
+    commit_signup_invite_resend,
     prepare_signup_invite,
+    prepare_signup_invite_resend,
     record_signup_refusal,
     record_signup_result,
 )
@@ -96,6 +102,8 @@ SIGNUP_RESULT_INVALID_DETAIL = "sign-up result is invalid"
 SIGNUP_REQUEST_CLOSED_DETAIL = "sign-up request already has a result"
 SIGNUP_INVITE_CONFLICT_DETAIL = "sign-up request invite conflicts"
 SIGNUP_INVITE_UNAVAILABLE_DETAIL = "invite preparation unavailable"
+SIGNUP_INVITE_RESEND_TOO_SOON_DETAIL = "invite resend too soon"
+SIGNUP_INVITE_CANNOT_RESEND_DETAIL = "invite cannot be resent"
 
 DEFAULT_SIGNUP_CLAIM_BATCH = 10
 # `secrets.token_urlsafe(32)`: 43 characters of URL-safe base64.
@@ -162,6 +170,10 @@ class InternalSignupInvitePrepareRequest(BaseModel):
     )
 
 
+class InternalSignupInviteResendRequest(InternalSignupInvitePrepareRequest):
+    """The patient, and the operation, as for a first invite. The invite is never named."""
+
+
 class InternalSignupInviteCommitRequest(BaseModel):
     """The operation and its delivery reference. The invite is the request's own, never named."""
 
@@ -188,7 +200,6 @@ class InternalSignupResultResponse(BaseModel):
     invite_id: int | None
     # False when this result was already recorded: nothing changed.
     recorded: bool
-
 
 
 def register_internal_signup_routes(
@@ -300,9 +311,7 @@ def register_internal_signup_routes(
         except SignupResultConflictError as exc:
             return refused(exc, 409, SIGNUP_RESULT_CONFLICT_DETAIL)
         except SignupResultInvalidError as exc:
-            return refused(
-                exc, status.HTTP_422_UNPROCESSABLE_CONTENT, SIGNUP_RESULT_INVALID_DETAIL
-            )
+            return refused(exc, status.HTTP_422_UNPROCESSABLE_CONTENT, SIGNUP_RESULT_INVALID_DETAIL)
         return {
             "request_id": outcome.request_id,
             "result": outcome.result,
@@ -413,6 +422,117 @@ def register_internal_signup_routes(
             )
         except SignupResultRefusal as refusal:
             return refusal_response(session, principal, refusal)
+        except InviteNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="invite not found") from exc
+        except InvitePreparationConflictError as exc:
+            raise HTTPException(status_code=409, detail="invite delivery conflicts") from exc
+        return invite_payload(invite)
+
+    @app.post(
+        "/internal/carlos/signup-requests/{request_id}/invite/resend",
+        status_code=201,
+        response_model=InternalInviteTokenResponse,
+        responses={
+            **INTERNAL_PREPARE_CREATE_INVITE_RESPONSES,
+            status.HTTP_429_TOO_MANY_REQUESTS: {
+                "description": "The invite was sent too recently; `Retry-After` says how long."
+            },
+        },
+    )
+    def internal_resend_signup_invite(
+        request_id: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
+        payload: InternalSignupInviteResendRequest,
+        principal: Annotated[
+            JobPrincipal,
+            Depends(deps.job_principal_requiring(JOB_SIGNUP_POLL, PERMISSION_INVITE_MANAGE)),
+        ],
+        session: Annotated[Session, deps.session_dependency],
+    ) -> dict[str, object] | JSONResponse:
+        try:
+            invite, invite_token = prepare_signup_invite_resend(
+                session,
+                request_id,
+                clinic_id=principal.clinic_id,
+                lease_token=payload.lease_token,
+                demographic_no=payload.demographic_no,
+                delivery_operation_id=payload.delivery_operation_id,
+                identity_proof_secret=runtime.identity_proof_secret,
+                encryption_secret=runtime.outbox_encryption_secret,
+                encryption_key_id=runtime.outbox_active_key_id,
+                encryption_keys=runtime.outbox_encryption_keys
+                or {runtime.outbox_active_key_id: runtime.outbox_encryption_secret},
+                resend_cooldown=timedelta(
+                    seconds=runtime.settings.self_signup_invite_resend_cooldown_seconds
+                ),
+                actor=principal.display_name,
+                actor_id=principal.actor_id,
+            )
+        except SignupResultRefusal as refusal:
+            return refusal_response(session, principal, refusal)
+        except SignupInviteTooSoonError as exc:
+            return JSONResponse(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                content={"detail": SIGNUP_INVITE_RESEND_TOO_SOON_DETAIL},
+                headers={"Retry-After": str(exc.retry_after_seconds)},
+            )
+        except SignupInviteUnavailableError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=SIGNUP_INVITE_UNAVAILABLE_DETAIL,
+            ) from exc
+        except (
+            InviteNotFoundError,
+            RevokedInviteError,
+            AcceptedInviteError,
+            SupersededInviteError,
+        ) as exc:
+            raise HTTPException(status_code=409, detail=SIGNUP_INVITE_CANNOT_RESEND_DETAIL) from exc
+        except InvitePreparationKeyUnavailableError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=SIGNUP_INVITE_UNAVAILABLE_DETAIL,
+            ) from exc
+        except InvitePreparationInProgressError as exc:
+            raise HTTPException(status_code=409, detail=INVITE_PREPARATION_IN_PROGRESS) from exc
+        except InvitePreparationConflictError as exc:
+            raise HTTPException(status_code=409, detail="invite preparation conflicts") from exc
+        return invite_payload(invite, invite_token=invite_token)
+
+    @app.post(
+        "/internal/carlos/signup-requests/{request_id}/invite/resend/commit-delivery",
+        response_model=InternalInviteResponse,
+        responses=INTERNAL_CONFLICT_RESPONSES,
+    )
+    def internal_commit_signup_invite_resend(
+        request_id: Annotated[int, Path(gt=0, le=MAX_DATABASE_ID)],
+        payload: InternalSignupInviteCommitRequest,
+        principal: Annotated[
+            JobPrincipal,
+            Depends(deps.job_principal_requiring(JOB_SIGNUP_POLL, PERMISSION_INVITE_MANAGE)),
+        ],
+        session: Annotated[Session, deps.session_dependency],
+    ) -> dict[str, object] | JSONResponse:
+        try:
+            invite = commit_signup_invite_resend(
+                session,
+                request_id,
+                clinic_id=principal.clinic_id,
+                lease_token=payload.lease_token,
+                delivery_operation_id=payload.delivery_operation_id,
+                delivery_reference=payload.delivery_reference,
+                identity_proof_secret=runtime.identity_proof_secret,
+                encryption_keys=runtime.outbox_encryption_keys
+                or {runtime.outbox_active_key_id: runtime.outbox_encryption_secret},
+                actor=principal.display_name,
+                actor_id=principal.actor_id,
+            )
+        except SignupResultRefusal as refusal:
+            return refusal_response(session, principal, refusal)
+        except SignupInviteUnavailableError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=SIGNUP_INVITE_UNAVAILABLE_DETAIL,
+            ) from exc
         except InviteNotFoundError as exc:
             raise HTTPException(status_code=404, detail="invite not found") from exc
         except InvitePreparationConflictError as exc:

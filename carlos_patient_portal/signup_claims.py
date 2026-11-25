@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from hmac import compare_digest
+from math import ceil
 from secrets import token_urlsafe
 
 from sqlalchemy import ColumnElement, and_, func, or_, select
@@ -49,7 +50,11 @@ from sqlalchemy.orm import Session
 
 from carlos_patient_portal.audit import record_audit_event
 from carlos_patient_portal.identity import IdentityProof, verify_identity_proof
-from carlos_patient_portal.invites import activate_prepared_invite, prepare_create_invite
+from carlos_patient_portal.invites import (
+    activate_prepared_invite,
+    prepare_create_invite,
+    prepare_resend_invite,
+)
 from carlos_patient_portal.models import (
     AUDIT_ACTOR_TYPE_SYSTEM,
     AUDIT_EVENT_SIGNUP_CLAIM,
@@ -139,6 +144,18 @@ class SignupInviteConflictError(SignupResultRefusal):
 
 class SignupInviteUnavailableError(Exception):
     """The request's details cannot be read, so no invite can be prepared from them."""
+
+
+class SignupInviteTooSoonError(Exception):
+    """The request's invite was sent too recently to send again; says how long to wait.
+
+    Not a refusal of the request itself: nothing about the patient or the request is disclosed, and
+    the wait is measured by the portal's clock from when the invite was last sent.
+    """
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__("sign-up invite resend too soon")
+        self.retry_after_seconds = retry_after_seconds
 
 
 @dataclass(frozen=True)
@@ -612,6 +629,195 @@ def commit_signup_invite(  # NOSONAR
     )
 
 
+# The pending invite of the person a request's typed details belong to, locked. One refusal for
+# "no such invite" and "another person's invite", so the answer says nothing about which.
+def _pending_invite_of_the_person(
+    session: Session,
+    signup_request: PatientPortalSignupRequest,
+    *,
+    clinic_id: str,
+    demographic_no: int,
+    details: SignupRequestDetails,
+    identity_proof_secret: str,
+) -> PatientPortalInvite:
+    original = session.scalar(
+        select(PatientPortalInvite)
+        .where(
+            PatientPortalInvite.clinic_id == clinic_id,
+            PatientPortalInvite.demographic_no == demographic_no,
+            PatientPortalInvite.status == INVITE_STATUS_PENDING,
+        )
+        .with_for_update()
+    )
+    if (
+        original is None
+        or original.proof_salt is None
+        or not _carries_the_typed_details(original, details, identity_proof_secret)
+    ):
+        raise SignupInviteConflictError(signup_request.health_card_hash)
+    return original
+
+
+def _carries_the_typed_details(
+    invite: PatientPortalInvite, details: SignupRequestDetails, identity_proof_secret: str
+) -> bool:
+    """Whether the invite's identity proof is exactly what the patient typed on the request."""
+    if invite.proof_salt is None:
+        return False
+    return verify_identity_proof(
+        IdentityProof(
+            email=details.email,
+            date_of_birth=details.date_of_birth,
+            health_card_number=details.health_card_number,
+        ),
+        identity_proof_secret,
+        salt=invite.proof_salt,
+        email_hash=invite.proof_email_hash,
+        date_of_birth_hash=invite.proof_date_of_birth_hash,
+        health_card_hash=invite.proof_health_card_hash,
+    )
+
+
+# Keyword-only so each security-relevant value is named at the call site.
+def prepare_signup_invite_resend(  # NOSONAR
+    session: Session,
+    request_id: int,
+    *,
+    clinic_id: str,
+    lease_token: str,
+    demographic_no: int,
+    delivery_operation_id: str,
+    identity_proof_secret: str,
+    encryption_secret: str,
+    encryption_key_id: str,
+    encryption_keys: Mapping[str, str],
+    resend_cooldown: timedelta,
+    actor: str,
+    actor_id: str,
+    now: datetime | None = None,
+) -> tuple[PatientPortalInvite, str]:
+    """Prepare a new code for the invite the patient already holds, once the cool-down has passed.
+
+    For a request the caller holds the lease on. The invite is the patient's one pending invite
+    (the caller names the patient, as for a first invite), and only if it carries exactly the
+    details this request holds: an invite for another person is the same refusal as none. The
+    cool-down is measured by the portal's clock from when that invite was last sent; inside it the
+    answer is `SignupInviteTooSoonError` and nothing is prepared. The replacement is prepared the
+    way a staff resend is (the old code keeps working until delivery is committed) and the same
+    operation id recovers the same replacement and token.
+    """
+    current_time = now or utc_now()
+    signup_request = _lock_request(
+        session, request_id, clinic_id=clinic_id, lease_token=lease_token
+    )
+    if signup_request.result is not None:
+        raise SignupRequestClosedError(signup_request.health_card_hash)
+    _require_running_lease(signup_request, current_time)
+    try:
+        details = decrypt_signup_request(signup_request, encryption_keys=encryption_keys)
+    except (SignupRequestKeyUnavailableError, SignupRequestPayloadError) as exc:
+        raise SignupInviteUnavailableError() from exc
+    original = _pending_invite_of_the_person(
+        session,
+        signup_request,
+        clinic_id=clinic_id,
+        demographic_no=demographic_no,
+        details=details,
+        identity_proof_secret=identity_proof_secret,
+    )
+    already_prepared = session.scalar(
+        select(PatientPortalInvite.id).where(
+            PatientPortalInvite.clinic_id == clinic_id,
+            PatientPortalInvite.delivery_operation_id == delivery_operation_id,
+        )
+    )
+    if already_prepared is None:
+        sent_at = _as_utc(original.last_sent_at or original.created_at)
+        remaining = resend_cooldown - (current_time - sent_at)
+        if remaining > timedelta(0):
+            raise SignupInviteTooSoonError(max(1, ceil(remaining.total_seconds())))
+    return prepare_resend_invite(
+        session,
+        original.id,
+        actor,
+        delivery_operation_id=delivery_operation_id,
+        encryption_secret=encryption_secret,
+        encryption_key_id=encryption_key_id,
+        encryption_keys=encryption_keys,
+        clinic_id=clinic_id,
+        actor_id=actor_id,
+        actor_type=AUDIT_ACTOR_TYPE_SYSTEM,
+    )
+
+
+# Keyword-only so each security-relevant value is named at the call site.
+def commit_signup_invite_resend(  # NOSONAR
+    session: Session,
+    request_id: int,
+    *,
+    clinic_id: str,
+    lease_token: str,
+    delivery_operation_id: str,
+    delivery_reference: str,
+    identity_proof_secret: str,
+    encryption_keys: Mapping[str, str],
+    actor: str,
+    actor_id: str,
+    now: datetime | None = None,
+) -> PatientPortalInvite:
+    """Release the replacement once CARLOS has durably queued its email; the old code stops working.
+
+    Only the replacement prepared for this operation can be committed, and only if it carries the
+    details this request holds. Releasing it retires the invite it replaces in the same step and
+    makes the replacement the request's own invite, so a match can still only be reported with the
+    invite that belongs to the request. No invite id is named by the caller.
+    """
+    current_time = now or utc_now()
+    signup_request = _lock_request(
+        session, request_id, clinic_id=clinic_id, lease_token=lease_token
+    )
+    if signup_request.result is not None:
+        raise SignupRequestClosedError(signup_request.health_card_hash)
+    _require_running_lease(signup_request, current_time)
+    replacement = session.scalar(
+        select(PatientPortalInvite)
+        .where(
+            PatientPortalInvite.clinic_id == clinic_id,
+            PatientPortalInvite.delivery_operation_id == delivery_operation_id,
+        )
+        .with_for_update()
+    )
+    if replacement is None or replacement.supersedes_invite_id is None:
+        raise SignupInviteConflictError(signup_request.health_card_hash)
+    try:
+        details = decrypt_signup_request(signup_request, encryption_keys=encryption_keys)
+    except (SignupRequestKeyUnavailableError, SignupRequestPayloadError) as exc:
+        raise SignupInviteUnavailableError() from exc
+    other_owner = session.scalar(
+        select(PatientPortalSignupRequest.id).where(
+            PatientPortalSignupRequest.prepared_invite_id == replacement.id,
+            PatientPortalSignupRequest.id != signup_request.id,
+        )
+    )
+    if other_owner is not None or not _carries_the_typed_details(
+        replacement, details, identity_proof_secret
+    ):
+        raise SignupInviteConflictError(signup_request.health_card_hash)
+    invite = activate_prepared_invite(
+        session,
+        replacement.id,
+        delivery_operation_id=delivery_operation_id,
+        delivery_reference=delivery_reference,
+        clinic_id=clinic_id,
+        actor=actor,
+        actor_id=actor_id,
+        actor_type=AUDIT_ACTOR_TYPE_SYSTEM,
+    )
+    signup_request.prepared_invite_id = invite.id
+    session.flush()
+    return invite
+
+
 def record_signup_refusal(
     session: Session,
     refusal: SignupResultRefusal,
@@ -643,4 +849,3 @@ def record_signup_refusal(
         assertion_key_id=assertion_key_id,
         assertion_id=assertion_id,
     )
-

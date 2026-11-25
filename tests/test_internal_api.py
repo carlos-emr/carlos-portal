@@ -1902,6 +1902,18 @@ INTERNAL_ROUTE_PERMISSIONS = (
         SIGNUP_POLL_JOB,
         "portal.invite.manage",
     ),
+    (
+        "POST",
+        "/internal/carlos/signup-requests/1/invite/resend",
+        SIGNUP_POLL_JOB,
+        "portal.invite.manage",
+    ),
+    (
+        "POST",
+        "/internal/carlos/signup-requests/1/invite/resend/commit-delivery",
+        SIGNUP_POLL_JOB,
+        "portal.invite.manage",
+    ),
 )
 STAFF_ROUTES = tuple(route for route in INTERNAL_ROUTE_PERMISSIONS if route[2] == STAFF)
 JOB_ROUTES = tuple(route for route in INTERNAL_ROUTE_PERMISSIONS if route[2] != STAFF)
@@ -1943,6 +1955,8 @@ def test_internal_openapi_contract_is_stable() -> None:
         "/internal/carlos/patients/{demographic_no}/unlock-secrets": ["post"],
         "/internal/carlos/signup-requests/claim": ["post"],
         "/internal/carlos/signup-requests/{request_id}/invite/commit-delivery": ["post"],
+        "/internal/carlos/signup-requests/{request_id}/invite/resend": ["post"],
+        "/internal/carlos/signup-requests/{request_id}/invite/resend/commit-delivery": ["post"],
         "/internal/carlos/signup-requests/{request_id}/invite/prepare": ["post"],
         "/internal/carlos/signup-requests/{request_id}/result": ["post"],
         "/internal/carlos/unlock-secrets/{unlock_secret_id}/publish": ["post"],
