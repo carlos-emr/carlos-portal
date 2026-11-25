@@ -4,7 +4,15 @@
 """The refusals of `invites.py` that no other test drives: input limits, an account that already
 exists, a prepared invite whose stored token is gone or unreadable, a resend of an invite that is
 no longer pending, an activation that no longer applies, and how a rejected insert is explained.
-FAKE staff, FAKE patients, FAKE secrets; an in-memory database."""
+FAKE staff, FAKE patients, FAKE secrets; an in-memory database.
+
+Not driven here, because the database refuses the row:
+- a pending invite beside a first preparation of the same patient (the unique index
+  `ux_pp_invites_first_delivery_per_patient`; the "old invite exists" check in
+  `activate_prepared_invite` is only a guard behind it);
+- an invite with a salt but a missing hash (`ck_patient_portal_invites_proof_fields_complete`; the
+  missing-hash check in `prepare_resend_invite` is a guard behind it).
+An invite with no proof columns at all is allowed and is tested below."""
 
 from __future__ import annotations
 
@@ -29,8 +37,10 @@ from carlos_patient_portal.invites import (
     prepare_create_invite,
     prepare_resend_invite,
     resend_invite,
+    revoke_invite,
 )
 from carlos_patient_portal.models import (
+    INVITE_STATUS_PENDING,
     INVITE_STATUS_PREPARED,
     PatientPortalAccount,
     PatientPortalInvite,
@@ -204,6 +214,27 @@ def test_a_resend_of_another_clinics_invite_is_not_found(factory) -> None:  # no
             resend_prepare(session, invite.id)
 
 
+def test_a_resend_of_an_invite_made_before_the_proof_columns_existed_is_a_conflict(
+    factory,  # noqa: ANN001
+) -> None:
+    """The proof columns are all set or all empty, and all empty is allowed: it is the shape of a
+    pending invite from before they existed. Such an invite cannot be re-prepared, because the
+    proof the replacement needs was never stored."""
+    with factory() as session, session.begin():
+        invite, _ = create_service_invite(session)
+        for column in (
+            "proof_salt",
+            "proof_hash_version",
+            "proof_email_hash",
+            "proof_date_of_birth_hash",
+            "proof_health_card_hash",
+        ):
+            setattr(invite, column, None)
+        session.flush()
+        with pytest.raises(InvitePreparationConflictError):
+            resend_prepare(session, invite.id)
+
+
 # --- activating a preparation ------------------------------------------------------------------
 
 
@@ -216,6 +247,27 @@ def activate(session: Session, invite: PatientPortalInvite, **changes: str):  # 
         **changes,
     }
     return activate_prepared_invite(session, invite.id, **values)
+
+
+def test_a_preparation_is_activated_only_by_the_operation_that_made_it(factory) -> None:  # noqa: ANN001
+    with factory() as session, session.begin():
+        invite, _ = prepare(session, operation="op-made-it")
+        with pytest.raises(InvitePreparationConflictError):
+            activate(session, invite, delivery_operation_id="op-another")
+        assert invite.status == INVITE_STATUS_PREPARED
+
+
+def test_activating_twice_returns_the_invite_for_the_same_reference_only(factory) -> None:  # noqa: ANN001
+    with factory() as session, session.begin():
+        invite, _ = prepare(session)
+        first = activate(session, invite, delivery_reference="FAKE-reference-1")
+        assert first.status == INVITE_STATUS_PENDING
+        # A repeat of the same activation (a retry after a lost answer) is the same invite.
+        again = activate(session, invite, delivery_reference="FAKE-reference-1")
+        assert again is first
+        # Another reference for an invite that is already live is a conflict.
+        with pytest.raises(InvitePreparationConflictError):
+            activate(session, invite, delivery_reference="FAKE-reference-2")
 
 
 def test_a_preparation_that_is_no_longer_prepared_cannot_be_activated(factory) -> None:  # noqa: ANN001
@@ -253,6 +305,16 @@ def test_a_resend_preparation_is_not_activated_when_its_original_is_no_longer_pe
 
 
 # --- a resend of an invite that was already replaced -------------------------------------------
+
+
+def test_an_invite_that_was_replaced_cannot_be_revoked(factory) -> None:  # noqa: ANN001
+    with factory() as session, session.begin():
+        original, _ = create_service_invite(session)
+        resend_invite(session, original.id, STAFF)
+        with pytest.raises(SupersededInviteError):
+            revoke_invite(session, original.id, STAFF)
+        assert original.status == "superseded"
+        assert original.revoked_at is None
 
 
 def test_an_invite_that_was_replaced_cannot_be_resent(factory) -> None:  # noqa: ANN001
