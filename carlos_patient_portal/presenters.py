@@ -550,6 +550,15 @@ def assemble_messages(
     )
 
 
+# A device not seen for this long is shown as "Not seen recently" (a device never seen is judged
+# from when it was linked).
+STALE_DEVICE_DAYS = 30
+
+
+def _utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
 def assemble_mycarlos_devices(
     session: Session,
     account: PatientPortalAccount,
@@ -574,6 +583,14 @@ def assemble_mycarlos_devices(
                 ),
                 remove_href=(
                     f"{account_path}/mycarlos/devices/{quote(device.device_key_id, safe='')}/remove"
+                ),
+                linked_iso=_utc(device.linked_at).isoformat(),
+                last_seen_iso=(
+                    _utc(device.last_seen_at).isoformat() if device.last_seen_at is not None else ""
+                ),
+                stale=(
+                    datetime.now(UTC) - _utc(device.last_seen_at or device.linked_at)
+                    > timedelta(days=STALE_DEVICE_DAYS)
                 ),
             )
             for device in devices_for_account(session, account.id)

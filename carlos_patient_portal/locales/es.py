@@ -258,6 +258,7 @@ TEXT: dict[str, str] = {
     "incorrect_username_or_password": "Nombre de usuario o contraseña incorrectos",
     "invite_code": "Código de invitación",
     "language_aria_label": "Idioma",
+    "skip_to_content": "Saltar al contenido principal",
     "logo_alt": "CARLOS",
     "logout": "Cerrar sesión",
     "message_back": "Volver a los mensajes",
@@ -538,7 +539,15 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_another": "Crear otro código",
     "mycarlos_linked": "Vinculado",
     "mycarlos_last_seen": "Última actividad",
-    "mycarlos_empty": "No hay dispositivos vinculados. Elija Vincular myCarlos para añadir uno.",
+    "mycarlos_devices_moved": (
+        "Gestione sus dispositivos vinculados en la página Vincular myCarlos."
+    ),
+    "mycarlos_status_active": "Activo",
+    "mycarlos_status_stale": "No visto recientemente",
+    "mycarlos_devices_empty_title": "Aún no hay dispositivos vinculados",
+    "mycarlos_devices_empty_body": (
+        "Cree un código y escríbalo en myCarlos para vincular su dispositivo a esta cuenta."
+    ),
     "mycarlos_remove_question": "¿Quitar este dispositivo?",
     "mycarlos_remove_effect": (
         "Este dispositivo dejará de recibir documentos nuevos. Para volver a usarlo, vincúlelo de "
@@ -558,6 +567,7 @@ MYCARLOS_TEXT: dict[str, str] = {
         "Verifique su inicio de sesión antes de vincular o quitar un dispositivo."
     ),
     "mycarlos_verify": "Verificar inicio de sesión",
+    "mycarlos_verify_to_create": "Verificar el inicio de sesión para crear un código",
     "mycarlos_portal_address": "Dirección del portal",
     "mycarlos_qr_label": "Escanear en myCarlos",
     "mycarlos_qr_alt": "Código QR para vincular myCarlos con este portal.",

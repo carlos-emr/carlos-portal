@@ -273,6 +273,7 @@ TEXT: dict[str, str] = {
     "incorrect_username_or_password": "Nieprawidłowa nazwa użytkownika lub hasło",
     "invite_code": "Kod zaproszenia",
     "language_aria_label": "Język",
+    "skip_to_content": "Przejdź do głównej treści",
     "logo_alt": "CARLOS",
     "logout": "Wylogowanie",
     "message_back": "Powrót do wiadomości",
@@ -569,8 +570,15 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_another": "Proszę utworzyć kolejny kod",
     "mycarlos_linked": "Połączono",
     "mycarlos_last_seen": "Ostatnia aktywność",
-    "mycarlos_empty": (
-        "Brak połączonych urządzeń. Aby dodać urządzenie, proszę wybrać „Proszę połączyć myCarlos”."
+    "mycarlos_devices_moved": (
+        "Połączonymi urządzeniami można zarządzać na stronie „Proszę połączyć myCarlos”."
+    ),
+    "mycarlos_status_active": "Aktywne",
+    "mycarlos_status_stale": "Dawno niewidziane",
+    "mycarlos_devices_empty_title": "Nie ma jeszcze połączonych urządzeń",
+    "mycarlos_devices_empty_body": (
+        "Proszę utworzyć kod, a następnie wpisać go w myCarlos, aby połączyć urządzenie "
+        "z tym kontem."
     ),
     "mycarlos_remove_question": "Usunąć to urządzenie?",
     "mycarlos_remove_effect": (
@@ -591,6 +599,7 @@ MYCARLOS_TEXT: dict[str, str] = {
         "Proszę potwierdzić logowanie przed połączeniem lub usunięciem urządzenia."
     ),
     "mycarlos_verify": "Proszę potwierdzić logowanie",
+    "mycarlos_verify_to_create": "Proszę potwierdzić logowanie, aby utworzyć kod",
     "mycarlos_portal_address": "Adres portalu",
     "mycarlos_qr_label": "Proszę zeskanować w myCarlos",
     "mycarlos_qr_alt": "Kod QR do połączenia myCarlos z tym portalem.",
