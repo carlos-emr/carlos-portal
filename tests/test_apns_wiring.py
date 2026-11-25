@@ -17,7 +17,9 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.orm import sessionmaker
 
+from carlos_patient_portal import apns_http2
 from carlos_patient_portal import mycarlos_apns_wiring as wiring
+from carlos_patient_portal.apns_http2 import Http2Client
 from carlos_patient_portal.apns_provider import ApnsKeyError, ApnsProviderJwtSigner
 from carlos_patient_portal.config import Settings
 from carlos_patient_portal.main import create_app
@@ -114,10 +116,26 @@ def test_off_gives_no_dispatch(tmp_path: Path) -> None:
     assert wiring.availability_dispatch_for(settings, sessions(), RecordingHttpClient()) is None
 
 
-def test_on_without_an_http_client_refuses_with_a_fixed_code(tmp_path: Path) -> None:
+def test_on_without_an_injected_client_the_real_http2_client_is_made(tmp_path: Path) -> None:
+    dispatch = wiring.availability_dispatch_for(
+        push_settings(good_key(tmp_path)), sessions(), None, clock=lambda: NOW
+    )
+    assert isinstance(dispatch, AvailabilityDispatch)
+    transport = dispatch.transports[PushPlatform.IOS_APNS]
+    assert isinstance(transport._http, Http2Client)  # noqa: SLF001
+    transport._http.close()  # noqa: SLF001
+
+
+def test_on_without_the_http2_packages_refuses_with_a_fixed_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def missing(name: str) -> object:
+        raise ImportError(name)
+
+    monkeypatch.setattr(apns_http2, "import_module", missing)
     with pytest.raises(ApnsKeyError) as raised:
         wiring.availability_dispatch_for(push_settings(good_key(tmp_path)), sessions(), None)
-    assert raised.value.code == "apns_http_client_unavailable"
+    assert raised.value.code == "apns_http2_unavailable"
 
 
 def test_on_with_a_key_anyone_can_read_refuses(tmp_path: Path) -> None:
@@ -137,10 +155,21 @@ def test_on_with_a_good_key_and_a_client_gives_an_iphone_dispatch(tmp_path: Path
     assert "FAKE" not in repr(dispatch)
 
 
-def test_create_app_with_push_on_and_no_http_client_stops_at_startup(tmp_path: Path) -> None:
+def test_create_app_with_push_on_and_no_http2_packages_stops_at_startup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def missing(name: str) -> object:
+        raise ImportError(name)
+
+    monkeypatch.setattr(apns_http2, "import_module", missing)
     with pytest.raises(ApnsKeyError) as raised:
         create_app(push_settings(good_key(tmp_path)), apns_http_client=None)
-    assert raised.value.code == "apns_http_client_unavailable"
+    assert raised.value.code == "apns_http2_unavailable"
+
+
+def test_create_app_with_push_on_makes_its_own_http2_client(tmp_path: Path) -> None:
+    app = create_app(push_settings(good_key(tmp_path)), apns_http_client=None)
+    app.state.database_engine.dispose()
 
 
 # --- a 403 from Apple ---------------------------------------------------------------------------

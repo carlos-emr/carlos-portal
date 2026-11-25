@@ -69,12 +69,17 @@ code in the log, never the path or any key bytes) when:
 | `apns_key_size` | empty or over 4 KiB |
 | `apns_key_invalid` | not an unencrypted PEM PKCS#8 EC key on the P-256 curve (Apple's `.p8` is exactly that) |
 | `apns_team_id_invalid`, `apns_key_id_invalid` | not ten upper-case letters and digits |
-| `apns_http_client_unavailable` | no HTTP/2 client was supplied (see below) |
+| `apns_http2_unavailable` | the HTTP/2 packages (`h2` and the `httpx2` HTTP/2 extra) are not installed (see below) |
 
-**HTTP/2:** APNs speaks HTTP/2 only. The portal's runtime dependencies do not yet include an HTTP/2 client,
-so adding one (and its reviewed, pinned lock entry) is a separate decision; until then a deployment cannot
-turn push on. The sender, signer, key check, handle store and outbox wiring are complete and tested against
-a fake HTTP client.
+**HTTP/2:** Apple's push service speaks HTTP/2 only. The portal sends over it with `httpx2` and its
+`http2` extra (`h2`, `hpack`, `hyperframe`), a runtime dependency hash-locked in
+`requirements-runtime.lock` like the others. The client keeps one connection to Apple open between pushes,
+negotiates HTTP/2 only (a server that does not offer it is refused, never downgraded), follows no redirect,
+retries nothing and logs nothing, and reads no proxy or certificate setting from the environment: pushes go
+straight to Apple. If the packages are missing (an image built without the extra) the portal refuses to start
+with push on, with the code above, rather than failing at the first push. The portal's outbound firewall
+must allow HTTPS (port 443) to `api.push.apple.com`, and to `api.sandbox.push.apple.com` if development
+builds are used.
 
 ## What goes to Apple
 

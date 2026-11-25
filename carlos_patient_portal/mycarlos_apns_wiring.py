@@ -5,10 +5,10 @@
 
 `availability_dispatch_for` returns the `AvailabilityDispatch` the dispatch worker needs (an APNs
 transport and the notice-token key), or None while push is off. It checks the Apple key file as it
-builds the signer, so a bad file stops the portal at start-up. The HTTP client is injected:
-APNs speaks HTTP/2 only, and the portal's runtime dependencies carry no HTTP/2 client yet, so a
-deployment cannot turn push on until one is supplied (a dependency decision, see the pull
-request). Nothing here logs, prints or returns key material.
+builds the signer, so a bad file stops the portal at start-up. The HTTP client is the portal's
+HTTP/2 client (`apns_http2.Http2Client`, since APNs speaks HTTP/2 only), made here unless a test
+injects a fake; a portal installed without the HTTP/2 packages refuses to start with push on.
+Nothing here logs, prints or returns key material.
 """
 
 from __future__ import annotations
@@ -20,7 +20,8 @@ from time import time
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from carlos_patient_portal.apns_provider import ApnsKeyError, ApnsProviderJwtSigner
+from carlos_patient_portal.apns_http2 import Http2Client
+from carlos_patient_portal.apns_provider import ApnsProviderJwtSigner
 from carlos_patient_portal.config import Settings
 from carlos_patient_portal.mycarlos_availability import NoticeKeys, PushPlatform
 from carlos_patient_portal.mycarlos_availability_dispatch import AvailabilityDispatch
@@ -50,13 +51,16 @@ def availability_dispatch_for(
 ) -> AvailabilityDispatch | None:
     """The worker's config, or None while iPhone push is off.
 
-    Raises ``ApnsKeyError`` (a fixed code only) when push is on and something is missing: no HTTP
-    client (`apns_http_client_unavailable`) or a key file that does not pass its checks.
+    Raises ``ApnsKeyError`` (a fixed code only) when push is on and something is missing: the HTTP/2
+    packages (`apns_http2_unavailable`) or a key file that does not pass its checks. Without an
+    injected `http_client` (tests inject a fake) the real HTTP/2 client is made.
     """
     if not settings.mycarlos_apns_enabled:
         return None
     if http_client is None:
-        raise ApnsKeyError("apns_http_client_unavailable")
+        # The real client: HTTP/2 to Apple (`apns_http2.Http2Client`). Refuses with
+        # `apns_http2_unavailable` when the HTTP/2 packages are not installed.
+        http_client = Http2Client()
     # The settings validator already checked these are present and well formed.
     assert settings.mycarlos_apns_key_path is not None  # noqa: S101
     assert settings.mycarlos_apns_team_id and settings.mycarlos_apns_key_id  # noqa: S101
