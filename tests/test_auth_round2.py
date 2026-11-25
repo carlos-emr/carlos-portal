@@ -15,6 +15,7 @@ from sqlalchemy import select
 from carlos_patient_portal import auth
 from carlos_patient_portal.models import (
     AUDIT_EVENT_LOGIN,
+    AUDIT_EVENT_MFA_DELIVERY,
     AUDIT_EVENT_PASSWORD_RESET_REQUEST,
     AUDIT_OUTCOME_FAILURE,
     AUDIT_OUTCOME_THROTTLED,
@@ -216,6 +217,83 @@ def test_a_delivery_outcome_for_a_challenge_that_does_not_exist_is_not_found():
         gone = replace(delivery, challenge_id=987_654_321)
         with pytest.raises(auth.MfaChallengeNotFoundError):
             auth.record_mfa_delivery_outcome(session, delivery=gone, outcome="failure")
+
+
+def test_a_delivery_outcome_reads_times_with_no_zone_as_utc():
+    app, payload, keys, _ = signed_in()
+    with app.state.session_factory() as session:
+        before = session.scalar(select(PatientPortalAccount.last_mfa_email_sent_at))
+        assert before is not None
+        delivery = delivery_state(session, payload, keys)
+    stripped = lambda value: value.replace(tzinfo=None)  # noqa: E731
+    with app.state.session_factory() as session, session.begin():
+        # The times the delivery was made with, but with no zone: the same instants, so the outcome
+        # is the real one and not "superseded" (a stale delivery).
+        naive = replace(
+            delivery,
+            expires_at=stripped(delivery.expires_at),
+            expected_account_sent_at=stripped(before),
+        )
+        auth.record_mfa_delivery_outcome(session, delivery=naive, outcome="success")
+    with app.state.session_factory() as session:
+        after = session.scalar(select(PatientPortalAccount.last_mfa_email_sent_at))
+        reasons = session.scalars(
+            select(PatientPortalAuditEvent.reason).where(
+                PatientPortalAuditEvent.event_type == AUDIT_EVENT_MFA_DELIVERY
+            )
+        ).all()
+    # Applied: the account's send time moved on, and nothing was recorded as superseded.
+    assert after > before
+    assert not [reason for reason in reasons if reason and reason.endswith(":superseded")]
+
+
+def test_an_outcome_for_a_verified_challenge_compares_account_send_times_with_no_zone_as_utc():
+    app, payload, keys, policy = signed_in()
+    with app.state.session_factory() as session:
+        delivery = delivery_state(session, payload, keys)
+    # A newer sign-in exists, and the first challenge has been verified since its code was sent: the
+    # outcome applies only if the account's send time is still the one the delivery expected.
+    with app.state.session_factory() as session, session.begin():
+        # The first send is old enough for another code to be sent.
+        old = utc_now() - timedelta(minutes=10)
+        session.scalar(select(PatientPortalAccount)).last_mfa_email_sent_at = old
+        session.scalar(select(PatientPortalMfaChallenge)).last_email_sent_at = old
+    with app.state.session_factory() as session, session.begin():
+        newer = login(session, policy, keys)
+        assert newer.mfa_challenge is not None
+        challenge = session.scalar(
+            select(PatientPortalMfaChallenge).order_by(PatientPortalMfaChallenge.id)
+        )
+        challenge.status = auth.MFA_CHALLENGE_STATUS_VERIFIED
+        challenge.verified_at = utc_now()
+    with app.state.session_factory() as session:
+        current = session.scalar(select(PatientPortalAccount.last_mfa_email_sent_at))
+    naive = replace(
+        delivery,
+        expires_at=delivery.expires_at.replace(tzinfo=None),
+        expected_account_sent_at=current.replace(tzinfo=None),
+    )
+    with app.state.session_factory() as session, session.begin():
+        auth.record_mfa_delivery_outcome(session, delivery=naive, outcome="success")
+    with app.state.session_factory() as session:
+        after = session.scalar(select(PatientPortalAccount.last_mfa_email_sent_at))
+        reasons = session.scalars(
+            select(PatientPortalAuditEvent.reason).where(
+                PatientPortalAuditEvent.event_type == AUDIT_EVENT_MFA_DELIVERY
+            )
+        ).all()
+    assert after >= current
+    assert not [reason for reason in reasons if reason and reason.endswith(":superseded")]
+
+
+def test_a_delivery_outcome_for_a_challenge_that_cannot_be_locked_is_not_found(monkeypatch):
+    app, payload, keys, _ = signed_in()
+    with app.state.session_factory() as session:
+        delivery = delivery_state(session, payload, keys)
+        # Another transaction removed it between the two reads.
+        monkeypatch.setattr(auth, "lock_mfa_challenge", lambda *args, **kwargs: None)
+        with pytest.raises(auth.MfaChallengeNotFoundError):
+            auth.record_mfa_delivery_outcome(session, delivery=delivery, outcome="failure")
 
 
 # ---- the password-reset request ----
@@ -548,6 +626,9 @@ def test_a_browser_mfa_form_shows_the_locked_page_or_the_reset_page(path, state)
     else:
         assert response.status_code == 403
         assert "You must reset your password before signing in." in response.text
+        # The reset-request page itself (its title and form), which the sign-in page does not have.
+        assert 'aria-labelledby="reset-request-title"' in response.text
+        assert 'action="http://testserver/auth/password-reset/request"' in response.text
 
 
 def auth_detail(kind):
@@ -579,6 +660,8 @@ def test_a_browser_sign_in_for_an_account_that_must_reset_its_password_is_sent_t
     )
     assert response.status_code == 403
     assert "You must reset your password before signing in." in response.text
+    # The reset-request page itself, which the sign-in page is not.
+    assert 'aria-labelledby="reset-request-title"' in response.text
 
 
 def test_a_browser_reset_request_with_missing_details_shows_the_form_again():
