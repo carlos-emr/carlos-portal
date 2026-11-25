@@ -36,6 +36,10 @@ from carlos_patient_portal.notification_transports import HttpRequest, HttpRespo
 # provider token is one). The portal logs no provider detail, so these loggers are shut: records
 # stop at the first of them (no propagation to the application's handlers) and are dropped there,
 # whatever level an application's logging configuration gives their children.
+#
+# Known limit: a handler attached directly to a *child* logger (for example `httpcore2.http2`) still
+# sees that child's records; nothing in the portal does that, and the guard is repeated before every
+# push so a later `dictConfig` cannot reopen the four parents.
 _QUIET_LOGGERS = ("httpx2", "httpcore2", "h2", "hpack")
 
 
@@ -94,6 +98,9 @@ class Http2Client:
         self._client.close()
 
     def send(self, request: HttpRequest, *, timeout: float) -> HttpResponse:
+        # Before every push, not only at construction: an application that configures logging
+        # after the client was made (a `dictConfig` that reopens `httpx2`) is put right again here.
+        silence_http_libraries()
         httpx2 = self._httpx
         try:
             response = self._client.request(

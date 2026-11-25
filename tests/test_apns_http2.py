@@ -375,3 +375,29 @@ def test_the_client_keeps_the_device_token_and_the_provider_token_out_of_every_l
         record.name.split(".")[0] in {"httpx2", "httpcore2", "h2", "hpack"}
         for record in caplog.records
     )
+
+
+def test_a_logging_configuration_applied_after_the_client_was_made_cannot_reopen_the_libraries(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, loud_libraries: None
+) -> None:
+    import logging.config
+
+    with h2_server(tmp_path) as (port, _, context):
+        client = Http2Client(verify=context)
+        caplog.set_level(logging.DEBUG)
+        # An application sets up its logging now, and names httpx2 with a level and propagation.
+        logging.config.dictConfig(
+            {
+                "version": 1,
+                "disable_existing_loggers": False,
+                "loggers": {"httpx2": {"level": "INFO", "propagate": True}},
+            }
+        )
+        assert logging.getLogger("httpx2").propagate is True
+        assert client.send(push(port), timeout=5) == HttpResponse(200)
+        client.close()
+    logged = texts(caplog)
+    assert "ab" * 32 not in logged
+    assert "FAKE-provider-token" not in logged
+    assert "/3/device/" not in logged
+    assert logging.getLogger("httpx2").propagate is False
