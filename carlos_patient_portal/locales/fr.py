@@ -271,6 +271,7 @@ TEXT: dict[str, str] = {
     "incorrect_username_or_password": "Nom d’utilisateur ou mot de passe incorrect",
     "invite_code": "Code d’invitation",
     "language_aria_label": "Langue",
+    "skip_to_content": "Passer au contenu principal",
     "logo_alt": "CARLOS",
     "logout": "Déconnexion",
     "message_back": "Retour aux messages",
@@ -561,7 +562,13 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_another": "Créer un autre code",
     "mycarlos_linked": "Associé le",
     "mycarlos_last_seen": "Dernière activité",
-    "mycarlos_empty": "Aucun appareil associé. Choisissez Associer myCarlos pour en ajouter un.",
+    "mycarlos_devices_moved": "Gérez vos appareils associés sur la page Associer myCarlos.",
+    "mycarlos_status_active": "Actif",
+    "mycarlos_status_stale": "Non vu récemment",
+    "mycarlos_devices_empty_title": "Aucun appareil associé pour l’instant",
+    "mycarlos_devices_empty_body": (
+        "Créez un code, puis saisissez-le dans myCarlos pour associer votre appareil à ce compte."
+    ),
     "mycarlos_remove_question": "Retirer cet appareil ?",
     "mycarlos_remove_effect": (
         "Cet appareil ne recevra plus de nouveaux documents. Pour le réutiliser, associez-le à "
@@ -579,6 +586,7 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_not_seen": "Aucune activité",
     "mycarlos_mfa_required": "Vérifiez votre connexion avant d’associer ou de retirer un appareil.",
     "mycarlos_verify": "Vérifier la connexion",
+    "mycarlos_verify_to_create": "Vérifier la connexion pour créer un code",
     "mycarlos_portal_address": "Adresse du portail",
     "mycarlos_qr_label": "Scanner dans myCarlos",
     "mycarlos_qr_alt": "Code QR pour associer myCarlos à ce portail.",

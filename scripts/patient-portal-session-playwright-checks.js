@@ -74,6 +74,7 @@ const { isIP } = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { assertNoSeriousAxeIssues } = require('./patient-portal-axe');
 const { readCapturedSmsCode, readCaptures } = require('./patient-portal-sms-capture');
 
 const baseUrl = validateBaseUrl(process.env.PORTAL_BASE_URL || 'http://127.0.0.1:8495');
@@ -238,6 +239,7 @@ async function assertAccessiblePage(page, surface) {
   assert(problems.imagesWithoutAlt === 0, `${surface} has an image without alt text`);
   assert(problems.unnamedControls.length === 0,
     `${surface} has unnamed controls: ${problems.unnamedControls.join(', ')}`);
+  await assertNoSeriousAxeIssues(page, surface);
 }
 
 function screenshotPath(name) {

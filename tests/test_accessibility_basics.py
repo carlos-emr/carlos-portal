@@ -1,0 +1,583 @@
+"""Accessibility basics that must not slip back (carlos-emr/carlos-portal#57): a skip link and a
+focusable <main> on every full page, a page title that names the page, text sizes that follow the
+browser's text size, and no live region around a whole page. Browser checks (an automatic axe run)
+are in scripts/patient-portal-playwright-checks.js; these run without a browser. FAKE data only."""
+
+import re
+from html.parser import HTMLParser
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from carlos_patient_portal import main
+from carlos_patient_portal.i18n import LOCALE_COOKIE_NAME
+from carlos_patient_portal.locales import en, es, fr, pl, pt_BR, zh_CN, zh_TW
+from tests.support import development_settings
+
+PACKAGE = Path(main.__file__).resolve().parent
+TEMPLATES = PACKAGE / "templates"
+STYLES = PACKAGE / "static" / "styles.css"
+
+# Every full page (the ones with their own <html>); the partials are included in them.
+FULL_PAGES = sorted(
+    path.name for path in TEMPLATES.glob("*.jinja") if "<html" in path.read_text(encoding="utf-8")
+)
+
+
+def test_the_full_pages_are_the_ones_that_are_checked() -> None:
+    # A new full page must be added to the checks below by being a full page; this fails if the
+    # list is ever empty or loses a known page.
+    assert {"index.jinja", "dashboard.jinja", "mfa.jinja", "activate.jinja"} <= set(FULL_PAGES)
+
+
+@pytest.mark.parametrize("name", FULL_PAGES)
+def test_every_full_page_has_a_skip_link_to_a_focusable_main(name: str) -> None:
+    source = (TEMPLATES / name).read_text(encoding="utf-8")
+    # The skip link is the first thing in the body.
+    assert re.search(
+        r"<body>\s*(?:\{#.*?#\}\s*)?"
+        r"\{% from \"_skip_link\.jinja\" import skip_link %\}"
+        r"\{\{ skip_link\(text(?:, \"[^\"]+\")?\) \}\}",
+        source,
+        re.S,
+    ), name
+    assert source.count('<main id="main-content" tabindex="-1">') == 1, name
+    assert source.count("<main") == 1 and source.count("</main>") == 1, name
+
+
+@pytest.mark.parametrize("name", FULL_PAGES)
+def test_every_full_page_has_a_banner_before_main_and_a_footer_after_it(name: str) -> None:
+    # The top bar is a <header> whose ancestors are only <div>s, so it is the banner landmark
+    # (inside <main> or a <section> it would not be); the footer stays the contentinfo.
+    source = (TEMPLATES / name).read_text(encoding="utf-8")
+    assert '<section class="portal-screen' not in source, name
+    top_bar = min(
+        i
+        for i in (source.find('<header class="patient-topbar'), source.find("_public_header.jinja"))
+        if i >= 0
+    )
+    assert top_bar < source.index("<main"), name
+    assert source.index("</main>") < source.index("_page_footer.jinja"), name
+
+
+def test_the_skip_link_points_at_the_main_it_skips_to() -> None:
+    link = (TEMPLATES / "_skip_link.jinja").read_text(encoding="utf-8")
+    assert 'target="main-content"' in link
+    assert 'href="#{{ target }}"' in link
+    assert "{{ text.skip_to_content }}" in link
+
+
+@pytest.mark.parametrize("name", FULL_PAGES)
+def test_every_full_page_title_names_the_page(name: str) -> None:
+    source = (TEMPLATES / name).read_text(encoding="utf-8")
+    title = re.search(r"<title>(.*?)</title>", source, re.S)
+    assert title, name
+    # Not the service name alone: the page's own words come first (WCAG 2.4.2).
+    assert title.group(1).strip() != "{{ service_name }}", name
+    assert title.group(1).strip().endswith("- {{ service_name }}"), name
+
+
+def test_the_dashboard_title_follows_the_module_shown() -> None:
+    source = (TEMPLATES / "dashboard.jinja").read_text(encoding="utf-8")
+    for module in ("mycarlos", "account", "email-passwords", "messages", "help"):
+        assert f'"{module}":' in source
+    assert "{{ page_heading }} - {{ service_name }}" in source
+
+
+def test_the_module_workspace_is_not_one_big_live_region() -> None:
+    # Status messages carry their own role="status" / role="alert"; a live region around the
+    # whole workspace announces every change in it together (WCAG 4.1.3 done badly).
+    source = (TEMPLATES / "dashboard.jinja").read_text(encoding="utf-8")
+    assert 'class="module-workspace"' in source
+    assert 'class="module-workspace" aria-live' not in source
+
+
+def test_text_sizes_follow_the_browsers_text_size() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    pixel_sizes = re.findall(r"font-size:\s*[0-9.]+px", css)
+    assert pixel_sizes == [], "font sizes in px ignore the browser's text size; use rem"
+    assert "font-size: 0.8125rem;" in css  # the former 13px
+
+
+def test_the_skip_link_is_hidden_until_it_has_the_focus() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    assert re.search(r"\.skip-link\s*\{[^}]*transform:\s*translateY\(-120%\)", css, re.S)
+    assert re.search(r"\.skip-link:focus\s*\{[^}]*transform:\s*translateY\(0\)", css, re.S)
+
+
+@pytest.mark.parametrize("module", [es, fr, pl, pt_BR, zh_CN, zh_TW])
+def test_the_skip_link_words_are_translated_in_every_language(module) -> None:
+    words = module.TEXT["skip_to_content"]
+    assert words.strip()
+    assert words != en.TEXT["skip_to_content"]
+
+
+@pytest.mark.parametrize(
+    ("code", "module"),
+    [
+        ("en", en),
+        ("es", es),
+        ("fr", fr),
+        ("pl", pl),
+        ("pt-BR", pt_BR),
+        ("zh-CN", zh_CN),
+        ("zh-TW", zh_TW),
+    ],
+)
+def test_the_sign_in_page_has_the_skip_link_and_a_page_title(code: str, module) -> None:
+    client = TestClient(main.create_app(development_settings()))
+    client.cookies.set(LOCALE_COOKIE_NAME, code)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    page = response.text
+    assert f'<a class="skip-link" href="#main-content">{module.TEXT["skip_to_content"]}</a>' in page
+    assert '<main id="main-content" tabindex="-1">' in page
+    assert page.index("<header") < page.index("<main")
+    title = re.search(r"<title>(.*?)</title>", page, re.S)
+    assert title
+    assert module.TEXT["sign_in_heading"] in title.group(1)
+    # The skip link comes before the header's language buttons in the page.
+    assert page.index('class="skip-link"') < page.index('class="language-switch"')
+
+
+DASHBOARD = (TEMPLATES / "dashboard.jinja").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("key", ["mycarlos", "account", "email-passwords", "help", "messages"])
+def test_a_module_tile_link_is_named_by_its_heading_and_not_by_view(key: str) -> None:
+    link = re.search(
+        rf'<a class="module-tile"[^>]*aria-labelledby="tile-{key}-title[^"]*"[^>]*>(.*?)</a>',
+        DASHBOARD,
+        re.S,
+    )
+    assert link, key
+    body = link.group(1)
+    assert f'id="tile-{key}-title"' in body
+    assert f'id="tile-{key}-description"' in body
+    assert 'aria-describedby="tile-' + key + '-description"' in link.group(0)
+    # The trailing "View" is for the eye only.
+    assert '<span aria-hidden="true">{{ text.view_module }}</span>' in body
+
+
+def test_the_unread_count_is_part_of_the_messages_tile_name() -> None:
+    assert (
+        'aria-labelledby="tile-messages-title'
+        "{% if new_message_count %} tile-messages-count{% endif %}"
+        '"' in DASHBOARD
+    )
+    assert 'id="tile-messages-count"' in DASHBOARD
+
+
+def test_the_disabled_documents_tile_has_no_meaningless_aria_disabled() -> None:
+    assert 'class="module-tile disabled">' in DASHBOARD
+    assert "aria-disabled" not in DASHBOARD
+
+
+def test_repeated_reveal_and_copy_buttons_say_which_password_they_are_for() -> None:
+    assert 'id="email-password-subject-{{ row.id }}"' in DASHBOARD
+    # Reveal and Copy both describe themselves by the row's subject; their own words stay first.
+    assert DASHBOARD.count('aria-describedby="email-password-subject-{{ row.id }}"') == 2
+    # The password itself is a named, read-only text box (a plain <code>'s name is not announced).
+    assert re.search(
+        r'<code[^>]*role="textbox"[^>]*aria-readonly="true"[^>]*aria-label=', DASHBOARD, re.S
+    )
+
+
+@pytest.mark.parametrize(
+    ("template", "error_id"), [("index.jinja", "sign-in-error"), ("mfa.jinja", "mfa-error")]
+)
+def test_a_failed_sign_in_or_code_marks_the_boxes_and_points_them_at_the_error(
+    template: str, error_id: str
+) -> None:
+    source = (TEMPLATES / template).read_text(encoding="utf-8")
+    assert f'role="alert" id="{error_id}"' in source
+    marked = (
+        f'{{% if error_message %}}aria-invalid="true" aria-describedby="{error_id}"{{% endif %}}'
+    )
+    assert source.count(marked) == (2 if template == "index.jinja" else 1)
+
+
+def test_what_a_button_changes_by_its_words_alone_is_announced() -> None:
+    script = (PACKAGE / "static" / "portal.js").read_text(encoding="utf-8")
+    region = (TEMPLATES / "_live_status.jinja").read_text(encoding="utf-8")
+    assert 'id="portal-live-status"' in region
+    assert 'role="status"' in region and 'aria-live="polite"' in region
+    assert 'getElementById("portal-live-status")' in script
+    # Revealing, reveal failed, copied, copy failed.
+    assert script.count("announce(") == 4  # the four uses
+    css = STYLES.read_text(encoding="utf-8")
+    assert re.search(r"\.sr-only\s*\{[^}]*clip:", css, re.S)
+
+
+def test_language_buttons_are_big_enough_to_touch() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    block = re.search(r"@media \(pointer: coarse\)\s*\{\s*\.text-tab\s*\{([^}]*)\}", css, re.S)
+    assert block
+    assert "min-width: 2.75rem" in block.group(1)
+    assert "min-height: 2.75rem" in block.group(1)
+
+
+# --- Structure, read from the parsed page rather than grepped from the template text ----------
+
+_VOID = {
+    "area",
+    "base",
+    "br",
+    "col",
+    "embed",
+    "hr",
+    "img",
+    "input",
+    "link",
+    "meta",
+    "source",
+    "track",
+    "wbr",
+}
+
+
+class _Outline(HTMLParser):
+    """The elements of a page in document order, each with the tags it sits inside."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.stack: list[tuple[str, dict[str, str | None]]] = []
+        self.elements: list[
+            tuple[str, dict[str, str | None], tuple[tuple[str, dict[str, str | None]], ...]]
+        ] = []
+
+    def handle_starttag(self, tag, attrs) -> None:
+        attributes = dict(attrs)
+        self.elements.append((tag, attributes, tuple(self.stack)))
+        if tag not in _VOID:
+            self.stack.append((tag, attributes))
+
+    def handle_startendtag(self, tag, attrs) -> None:
+        self.elements.append((tag, dict(attrs), tuple(self.stack)))
+
+    def handle_endtag(self, tag) -> None:
+        for index in range(len(self.stack) - 1, -1, -1):
+            if self.stack[index][0] == tag:
+                del self.stack[index:]
+                return
+
+
+def _outline(html: str) -> _Outline:
+    parser = _Outline()
+    parser.feed(html)
+    return parser
+
+
+def _page_source(name: str) -> str:
+    """A template as the browser would get it: its includes written in, its Jinja tags removed
+    (every branch of a conditional stays, which is why this is for structure, not for words).
+    The skip link macro is written out as the link it makes."""
+    source = (TEMPLATES / name).read_text(encoding="utf-8")
+    source = re.sub(
+        r"\{%-?\s*include\s+\"([^\"]+)\"\s*-?%\}",
+        lambda match: _page_source(match.group(1)),
+        source,
+    )
+    source = re.sub(
+        r"\{\{\s*skip_link\(text(?:,\s*\"([^\"]+)\")?\)\s*\}\}",
+        lambda match: f'<a class="skip-link" href="#{match.group(1) or "main-content"}">x</a>',
+        source,
+    )
+    source = re.sub(r"\{#.*?#\}", "", source, flags=re.S)
+    source = re.sub(r"\{%.*?%\}", "", source, flags=re.S)
+    return re.sub(r"\{\{.*?\}\}", "x", source, flags=re.S)
+
+
+def _is_focusable(tag: str, attributes: dict[str, str | None]) -> bool:
+    if "hidden" in attributes or attributes.get("type") == "hidden":
+        return False
+    if tag in {"button", "select", "textarea"}:
+        return "disabled" not in attributes
+    if tag == "input":
+        return "disabled" not in attributes
+    if tag == "a":
+        return "href" in attributes
+    return attributes.get("tabindex") not in (None, "-1")
+
+
+def _check_skip_link_structure(html: str, label: str) -> None:
+    outline = _outline(html)
+    mains = [e for e in outline.elements if e[0] == "main"]
+    assert len(mains) == 1, label
+    assert mains[0][1].get("id") == "main-content", label
+    assert mains[0][1].get("tabindex") == "-1", label
+    # The skip link is the first thing a keyboard reaches, and points at an element of the page.
+    focusables = [(i, e) for i, e in enumerate(outline.elements) if _is_focusable(e[0], e[1])]
+    first = focusables[0][1]
+    assert first[0] == "a" and (first[1].get("href") or "").startswith("#"), label
+    assert "skip-link" in (first[1].get("class") or ""), label
+    target_id = first[1]["href"][1:]
+    targets = [e for e in outline.elements if e[1].get("id") == target_id]
+    assert len(targets) == 1, f"{label}: the skip link points at #{target_id}"
+    target = targets[0]
+    assert target[1].get("tabindex") == "-1", label
+    # The target is main itself, or something inside main (the dashboard's content, after its
+    # module navigation).
+    assert target is mains[0] or any(tag == "main" for tag, _ in target[2]), label
+    target_at = outline.elements.index(target)
+
+    def in_target(element) -> bool:
+        return element is target or any(a.get("id") == target_id for _, a in element[2])
+
+    inside_target = [i for i, e in focusables if in_target(e)]
+    assert inside_target, f"{label}: nothing in the page content can be reached"
+    # What the skip link skips: the top bar (and the module navigation), before the target.
+    before_target = [e for i, e in focusables if i < target_at]
+    assert len(before_target) > 1, f"{label}: the skip link would skip nothing"
+    # The first stop at or after the target begins is inside it.
+    after = [e for i, e in focusables if i >= target_at][0]
+    assert in_target(after), label
+    for tag, attributes, ancestors in outline.elements:
+        in_main = any(t == "main" for t, _ in ancestors)
+        classes = (attributes.get("class") or "").split()
+        # The top bar (banner) and the language switch are outside main; so is the footer.
+        if "patient-topbar" in classes or "page-footer" in classes or "language-switch" in classes:
+            assert not in_main, f"{label}: {tag}.{'.'.join(classes)} is inside main"
+    # The live region is in the page from the start, outside main, empty.
+    regions = [e for e in outline.elements if e[1].get("id") == "portal-live-status"]
+    assert len(regions) == 1, label
+    assert regions[0][1].get("role") == "status", label
+    assert not any(t == "main" for t, _ in regions[0][2]), label
+    topbars = [e for e in outline.elements if "patient-topbar" in (e[1].get("class") or "").split()]
+    assert len(topbars) == 1 and topbars[0][0] == "header", label
+    # A <header> is the page's banner only when no section, article, aside, nav or main holds it.
+    assert not any(t in {"main", "section", "article", "aside", "nav"} for t, _ in topbars[0][2]), (
+        label
+    )
+
+
+@pytest.mark.parametrize("name", FULL_PAGES)
+def test_the_skip_link_skips_the_top_bar_on_every_page(name: str) -> None:
+    _check_skip_link_structure(_page_source(name), name)
+
+
+@pytest.mark.parametrize("code", ["en", "es", "fr", "pl", "pt-BR", "zh-CN", "zh-TW"])
+def test_the_rendered_sign_in_page_has_the_same_structure(code: str) -> None:
+    client = TestClient(main.create_app(development_settings()))
+    client.cookies.set(LOCALE_COOKIE_NAME, code)
+    _check_skip_link_structure(client.get("/").text, f"rendered / in {code}")
+
+
+def test_every_message_the_script_puts_into_a_button_is_announced_or_deliberately_not() -> None:
+    script = (PACKAGE / "static" / "portal.js").read_text(encoding="utf-8")
+    # Announced: Revealing..., the failed reveal, Copied, Copy failed.
+    for words in (
+        "revealButton.dataset.revealingLabel",
+        "revealButton.dataset.revealFailedLabel",
+        "copyButton.dataset.copiedLabel",
+        "copyButton.dataset.copyFailedLabel",
+    ):
+        block = script[script.index(words) :].split(";", 1)[1:2]
+        assert block and "announce(" in script[script.index(words) : script.index(words) + 260], (
+            words
+        )
+    # Not announced on purpose: putting a label back (after 2.5 s, on hiding the page), the
+    # password box (the focus moves to it), the modal (a dialog) and the booking notice
+    # (its element is role="status" already).
+    assert 'role="status"' in DASHBOARD
+
+
+def _luminance(colour: str) -> float:
+    channels = [int(colour.lstrip("#")[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+    linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def _contrast(foreground: str, background: str) -> float:
+    lighter, darker = sorted((_luminance(foreground), _luminance(background)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def _token(name: str) -> str:
+    match = re.search(rf"--{name}:\s*(#[0-9a-fA-F]{{6}});", STYLES.read_text(encoding="utf-8"))
+    assert match, name
+    return match.group(1)
+
+
+def test_the_brand_blue_is_readable_as_text_on_the_page_and_on_white() -> None:
+    blue = _token("carlos-blue")
+    assert blue.lower() == "#4065b2"
+    # WCAG 1.4.3: 4.5:1 for normal-size text, on the page's pale blue and on white; and white text
+    # on the blue (buttons, the message count) too.
+    assert _contrast(blue, _token("page")) >= 4.5
+    assert _contrast(blue, "#ffffff") >= 4.5
+    assert _contrast("#ffffff", blue) >= 4.5
+
+
+def test_no_old_brand_blue_is_left_in_the_stylesheet() -> None:
+    assert "#486ebd" not in STYLES.read_text(encoding="utf-8").lower()
+
+
+def test_the_axe_check_runs_in_both_colour_schemes_and_with_forced_colours() -> None:
+    script = (PACKAGE.parent / "scripts" / "patient-portal-axe.js").read_text(encoding="utf-8")
+    assert "disableRules" not in script  # colour contrast is on
+    assert "emulateMedia({ colorScheme: 'dark' })" in script
+    assert "emulateMedia({ forcedColors: 'active' })" in script
+    # Emulation is always switched off again for the caller's own steps.
+    assert "emulateMedia({ colorScheme: null, forcedColors: null })" in script
+    assert "finally" in script
+
+
+# --- Both palettes: every token pair, computed from the stylesheet --------------------------------
+
+
+def _block(source: str, opening: str) -> str:
+    """The text between the braces that follow `opening` (braces may nest one level)."""
+    start = source.index(opening) + len(opening)
+    depth = 1
+    for index in range(start, len(source)):
+        depth += {"{": 1, "}": -1}.get(source[index], 0)
+        if depth == 0:
+            return source[start:index]
+    raise AssertionError(opening)
+
+
+def _palettes() -> dict[str, dict[str, str]]:
+    css = STYLES.read_text(encoding="utf-8")
+    light_block = _block(css, ":root {")
+    dark_block = _block(_block(css, "@media (prefers-color-scheme: dark) {"), ":root {")
+    declared = re.compile(r"--([a-z-]+):\s*(#[0-9a-fA-F]{6});")
+    light = dict(declared.findall(light_block))
+    dark = {**light, **dict(declared.findall(dark_block))}
+    return {"light": light, "dark": dark}
+
+
+PALETTES = _palettes()
+TEXT_TOKENS = ["text-strong", "text", "text-soft", "muted", "brand-text"]
+SURFACES = ["page", "surface", "surface-subtle", "surface-muted", "surface-topbar"]
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_every_text_colour_is_readable_on_every_surface_in_both_palettes(scheme: str) -> None:
+    palette = PALETTES[scheme]
+    for text in TEXT_TOKENS:
+        for surface in SURFACES:
+            ratio = _contrast(palette[text], palette[surface])
+            assert ratio >= 4.5, f"{scheme}: {text} on {surface} is {ratio:.2f}:1"
+    for text, background in [
+        ("warn-text", "warn-bg"),
+        ("error-text", "error-bg"),
+        ("success-text", "success-bg"),
+        ("on-accent", "carlos-blue"),
+        ("on-accent", "brand-bg"),
+    ]:
+        ratio = _contrast(palette[text], palette[background])
+        assert ratio >= 4.5, f"{scheme}: {text} on {background} is {ratio:.2f}:1"
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_borders_the_focus_ring_and_the_blue_are_visible_in_both_palettes(scheme: str) -> None:
+    palette = PALETTES[scheme]
+    for token in ("border-control", "focus-ring", "carlos-blue"):
+        for surface in SURFACES:
+            ratio = _contrast(palette[token], palette[surface])
+            assert ratio >= 3.0, f"{scheme}: {token} on {surface} is {ratio:.2f}:1"
+    # The status borders are decoration beside text that already says it; the blue as text is
+    # not used (the text tokens above are).
+    assert palette["on-accent"].lower() == "#ffffff"
+
+
+def test_the_dark_palette_defines_every_token_the_light_one_does() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    light = set(re.findall(r"--([a-z-]+):\s*#", _block(css, ":root {")))
+    dark = set(
+        re.findall(
+            r"--([a-z-]+):\s*#",
+            _block(_block(css, "@media (prefers-color-scheme: dark) {"), ":root {"),
+        )
+    )
+    assert light == dark
+
+
+def test_the_colour_and_motion_media_blocks_are_present() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    for opening in (
+        "@media (prefers-color-scheme: dark)",
+        "@media (prefers-contrast: more)",
+        "@media (forced-colors: active)",
+        "@media (prefers-reduced-motion: reduce)",
+    ):
+        assert css.count(opening) == 1, opening
+    assert "color-scheme: light dark;" in css
+    assert '<meta name="color-scheme" content="light dark">' in (
+        TEMPLATES / "_head_assets.jinja"
+    ).read_text(encoding="utf-8")
+    # Order matters: the contrast block must come after the palettes it adjusts.
+    assert css.index("prefers-color-scheme: dark") < css.index("prefers-contrast: more")
+
+
+def test_more_contrast_strengthens_text_and_borders_and_the_focus_ring() -> None:
+    block = _block(STYLES.read_text(encoding="utf-8"), "@media (prefers-contrast: more) {")
+    for token in ("--muted", "--text-soft", "--text"):
+        assert f"{token}: var(--text-strong);" in block
+    for token in ("--line", "--border-soft", "--border-card"):
+        assert f"{token}: var(--border-control);" in block
+    assert "outline: 4px solid var(--focus-ring);" in block
+
+
+def test_forced_colours_keep_focus_selection_and_errors_visible_by_shape() -> None:
+    block = _block(STYLES.read_text(encoding="utf-8"), "@media (forced-colors: active) {")
+    assert "outline: 3px solid Highlight;" in block
+    # Selected and checked states are a thicker or underlined border, not only a colour.
+    assert "border: 2px solid Highlight;" in block and "text-decoration: underline;" in block
+    assert "border: 3px solid Highlight;" in block
+    # Errors and notices are drawn with lines, in system colours.
+    assert "border: 3px double CanvasText;" in block
+    assert "border: 2px solid CanvasText;" in block
+
+
+def test_reduced_motion_stops_animation_transition_and_smooth_scrolling() -> None:
+    block = _block(STYLES.read_text(encoding="utf-8"), "@media (prefers-reduced-motion: reduce) {")
+    for declaration in (
+        "animation: none !important;",
+        "transition: none !important;",
+        "scroll-behavior: auto !important;",
+    ):
+        assert declaration in block
+
+
+def test_no_colour_is_hard_coded_outside_the_palettes() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    light = _block(css, ":root {")
+    dark_media = _block(css, "@media (prefers-color-scheme: dark) {")
+    outside = css.replace(light, "").replace(dark_media, "")
+    literals = re.findall(r"#[0-9a-fA-F]{3,6}\b", outside)
+    # Every colour is a token, so the dark palette and the contrast modes reach all of them.
+    assert literals == [], literals
+
+
+def test_placeholders_use_the_muted_text_colour() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    assert re.search(
+        r"::placeholder\s*\{[^}]*color:\s*var\(--muted\);[^}]*opacity:\s*1;", css, re.S
+    )
+
+
+def test_the_dashboard_skip_link_skips_the_module_navigation_too() -> None:
+    page = _page_source("dashboard.jinja")
+    assert 'href="#module-content"' in page
+    outline = _outline(page)
+    nav = [
+        e for e in outline.elements if e[0] == "nav" and "module-nav" in (e[1].get("class") or "")
+    ]
+    content = [e for e in outline.elements if e[1].get("id") == "module-content"]
+    assert len(nav) == 1 and len(content) == 1
+    # The workspace comes after the navigation, so the skip link jumps over it.
+    assert outline.elements.index(nav[0]) < outline.elements.index(content[0])
+    assert content[0][1].get("tabindex") == "-1"
+
+
+def test_no_unused_colour_token_is_left_in_the_stylesheet() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    declared = set(re.findall(r"--([a-z-]+):", css))
+    used = set(re.findall(r"var\(--([a-z-]+)\)", css))
+    # A token nothing reads is dead; the media blocks read tokens too.
+    assert declared - used == set(), declared - used

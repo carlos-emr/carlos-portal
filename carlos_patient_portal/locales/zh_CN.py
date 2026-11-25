@@ -213,6 +213,7 @@ TEXT: dict[str, str] = {
     "incorrect_username_or_password": "用户名或密码不正确",
     "invite_code": "邀请码",
     "language_aria_label": "语言",
+    "skip_to_content": "跳到主要内容",
     "logo_alt": "CARLOS",
     "logout": "退出登录",
     "message_back": "返回消息列表",
@@ -409,7 +410,11 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_another": "再创建一个关联码",
     "mycarlos_linked": "关联时间",
     "mycarlos_last_seen": "上次连接",
-    "mycarlos_empty": "没有已关联的设备。请选择「关联 myCarlos」添加设备。",
+    "mycarlos_devices_moved": "请在“关联 myCarlos”页面管理已关联的设备。",
+    "mycarlos_status_active": "活跃",
+    "mycarlos_status_stale": "近期未见",
+    "mycarlos_devices_empty_title": "尚无已关联的设备",
+    "mycarlos_devices_empty_body": "请创建关联码，然后在 myCarlos 中输入，将您的设备关联到此账户。",
     "mycarlos_remove_question": "要移除此设备吗？",
     "mycarlos_remove_effect": (
         "此设备将不再接收新文档。如需再次使用，请重新关联。已保存在 myCarlos 中的文档会保留在那里。"
@@ -423,6 +428,7 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_not_seen": "尚未连接",
     "mycarlos_mfa_required": "关联或移除设备前，请先验证您的登录。",
     "mycarlos_verify": "验证登录",
+    "mycarlos_verify_to_create": "验证登录后创建关联码",
     "mycarlos_portal_address": "门户网站网址",
     "mycarlos_qr_label": "在 myCarlos 中扫描",
     "mycarlos_qr_alt": "用于将 myCarlos 关联到此门户网站的二维码。",

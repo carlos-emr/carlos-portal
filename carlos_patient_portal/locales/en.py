@@ -246,6 +246,7 @@ TEXT: dict[str, str] = {
     "incorrect_username_or_password": "Incorrect Username or Password",
     "invite_code": "Invitation code",
     "language_aria_label": "Language",
+    "skip_to_content": "Skip to main content",
     "logo_alt": "CARLOS",
     "logout": "Logout",
     "message_back": "Back to messages",
@@ -499,7 +500,13 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_another": "Create another code",
     "mycarlos_linked": "Linked",
     "mycarlos_last_seen": "Last seen",
-    "mycarlos_empty": "No linked devices. Choose Link myCarlos to add one.",
+    "mycarlos_devices_moved": "Manage your linked devices on the Link myCarlos page.",
+    "mycarlos_status_active": "Active",
+    "mycarlos_status_stale": "Not seen recently",
+    "mycarlos_devices_empty_title": "No linked devices yet",
+    "mycarlos_devices_empty_body": (
+        "Create a code, then enter it in myCarlos to link your device to this account."
+    ),
     "mycarlos_remove_question": "Remove this device?",
     "mycarlos_remove_effect": (
         "This device will stop receiving new documents. To use it again, link it "
@@ -514,6 +521,7 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_not_seen": "Not yet seen",
     "mycarlos_mfa_required": "Verify your sign-in before linking or removing a device.",
     "mycarlos_verify": "Verify sign-in",
+    "mycarlos_verify_to_create": "Verify sign-in to create a code",
     "mycarlos_portal_address": "Portal address",
     "mycarlos_qr_label": "Scan in myCarlos",
     "mycarlos_qr_alt": "QR code for linking myCarlos to this portal.",

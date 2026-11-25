@@ -216,6 +216,7 @@ TEXT: dict[str, str] = {
     "incorrect_username_or_password": "使用者名稱或密碼錯誤",
     "invite_code": "邀請碼",
     "language_aria_label": "語言",
+    "skip_to_content": "跳到主要內容",
     "logo_alt": "CARLOS",
     "logout": "登出",
     "message_back": "返回訊息",
@@ -414,7 +415,11 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_another": "建立另一組連結碼",
     "mycarlos_linked": "連結時間",
     "mycarlos_last_seen": "最後連線時間",
-    "mycarlos_empty": "沒有已連結的裝置。請選擇「連結 myCarlos」來新增裝置。",
+    "mycarlos_devices_moved": "請在「連結 myCarlos」頁面管理已連結的裝置。",
+    "mycarlos_status_active": "使用中",
+    "mycarlos_status_stale": "近期未見",
+    "mycarlos_devices_empty_title": "尚無已連結的裝置",
+    "mycarlos_devices_empty_body": "請建立連結碼，然後在 myCarlos 中輸入，將您的裝置連結到此帳戶。",
     "mycarlos_remove_question": "要移除此裝置嗎？",
     "mycarlos_remove_effect": (
         "此裝置將不再接收新文件。若要再次使用，請重新連結。已儲存在 myCarlos 中的文件會保留。"
@@ -428,6 +433,7 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_not_seen": "尚未連線",
     "mycarlos_mfa_required": "連結或移除裝置之前，請先驗證您的登入。",
     "mycarlos_verify": "驗證登入",
+    "mycarlos_verify_to_create": "驗證登入後建立連結碼",
     "mycarlos_portal_address": "入口網站網址",
     "mycarlos_qr_label": "在 myCarlos 中掃描",
     "mycarlos_qr_alt": "用於將 myCarlos 連結至此入口網站的 QR 碼。",

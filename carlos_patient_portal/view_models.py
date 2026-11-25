@@ -147,6 +147,12 @@ class MyCarlosDeviceRowViewModel:
     linked_at: str
     last_seen_at: str
     remove_href: str
+    # For the device card (#100): the two moments in ISO 8601 UTC (the page writes "3 days ago"
+    # from them, the written date stays as the title and for a screen reader), and whether the
+    # device has not been seen for STALE_DEVICE_DAYS ("Not seen recently").
+    linked_iso: str = ""
+    last_seen_iso: str = ""
+    stale: bool = False
 
 
 @dataclass(frozen=True, slots=True)
