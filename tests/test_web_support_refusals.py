@@ -186,6 +186,34 @@ def test_a_proof_proves_only_for_its_own_session_and_an_allowed_factor() -> None
     )
 
 
+def test_the_proof_tag_is_compared_in_constant_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The tag is compared with `compare_digest` on the tag in the cookie and the one computed
+    for the session, never with `==`."""
+    calls: list[tuple[str, str]] = []
+    real = ws.compare_digest
+
+    def spy(left: str, right: str) -> bool:
+        calls.append((left, right))
+        return real(left, right)
+
+    monkeypatch.setattr(ws, "compare_digest", spy)
+    sms = _proof("sms")
+    assert ws.is_valid_portal_mfa_proof(
+        sms, SESSION_TOKEN, proof_secret=PROOF_SECRET, allow_email=False
+    )
+    assert len(calls) == 1
+    cookie_tag = sms.split(".", 1)[1]
+    assert calls[0][0] == cookie_tag
+    assert calls[0][1] == cookie_tag  # the computed tag equals the genuine one
+    # A wrong tag still reaches the comparison and fails it.
+    wrong = "sms." + "0" * 64
+    assert not ws.is_valid_portal_mfa_proof(
+        wrong, SESSION_TOKEN, proof_secret=PROOF_SECRET, allow_email=False
+    )
+    assert len(calls) == 2
+    assert calls[1] == ("0" * 64, cookie_tag)
+
+
 def test_logging_out_without_a_session_token_does_nothing() -> None:
     from datetime import timedelta
 
