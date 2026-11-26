@@ -59,9 +59,11 @@ APNS_PRODUCTION_HOST = "https://api.push.apple.com"
 APNS_SANDBOX_HOST = "https://api.sandbox.push.apple.com"
 WNS_HOST_SUFFIX = ".notify.windows.com"
 MAX_COLLAPSE_KEY_BYTES = 64
-# The key the phone looks up in its own strings (myCarlos's Fluent id `native-notice-arrival`:
-# "A new document is waiting. Unlock myCarlos to see it."). The portal sends the key, never text.
-APNS_ALERT_LOC_KEY = "native-notice-arrival"
+# The key the phone looks up in its own strings, never text: iOS shows an unknown key as the raw key
+# on the lock screen. It must exist in the phone's `src-tauri/ios-push/strings.json` and in each
+# `Localizable.strings` (myCarlos generates them from the Fluent id `native-tray-waiting` with
+# `scripts/generate-ios-push-strings.mjs`): "A new document is waiting. Unlock myCarlos to see it."
+APNS_ALERT_LOC_KEY = "MYCARLOS_DOCUMENT_WAITING"
 _FCM_TOKEN = re.compile(r"[A-Za-z0-9_:\-.]{20,4096}")
 _APNS_TOKEN = re.compile(r"[0-9a-fA-F]{64,200}")
 _PROJECT_ID = re.compile(r"[a-z][a-z0-9\-]{4,28}[a-z0-9]")
