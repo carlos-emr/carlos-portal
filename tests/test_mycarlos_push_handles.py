@@ -473,12 +473,16 @@ def test_apns_saying_410_revokes_the_destination_and_deletes_the_token(db) -> No
 # --- the migration -----------------------------------------------------------------------------
 
 
-def test_the_revision_follows_the_signup_claim_on_the_one_line_to_the_head() -> None:
+def test_the_revision_follows_the_signup_claim_and_the_line_has_one_head() -> None:
     script = ScriptDirectory.from_config(alembic_config_for_tests())
-    (head,) = script.get_heads()
-    assert head == "0026_mycarlos_push_handles"
-    assert script.get_revision(head).down_revision == "0025_signup_claim"
-    assert len(head) <= 32  # alembic_version.version_num is VARCHAR(32) on PostgreSQL
+    heads = script.get_heads()
+    assert len(heads) == 1
+    revision = script.get_revision("0026_mycarlos_push_handles")
+    assert revision.down_revision == "0025_signup_claim"
+    # It is on the line to the head (later revisions build on it).
+    assert "0026_mycarlos_push_handles" in {r.revision for r in script.walk_revisions()}
+    # alembic_version.version_num is VARCHAR(32) on PostgreSQL.
+    assert all(len(r.revision) <= 32 for r in script.walk_revisions())
 
 
 def test_the_downgrade_is_refused_while_a_token_exists(migrated) -> None:  # noqa: F811

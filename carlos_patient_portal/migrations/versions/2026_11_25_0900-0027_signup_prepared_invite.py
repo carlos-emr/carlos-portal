@@ -23,9 +23,9 @@ The table is altered in place on PostgreSQL (batch mode recreates it only on SQL
 Downgrade is refused while a request holds a prepared invite, since the old schema cannot keep
 what ties the invite to its request.
 
-Revision ID: 0026_signup_prepared_invite
-Revises: 0025_signup_claim
-Create Date: 2026-11-19 14:00:00+00:00
+Revision ID: 0027_signup_prepared_invite
+Revises: 0026_mycarlos_push_handles
+Create Date: 2026-11-25 09:00:00+00:00
 """
 
 from collections.abc import Sequence
@@ -34,8 +34,8 @@ import sqlalchemy as sa
 from alembic import context, op
 
 _ALEMBIC_REVISION_IDENTIFIERS: dict[str, str | Sequence[str] | None] = {
-    "revision": "0026_signup_prepared_invite",
-    "down_revision": "0025_signup_claim",
+    "revision": "0027_signup_prepared_invite",
+    "down_revision": "0026_mycarlos_push_handles",
     "branch_labels": None,
     "depends_on": None,
 }
@@ -57,7 +57,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     if context.is_offline_mode():
         raise RuntimeError(
-            "migration 0026 downgrade requires an online connection to check retained signup data"
+            "migration 0027 downgrade requires an online connection to check retained signup data"
         )
     connection = op.get_bind()
     if connection.dialect.name == "postgresql":
@@ -68,7 +68,7 @@ def downgrade() -> None:
         if not connection.connection.driver_connection.in_transaction:
             connection.exec_driver_sql("BEGIN IMMEDIATE")
     else:
-        raise RuntimeError("migration 0026 supports only SQLite and PostgreSQL")
+        raise RuntimeError("migration 0027 supports only SQLite and PostgreSQL")
     if connection.scalar(
         sa.text(
             "select count(*) from patient_portal_signup_requests "
@@ -76,7 +76,7 @@ def downgrade() -> None:
         )
     ):
         raise RuntimeError(
-            "cannot downgrade migration 0026 while sign-up requests hold a prepared invite"
+            "cannot downgrade migration 0027 while sign-up requests hold a prepared invite"
         )
     with op.batch_alter_table(_SIGNUP_TABLE) as batch_op:
         batch_op.drop_constraint(_POSITIVE, type_="check")
