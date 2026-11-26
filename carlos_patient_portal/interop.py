@@ -29,7 +29,7 @@ from fhir.resources.patient import Patient
 from fhir.resources.practitioner import Practitioner
 from hl7apy.consts import VALIDATION_LEVEL
 from hl7apy.core import Field, Message
-from hl7apy.exceptions import HL7apyException
+from hl7apy.exceptions import HL7apyException, ValidationError
 from hl7apy.parser import parse_message
 
 from carlos_patient_portal.identity import (
@@ -677,6 +677,13 @@ HL7_PROFILE_RULES: tuple[Callable[[Message, dict[str, object]], list[str]], ...]
 )
 
 
+# The two ValidationErrors HL7apy words with element names only: "Missing required child
+# ADT_A01.PV1", "Child limit exceeded ADT_A01.PID".
+STRUCTURAL_VALIDATION_ERROR = re.compile(
+    r"(?:Missing required child|Child limit exceeded) [A-Z0-9_]+\.[A-Z0-9_]+"
+)
+
+
 def validate_hl7_v251_patient_registration_profile(
     encoded_message: str,
     *,
@@ -693,8 +700,19 @@ def validate_hl7_v251_patient_registration_profile(
             validation_level=VALIDATION_LEVEL.STRICT,
             find_groups=True,
         )
-    except HL7apyException as exc:
-        raise Hl7ConformanceProfileError(f"HL7 v2.5.1 validation failed: {exc}") from exc
+    except (HL7apyException, ValueError) as exc:
+        # HL7apy words most errors with the offending value ("<value> is not an HL7 valid date
+        # value"), and some are plain ValueErrors. The value is a patient's name, birth date or
+        # health card number, so only the failure's kind is said, with one exception: a missing
+        # or surplus segment or field is named by its place in the message (PV1), never a value.
+        # The original is dropped (a chained exception prints its message in any traceback).
+        text = str(exc)
+        detail = (
+            text
+            if isinstance(exc, ValidationError) and STRUCTURAL_VALIDATION_ERROR.fullmatch(text)
+            else type(exc).__name__
+        )
+        raise Hl7ConformanceProfileError(f"HL7 v2.5.1 validation failed ({detail})") from None
 
     profile_payload = load_hl7_v251_patient_registration_profile() if profile is None else profile
     errors = check_hl7_profile_metadata(profile_payload)

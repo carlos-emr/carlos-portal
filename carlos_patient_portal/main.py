@@ -51,6 +51,7 @@ from carlos_patient_portal.auth import (
     PortalSessionInvalidError,
     authenticate_session_token,
 )
+from carlos_patient_portal.body_limit import BodyLimitMiddleware
 from carlos_patient_portal.booking_prompts import count_unread_prompts_for_account
 from carlos_patient_portal.config import (
     DEFAULT_AUDIT_RETENTION_DAYS,
@@ -736,6 +737,9 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
     # got counted: a credential-stuffing burst tripping auth_rate_limiter produced 429s that
     # were absent from operational_metrics, emitted no http_request log line and carried no
     # X-Request-ID, so /internal/metrics showed a quiet service for the duration of the attack.
+    # The body limit goes first, so it is innermost: its 413 still passes through the security
+    # headers and the request log.
+    app.add_middleware(BodyLimitMiddleware)
     app.middleware("http")(add_security_headers)
     app.middleware("http")(record_operational_signal)
 
