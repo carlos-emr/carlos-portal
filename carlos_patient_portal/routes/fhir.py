@@ -18,6 +18,7 @@ Registered by `main.create_app`. Everything here is patient-scoped: each handler
 clinic and demographic from the authenticated session rather than from request input.
 """
 
+import re
 from typing import Annotated
 from urllib.parse import urlencode
 
@@ -45,7 +46,6 @@ from carlos_patient_portal.models import (
     AUDIT_EVENT_FHIR_SEARCH,
     AUDIT_OUTCOME_FAILURE,
     AUDIT_OUTCOME_SUCCESS,
-    MAX_AUDIT_RESOURCE_ID_LENGTH,
     UNLOCK_SECRET_STATUS_ACTIVE,
     UNLOCK_SECRET_TYPE_EMAIL,
     PatientPortalAccount,
@@ -202,6 +202,12 @@ def parse_fhir_numeric_id(resource_id: str) -> int:
     return parsed_id
 
 
+# The ids this portal issues: `build_fhir_id`'s "portal-" and 56 hex digits (Patient, Organization,
+# Practitioner), and a document's database number.
+ISSUED_FHIR_ID = re.compile(r"portal-[0-9a-f]{56}|[1-9][0-9]{0,18}")
+UNRECOGNIZED_AUDIT_RESOURCE_ID = "unrecognized"
+
+
 def record_fhir_access(
     session: Session,
     account: PatientPortalAccount,
@@ -212,19 +218,14 @@ def record_fhir_access(
     outcome: str,
     reason: str,
 ) -> None:
-    # The raw client-supplied id is stored for traceability, but it must never be able to violate
-    # the column's length CHECK: an audit write that raises would turn a clean 404 into a 500 and
-    # lose the very event recording the attempt.
-    if resource_id is not None:
-        # Control characters must go too: SQLite's length() stops at an embedded NUL, so a raw
-        # "\x00" id measures as length 0 and fails the same CHECK from the other direction.
-        resource_id = "".join(
-            character if character.isprintable() else "?" for character in resource_id
-        )
-        if len(resource_id) > MAX_AUDIT_RESOURCE_ID_LENGTH:
-            resource_id = f"{resource_id[: MAX_AUDIT_RESOURCE_ID_LENGTH - 1]}~"
-        if not resource_id:
-            resource_id = "?"
+    # An id the client typed is stored only when it has the shape of an id this portal issues (a
+    # "portal-" hash, or a document's number): anything else is whatever the caller pasted into
+    # the URL or `_id`, which would sit in the audit trail and its export for the retention period
+    # (a name, a health card number). Those rows say only that an unrecognised id was asked for.
+    # What is stored is also at most 63 characters of ASCII, so it can never break the column's
+    # length check either (an audit write that raises would turn a clean 404 into a 500).
+    if resource_id is not None and not ISSUED_FHIR_ID.fullmatch(resource_id):
+        resource_id = UNRECOGNIZED_AUDIT_RESOURCE_ID
     record_audit_event(
         session,
         event_type=event_type,
