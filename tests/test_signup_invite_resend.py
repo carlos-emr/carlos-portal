@@ -45,8 +45,12 @@ from tests.support import IDENTITY_PROOF_SECRET, INTERNAL_API_TOKEN, carlos_staf
 from tests.test_signup_claims import (
     CLINIC,
     audit_rows,
+    claim,
+    claimed,
+    client_at,
     post_job,
     report,
+    sign_up,
     signup_app,
     stored_rows,
     typed_identity,
@@ -264,6 +268,65 @@ def test_every_audit_row_of_the_resend_names_the_system() -> None:
 # --------------------------------------------------------------------------------------------
 # What it refuses
 # --------------------------------------------------------------------------------------------
+
+
+def test_a_repeat_request_with_the_same_details_adopts_the_replacement_of_the_first_invite() -> (
+    None
+):
+    app = signup_app()
+    # Two requests with the very same details (the portal allows a few per health card).
+    for address in ("203.0.113.10", "203.0.113.11"):
+        assert sign_up(client_at(app, address)).status_code == 202
+    client = client_at(app, "198.51.100.1")
+    leases = [(item["request_id"], item["lease_token"]) for item in claimed(claim(client, 2))]
+    (first, first_token), (second, second_token) = leases
+    # The first request had its invite made and its match reported.
+    assert prepare(client, first, first_token).status_code == 201
+    assert commit(client, first, first_token).status_code == 200
+    [original] = invites(app)
+    assert report(client, first, first_token, "matched", original.id).status_code == 200
+    backdate(app, original.id, COOLDOWN + timedelta(minutes=1))
+
+    # The repeat asks for a new code for that invite.
+    prepared = resend(client, second, second_token)
+    assert prepared.status_code == 201, prepared.text
+    assert resend_commit(client, second, second_token).status_code == 200
+
+    owners = {row.id: row.prepared_invite_id for row in stored_rows(app)}
+    replacement_id = prepared.json()["id"]
+    assert owners == {first: original.id, second: replacement_id}
+    rows = by_id(app)
+    assert rows[original.id].status == INVITE_STATUS_SUPERSEDED
+    assert rows[replacement_id].status == INVITE_STATUS_PENDING
+    # The repeat reports its match with the replacement, the first request's report stands.
+    assert report(client, second, second_token, "matched", original.id).status_code == 422
+    assert report(client, second, second_token, "matched", replacement_id).status_code == 200
+
+
+def test_a_replacement_a_staff_member_prepared_is_never_released_as_the_systems() -> None:
+    from carlos_patient_portal.invites import prepare_resend_invite
+
+    app = signup_app()
+    client, [(request_id, token)] = sent_invite(app)
+    [original] = invites(app)
+    backdate(app, original.id, COOLDOWN + timedelta(minutes=1))
+    with app.state.session_factory() as session, session.begin():
+        prepare_resend_invite(
+            session,
+            original.id,
+            "Front Desk",
+            delivery_operation_id=RESEND_OPERATION,
+            encryption_secret="k" * 32,
+            encryption_key_id="primary",
+            encryption_keys={"primary": "k" * 32},
+            clinic_id=CLINIC,
+        )
+
+    refused = resend_commit(client, request_id, token)
+
+    assert refused.status_code == 409
+    assert refused.json() == {"detail": "sign-up request invite conflicts"}
+    assert by_id(app)[original.id].status == INVITE_STATUS_PENDING
 
 
 def test_another_persons_invite_and_no_invite_are_the_same_refusal() -> None:

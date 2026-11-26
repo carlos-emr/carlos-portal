@@ -629,8 +629,13 @@ def commit_signup_invite(  # NOSONAR
     )
 
 
-# The pending invite of the person a request's typed details belong to, locked. One refusal for
-# "no such invite" and "another person's invite", so the answer says nothing about which.
+# The pending invite of the person a request's typed details belong to. One refusal for "no such
+# invite" and "another person's invite", so the answer says nothing about which.
+#
+# Read WITHOUT a lock. The lock order for a replacement is the prepared row first, then the
+# original (commit takes them so); `prepare_resend_invite` locks the original itself, after looking
+# for an already prepared replacement, and re-checks that it is still pending. Locking it here
+# first would invert that order, and a retried prepare racing a commit could deadlock.
 def _pending_invite_of_the_person(
     session: Session,
     signup_request: PatientPortalSignupRequest,
@@ -641,13 +646,11 @@ def _pending_invite_of_the_person(
     identity_proof_secret: str,
 ) -> PatientPortalInvite:
     original = session.scalar(
-        select(PatientPortalInvite)
-        .where(
+        select(PatientPortalInvite).where(
             PatientPortalInvite.clinic_id == clinic_id,
             PatientPortalInvite.demographic_no == demographic_no,
             PatientPortalInvite.status == INVITE_STATUS_PENDING,
         )
-        .with_for_update()
     )
     if (
         original is None
@@ -787,7 +790,13 @@ def commit_signup_invite_resend(  # NOSONAR
         )
         .with_for_update()
     )
-    if replacement is None or replacement.supersedes_invite_id is None:
+    # Only a replacement this job prepared: one a staff member prepared (the same operation id on
+    # the staff routes) is never released as the system's.
+    if (
+        replacement is None
+        or replacement.supersedes_invite_id is None
+        or replacement.created_by_id != actor_id
+    ):
         raise SignupInviteConflictError(signup_request.health_card_hash)
     try:
         details = decrypt_signup_request(signup_request, encryption_keys=encryption_keys)
