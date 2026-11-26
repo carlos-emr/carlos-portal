@@ -61,6 +61,7 @@ from carlos_patient_portal.mycarlos_availability_store import (
     STATUS_PENDING,
     SqlAvailabilityTransaction,
     as_subscription,
+    forget_push_handles,
 )
 from carlos_patient_portal.mycarlos_devices import recipient_id_for_account
 
@@ -428,6 +429,8 @@ def revoke_invalid_destination(session: Session, intent: OutboxIntent, *, now: i
     row.revoked_at = datetime.fromtimestamp(now, tz=UTC)
     row.revoked_by = "provider"
     row.remote_enabled = False
+    # APNs said the token is gone (410): the stored token goes with the destination.
+    forget_push_handles(session, [row.destination_id])
     session.execute(
         delete(PatientPortalMyCarlosAvailabilityOutbox).where(
             PatientPortalMyCarlosAvailabilityOutbox.subscription_id == row.subscription_id,

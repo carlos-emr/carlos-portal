@@ -169,11 +169,15 @@ def test_the_downgrade_is_refused_while_enrollments_exist_and_drops_the_tables_o
         subscription_id = row.subscription_id
     with pytest.raises(RuntimeError, match="availability enrollments exist"):
         command.downgrade(config, SIGNUP)
+    # The refused downgrade had already stepped back past the later revisions (0026 dropped the
+    # push handle table, which a revocation clears): the operator upgrades again before going on.
+    command.upgrade(config, "head")
     # A tombstone counts: forgetting it would let a revoked destination enroll again.
     with Session(engine) as session, session.begin():
         revoke(session, owner, subscription_id)
     with pytest.raises(RuntimeError, match="availability enrollments exist"):
         command.downgrade(config, SIGNUP)
+    command.upgrade(config, "head")
     with engine.begin() as connection:
         connection.execute(text(f"delete from {SUBSCRIPTIONS}"))  # noqa: S608
     command.downgrade(config, SIGNUP)

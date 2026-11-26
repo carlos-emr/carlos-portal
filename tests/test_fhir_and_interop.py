@@ -397,7 +397,9 @@ def test_fhir_document_reference_read_audits_malformed_and_unknown_ids() -> None
                 .order_by(PatientPortalAuditEvent.id)
             )
         )
-        assert [event.resource_id for event in read_events] == ["not-a-number", "999999"]
+        # What a client typed is stored only when it has the shape of an id this portal issues
+        # (see test_privacy_hardening): a word is not, a number is.
+        assert [event.resource_id for event in read_events] == ["unrecognized", "999999"]
         assert all(event.outcome == "failure" for event in read_events)
         assert all(event.reason == "not_found" for event in read_events)
 

@@ -20,6 +20,9 @@ dependencies = [
   # Version 5.1.1 models FHIR R4 4.0.1; newer major versions omit exact R4.
   "fhir.resources==5.1.1",
   "hl7apy>=1.3.5,<2",
+  # Apple's push service speaks HTTP/2 only; the http2 extra brings h2, hpack and hyperframe. The same
+  # client as the dev extra (2.9.1 carries CVE-2026-84378/84379/84380/84382; fixed by 2.12.0).
+  "httpx2[http2]>=2.12,<3",
   "jinja2>=3.1,<4",
   # Keep the self-contained driver until a managed production image is defined.
   "psycopg[binary]>=3.2,<4",

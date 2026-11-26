@@ -67,3 +67,9 @@ def test_raw_configured_m3_base_is_validated_before_legacy_normalization(raw):
             mycarlos_approval_enabled=True,
             public_base_url=raw,
         )
+
+
+@pytest.mark.parametrize("raw", ["https://", "https://exa mple.com", "https://[::1", "not a url"])
+def test_text_the_url_parser_cannot_read_is_the_one_invalid_base_error(raw):
+    with pytest.raises(ValueError, match="myCarlos public portal base is invalid"):
+        normalize_portal(raw)
