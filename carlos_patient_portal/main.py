@@ -77,6 +77,7 @@ from carlos_patient_portal.models import (
     AUDIT_OUTCOME_SUCCESS,
     PatientPortalBookingPrompt,
 )
+from carlos_patient_portal.mycarlos_apns_wiring import HttpClient, availability_dispatch_for
 from carlos_patient_portal.presenters import (
     assemble_email_password_dashboard,
     assemble_messages,
@@ -97,6 +98,7 @@ from carlos_patient_portal.routes.signup import register_signup_routes
 from carlos_patient_portal.runtime import (
     FhirApiError,
     InMemoryRateLimiter,
+    PortalOperationalMetrics,
     PortalRuntime,
     RouteDependencies,
     auth_policy_from_settings,
@@ -180,6 +182,7 @@ def build_portal_runtime(
     *,
     email_sender: PortalEmailSender | None = None,
     sms_sender: PortalSmsSender | None = None,
+    apns_http_client: HttpClient | None = None,
 ) -> PortalRuntime:
     # Development without a configured secret gets an ephemeral one, so tokens minted by this
     # process stay valid for its lifetime and nothing survives a restart.
@@ -240,6 +243,7 @@ def build_portal_runtime(
         max_requests=settings.auth_rate_limit_max_requests,
         max_buckets=settings.rate_limit_max_buckets,
     )
+    metrics = PortalOperationalMetrics()
     return PortalRuntime(
         settings=settings,
         database_engine=database_engine,
@@ -261,6 +265,12 @@ def build_portal_runtime(
             email_sender if email_sender is not None else build_portal_email_sender(settings)
         ),
         sms_sender=(sms_sender if sms_sender is not None else build_portal_sms_sender(settings)),
+        # iPhone push: None while it is off; a bad key file or a missing HTTP client stops the
+        # portal here, at start-up.
+        availability_dispatch=availability_dispatch_for(
+            settings, session_factory, apns_http_client, record_failure=metrics.record_failure
+        ),
+        operational_metrics=metrics,
     )
 
 
@@ -1099,6 +1109,7 @@ def create_app(
     *,
     email_sender: PortalEmailSender | None = None,
     sms_sender: PortalSmsSender | None = None,
+    apns_http_client: HttpClient | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
     # Before anything can serve a request, so no hash is ever produced with the module defaults
@@ -1113,6 +1124,7 @@ def create_app(
         settings,
         email_sender=email_sender,
         sms_sender=sms_sender,
+        apns_http_client=apns_http_client,
     )
 
     app = FastAPI(

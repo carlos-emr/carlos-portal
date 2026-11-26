@@ -32,6 +32,7 @@ from carlos_patient_portal.models import (
     PatientPortalMyCarlosAvailabilityOutbox,
     PatientPortalMyCarlosAvailabilitySubscription,
     PatientPortalMyCarlosDevice,
+    PatientPortalMyCarlosPushHandle,
 )
 from carlos_patient_portal.mycarlos_availability import (
     MAX_DESTINATIONS,
@@ -214,6 +215,19 @@ def _destination_row(
     ).first()
 
 
+def forget_push_handles(session: Session, destination_ids: Sequence[str]) -> int:
+    """Deletes the push tokens of these destinations: a revoked destination keeps no token, and
+    neither does one APNs said is gone. How many were deleted."""
+    if not destination_ids:
+        return 0
+    result = session.execute(
+        delete(PatientPortalMyCarlosPushHandle).where(
+            PatientPortalMyCarlosPushHandle.destination_id.in_(list(destination_ids))
+        )
+    )
+    return int(result.rowcount or 0)
+
+
 def revoke(
     session: Session,
     owner: Owner,
@@ -246,6 +260,7 @@ def revoke(
         row.revoked_at = now or datetime.now(UTC)
         row.revoked_by = by
         row.remote_enabled = False
+        forget_push_handles(session, [row.destination_id])
         for pending in session.scalars(
             select(PatientPortalMyCarlosAvailabilityOutbox).where(
                 PatientPortalMyCarlosAvailabilityOutbox.subscription_id == row.subscription_id,
@@ -282,6 +297,7 @@ def revoke_for_removed_device(
         row.revoked_at = current
         row.revoked_by = by
         row.remote_enabled = False
+    forget_push_handles(session, [row.destination_id for row in rows])
     if rows:
         session.execute(
             delete(PatientPortalMyCarlosAvailabilityOutbox).where(
