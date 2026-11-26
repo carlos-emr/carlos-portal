@@ -76,9 +76,11 @@ CLINIC_BOOKING_PHONE_PATTERN = re.compile(
     r"(?=(?:[^0-9]*[0-9]){7})\+?\(?[0-9][0-9 ().-]{2,24}(?:\s*(?:ext\.?|x)\s*[0-9]{1,6})?",
     re.IGNORECASE,
 )
-# One plain address: no display name, no angle brackets, no comma list; the Help page links it.
+# One plain address: no display name, no angle brackets, no comma list; the Help page links it as
+# `mailto:`. The local part leaves out `? & % # = /` on purpose: `?bcc=`, `&body=`, `%0d%0a` and a
+# `#` would turn into mail-client headers or a second recipient in the link.
 CLINIC_CONTACT_EMAIL_PATTERN = re.compile(
-    r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+    r"[A-Za-z0-9.!$'*+^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
 )
 BOOKING_LOCATIONS_VARIABLE = "PATIENT_PORTAL_BOOKING_LOCATIONS"
 BOOKING_LOCATION_CODE_PATTERN = re.compile(rf"[a-z0-9_-]{{1,{MAX_BOOKING_LOCATION_CODE_LENGTH}}}")
