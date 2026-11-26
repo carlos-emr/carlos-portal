@@ -280,3 +280,46 @@ def test_a_key_owned_by_someone_else_is_refused(
     with pytest.raises(ApnsKeyError) as raised:
         apns_provider.check_apns_key_file(ApnsConfig(TEAM, KEY_ID, key, "ca.example.fake"))
     assert raised.value.code == "apns_key_wrong_owner"
+
+
+def _code_within_seconds(path: Path) -> str:
+    """The start-up check on a path that could block, on a thread, so a regression fails."""
+    import threading
+
+    from carlos_patient_portal.notification_transports import ApnsConfig
+
+    outcome: list[str] = []
+
+    def run() -> None:
+        try:
+            ApnsProviderJwtSigner(ApnsConfig(TEAM, KEY_ID, path, "ca.example.fake"), lambda: NOW)
+        except ApnsKeyError as error:
+            outcome.append(error.code)
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive(), "the key check blocked on a special file"
+    return outcome[0]
+
+
+def test_a_fifo_with_no_writer_is_refused_and_does_not_hang_start_up(tmp_path: Path) -> None:
+    fifo = tmp_path / "AuthKey_FAKEKEYID1.p8"
+    os.mkfifo(fifo, 0o600)
+    assert _code_within_seconds(fifo) == "apns_key_not_a_regular_file"
+
+
+def test_a_character_device_is_refused_as_not_a_regular_file() -> None:
+    assert _code_within_seconds(Path("/dev/null")) == "apns_key_not_a_regular_file"
+
+
+def test_a_key_read_in_short_pieces_is_still_read_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from carlos_patient_portal import apns_provider
+    from carlos_patient_portal.notification_transports import ApnsConfig
+
+    key = good_key(tmp_path)
+    real_read = os.read
+    monkeypatch.setattr(apns_provider.os, "read", lambda fd, n: real_read(fd, min(n, 37)))
+    ApnsProviderJwtSigner(ApnsConfig(TEAM, KEY_ID, key, "ca.example.fake"), lambda: NOW)
