@@ -156,6 +156,18 @@ class MyCarlosDeviceRowViewModel:
 
 
 @dataclass(frozen=True, slots=True)
+class DocumentsTileViewModel:
+    """The dashboard's Documents tile: a count of deliveries waiting, and nothing about them.
+
+    `has_device` is False when no linked device is active, which turns the tile into a link to
+    the Link myCarlos page. No document name, kind or clinic detail is ever carried here.
+    """
+
+    has_device: bool
+    waiting_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class MyCarlosViewModel:
     devices: tuple[MyCarlosDeviceRowViewModel, ...] = ()
     portal_address: str | None = None
