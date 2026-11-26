@@ -73,6 +73,17 @@ def test_the_builders_accept_the_values_the_refusals_below_change() -> None:
 
 
 @pytest.mark.parametrize(
+    ("account_id", "device_id"),
+    [(0, 1), (1, 0), (-1, 1), (1, -1), ("7", 11), (7, "11"), (True, 1), (1, True), (None, None)],
+)
+def test_an_owner_is_two_positive_integer_ids(account_id: object, device_id: object) -> None:
+    with pytest.raises(AvailabilityError) as raised:
+        Owner(account_id, device_id)  # type: ignore[arg-type]
+    assert str(raised.value) == "invalid_owner"
+    assert Owner(1, 1) == Owner(1, 1)
+
+
+@pytest.mark.parametrize(
     "changes",
     [
         {"owner": (7, 11)},
