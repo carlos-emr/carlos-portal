@@ -1,6 +1,6 @@
 {% from "_password_toggle.jinja" import password_toggle -%}
 <!doctype html>
-<html lang="{{ locale }}">
+<html lang="{{ locale }}"{{ appearance_html_attributes() }}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -10,6 +10,7 @@
     "email-passwords": text.email_passwords,
     "messages": text.messages,
     "help": text.help,
+    "preferences": text.preferences,
   }.get(active_module, text.patient_dashboard) -%}
   <title>{{ page_heading }} - {{ service_name }}</title>
   {% include "_head_assets.jinja" %}
@@ -30,7 +31,7 @@
             <span>{{ clinic_name }}</span>
           </div>
         </div>
-        {% include "_language_switch.jinja" %}
+        {# The language buttons live in the Preferences module here; the sign-in pages keep theirs. #}
         <div class="portal-user-actions">
           <span class="signed-in-user">{{ account.username }}</span>
           <form class="logout-form" method="post" action="{{ url_for('portal_logout') }}">
@@ -456,6 +457,44 @@
             {% else %}
               <p class="empty-state">{{ text.messages_empty }}</p>
             {% endif %}
+          {% elif active_module == "preferences" %}
+            <header class="module-header">
+              <h1>{{ text.preferences }}</h1>
+            </header>
+            {% if account_notice %}
+              <p class="form-notice" role="status">{{ account_notice }}</p>
+            {% endif %}
+            <div class="settings-sections">
+              <section class="settings-section">
+                <h2>{{ text.preferences_appearance }}</h2>
+                <form class="form-stack settings-form" method="post" action="{{ url_for('portal_save_preferences') }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  {# A radio group: arrow keys move through it, and a screen reader hears its name and
+                     "n of 3". System sets nothing, so the device's own colour setting decides. #}
+                  <fieldset class="preference-group">
+                    <legend>{{ text.preferences_appearance_legend }}</legend>
+                    <div class="segmented-control segmented-control-three">
+                      {% for value, label in (("system", text.appearance_system), ("light", text.appearance_light), ("dark", text.appearance_dark)) %}
+                        <label class="segmented-option">
+                          <input type="radio" name="theme" value="{{ value }}"{% if appearance.theme == value %} checked{% endif %}>
+                          <span>{{ label }}</span>
+                        </label>
+                      {% endfor %}
+                    </div>
+                  </fieldset>
+                  <label class="checkbox-row">
+                    <input type="checkbox" name="contrast" value="more" aria-describedby="preferences-contrast-help"{% if appearance.contrast == "more" %} checked{% endif %}>
+                    <span>{{ text.appearance_high_contrast }}</span>
+                  </label>
+                  <p class="clinic-help-line" id="preferences-contrast-help">{{ text.appearance_high_contrast_help }}</p>
+                  <button class="primary-action" type="submit">{{ text.preferences_save }}</button>
+                </form>
+              </section>
+              <section class="settings-section">
+                <h2>{{ text.preferences_language }}</h2>
+                {% include "_language_switch.jinja" %}
+              </section>
+            </div>
           {% else %}
             <header class="module-header">
               <h1>{{ text.help }}</h1>

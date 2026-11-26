@@ -338,9 +338,15 @@ def _check_skip_link_structure(html: str, label: str) -> None:
     for tag, attributes, ancestors in outline.elements:
         in_main = any(t == "main" for t, _ in ancestors)
         classes = (attributes.get("class") or "").split()
-        # The top bar (banner) and the language switch are outside main; so is the footer.
-        if "patient-topbar" in classes or "page-footer" in classes or "language-switch" in classes:
+        # The top bar (banner) and the language switch are outside main; so is the footer. The one
+        # exception is the signed-in dashboard, where the language buttons moved into the
+        # Preferences module (inside main), and the top bar no longer has them.
+        if "patient-topbar" in classes or "page-footer" in classes:
             assert not in_main, f"{label}: {tag}.{'.'.join(classes)} is inside main"
+        if "language-switch" in classes:
+            assert in_main == label.startswith("dashboard"), (
+                f"{label}: the language switch is {'inside' if in_main else 'outside'} main"
+            )
     # The live region is in the page from the start, outside main, empty.
     regions = [e for e in outline.elements if e[1].get("id") == "portal-live-status"]
     assert len(regions) == 1, label
@@ -424,6 +430,16 @@ def test_the_axe_check_runs_in_both_colour_schemes_and_with_forced_colours() -> 
     # Emulation is always switched off again for the caller's own steps.
     assert "emulateMedia({ colorScheme: null, forcedColors: null })" in script
     assert "finally" in script
+    # The choice made in Preferences is checked too, each way it can be set, then put back.
+    for mode in (
+        "chosen dark'",
+        "chosen dark, high contrast'",
+        "chosen light, high contrast'",
+        "chosen light on a dark device'",
+    ):
+        assert mode in script, mode
+    assert "setAttribute('data-theme'" in script and "setAttribute('data-contrast'" in script
+    assert "setAppearance(previous.theme, previous.contrast)" in script
 
 
 # --- Both palettes: every token pair, computed from the stylesheet --------------------------------
@@ -440,10 +456,16 @@ def _block(source: str, opening: str) -> str:
     raise AssertionError(opening)
 
 
+# The device's dark setting applies unless Light was chosen in Preferences; a chosen Dark has its
+# own copy of the same palette (see test_a_chosen_dark_has_exactly_the_devices_dark_palette).
+DARK_FOLLOWS_DEVICE = ':root:not([data-theme="light"]) {'
+DARK_CHOSEN = ':root[data-theme="dark"] {'
+
+
 def _palettes() -> dict[str, dict[str, str]]:
     css = STYLES.read_text(encoding="utf-8")
     light_block = _block(css, ":root {")
-    dark_block = _block(_block(css, "@media (prefers-color-scheme: dark) {"), ":root {")
+    dark_block = _block(_block(css, "@media (prefers-color-scheme: dark) {"), DARK_FOLLOWS_DEVICE)
     declared = re.compile(r"--([a-z-]+):\s*(#[0-9a-fA-F]{6});")
     light = dict(declared.findall(light_block))
     dark = {**light, **dict(declared.findall(dark_block))}
@@ -491,10 +513,62 @@ def test_the_dark_palette_defines_every_token_the_light_one_does() -> None:
     dark = set(
         re.findall(
             r"--([a-z-]+):\s*#",
-            _block(_block(css, "@media (prefers-color-scheme: dark) {"), ":root {"),
+            _block(_block(css, "@media (prefers-color-scheme: dark) {"), DARK_FOLLOWS_DEVICE),
         )
     )
     assert light == dark
+
+
+def test_a_chosen_dark_has_exactly_the_devices_dark_palette() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    declared = re.compile(r"--([a-z-]+):\s*(#[0-9a-fA-F]{6});")
+    device = dict(
+        declared.findall(
+            _block(_block(css, "@media (prefers-color-scheme: dark) {"), DARK_FOLLOWS_DEVICE)
+        )
+    )
+    chosen = dict(declared.findall(_block(css, DARK_CHOSEN)))
+    assert chosen == device and len(chosen) == len(PALETTES["light"])
+    # A chosen Dark also draws form controls and scrollbars dark, and a chosen Light light.
+    assert "color-scheme: dark;" in _block(css, DARK_CHOSEN)
+    assert "color-scheme: light;" in _block(css, ':root[data-theme="light"] {')
+
+
+def test_the_logo_keeps_its_white_backing_on_both_ways_into_dark() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    device = _block(
+        _block(css, "@media (prefers-color-scheme: dark) {"),
+        ':root:not([data-theme="light"]) .brand-logo {',
+    )
+    chosen = _block(css, ':root[data-theme="dark"] .brand-logo {')
+    assert " ".join(device.split()) == " ".join(chosen.split()) != ""
+    assert "background: #ffffff;" in chosen
+
+
+def test_the_chosen_light_theme_is_not_darkened_by_the_device() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    # The device's dark palette must not reach a page that chose Light: it is scoped out.
+    media = _block(css, "@media (prefers-color-scheme: dark) {")
+    assert ':root:not([data-theme="light"])' in media
+    assert "\n  :root {" not in media
+
+
+def test_the_high_contrast_switch_has_the_same_declarations_as_the_devices_setting() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    media = _block(css, "@media (prefers-contrast: more) {")
+    from_device = _block(media, ":root,\n  :root[data-theme] {")
+    chosen = _block(css, ':root[data-contrast="more"] {')
+    declaration = re.compile(r"--[a-z-]+:\s*var\(--[a-z-]+\);")
+    assert declaration.findall(chosen) == declaration.findall(from_device) != []
+    # The thicker focus outline too, on every kind of focusable control the media block covers.
+    for control in ("a", "button", "input", "select", "textarea", "[tabindex]"):
+        assert f'[data-contrast="more"] {control}:focus-visible' in css
+    assert css.count("outline: 4px solid var(--focus-ring);") == 2
+    # It comes after every palette it adjusts, so it wins at the same specificity.
+    assert css.index(':root[data-contrast="more"] {') > css.index(DARK_CHOSEN)
+    assert css.index(':root[data-contrast="more"] {') > css.index(
+        "@media (prefers-color-scheme: dark)"
+    )
 
 
 def test_the_colour_and_motion_media_blocks_are_present() -> None:
@@ -507,7 +581,9 @@ def test_the_colour_and_motion_media_blocks_are_present() -> None:
     ):
         assert css.count(opening) == 1, opening
     assert "color-scheme: light dark;" in css
-    assert '<meta name="color-scheme" content="light dark">' in (
+    # The meta value is chosen on the server: "light dark" while the device decides (the default),
+    # and the one scheme when Light or Dark was chosen (tests/test_appearance_preferences.py).
+    assert '<meta name="color-scheme" content="{{ appearance_color_scheme() }}">' in (
         TEMPLATES / "_head_assets.jinja"
     ).read_text(encoding="utf-8")
     # Order matters: the contrast block must come after the palettes it adjusts.
@@ -548,7 +624,15 @@ def test_no_colour_is_hard_coded_outside_the_palettes() -> None:
     css = STYLES.read_text(encoding="utf-8")
     light = _block(css, ":root {")
     dark_media = _block(css, "@media (prefers-color-scheme: dark) {")
-    outside = css.replace(light, "").replace(dark_media, "")
+    # A chosen Dark repeats the device's dark palette and the logo's white backing.
+    dark_chosen = _block(css, DARK_CHOSEN)
+    dark_chosen_logo = _block(css, ':root[data-theme="dark"] .brand-logo {')
+    outside = (
+        css.replace(light, "")
+        .replace(dark_media, "")
+        .replace(dark_chosen, "")
+        .replace(dark_chosen_logo, "")
+    )
     literals = re.findall(r"#[0-9a-fA-F]{3,6}\b", outside)
     # Every colour is a token, so the dark palette and the contrast modes reach all of them.
     assert literals == [], literals

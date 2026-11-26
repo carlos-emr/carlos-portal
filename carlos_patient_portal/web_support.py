@@ -40,12 +40,13 @@ from fastapi import HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, pass_context
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 from starlette.responses import Response
 from starlette.routing import Match, Mount
 
+from carlos_patient_portal.appearance import Appearance, read_appearance
 from carlos_patient_portal.audit import UNKNOWN_CLIENT_REFERENCE
 from carlos_patient_portal.auth import (
     AuthenticatedPortalSession,
@@ -105,6 +106,31 @@ templates = Jinja2Templates(  # nosemgrep: direct-use-of-jinja2 -- see comment a
         autoescape=True,
     )
 )
+
+
+def _request_appearance(context: object) -> Appearance:
+    """The appearance cookies of the request the template is being rendered for."""
+    getter = getattr(context, "get", None)
+    request = getter("request") if getter is not None else None
+    return read_appearance(getattr(request, "cookies", None))
+
+
+@pass_context
+def appearance_html_attributes(context: object) -> object:
+    """The ` data-theme` and ` data-contrast` attributes for `<html>`: only what was chosen."""
+    return _request_appearance(context).html_attributes
+
+
+@pass_context
+def appearance_color_scheme(context: object) -> str:
+    """The `color-scheme` meta value for this request."""
+    return _request_appearance(context).color_scheme
+
+
+# Every full page puts these on its `<html>` and in its head, so the choice is already in the first
+# response and nothing flashes (see appearance.py).
+templates.env.globals["appearance_html_attributes"] = appearance_html_attributes
+templates.env.globals["appearance_color_scheme"] = appearance_color_scheme
 
 
 CONTENT_SECURITY_POLICY = (
@@ -230,6 +256,7 @@ PORTAL_MODULES = (
     },
     {"slug": "messages", "label_key": "messages", "route_name": "portal_messages"},
     {"slug": "help", "label_key": "help", "route_name": "portal_help"},
+    {"slug": "preferences", "label_key": "preferences", "route_name": "portal_preferences"},
 )
 
 
@@ -1140,6 +1167,8 @@ def portal_template_context(
     ).format(count=new_message_count)
     context["mycarlos_enabled"] = settings.mycarlos_delivery_enabled
     context["mycarlos"] = mycarlos
+    # The Preferences module shows what this browser has chosen (see appearance.py).
+    context["appearance"] = read_appearance(request.cookies)
     return context
 
 

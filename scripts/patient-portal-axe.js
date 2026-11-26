@@ -5,7 +5,9 @@
  * own accessible-page helper.
  *
  * It runs twice, in the light and then in the dark colour scheme (the device's setting, emulated),
- * and then makes a smoke check with forced colours (a Windows contrast theme, emulated): the page
+ * then again with the patient's own choice from Preferences (data-theme Dark and Light, and
+ * data-contrast More, set on <html> as the server does), and then makes a smoke check with forced
+ * colours (a Windows contrast theme, emulated): the page
  * still shows its heading and the skip link, when it has the focus, still has a visible outline.
  * Emulation is switched off again, so the caller's own steps see the page as before.
  *
@@ -71,12 +73,43 @@ async function assertForcedColoursSmoke(page, surface) {
   }
 }
 
+// The patient's own choice in Preferences: the server puts data-theme and data-contrast on <html>.
+// They are set here the same way, on the open page, and put back as they were: Dark chosen while
+// the device is light (and Light chosen while it is dark), and High contrast on top of each.
+async function assertNoSeriousIssuesWithChosenAppearance(page, surface) {
+  const previous = await page.evaluate(() => ({
+    theme: document.documentElement.getAttribute('data-theme'),
+    contrast: document.documentElement.getAttribute('data-contrast'),
+  }));
+  const setAppearance = (theme, contrast) => page.evaluate(([chosenTheme, chosenContrast]) => {
+    const root = document.documentElement;
+    if (chosenTheme) root.setAttribute('data-theme', chosenTheme); else root.removeAttribute('data-theme');
+    if (chosenContrast) root.setAttribute('data-contrast', chosenContrast); else root.removeAttribute('data-contrast');
+  }, [theme, contrast]);
+  try {
+    await setAppearance('dark', null);
+    await assertNoSeriousIssues(page, surface, 'chosen dark');
+    await setAppearance('dark', 'more');
+    await assertNoSeriousIssues(page, surface, 'chosen dark, high contrast');
+    await setAppearance('light', 'more');
+    await assertNoSeriousIssues(page, surface, 'chosen light, high contrast');
+    // Chosen Light on a device that is dark must stay light: the device's palette is scoped out.
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await setAppearance('light', null);
+    await assertNoSeriousIssues(page, surface, 'chosen light on a dark device');
+  } finally {
+    await page.emulateMedia({ colorScheme: null });
+    await setAppearance(previous.theme, previous.contrast);
+  }
+}
+
 async function assertNoSeriousAxeIssues(page, surface) {
   await assertNoSeriousIssues(page, surface, 'light');
   try {
     await page.emulateMedia({ colorScheme: 'dark' });
     await assertNoSeriousIssues(page, surface, 'dark');
     await page.emulateMedia({ colorScheme: null });
+    await assertNoSeriousIssuesWithChosenAppearance(page, surface);
     await assertForcedColoursSmoke(page, surface);
   } finally {
     await page.emulateMedia({ colorScheme: null, forcedColors: null });
