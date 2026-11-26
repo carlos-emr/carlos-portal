@@ -15,6 +15,7 @@ from carlos_patient_portal import web_support
 from carlos_patient_portal.auth import create_patient_session
 from carlos_patient_portal.config import Settings
 from carlos_patient_portal.credentials import hash_password
+from carlos_patient_portal.device_identity import DevicePrincipal, record_device_seen
 from carlos_patient_portal.i18n import MYCARLOS_TEXT_CATALOG
 from carlos_patient_portal.models import (
     PatientPortalAccount,
@@ -404,6 +405,42 @@ def test_email_proof_is_environment_bound_and_cookie_is_scoped_secure_and_cleare
         web_support.PORTAL_MFA_PROOF_COOKIE_NAME in value and "Max-Age=0" in value
         for value in cleared.headers.getlist("set-cookie")
     )
+
+
+def test_a_device_that_checks_in_shows_its_time_and_loses_the_not_seen_recently_chip():
+    app, client, sms, account_id = make_portal()
+    sign_in(client, sms)
+    key = stored_device(app, account_id, "FAKE card", "FAKE Pixel phone")
+    with app.state.session_factory() as session, session.begin():
+        device = session.scalar(
+            select(PatientPortalMyCarlosDevice).where(
+                PatientPortalMyCarlosDevice.device_key_id == key
+            )
+        )
+        # Linked long ago and never seen: nothing was recorded, so it reads as unused for months.
+        device.linked_at = utc_now() - timedelta(days=200)
+        device_id = device.id
+    before = client.get("/portal/mycarlos").text
+    assert before.count("mycarlos-device-status-stale") == 1
+    assert "Not yet seen" in before
+
+    # One accepted device request records the check-in (the same call its route makes).
+    principal = DevicePrincipal(
+        device_id=device_id,
+        account_id=account_id,
+        device_key_id=key,
+        assertion_id="FAKE-assertion",
+        assertion_expires_at=0,
+        vault_head_link=None,
+    )
+    record_device_seen(app.state.session_factory, principal)
+
+    after = client.get("/portal/mycarlos").text
+    assert "mycarlos-device-status-stale" not in after
+    assert after.count("mycarlos-device-status-active") == 1
+    assert "Not yet seen" not in after
+    # The card shows the moment as a <time> element, as for any seen device.
+    assert after.count("<time ") == before.count("<time ") + 1
 
 
 def test_linked_devices_are_cards_on_the_link_page_and_account_only_points_to_them():

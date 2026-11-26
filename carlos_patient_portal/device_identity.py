@@ -35,7 +35,7 @@ import re
 from base64 import urlsafe_b64encode
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from secrets import compare_digest
 from time import time
@@ -43,7 +43,7 @@ from uuid import UUID
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from carlos_patient_portal.models import (
@@ -72,6 +72,8 @@ DEVICE_ISSUER = "mycarlos"
 MAX_DEVICE_ASSERTION_BYTES = 4096
 MAX_DEVICE_ASSERTION_LIFETIME_SECONDS = 120
 DEVICE_CLOCK_SKEW_SECONDS = 30
+# A device's `last_seen_at` is written at most this often (as for browser sessions, 5 minutes).
+DEVICE_LAST_SEEN_UPDATE_INTERVAL = timedelta(minutes=5)
 DEVICE_KEY_ID_LABEL = b"mycarlos-device-key-v1"
 LINK_CODE_ALPHABET = frozenset("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
 MAX_DEVICE_NAME_LENGTH = 64
@@ -445,6 +447,49 @@ def consume_device_assertion(
         raise DeviceRefusal(REFUSAL_EXPIRED) from exc
     except AssertionReplayError as exc:
         raise DeviceRefusal(REFUSAL_REPLAY) from exc
+    if isinstance(principal, DevicePrincipal):
+        # Only a request that passed checks 1-8 (so never a replay) shows the device as seen.
+        record_device_seen(session_factory, principal, now=current_time)
+
+
+def record_device_seen(
+    session_factory: sessionmaker[Session],
+    principal: DevicePrincipal,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Stamp the device's `last_seen_at`, and copy the vault head anchor its request carried.
+
+    One conditional UPDATE that matches no row (so writes nothing) unless the device is still
+    active and either its last stamp is older than `DEVICE_LAST_SEEN_UPDATE_INTERVAL` or its
+    anchor changed. It records a timestamp and the device's own signed anchor only: no IP
+    address, user agent or request detail. A device removed since the request was verified is not
+    stamped.
+    """
+    moment = datetime.now(UTC) if now is None else now
+    anchor = principal.vault_head_link
+    due = or_(
+        PatientPortalMyCarlosDevice.last_seen_at.is_(None),
+        PatientPortalMyCarlosDevice.last_seen_at < moment - DEVICE_LAST_SEEN_UPDATE_INTERVAL,
+    )
+    values: dict[str, object] = {"last_seen_at": moment}
+    if anchor is not None:
+        due = or_(
+            due,
+            PatientPortalMyCarlosDevice.vault_head_link.is_(None),
+            PatientPortalMyCarlosDevice.vault_head_link != anchor,
+        )
+        values |= {"vault_head_link": anchor, "vault_head_link_at": moment}
+    with session_factory() as session, session.begin():
+        session.execute(
+            update(PatientPortalMyCarlosDevice)
+            .where(
+                PatientPortalMyCarlosDevice.id == principal.device_id,
+                PatientPortalMyCarlosDevice.status == MYCARLOS_DEVICE_STATUS_ACTIVE,
+                due,
+            )
+            .values(**values)
+        )
 
 
 def lock_active_device_account(session: Session, account_id: int) -> bool:
