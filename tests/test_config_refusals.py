@@ -349,3 +349,40 @@ def test_the_outbox_settings_refuse_each_web_only_credential_outside_development
     # And without an outbox key it does not start.
     with pytest.raises(ValueError, match="OUTBOX_ENCRYPTION_SECRET or"):
         OutboxSettings(**{**worker, "outbox_encryption_secret": None})
+
+
+# --------------------------------------------------------------------------------------------
+# A refusal never echoes what it was given
+# --------------------------------------------------------------------------------------------
+
+
+def test_a_settings_error_never_contains_the_values_it_refused() -> None:
+    """`hide_input_in_errors=True` keeps secrets out of a start-up traceback and the log.
+
+    Without it pydantic prints `input_value=...` with the whole input, for a field error and for
+    a model-level error alike, and these values include the session secret and database password.
+    """
+    secret = "FAKE-SECRET-MUST-NOT-APPEAR"
+    cases = [
+        # A field error: the bad value is the secret itself.
+        (development_settings, {"smtp_host": "mail.internal", "smtp_from_address": secret}),
+        # A model-level error: the secret is a different field's (and too short) value.
+        (production_settings, {"session_secret": secret}),
+        (
+            production_settings,
+            {"database_url": f"invalid://portal:{secret}@localhost/portal"},
+        ),
+    ]
+    for build, overrides in cases:
+        with pytest.raises(ValueError) as refused:
+            build(**overrides)
+        text = str(refused.value)
+        assert "validation error" in text, overrides  # it is a pydantic refusal, with its reason
+        assert secret not in text and "input_value" not in text, overrides
+    # The migration job's smaller settings object holds the same rule.
+    with pytest.raises(ValueError) as refused:
+        MigrationDatabaseSettings(
+            environment="production", database_url=f"invalid://portal:{secret}@localhost/portal"
+        )
+    assert "validation error" in str(refused.value)
+    assert secret not in str(refused.value) and "input_value" not in str(refused.value)
