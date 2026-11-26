@@ -13,12 +13,24 @@ FAKE patient and passwords only (the test seed's).
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from carlos_patient_portal import web_support
+from carlos_patient_portal.models import (
+    EMAIL_CHANGE_STATUS_REVOKED,
+    PatientPortalAccount,
+    PatientPortalEmailChangeRequest,
+)
 from tests.support import (
+    NON_DEVELOPMENT_SESSION_SECRET,
+    SEEDED_INVITE_EMAIL,
     STRONG_PASSWORD,
+    RecordingPortalEmailSender,
+    RecordingPortalSmsSender,
     browser_sign_in_seeded_patient,
     csrf_token_from_response,
     migrated_development_app,
@@ -135,3 +147,91 @@ def test_an_mfa_change_with_the_wrong_password_or_an_unknown_method_fails() -> N
     )
     assert wrong.status_code == 403
     assert form.client.get("/portal/account").status_code == 200
+
+
+# --- a portal with no SMS delivery configured ---
+
+
+def request_phone_change(app, client: TestClient, phone: str):  # noqa: ANN001, ANN201
+    page = client.get("/portal/account")
+    return client.post(
+        "/portal/account/contact",
+        data={
+            "csrf_token": csrf_token_from_response(page),
+            "email": SEEDED_INVITE_EMAIL,
+            "phone_number": phone,
+            "current_password": STRONG_PASSWORD,
+        },
+        follow_redirects=False,
+    )
+
+
+def pending_phone_requests(app) -> list[PatientPortalEmailChangeRequest]:  # noqa: ANN001
+    with app.state.session_factory() as session:
+        return list(session.scalars(select(PatientPortalEmailChangeRequest)))
+
+
+def test_a_phone_change_with_no_sms_delivery_configured_is_revoked_and_the_patient_is_told() -> (
+    None
+):
+    # No webhook is configured, so the portal has no SMS sender at all.
+    app = migrated_development_app(email_sender=RecordingPortalEmailSender())
+    client = TestClient(app)
+    account_id = browser_sign_in_seeded_patient(app, client)
+    response = request_phone_change(app, client, "+1 555 010 5559")
+    # The confirmation cannot be sent, so nothing is left pending and the patient is not left
+    # believing a change is in flight.
+    assert response.status_code == 303
+    assert response.headers["location"] == "/portal/account?status=phone-confirmation-notice-failed"
+    requests = pending_phone_requests(app)
+    assert [row.status for row in requests] == [EMAIL_CHANGE_STATUS_REVOKED]
+    with app.state.session_factory() as session:
+        account = session.get(PatientPortalAccount, account_id)
+        assert account.phone_number is None
+
+
+def test_a_phone_code_resent_by_a_portal_with_no_sms_delivery_keeps_the_last_delivered_code(
+    tmp_path,  # noqa: ANN001
+) -> None:
+    database = f"sqlite+pysqlite:///{tmp_path / 'portal.db'}"
+    # First, a portal that can send: the patient asks for a phone change and gets a code.
+    sender = RecordingPortalSmsSender()
+    sending = migrated_development_app(
+        email_sender=RecordingPortalEmailSender(),
+        sms_sender=sender,
+        database_url=database,
+        session_secret=NON_DEVELOPMENT_SESSION_SECRET,
+    )
+    first = TestClient(sending)
+    browser_sign_in_seeded_patient(sending, first)
+    requested = request_phone_change(sending, first, "+1 555 010 5558")
+    assert requested.headers["location"] == "/portal/account?status=phone-confirmation-required"
+    assert len(sender.messages) == 1
+    # The code was sent a while ago, so the resend is not rate limited.
+    with sending.state.session_factory() as session, session.begin():
+        for row in session.scalars(select(PatientPortalEmailChangeRequest)):
+            row.phone_code_sent_at = datetime.now(UTC) - timedelta(hours=1)
+    before = [(row.status, row.phone_code_hash) for row in pending_phone_requests(sending)]
+    # Then the same database and the same session, in a portal with no SMS delivery configured.
+    bare = migrated_development_app(
+        email_sender=RecordingPortalEmailSender(),
+        database_url=database,
+        session_secret=NON_DEVELOPMENT_SESSION_SECRET,
+    )
+    second = TestClient(bare)
+    # Only the session crosses over: the page of this portal gives its own CSRF token and cookie.
+    for cookie in first.cookies.jar:
+        if cookie.name == web_support.PORTAL_SESSION_COOKIE_NAME:
+            second.cookies.set(cookie.name, cookie.value, domain=cookie.domain, path=cookie.path)
+    page = second.get("/portal/account", follow_redirects=False)
+    assert page.status_code == 200
+    resent = second.post(
+        "/portal/account/contact/resend-phone",
+        data={"csrf_token": csrf_token_from_response(page)},
+        follow_redirects=False,
+    )
+    assert resent.status_code == 303
+    assert resent.headers["location"] == "/portal/account?status=phone-confirmation-invalid"
+    # Nothing was sent, and the request that was pending still is (its last code is kept).
+    assert len(sender.messages) == 1
+    assert [(row.status, row.phone_code_hash) for row in pending_phone_requests(bare)] == before
