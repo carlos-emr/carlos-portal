@@ -7,6 +7,7 @@ Nothing here prints or returns a stored secret: a refusal carries a fixed senten
 wrong with the input, never the input.
 """
 
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -77,20 +78,34 @@ def test_a_word_list_row_out_of_order_or_not_a_numbered_word_is_refused(wordlist
             load_unlock_secret_words()
 
 
-def test_a_word_that_is_not_lower_case_letters_is_refused_before_it_is_used(wordlist) -> None:
+def test_a_word_that_is_not_lower_case_letters_is_refused_before_it_is_used(
+    wordlist, monkeypatch
+) -> None:
     # The row pattern already requires letters, so the word check is the second guard: it is
-    # reached through a pattern that lets one through.
-    wordlist("0000\tapple\n")
-    original = unlock_secrets.UNLOCK_SECRET_WORDLIST_ROW_PATTERN
-    try:
-        unlock_secrets.UNLOCK_SECRET_WORDLIST_ROW_PATTERN = __import__("re").compile(
-            r"^(\d{4})\t(.+)$"
-        )
-        wordlist("0000\tApple9\n")
-        with pytest.raises(RuntimeError, match="invalid word"):
-            load_unlock_secret_words()
-    finally:
-        unlock_secrets.UNLOCK_SECRET_WORDLIST_ROW_PATTERN = original
+    # reached through a row pattern that lets one through.
+    monkeypatch.setattr(
+        unlock_secrets, "UNLOCK_SECRET_WORDLIST_ROW_PATTERN", re.compile(r"^(\d{4})\t(.+)$")
+    )
+    wordlist("0000\tApple9\n")
+    with pytest.raises(RuntimeError, match="invalid word"):
+        load_unlock_secret_words()
+
+
+def numbered_word(number: int) -> str:
+    """A four-letter lower-case word for `number` (base 26), so all 4096 are different."""
+    return "".join(chr(ord("a") + (number // 26**place) % 26) for place in range(4))
+
+
+def test_a_word_list_of_the_right_size_with_a_repeated_word_is_refused(wordlist) -> None:
+    rows = [f"{number:04d}\t{numbered_word(number)}" for number in range(4096)]
+    wordlist("\n".join(rows) + "\n")
+    assert len(set(load_unlock_secret_words())) == 4096  # the control: all different is accepted
+    # Row 5 repeats row 4's word: still 4096 well-formed rows, but fewer than 4096 different words,
+    # which would lower the entropy of every generated secret.
+    rows[5] = f"0005\t{numbered_word(4)}"
+    wordlist("\n".join(rows) + "\n")
+    with pytest.raises(RuntimeError, match="must contain 4096 unique words"):
+        load_unlock_secret_words()
 
 
 def test_comments_and_blank_lines_are_skipped_and_the_wrong_size_is_refused(wordlist) -> None:
