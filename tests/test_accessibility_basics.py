@@ -428,7 +428,11 @@ def test_the_axe_check_runs_in_both_colour_schemes_and_with_forced_colours() -> 
     assert "emulateMedia({ colorScheme: 'dark' })" in script
     assert "emulateMedia({ forcedColors: 'active' })" in script
     # Emulation is always switched off again for the caller's own steps.
-    assert "emulateMedia({ colorScheme: null, forcedColors: null })" in script
+    assert "emulateMedia({ colorScheme: null, contrast: null, forcedColors: null })" in script
+    # The browser's real cascade is read too (the CSS tests are textual): with more contrast the
+    # computed text token is the strong one, with no choice on a dark device and with Dark chosen.
+    assert "emulateMedia({ colorScheme: 'dark', contrast: 'more' })" in script
+    assert "assertContrastCascade(page, surface)" in script
     assert "finally" in script
     # The choice made in Preferences is checked too, each way it can be set, then put back.
     for mode in (
@@ -556,19 +560,134 @@ def test_the_chosen_light_theme_is_not_darkened_by_the_device() -> None:
 def test_the_high_contrast_switch_has_the_same_declarations_as_the_devices_setting() -> None:
     css = STYLES.read_text(encoding="utf-8")
     media = _block(css, "@media (prefers-contrast: more) {")
-    from_device = _block(media, ":root,\n  :root[data-theme] {")
+    from_device = _block(media, ":root:not([data-theme]),\n  :root[data-theme] {")
     chosen = _block(css, ':root[data-contrast="more"] {')
     declaration = re.compile(r"--[a-z-]+:\s*var\(--[a-z-]+\);")
     assert declaration.findall(chosen) == declaration.findall(from_device) != []
     # The thicker focus outline too, on every kind of focusable control the media block covers.
     for control in ("a", "button", "input", "select", "textarea", "[tabindex]"):
-        assert f'[data-contrast="more"] {control}:focus-visible' in css
+        assert f':where([data-contrast="more"]) {control}:focus-visible' in css
     assert css.count("outline: 4px solid var(--focus-ring);") == 2
     # It comes after every palette it adjusts, so it wins at the same specificity.
     assert css.index(':root[data-contrast="more"] {') > css.index(DARK_CHOSEN)
     assert css.index(':root[data-contrast="more"] {') > css.index(
         "@media (prefers-color-scheme: dark)"
     )
+
+
+def _cascade_rules(css: str) -> list[tuple[int, list[str], str | None, dict[str, str]]]:
+    """The rules deciding the palette and contrast tokens: (position, selectors, media, decls)."""
+    dark_media = "@media (prefers-color-scheme: dark) {"
+    contrast_media = "@media (prefers-contrast: more) {"
+    contrast_selectors = ":root:not([data-theme]),\n  :root[data-theme] {"
+    sources = [
+        (css.index(":root {"), [":root"], None, _block(css, ":root {")),
+        (
+            css.index(dark_media)
+            + len(dark_media)
+            + _block(css, dark_media).index(DARK_FOLLOWS_DEVICE),
+            [DARK_FOLLOWS_DEVICE.removesuffix(" {")],
+            "dark",
+            _block(_block(css, dark_media), DARK_FOLLOWS_DEVICE),
+        ),
+        (css.index(DARK_CHOSEN), [DARK_CHOSEN.removesuffix(" {")], None, _block(css, DARK_CHOSEN)),
+        (
+            css.index(contrast_media) + len(contrast_media),
+            [":root:not([data-theme])", ":root[data-theme]"],
+            "more",
+            _block(_block(css, contrast_media), contrast_selectors),
+        ),
+        (
+            css.index(':root[data-contrast="more"] {'),
+            [':root[data-contrast="more"]'],
+            None,
+            _block(css, ':root[data-contrast="more"] {'),
+        ),
+    ]
+    declaration = re.compile(r"(--[a-z-]+):\s*([^;]+);")
+    return [
+        (position, selectors, media, dict(declaration.findall(body)))
+        for position, selectors, media, body in sources
+    ]
+
+
+def _selector_matches(selector: str, attributes: dict[str, str | None]) -> bool:
+    for negated, name, value in re.findall(
+        r'(:not\()?\[([a-z-]+)(?:="([^"]*)")?\]\)?', selector.replace(":root", "", 1)
+    ):
+        actual = attributes[name]
+        holds = actual is not None if not value else actual == value
+        if holds == bool(negated):
+            return False
+    return True
+
+
+def _cascaded(css: str, token: str, *, device_dark, device_more, theme, contrast) -> str:
+    """What `token` comes to on <html>, by specificity then source order, with var() resolved."""
+    attributes = {"data-theme": theme, "data-contrast": contrast}
+    best: tuple[tuple[int, int], str] | None = None
+    for position, selectors, media, declarations in _cascade_rules(css):
+        if token not in declarations:
+            continue
+        if (media == "dark" and not device_dark) or (media == "more" and not device_more):
+            continue
+        for selector in selectors:
+            if _selector_matches(selector, attributes):
+                rank = (selector.count(":root") + selector.count("["), position)
+                if best is None or rank > best[0]:
+                    best = (rank, declarations[token].strip())
+    assert best is not None, token
+    value = best[1]
+    reference = re.fullmatch(r"var\((--[a-z-]+)\)", value)
+    if reference:
+        return _cascaded(
+            css,
+            reference.group(1),
+            device_dark=device_dark,
+            device_more=device_more,
+            theme=theme,
+            contrast=contrast,
+        )
+    return value
+
+
+@pytest.mark.parametrize("device_dark", [False, True])
+@pytest.mark.parametrize("device_more", [False, True])
+@pytest.mark.parametrize("theme", [None, "light", "dark"])
+@pytest.mark.parametrize("contrast", [None, "more"])
+def test_the_cascade_gives_the_right_tokens_for_every_device_and_choice(
+    device_dark, device_more, theme, contrast
+) -> None:
+    """The device's setting and the patient's choice combine as documented, whichever way in.
+
+    No choice made, on a dark device with "more contrast", must get both: the dark palette's
+    strong text and border (the dark block is more specific than a bare `:root`, so the
+    contrast block names `:root:not([data-theme])` too).
+    """
+    css = STYLES.read_text(encoding="utf-8")
+    dark = theme == "dark" or (theme is None and device_dark)
+    more = contrast == "more" or device_more
+    palette = PALETTES["dark" if dark else "light"]
+    expected = {
+        "--text": palette["text-strong"] if more else palette["text"],
+        "--muted": palette["text-strong"] if more else palette["muted"],
+        "--text-soft": palette["text-strong"] if more else palette["text-soft"],
+        "--line": palette["border-control"] if more else palette["line"],
+        "--surface": palette["surface"],
+    }
+    for token, wanted in expected.items():
+        got = _cascaded(
+            css,
+            token,
+            device_dark=device_dark,
+            device_more=device_more,
+            theme=theme,
+            contrast=contrast,
+        )
+        assert got.lower() == wanted.lower(), (
+            f"{token} with dark device={device_dark}, more-contrast device={device_more}, "
+            f"theme={theme}, contrast={contrast}: {got} != {wanted}"
+        )
 
 
 def test_the_colour_and_motion_media_blocks_are_present() -> None:

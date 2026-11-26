@@ -103,6 +103,57 @@ async function assertNoSeriousIssuesWithChosenAppearance(page, surface) {
   }
 }
 
+// The CSS tests read the stylesheet as text; this reads what the browser's cascade really makes of
+// it. With more contrast the text token is the strong one, however the dark palette got there:
+// no choice made on a dark device, or Dark and High contrast chosen (a bare `:root` in the
+// contrast block once lost to the dark block's more specific selector, silently).
+async function assertContrastCascade(page, surface) {
+  const computed = () => page.evaluate(() => {
+    const style = getComputedStyle(document.documentElement);
+    return {
+      text: style.getPropertyValue('--text').trim(),
+      strong: style.getPropertyValue('--text-strong').trim(),
+      muted: style.getPropertyValue('--muted').trim(),
+      line: style.getPropertyValue('--line').trim(),
+      control: style.getPropertyValue('--border-control').trim(),
+    };
+  });
+  const expectStrong = async (label) => {
+    const value = await computed();
+    if (!value.strong || value.text !== value.strong || value.muted !== value.strong
+      || value.line !== value.control) {
+      throw new Error(
+        `${surface}: more contrast is not applied (${label}): text ${value.text}, muted ${value.muted}, `
+        + `line ${value.line}; expected ${value.strong} and ${value.control}`
+      );
+    }
+  };
+  const previous = await page.evaluate(() => ({
+    theme: document.documentElement.getAttribute('data-theme'),
+    contrast: document.documentElement.getAttribute('data-contrast'),
+  }));
+  const setAppearance = (theme, contrast) => page.evaluate(([chosenTheme, chosenContrast]) => {
+    const root = document.documentElement;
+    if (chosenTheme) root.setAttribute('data-theme', chosenTheme); else root.removeAttribute('data-theme');
+    if (chosenContrast) root.setAttribute('data-contrast', chosenContrast); else root.removeAttribute('data-contrast');
+  }, [theme, contrast]);
+  try {
+    await page.emulateMedia({ colorScheme: 'dark', contrast: 'more' });
+    await setAppearance(null, null);
+    await expectStrong('no choice, dark device, more-contrast device');
+    await setAppearance('dark', 'more');
+    await expectStrong('Dark and High contrast chosen');
+    await setAppearance('light', null);
+    await expectStrong('Light chosen, more-contrast device');
+    await page.emulateMedia({ colorScheme: 'dark', contrast: null });
+    await setAppearance('dark', 'more');
+    await expectStrong('Dark and High contrast chosen, device default');
+  } finally {
+    await page.emulateMedia({ colorScheme: null, contrast: null });
+    await setAppearance(previous.theme, previous.contrast);
+  }
+}
+
 async function assertNoSeriousAxeIssues(page, surface) {
   await assertNoSeriousIssues(page, surface, 'light');
   try {
@@ -110,9 +161,10 @@ async function assertNoSeriousAxeIssues(page, surface) {
     await assertNoSeriousIssues(page, surface, 'dark');
     await page.emulateMedia({ colorScheme: null });
     await assertNoSeriousIssuesWithChosenAppearance(page, surface);
+    await assertContrastCascade(page, surface);
     await assertForcedColoursSmoke(page, surface);
   } finally {
-    await page.emulateMedia({ colorScheme: null, forcedColors: null });
+    await page.emulateMedia({ colorScheme: null, contrast: null, forcedColors: null });
   }
 }
 

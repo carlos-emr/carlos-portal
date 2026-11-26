@@ -1589,9 +1589,11 @@ main[tabindex="-1"]:focus,
 /* More contrast, when the person asks for it: text colours go to the strongest, borders become the
    control border colour, and the focus ring is thicker. */
 @media (prefers-contrast: more) {
-  /* `:root[data-theme]` as well, so this still wins over the palette of a chosen Dark (the same
-     specificity, and this block comes later). */
-  :root,
+  /* Two selectors of specificity 0,2,0, the same as the dark palettes before it: with no choice
+     made, the device's dark block is `:root:not([data-theme="light"])`, and a plain `:root` here
+     would lose to it; `:root[data-theme]` is for a chosen Light or Dark. This block comes later,
+     so it wins every tie. */
+  :root:not([data-theme]),
   :root[data-theme] {
     --muted: var(--text-strong);
     --text-soft: var(--text-strong);
@@ -1623,12 +1625,14 @@ main[tabindex="-1"]:focus,
   --border-card: var(--border-control);
 }
 
-[data-contrast="more"] a:focus-visible,
-[data-contrast="more"] button:focus-visible,
-[data-contrast="more"] input:focus-visible,
-[data-contrast="more"] select:focus-visible,
-[data-contrast="more"] textarea:focus-visible,
-[data-contrast="more"] [tabindex]:focus-visible {
+/* `:where()` adds no specificity, so each selector below weighs what the media block's does and a
+   control's own focus rules treat the two the same. */
+:where([data-contrast="more"]) a:focus-visible,
+:where([data-contrast="more"]) button:focus-visible,
+:where([data-contrast="more"]) input:focus-visible,
+:where([data-contrast="more"]) select:focus-visible,
+:where([data-contrast="more"]) textarea:focus-visible,
+:where([data-contrast="more"]) [tabindex]:focus-visible {
   outline: 4px solid var(--focus-ring);
   outline-offset: 2px;
 }
