@@ -91,6 +91,8 @@ def test_a_name_part_may_not_contain_an_hl7_separator(separator) -> None:
 
 def test_a_namespace_id_is_short_plain_and_never_blank() -> None:
     assert normalize_hl7_namespace_id(" clinic.A-1_x ", "id") == "clinic.A-1_x"
+    # Exactly the limit is accepted, one more is not.
+    assert normalize_hl7_namespace_id("a" * MAX_HL7_NAMESPACE_ID_LENGTH, "id") == "a" * 20
     with pytest.raises(ValueError, match="id must not be blank"):
         normalize_hl7_namespace_id("   ", "id")
     with pytest.raises(ValueError, match=f"{MAX_HL7_NAMESPACE_ID_LENGTH} characters or fewer"):
@@ -121,6 +123,11 @@ def test_an_identity_with_an_impossible_demographic_number_is_refused() -> None:
         with pytest.raises(ValueError, match="demographic_no must be between 1 and"):
             normalize_interop_identity(bad)
     assert normalize_interop_identity(IDENTITY).demographic_no == 1234
+    # The largest number the database holds is accepted.
+    largest = PortalPatientInteroperabilityIdentity(
+        **{**IDENTITY.__dict__, "demographic_no": MAX_DEMOGRAPHIC_NO}
+    )
+    assert normalize_interop_identity(largest).demographic_no == MAX_DEMOGRAPHIC_NO
 
 
 def test_a_portal_patient_carries_a_phone_number_only_when_the_account_has_one() -> None:

@@ -76,6 +76,29 @@ def test_a_compact_that_is_not_one_short_ascii_payload_dot_signature_is_refused(
     assert (failure.value.code, failure.value.status) == ("invalid_approval", 400)
 
 
+def test_the_longest_compact_that_can_be_valid_is_read_and_one_more_character_is_not() -> None:
+    """The limit is 8192 characters, but a 64-byte signature is 86 characters and the payload's
+    base64 length is never 1 modulo 4, so the longest valid compact is 8191: that one is read.
+    (A compact of exactly 8192 can never be valid, so `>` against `>=` there is not observable.)
+    """
+    from carlos_patient_portal.approval_codec import compact_parts
+
+    signature = b64(bytes(range(64)))
+    assert len(signature) == 86
+    overhead = len(json.dumps({"pad": ""}, separators=(",", ":")))
+    raw = json.dumps({"pad": "x" * (6078 - overhead)}, separators=(",", ":")).encode()
+    assert len(raw) == 6078 and len(b64(raw)) == 8104
+    longest = b64(raw) + "." + signature
+    assert len(longest) == 8191
+    claims, read_raw, read_signature = compact_parts(longest)
+    assert read_raw == raw and read_signature == bytes(range(64)) and claims["pad"]
+    # One more byte of payload makes 8193 characters: refused by the length, not by its shape.
+    too_long = json.dumps({"pad": "x" * (6079 - overhead)}, separators=(",", ":")).encode()
+    with pytest.raises(MailboxRefusal) as failure:
+        compact_parts(b64(too_long) + "." + signature)
+    assert (failure.value.code, failure.value.status) == ("invalid_approval", 400)
+
+
 def test_a_signature_of_the_wrong_size_is_refused() -> None:
     source = FLOWS["first"]["intent"]
     payload = source["compact"].split(".")[0]
@@ -206,6 +229,26 @@ def test_an_intent_must_end_after_it_began_and_within_its_life() -> None:
     refused("intent", "first", exp=iat)  # no lifetime at all
     refused("intent", "first", exp=iat - 1)
     refused("intent", "first", exp=iat + life + 1)
+
+
+def test_an_intent_and_a_challenge_may_last_exactly_their_life() -> None:
+    from carlos_patient_portal.approval_codec import challenge_life, intent_life
+
+    intent = FLOWS["first"]["intent"]["claims"]
+    life = intent_life(intent["v"])
+    kept, *_ = object_claims(
+        "intent", compact_with(FLOWS["first"]["intent"], exp=intent["iat"] + life), **SCOPE
+    )
+    assert kept["exp"] - kept["iat"] == life
+    for flow in ("first", "later"):
+        challenge = FLOWS[flow]["challenge"]["claims"]
+        life = challenge_life(challenge["v"], challenge["approval_kind"])
+        kept, *_ = object_claims(
+            "challenge",
+            compact_with(FLOWS[flow]["challenge"], expires_at=challenge["issued_at"] + life),
+            **SCOPE,
+        )
+        assert kept["expires_at"] - kept["issued_at"] == life
 
 
 def test_a_challenge_must_end_after_it_was_issued_and_within_its_life() -> None:
