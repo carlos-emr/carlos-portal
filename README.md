@@ -1362,7 +1362,7 @@ is refused on every route.
     retires, the delivery that releases it) name the actor as **`system`** with the actor id
     `job:signup-poll`, never `staff`: no person made it. (The invite layer takes an `actor_type` of
     `staff`, the default, or `system`; anything else is refused.) The invite's id is recorded on
-    the request, and no two requests can hold the same invite (a unique index, migration 0027).
+    the request, and no two requests can hold the same invite (a unique index, migration 0028).
     Preparing again with the same `delivery_operation_id` returns the same invite and token;
     another operation for a request that has one is `409`
     `sign-up request invite conflicts`. The invite layer's own `409`s apply (`portal account already

@@ -16,11 +16,11 @@
 
 Two sign-up requests must never name the same prepared invite: a match is reported with the invite
 of its own request, and a shared one would let one patient's request stand for another's. The
-column added by 0026 gets a unique index (requests without an invite hold NULL, which a unique
+column added by 0027 gets a unique index (requests without an invite hold NULL, which a unique
 index does not compare). Downgrade drops the index only; no data is lost.
 
-Revision ID: 0027_signup_invite_unique
-Revises: 0026_signup_prepared_invite
+Revision ID: 0028_signup_invite_unique
+Revises: 0027_signup_prepared_invite
 Create Date: 2026-11-25 10:00:00+00:00
 """
 
@@ -29,8 +29,8 @@ from collections.abc import Sequence
 from alembic import op
 
 _ALEMBIC_REVISION_IDENTIFIERS: dict[str, str | Sequence[str] | None] = {
-    "revision": "0027_signup_invite_unique",
-    "down_revision": "0026_signup_prepared_invite",
+    "revision": "0028_signup_invite_unique",
+    "down_revision": "0027_signup_prepared_invite",
     "branch_labels": None,
     "depends_on": None,
 }
