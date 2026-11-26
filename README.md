@@ -1406,8 +1406,9 @@ is refused on every route.
   health card number, date of birth, email or lease token is ever audited or logged.
 - **Backlog and cleanup.** Reported requests no longer count toward the backlog. The expiry purge
   keeps a request whose lease is still running past its TTL, so its result can still be recorded.
-- Migration `0026_signup_prepared_invite` (the invite route) adds `prepared_invite_id` to the signup
-  table; downgrade is refused while a request holds one. Migration `0025_signup_claim` follows
+- Migration `0027_signup_prepared_invite` (the invite route, after `0026_mycarlos_push_handles`) adds
+  `prepared_invite_id` to the signup table; downgrade is refused while a request holds one.
+  Migration `0025_signup_claim` follows
   `0024_avail_device_removed`. It adds the lease and result
   columns to the signup table and the `signup.claim` and `signup.result` audit event types; the id
   is the next free one at the time of writing and is to be renumbered at merge if another revision

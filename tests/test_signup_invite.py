@@ -600,7 +600,7 @@ def test_two_requests_can_never_share_a_prepared_invite() -> None:
 def test_the_migration_round_trips_and_refuses_a_downgrade_over_a_prepared_invite(tmp_path) -> None:
     url = f"sqlite+pysqlite:///{tmp_path / 'invite.db'}"
     config = alembic_config(url)
-    command.upgrade(config, "0025_signup_claim")
+    command.upgrade(config, "0026_mycarlos_push_handles")
     engine = create_engine(url)
     try:
         with engine.begin() as connection:
@@ -630,12 +630,12 @@ def test_the_migration_round_trips_and_refuses_a_downgrade_over_a_prepared_invit
                 text("update patient_portal_signup_requests set prepared_invite_id = 5")
             )
         with pytest.raises(RuntimeError, match="hold a prepared invite"):
-            command.downgrade(config, "0025_signup_claim")
+            command.downgrade(config, "0026_mycarlos_push_handles")
         with engine.begin() as connection:
             connection.execute(
                 text("update patient_portal_signup_requests set prepared_invite_id = null")
             )
-        command.downgrade(config, "0025_signup_claim")
+        command.downgrade(config, "0026_mycarlos_push_handles")
         columns = {c["name"] for c in inspect(engine).get_columns("patient_portal_signup_requests")}
         assert "prepared_invite_id" not in columns
         command.upgrade(config, "head")
