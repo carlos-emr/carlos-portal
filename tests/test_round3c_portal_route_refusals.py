@@ -23,6 +23,7 @@ from carlos_patient_portal import web_support
 from carlos_patient_portal.models import (
     EMAIL_CHANGE_STATUS_REVOKED,
     PatientPortalAccount,
+    PatientPortalAuditEvent,
     PatientPortalEmailChangeRequest,
 )
 from tests.support import (
@@ -57,10 +58,14 @@ def test_a_valid_csrf_token_whose_session_has_gone_sends_the_browser_to_sign_in(
     # The page was loaded signed in and the session is gone when the form is sent (it expired, or
     # was revoked from another browser): the token is still valid, the session is not.
     client, token = signed_in()
+    before = stored_state(client.app)
     client.cookies.delete(web_support.PORTAL_SESSION_COOKIE_NAME)
     response = client.post(path, data={"csrf_token": token, **body}, follow_redirects=False)
     assert response.status_code == 303, path
     assert response.headers["location"] == "/", path
+    # Nothing was written: not the password, the MFA method, the contact details, a pending
+    # change, a failed-attempt counter or an audit row.
+    assert stored_state(client.app) == before, path
 
 
 @pytest.mark.parametrize("path", ["/portal/messages", "/portal/messages/1", "/portal/account"])
@@ -70,6 +75,21 @@ def test_a_page_of_the_signed_in_portal_sends_a_visitor_to_sign_in(path: str) ->
     response = client.get(path, follow_redirects=False)
     assert response.status_code == 303, path
     assert response.headers["location"] == "/", path
+
+
+def stored_state(app) -> dict[str, object]:  # noqa: ANN001
+    """Every column of every account, plus how many change requests and audit rows exist."""
+    columns = [column.name for column in PatientPortalAccount.__table__.columns]
+    with app.state.session_factory() as session:
+        rows = session.scalars(select(PatientPortalAccount).order_by(PatientPortalAccount.id))
+        accounts = [{name: getattr(row, name) for name in columns} for row in rows]
+        changes = session.scalars(select(PatientPortalEmailChangeRequest))
+        audits = session.scalars(select(PatientPortalAuditEvent))
+        return {
+            "accounts": accounts,
+            "change_requests": len(list(changes)),
+            "audit_events": len(list(audits)),
+        }
 
 
 def signed_in() -> tuple[TestClient, str]:

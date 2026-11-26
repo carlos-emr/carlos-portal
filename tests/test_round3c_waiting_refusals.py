@@ -30,11 +30,16 @@ from carlos_patient_portal.device_identity import (
     REFUSAL_UNKNOWN_DEVICE,
     DeviceRefusal,
 )
-from carlos_patient_portal.models import PatientPortalMyCarlosWaitingKey
+from carlos_patient_portal.mailbox_models import MailboxCopy
+from carlos_patient_portal.models import (
+    PatientPortalMyCarlosDevice,
+    PatientPortalMyCarlosWaitingKey,
+)
 from carlos_patient_portal.mycarlos_availability import AvailabilityError, Owner
 from carlos_patient_portal.mycarlos_waiting import (
     ANSWER_NOTHING,
     ANSWER_SPACING_SECONDS,
+    ANSWER_WAITING,
     MAX_WAITING_ASSERTION_LIFETIME_SECONDS,
     TooSoon,
     WaitingKeyRecord,
@@ -451,3 +456,78 @@ def test_a_key_of_a_removed_device_gets_no_answer(factory) -> None:  # noqa: ANN
         device.removed_by = "patient"
     with factory() as session, session.begin():
         refused(lambda: answer(session, principal, now=MOMENT), "device_inactive")
+
+
+def test_a_nonce_stays_recorded_through_the_whole_grace_after_exp(factory) -> None:  # noqa: ANN001
+    # An assertion still verifies from exp until exp + the allowance, so that is exactly the time a
+    # forgotten nonce would let it be replayed: it must be remembered through all of it.
+    exp = NOW + 60
+    principal = WaitingPrincipal(1, 1, "kid", str(UUID(int=7)), exp)
+    consume_waiting_assertion(factory, principal, now=exp - 10)
+    for later in (exp - 1, exp, exp + 1, exp + DEVICE_CLOCK_SKEW_SECONDS - 1):
+
+        def again(later: int = later) -> None:
+            consume_waiting_assertion(factory, principal, now=later)
+
+        assert code_of(again) == "replay", later
+    # At the end of the allowance the assertion itself no longer verifies: expired, not replay.
+    end = exp + DEVICE_CLOCK_SKEW_SECONDS
+    assert (
+        code_of(lambda: consume_waiting_assertion(factory, principal, now=end)) == REFUSAL_EXPIRED
+    )
+
+
+def add_waiting_copy(session, owner: Owner, *, expires_at: int, status: str = "waiting") -> None:  # noqa: ANN001
+    sequence = 1 + len(list(session.scalars(select(MailboxCopy.id))))
+    recipient = session.scalars(
+        select(PatientPortalMyCarlosDevice).where(PatientPortalMyCarlosDevice.id == owner.device_id)
+    ).one()
+    session.add(
+        MailboxCopy(
+            account_id=owner.account_id,
+            device_id=owner.device_id,
+            clinic_id="clinic-a",
+            recipient_id=f"FAKE-{sequence}",
+            device_key_id=recipient.device_key_id,
+            delivery_id=f"00000000-0000-4000-8000-{sequence:012d}",
+            sequence=sequence,
+            size=49,
+            ciphertext_sha256="c" * 64,
+            body_sha256="b" * 64,
+            created_at=NOW - 60,
+            expires_at=expires_at,
+            status=status,
+            terminal_at=None if status == "waiting" else NOW - 30,
+            receipt_sha256="d" * 64 if status == "picked_up" else None,
+        )
+    )
+
+
+def test_only_a_waiting_copy_that_has_not_expired_makes_the_answer_waiting(factory) -> None:  # noqa: ANN001
+    with factory() as session, session.begin():
+        owner = add_owner(session, "mailbox")
+    key = WaitingKey("mailbox")
+    with factory() as session, session.begin():
+        register(session, owner, key.key_id, key.public, now=MOMENT)
+    principal = principal_for(factory, owner, key)
+    step = timedelta(seconds=ANSWER_SPACING_SECONDS)
+    moment = MOMENT
+    now_epoch = int(moment.timestamp())
+
+    def answered(at: datetime) -> bytes:
+        with factory() as session, session.begin():
+            return answer(session, principal, now=at)
+
+    # A waiting copy whose time has passed does not count; a copy that is not waiting never does.
+    with factory() as session, session.begin():
+        add_waiting_copy(session, owner, expires_at=now_epoch - 1)
+        add_waiting_copy(session, owner, expires_at=now_epoch + 3600, status="picked_up")
+    assert answered(moment) == ANSWER_NOTHING
+    # One that expires exactly now has expired (the copy lives until, not through, its time).
+    with factory() as session, session.begin():
+        add_waiting_copy(session, owner, expires_at=int((moment + step).timestamp()))
+    assert answered(moment + step) == ANSWER_NOTHING
+    # One second more life and it still waits.
+    with factory() as session, session.begin():
+        add_waiting_copy(session, owner, expires_at=int((moment + 2 * step).timestamp()) + 1)
+    assert answered(moment + 2 * step) == ANSWER_WAITING
