@@ -223,8 +223,9 @@ def record_fhir_access(
     # "portal-" hash, or a document's number): anything else is whatever the caller pasted into
     # the URL or `_id`, which would sit in the audit trail and its export for the retention period
     # (a name, a health card number). Those rows say only that an unrecognised id was asked for.
-    # What is stored is also at most 63 characters of ASCII, so it can never break the column's
-    # length check either (an audit write that raises would turn a clean 404 into a 500).
+    # What is stored is also plain ASCII and well inside the 128-character column, so it can never
+    # break the column's length check either (an audit write that raises would turn a clean 404
+    # into a 500).
     if resource_id is not None and not ISSUED_FHIR_ID.fullmatch(resource_id):
         resource_id = UNRECOGNIZED_AUDIT_RESOURCE_ID
     record_audit_event(
