@@ -19,6 +19,7 @@ from binascii import Error as Base64DecodeError
 from email.utils import parseaddr
 from functools import lru_cache
 from ipaddress import ip_address, ip_network
+from pathlib import Path
 from typing import Literal
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -362,6 +363,19 @@ class Settings(BaseSettings):
     # credentials and notice keys (mycarlos_availability_dispatch.AvailabilityDispatch), which no
     # setting provides yet.
     mycarlos_availability_enabled: bool = False
+    # iPhone push (carlos-portal, piece 7). The portal signs Apple's provider token with the
+    # team's `.p8` key, which it holds on its own disk (0600, outside the repository; see
+    # docs/apns-key-operations.md). Off by default. Needs a delivery, mailbox and availability
+    # switch on, a real encryption keyring (the device tokens are encrypted at rest) and the
+    # notice-token key below. A bad key file stops the portal at start-up.
+    mycarlos_apns_enabled: bool = False
+    mycarlos_apns_team_id: str | None = None
+    mycarlos_apns_key_id: str | None = None
+    mycarlos_apns_key_path: Path | None = None
+    mycarlos_apns_bundle_id: str | None = None
+    # The portal's own HMAC key for the opaque notice token a push carries (URL-safe base64 of at
+    # least 32 random bytes). Never leaves the portal.
+    mycarlos_notice_token_key: SecretStr | None = None
     mycarlos_mailbox_device_bytes: int = Field(default=268435456, ge=20971520)
     mycarlos_mailbox_account_bytes: int = Field(default=1073741824, ge=20971520)
     mycarlos_mailbox_clinic_bytes: int = Field(default=21474836480, ge=20971520)
@@ -958,6 +972,7 @@ class Settings(BaseSettings):
         "dev_admin_token",
         "smtp_password",
         "sms_webhook_token",
+        "mycarlos_notice_token_key",
         mode="before",
     )
     @classmethod
@@ -1403,6 +1418,45 @@ class Settings(BaseSettings):
         """Whether this deployment runs below the regulatory-default retention."""
         return self.audit_retention_days < DEFAULT_AUDIT_RETENTION_DAYS
 
+    def validate_apns_policy(self) -> None:
+        """The iPhone push settings: all present and well formed when it is on, nothing read from
+        disk here (the key file is checked when the runtime is built)."""
+        if not self.mycarlos_apns_enabled:
+            return
+        if not (
+            self.mycarlos_delivery_enabled
+            and self.mycarlos_mailbox_enabled
+            and self.mycarlos_availability_enabled
+        ):
+            raise ValueError(
+                "PATIENT_PORTAL_MYCARLOS_APNS_ENABLED requires the myCarlos delivery, mailbox and "
+                "availability switches"
+            )
+        for name, value in (
+            ("TEAM_ID", self.mycarlos_apns_team_id),
+            ("KEY_ID", self.mycarlos_apns_key_id),
+            ("BUNDLE_ID", self.mycarlos_apns_bundle_id),
+        ):
+            if not value:
+                raise ValueError(f"PATIENT_PORTAL_MYCARLOS_APNS_{name} is required for push")
+        if self.mycarlos_apns_key_path is None or not self.mycarlos_apns_key_path.is_absolute():
+            raise ValueError("PATIENT_PORTAL_MYCARLOS_APNS_KEY_PATH must be an absolute path")
+        if not self.resolved_outbox_keyring:
+            raise ValueError(
+                "PATIENT_PORTAL_MYCARLOS_APNS_ENABLED requires an outbox encryption secret or "
+                "keyring: device tokens are encrypted at rest"
+            )
+        encoded = self.secret_value("mycarlos_notice_token_key")
+        try:
+            key = urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)) if encoded else b""
+        except (Base64DecodeError, ValueError):
+            key = b""
+        if len(key) < 32:
+            raise ValueError(
+                "PATIENT_PORTAL_MYCARLOS_NOTICE_TOKEN_KEY must be URL-safe base64 of at "
+                "least 32 bytes"
+            )
+
     @model_validator(mode="after")
     def reject_unsafe_runtime_policy(self) -> "Settings":
         if self.mycarlos_approval_enabled:
@@ -1424,6 +1478,7 @@ class Settings(BaseSettings):
         self.validate_database_transport_policy()
         self.validate_clinic_policy()
         self.validate_session_policy()
+        self.validate_apns_policy()
         return self
 
 
