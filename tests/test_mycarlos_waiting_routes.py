@@ -13,7 +13,7 @@ from uuid import uuid4
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from carlos_patient_portal.mailbox_models import MailboxCopy
 from carlos_patient_portal.models import (
@@ -286,6 +286,30 @@ def test_the_answer_is_17_bytes_either_way_and_says_only_whether_a_copy_waits(po
     assert len(ANSWER_WAITING) == len(ANSWER_NOTHING) == 17
     # Another device's copy is not this device's.
     assert ask(client, other, iat=clock.now, exp=clock.now + 60).content == ANSWER_NOTHING
+
+
+def last_seen(app, device: Device):  # noqa: ANN001, ANN201
+    with app.state.session_factory() as session:
+        return session.scalar(
+            select(PatientPortalMyCarlosDevice.last_seen_at).where(
+                PatientPortalMyCarlosDevice.device_key_id == device.keys.device_key_id
+            )
+        )
+
+
+def test_a_waiting_check_shows_its_device_as_seen_and_no_other(portal) -> None:
+    # The locked app in tray mode makes no device request, only this check: it is its check-in.
+    app, client, _ = portal
+    key = WaitingKey("seen")
+    register(client, A, key)
+    with app.state.session_factory() as session, session.begin():
+        session.execute(update(PatientPortalMyCarlosDevice).values(last_seen_at=None))
+    assert last_seen(app, A) is None
+    assert ask(client, key).content == ANSWER_NOTHING
+    stamped = last_seen(app, A)
+    assert stamped is not None
+    assert stamped.replace(tzinfo=stamped.tzinfo or UTC) == datetime.fromtimestamp(NOW, tz=UTC)
+    assert last_seen(app, B) is None
 
 
 def test_one_answer_per_key_per_120_seconds(portal) -> None:

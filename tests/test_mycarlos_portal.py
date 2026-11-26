@@ -15,7 +15,7 @@ from carlos_patient_portal import web_support
 from carlos_patient_portal.auth import create_patient_session
 from carlos_patient_portal.config import Settings
 from carlos_patient_portal.credentials import hash_password
-from carlos_patient_portal.device_identity import DevicePrincipal, record_device_seen
+from carlos_patient_portal.device_identity import record_device_seen
 from carlos_patient_portal.i18n import MYCARLOS_TEXT_CATALOG
 from carlos_patient_portal.models import (
     PatientPortalAccount,
@@ -425,15 +425,7 @@ def test_a_device_that_checks_in_shows_its_time_and_loses_the_not_seen_recently_
     assert "Not yet seen" in before
 
     # One accepted device request records the check-in (the same call its route makes).
-    principal = DevicePrincipal(
-        device_id=device_id,
-        account_id=account_id,
-        device_key_id=key,
-        assertion_id="FAKE-assertion",
-        assertion_expires_at=0,
-        vault_head_link=None,
-    )
-    record_device_seen(app.state.session_factory, principal)
+    record_device_seen(app.state.session_factory, device_id)
 
     after = client.get("/portal/mycarlos").text
     assert "mycarlos-device-status-stale" not in after

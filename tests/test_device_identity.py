@@ -31,6 +31,7 @@ from uuid import NAMESPACE_URL, uuid5
 import pytest
 from alembic import command
 from sqlalchemy import create_engine, select, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from carlos_patient_portal import device_identity
@@ -444,7 +445,39 @@ def test_the_same_anchor_inside_the_interval_writes_nothing_and_a_new_one_is_cop
     device = seen_device(portal)
     assert device.vault_head_link == ANCHOR_B
     assert as_utc(device.vault_head_link_at) == datetime.fromtimestamp(newer, tz=UTC)
-    assert as_utc(device.last_seen_at) == datetime.fromtimestamp(newer, tz=UTC)
+    # The seen time has its own throttle: inside the interval it still shows the first request.
+    assert as_utc(device.last_seen_at) == datetime.fromtimestamp(NOW, tz=UTC)
+
+
+def test_an_anchor_signed_earlier_but_consumed_later_does_not_replace_a_newer_one(portal) -> None:
+    newer, older = NOW + 30, NOW
+    # Both are valid at NOW + 30, and the newer one reaches the portal first.
+    first = request_at("newer", newer, vault_head_link=ANCHOR_B)
+    second = request_at("older", older, vault_head_link=ANCHOR_A)
+    assert device_outcome(portal, first, now=newer)[0] == "accept"
+    assert device_outcome(portal, second, now=newer)[0] == "accept"
+    device = seen_device(portal)
+    assert device.vault_head_link == ANCHOR_B
+    assert as_utc(device.vault_head_link_at) == datetime.fromtimestamp(newer, tz=UTC)
+
+
+def test_a_database_error_in_the_stamp_never_fails_a_request_whose_nonce_is_spent(
+    portal, monkeypatch, caplog
+) -> None:
+    def down(*args: object, **kwargs: object) -> None:
+        raise OperationalError("UPDATE", {}, Exception("FAKE database unavailable"))
+
+    monkeypatch.setattr(device_identity, "update", down)
+    request = request_at("first", NOW, vault_head_link=ANCHOR_A)
+    assert device_outcome(portal, request, now=NOW)[0] == "accept"
+    # The nonce is spent (a second use is a replay), the stamp was skipped, and the log line names
+    # no device.
+    assert device_outcome(portal, request, now=NOW)[0] == "replay"
+    assert seen_device(portal).last_seen_at is None
+    skipped = [r for r in caplog.records if "last-seen stamp was skipped" in r.getMessage()]
+    assert len(skipped) == 1
+    device_key = ref.DeviceKeys("device 1").device_key_id
+    assert all(device_key not in record.getMessage() for record in caplog.records)
 
 
 def test_a_request_without_an_anchor_leaves_the_stored_anchor_alone(portal) -> None:

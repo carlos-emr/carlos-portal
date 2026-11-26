@@ -27,7 +27,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from carlos_patient_portal import internal_routes
-from carlos_patient_portal.device_identity import DevicePrincipal, record_device_seen
+from carlos_patient_portal.device_identity import record_device_seen
 from carlos_patient_portal.models import (
     AUDIT_EVENT_JOB_AUTH_REFUSED,
     AUDIT_EVENT_MYCARLOS_CLINIC_KEYS_PUBLISH,
@@ -477,7 +477,7 @@ def test_staff_read_the_recipient_id_and_every_device_with_its_public_keys() -> 
 
 def test_staff_read_when_a_device_was_last_seen_and_its_vault_head_anchor() -> None:
     app = mycarlos_app()
-    account_id = seed_patient(app, 1234, [("phone", "active")])
+    seed_patient(app, 1234, [("phone", "active")])
     path = "/internal/carlos/patients/1234/mycarlos/devices"
     client = TestClient(app)
     unseen = client.get(path, headers=staff(MANAGE)).json()["devices"][0]
@@ -487,16 +487,8 @@ def test_staff_read_when_a_device_was_last_seen_and_its_vault_head_anchor() -> N
         None,
     )
     with app.state.session_factory() as session:
-        device = session.scalars(select(PatientPortalMyCarlosDevice)).one()
-        principal = DevicePrincipal(
-            device_id=device.id,
-            account_id=account_id,
-            device_key_id=device.device_key_id,
-            assertion_id="FAKE-assertion",
-            assertion_expires_at=0,
-            vault_head_link="ab" * 32,
-        )
-    record_device_seen(app.state.session_factory, principal)
+        device_id = session.scalars(select(PatientPortalMyCarlosDevice)).one().id
+    record_device_seen(app.state.session_factory, device_id, anchor="ab" * 32)
     seen = client.get(path, headers=staff(MANAGE)).json()["devices"][0]
     assert seen["last_seen_at"] is not None and seen["vault_head_link_at"] is not None
     assert seen["vault_head_link"] == "ab" * 32
