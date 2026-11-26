@@ -203,8 +203,9 @@ def parse_fhir_numeric_id(resource_id: str) -> int:
 
 
 # The ids this portal issues: `build_fhir_id`'s "portal-" and 56 hex digits (Patient, Organization,
-# Practitioner), and a document's database number.
-ISSUED_FHIR_ID = re.compile(r"portal-[0-9a-f]{56}|[1-9][0-9]{0,18}")
+# Practitioner), the same as the patient reference a search without `_id` is audited under
+# ("Patient/portal-..."), and a document's database number.
+ISSUED_FHIR_ID = re.compile(r"(?:Patient/)?portal-[0-9a-f]{56}|[1-9][0-9]{0,18}")
 UNRECOGNIZED_AUDIT_RESOURCE_ID = "unrecognized"
 
 

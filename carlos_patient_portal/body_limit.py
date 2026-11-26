@@ -25,6 +25,8 @@ routes with a model, so the limit sits here, around the whole API, and counts wh
 import re
 from collections.abc import Callable
 
+# A private Starlette helper (it strips the mount's root path): check it on a Starlette upgrade;
+# `test_a_mounted_app_is_capped_by_its_path_inside_the_mount` fails if it stops doing so.
 from starlette._utils import get_route_path
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -81,7 +83,9 @@ class BodyLimitMiddleware:
             return
 
         declared = Headers(scope=scope).get("content-length", "")
-        if declared.isdigit() and int(declared) > limit:
+        # `isdigit` is also true of "²" and other digits `int` refuses (a 500 on a server that
+        # does not check the header itself): only plain ASCII digits are a length.
+        if declared.isascii() and declared.isdigit() and int(declared) > limit:
             await self._refuse(send)
             return
 

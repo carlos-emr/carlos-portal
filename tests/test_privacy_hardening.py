@@ -155,8 +155,16 @@ def test_an_id_this_portal_issues_is_still_stored_as_it_was_asked_for() -> None:
 
     client.get(f"/fhir/Patient?_id={patient_id}", headers=headers)
     client.get("/fhir/DocumentReference/999999", headers=headers)  # a number nobody holds
+    # A search without `_id` is audited under the patient it is for.
+    client.get("/fhir/DocumentReference", headers=headers)
+    client.get("/fhir/Practitioner", headers=headers)
 
-    assert fhir_read_ids(app) == [patient_id, "999999"]
+    assert fhir_read_ids(app) == [
+        patient_id,
+        "999999",
+        f"Patient/{patient_id}",
+        f"Patient/{patient_id}",
+    ]
 
 
 # --------------------------------------------------------------------------------------------
@@ -228,7 +236,7 @@ def call(
             "raw_path": path.encode(),
             "query_string": b"",
             "root_path": "",
-            "headers": [(k.encode(), v.encode()) for k, v in request_headers.items()],
+            "headers": [(k.encode(), v.encode("latin-1")) for k, v in request_headers.items()],
             "client": ("127.0.0.1", 50000),
             "server": ("testserver", 80),
         }
@@ -284,8 +292,10 @@ def test_an_unauthenticated_body_over_the_limit_is_refused_after_reading_only_th
     assert json.loads(result.body) == {"detail": "request too large"}
     # Counted as it arrived: the application was given the first chunks and then nothing.
     assert result.served <= INTERNAL_BODY_LIMIT // chunk + 1
-    # It passed through the security headers like any other answer.
-    assert result.headers["cache-control"] == "no-store"
+    # It passed through the security headers like any other answer (`cache-control` is set by the
+    # refusal itself, so it proves nothing about that layer).
+    assert result.headers["x-content-type-options"] == "nosniff"
+    assert "content-security-policy" in result.headers
     assert "x-request-id" in result.headers
 
 
@@ -342,6 +352,46 @@ def test_a_device_link_body_of_exactly_its_limit_is_read_and_one_byte_more_is_no
 
     assert exactly.status != 413
     assert one_more.status == 413
+
+
+def test_a_declared_length_that_is_not_ascii_digits_is_not_a_length_and_not_a_server_error() -> (
+    None
+):
+    app = internal_app()
+    for declared in ("\u00b2", "\u00b3", "1e3", "-5", "", " 7 "):
+        result = call(app, INTERNAL_PATH, chunk_sizes=[10], headers={"content-length": declared})
+
+        # Nothing was claimed that can be believed: the body is counted as it arrives, and a
+        # small one reaches the route (which refuses an unknown caller as it always did).
+        assert result.status == 404, repr(declared)
+
+
+def test_a_mounted_app_is_capped_by_its_path_inside_the_mount() -> None:
+    seen = []
+
+    async def app(scope, receive, send):
+        seen.append(scope["path"])
+
+    middleware = BodyLimitMiddleware(app)
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "root_path": "/portal-root",
+        "path": "/portal-root/internal/carlos/patients/1/invites",
+        "headers": [(b"content-length", str(INTERNAL_BODY_LIMIT + 1).encode())],
+    }
+    anyio.run(middleware, scope, receive, send)
+
+    assert seen == [], "the application was not run"
+    assert sent[0]["status"] == 413
 
 
 def test_the_middleware_ignores_anything_that_is_not_an_http_request() -> None:
