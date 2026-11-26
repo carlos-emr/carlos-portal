@@ -288,7 +288,7 @@ def test_the_alert_is_a_loc_key_and_the_opaque_token_only_with_the_fixed_headers
     send(t)
     (request,) = http.requests
     assert json.loads(request.body) == {
-        "aps": {"alert": {"loc-key": "native-notice-arrival"}},
+        "aps": {"alert": {"loc-key": "MYCARLOS_DOCUMENT_WAITING"}},
         "n": NOTICE.token,
     }
     headers = dict(request.headers)

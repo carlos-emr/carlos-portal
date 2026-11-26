@@ -169,7 +169,7 @@ def push(port: int, **changes: object) -> HttpRequest:
             "apns-priority": "10",
             "content-type": "application/json",
         },
-        "body": b'{"aps":{"alert":{"loc-key":"native-notice-arrival"}},"n":"FAKE"}',
+        "body": b'{"aps":{"alert":{"loc-key":"MYCARLOS_DOCUMENT_WAITING"}},"n":"FAKE"}',
         **changes,
     }
     return HttpRequest(**values)  # type: ignore[arg-type]

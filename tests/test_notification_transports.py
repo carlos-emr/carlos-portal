@@ -124,7 +124,7 @@ class RequestShapes(unittest.TestCase):
         self.assertEqual(set(payload), {"aps", "n"})
         # A localization key and nothing else: no text, so no wording and no name leave the portal.
         self.assertEqual(payload["aps"], {"alert": {"loc-key": nt.APNS_ALERT_LOC_KEY}})
-        self.assertEqual(nt.APNS_ALERT_LOC_KEY, "native-notice-arrival")
+        self.assertEqual(nt.APNS_ALERT_LOC_KEY, "MYCARLOS_DOCUMENT_WAITING")
         self.assertEqual(payload["n"], NOTICE.token)
         self.assertNotIn(NOTICE.body.encode(), request.body)
         self.assertNotIn(b"myCarlos", request.body)
@@ -258,7 +258,9 @@ class NoPhiAndNoDocumentContent(unittest.TestCase):
                 "token",
                 "native",
                 "notice",
-                "arrival",
+                "MYCARLOS",
+                "DOCUMENT",
+                "WAITING",
             } | set(NOTICE.body.replace(".", "").split())
             self.assertLessEqual(words - allowed, set(), words - allowed)
 
