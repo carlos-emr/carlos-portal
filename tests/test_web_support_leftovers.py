@@ -136,6 +136,10 @@ def test_a_proof_is_valid_only_with_the_session_it_was_made_for() -> None:
 
     sms, email = make("sms"), make("email")
     assert check(sms) and check(email)
+    # A correct tag for a token that is not the shape of a session token is still refused.
+    odd = "short"
+    forged = f"sms.{web.hash_auth_token(SECRET, 'mycarlos-mfa-session-v1:sms', odd)}"
+    assert not check(forged, odd)
     assert not check(email, allow_email=False) and check(sms, allow_email=False)
     # Another session, another secret, a missing or malformed token, a missing or malformed proof.
     assert not check(sms, "B" * 43) and not check(sms, secret="q" * 32)
