@@ -76,6 +76,10 @@ CLINIC_BOOKING_PHONE_PATTERN = re.compile(
     r"(?=(?:[^0-9]*[0-9]){7})\+?\(?[0-9][0-9 ().-]{2,24}(?:\s*(?:ext\.?|x)\s*[0-9]{1,6})?",
     re.IGNORECASE,
 )
+# One plain address: no display name, no angle brackets, no comma list; the Help page links it.
+CLINIC_CONTACT_EMAIL_PATTERN = re.compile(
+    r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+)
 BOOKING_LOCATIONS_VARIABLE = "PATIENT_PORTAL_BOOKING_LOCATIONS"
 BOOKING_LOCATION_CODE_PATTERN = re.compile(rf"[a-z0-9_-]{{1,{MAX_BOOKING_LOCATION_CODE_LENGTH}}}")
 MAX_BOOKING_LOCATION_LABEL_LENGTH = 64
@@ -331,6 +335,13 @@ class Settings(BaseSettings):
     # Shown with a booking prompt so the patient knows how to book. Without it the prompt says to
     # contact the clinic.
     clinic_booking_phone: str | None = Field(default=None, max_length=32)
+    # Optional contact details for the Help page. All blank by default, and Help then only says
+    # "Contact the clinic". Any that are set are shown in place of that line, in every language
+    # (the clinic writes the hours itself); the labels are translated.
+    clinic_contact_phone: str | None = Field(default=None, max_length=32)
+    clinic_contact_email: str | None = Field(default=None, max_length=254)
+    clinic_contact_hours: str | None = Field(default=None, max_length=200)
+    clinic_contact_url: str | None = Field(default=None, max_length=2048)
     # A booking prompt disappears from the patient's messages after this long.
     booking_prompt_ttl_days: int = Field(default=90, ge=1, le=366)
     # Where an offered appointment time can be, as comma-separated `code=Label` pairs such as
@@ -723,6 +734,10 @@ class Settings(BaseSettings):
         "service_name",
         "clinic_name",
         "clinic_booking_phone",
+        "clinic_contact_phone",
+        "clinic_contact_email",
+        "clinic_contact_hours",
+        "clinic_contact_url",
         "booking_locations",
         "maintenance_database_url",
         mode="before",
@@ -748,6 +763,65 @@ class Settings(BaseSettings):
             raise ValueError(
                 "PATIENT_PORTAL_CLINIC_BOOKING_PHONE must be a phone number, optionally with an "
                 "extension, such as 555-123-4567 ext. 2"
+            )
+        return value
+
+    @field_validator("clinic_contact_phone")
+    @classmethod
+    def validate_clinic_contact_phone(cls, value: str | None) -> str | None:
+        if value is not None and CLINIC_BOOKING_PHONE_PATTERN.fullmatch(value) is None:
+            raise ValueError(
+                "PATIENT_PORTAL_CLINIC_CONTACT_PHONE must be a phone number, optionally with an "
+                "extension, such as 555-123-4567 ext. 2"
+            )
+        return value
+
+    @field_validator("clinic_contact_email")
+    @classmethod
+    def validate_clinic_contact_email(cls, value: str | None) -> str | None:
+        if value is not None and CLINIC_CONTACT_EMAIL_PATTERN.fullmatch(value) is None:
+            raise ValueError(
+                "PATIENT_PORTAL_CLINIC_CONTACT_EMAIL must be one email address, such as "
+                "frontdesk@clinic.example"
+            )
+        return value
+
+    @field_validator("clinic_contact_hours")
+    @classmethod
+    def validate_clinic_contact_hours(cls, value: str | None) -> str | None:
+        if value is not None and any(
+            ord(character) < 32 or ord(character) == 127 for character in value
+        ):
+            raise ValueError(
+                "PATIENT_PORTAL_CLINIC_CONTACT_HOURS must be one line of text without control "
+                "characters"
+            )
+        return value
+
+    @field_validator("clinic_contact_url")
+    @classmethod
+    def validate_clinic_contact_url(cls, value: str | None) -> str | None:
+        """An https link only: the value becomes an `href` every patient sees on the Help page."""
+        if value is None:
+            return value
+        if any(ord(character) < 33 or ord(character) == 127 for character in value):
+            raise ValueError(
+                "PATIENT_PORTAL_CLINIC_CONTACT_URL must not contain spaces or control characters"
+            )
+        parsed_url = urlsplit(value)
+        try:
+            _ = parsed_url.port
+        except ValueError as exc:
+            raise ValueError("PATIENT_PORTAL_CLINIC_CONTACT_URL must contain a valid port") from exc
+        if (
+            parsed_url.scheme != "https"
+            or parsed_url.hostname is None
+            or parsed_url.username is not None
+            or parsed_url.password is not None
+        ):
+            raise ValueError(
+                "PATIENT_PORTAL_CLINIC_CONTACT_URL must be an https:// address without a user "
+                "name or password"
             )
         return value
 

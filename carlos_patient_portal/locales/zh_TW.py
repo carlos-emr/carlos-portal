@@ -158,7 +158,11 @@ TEXT: dict[str, str] = {
         "核 CARLOS 中相符的病歷資料。"
     ),
     "contact_change_success_heading": "聯絡資訊已更新",
+    "contact_email": "電子郵件",
+    "contact_hours": "營業時間",
+    "contact_phone": "電話",
     "contact_the_clinic": "聯絡診所",
+    "contact_website": "網站",
     "copy": "複製",
     "copy_failed": "請手動選取並複製",
     "copied": "已複製",

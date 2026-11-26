@@ -192,7 +192,11 @@ TEXT: dict[str, str] = {
         "correspondentes do prontuário no CARLOS."
     ),
     "contact_change_success_heading": "Dados de contato atualizados",
+    "contact_email": "E-mail",
+    "contact_hours": "Horário",
+    "contact_phone": "Telefone",
     "contact_the_clinic": "Entrar em contato com a clínica",
+    "contact_website": "Site",
     "copy": "Copiar",
     "copy_failed": "Selecione e copie manualmente",
     "copied": "Copiado",

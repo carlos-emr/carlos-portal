@@ -467,7 +467,39 @@
               </div>
               <div>
                 <dt>{{ text.account_help }}</dt>
-                <dd>{{ text.contact_the_clinic }}</dd>
+                {% if clinic_contact %}
+                  {# The clinic's own contact details, when set; blank settings keep the line below. #}
+                  <dd>
+                    <ul class="contact-list">
+                      {% if clinic_contact.phone %}
+                        <li>
+                          <span class="contact-label">{{ text.contact_phone }}</span>
+                          <a href="{{ clinic_contact.phone_href }}">{{ clinic_contact.phone }}</a>
+                        </li>
+                      {% endif %}
+                      {% if clinic_contact.email %}
+                        <li>
+                          <span class="contact-label">{{ text.contact_email }}</span>
+                          <a href="mailto:{{ clinic_contact.email }}">{{ clinic_contact.email }}</a>
+                        </li>
+                      {% endif %}
+                      {% if clinic_contact.hours %}
+                        <li>
+                          <span class="contact-label">{{ text.contact_hours }}</span>
+                          <span>{{ clinic_contact.hours }}</span>
+                        </li>
+                      {% endif %}
+                      {% if clinic_contact.url %}
+                        <li>
+                          <span class="contact-label">{{ text.contact_website }}</span>
+                          <a href="{{ clinic_contact.url }}" rel="noopener noreferrer">{{ clinic_contact.url_label }}</a>
+                        </li>
+                      {% endif %}
+                    </ul>
+                  </dd>
+                {% else %}
+                  <dd>{{ text.contact_the_clinic }}</dd>
+                {% endif %}
               </div>
             </dl>
           {% endif %}

@@ -155,7 +155,11 @@ TEXT: dict[str, str] = {
         "员将核对 CARLOS 中相应的病历信息。"
     ),
     "contact_change_success_heading": "联系信息已更新",
+    "contact_email": "电子邮件",
+    "contact_hours": "营业时间",
+    "contact_phone": "电话",
     "contact_the_clinic": "联系诊所",
+    "contact_website": "网站",
     "copy": "复制",
     "copy_failed": "请手动选择并复制",
     "copied": "已复制",

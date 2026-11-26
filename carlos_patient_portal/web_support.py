@@ -83,6 +83,7 @@ from carlos_patient_portal.schemas import (
     PasswordResetRequest,
 )
 from carlos_patient_portal.view_models import (
+    ClinicContactViewModel,
     EmailPasswordDashboardViewModel,
     MessagesViewModel,
     MyCarlosViewModel,
@@ -1134,6 +1135,9 @@ def portal_template_context(
     # Modules with their own view state; typed so a rename is a type error, not a blank page.
     context["email_passwords"] = email_passwords
     context["messages"] = messages
+    context["clinic_contact"] = (
+        clinic_contact_for_help(settings) if active_module == "help" else None
+    )
     context["new_message_count"] = new_message_count
     context["new_messages_label"] = plural_text(
         text, "messages_new_count", new_message_count, locale
@@ -1141,6 +1145,34 @@ def portal_template_context(
     context["mycarlos_enabled"] = settings.mycarlos_delivery_enabled
     context["mycarlos"] = mycarlos
     return context
+
+
+_PHONE_EXTENSION = re.compile(r"\s*(?:ext\.?|x)\s*([0-9]{1,6})\s*$", re.IGNORECASE)
+
+
+def phone_tel_href(phone: str) -> str:
+    """A `tel:` link for a validated phone number: digits, a leading plus, and `;ext=` if given."""
+    extension = _PHONE_EXTENSION.search(phone)
+    number = phone[: extension.start()] if extension else phone
+    digits = re.sub(r"[^0-9]", "", number)
+    href = f"tel:{'+' if number.lstrip().startswith('+') else ''}{digits}"
+    return f"{href};ext={extension.group(1)}" if extension else href
+
+
+def clinic_contact_for_help(settings: Settings) -> ClinicContactViewModel | None:
+    """The configured Help contact details, or None when none are set ("Contact the clinic")."""
+    phone = settings.clinic_contact_phone
+    url = settings.clinic_contact_url
+    if not (phone or settings.clinic_contact_email or settings.clinic_contact_hours or url):
+        return None
+    return ClinicContactViewModel(
+        phone=phone,
+        phone_href=phone_tel_href(phone) if phone else None,
+        email=settings.clinic_contact_email,
+        hours=settings.clinic_contact_hours,
+        url=url,
+        url_label=url.removeprefix("https://").rstrip("/") if url else None,
+    )
 
 
 def parse_optional_email_password_date(value: str | None) -> date | None:

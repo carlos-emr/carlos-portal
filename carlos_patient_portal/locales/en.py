@@ -182,7 +182,11 @@ TEXT: dict[str, str] = {
         "CARLOS chart details."
     ),
     "contact_change_success_heading": "Contact information updated",
+    "contact_email": "Email",
+    "contact_hours": "Hours",
+    "contact_phone": "Phone",
     "contact_the_clinic": "Contact the clinic",
+    "contact_website": "Website",
     "copy": "Copy",
     "copy_failed": "Select and copy manually",
     "copied": "Copied",

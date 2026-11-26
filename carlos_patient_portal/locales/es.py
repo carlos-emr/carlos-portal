@@ -189,7 +189,11 @@ TEXT: dict[str, str] = {
         "revisará los datos correspondientes de su historia clínica en CARLOS."
     ),
     "contact_change_success_heading": "Datos de contacto actualizados",
+    "contact_email": "Correo electrónico",
+    "contact_hours": "Horario",
+    "contact_phone": "Teléfono",
     "contact_the_clinic": "Contactar con la clínica",
+    "contact_website": "Sitio web",
     "copy": "Copiar",
     "copy_failed": "Seleccione y copie manualmente",
     "copied": "Copiado",
