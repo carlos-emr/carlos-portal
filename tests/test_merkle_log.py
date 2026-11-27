@@ -1,0 +1,369 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 CARLOS Contributors. All Rights Reserved.
+
+"""The transparency log's Merkle core (carlos-portal#37, inert) against published vectors.
+
+Three independent anchors, so that the module is not only tested against itself:
+
+1. **The Certificate Transparency reference data set**: eight fixed leaves and the root of every
+   prefix of them, and the proofs for a few (leaf, size) and (first, second) pairs. These are the
+   long-published values used by Google's `certificate-transparency` and by Trillian's merkle
+   tests; the module reproduces them byte for byte.
+2. **An independent recursive reading of RFC 9162 section 2.1.1** written out in this file (it
+   shares no code with the module), compared for every tree size up to 70.
+3. **Exhaustive properties** over every leaf of every tree up to 40 entries, and every pair of
+   sizes up to 40: each generated proof verifies, and each way of damaging it does not.
+"""
+
+from hashlib import sha256
+
+import pytest
+
+from carlos_patient_portal import merkle_log as log
+from carlos_patient_portal.merkle_log import (
+    MAX_PROOF_HASHES,
+    consistency_proof,
+    empty_root,
+    inclusion_proof,
+    leaf_hash,
+    merkle_tree_hash,
+    node_hash,
+    root_from_leaf_hashes,
+    verify_consistency,
+    verify_inclusion,
+)
+
+# The CT reference leaves (the data of each entry).
+CT_LEAVES = [
+    b"",
+    b"\x00",
+    b"\x10",
+    b"\x20\x21",
+    b"\x30\x31",
+    b"\x40\x41\x42\x43",
+    b"\x50\x51\x52\x53\x54\x55\x56\x57",
+    b"\x60\x61\x62\x63\x64\x65\x66\x67\x68\x69\x6a\x6b\x6c\x6d\x6e\x6f",
+]
+CT_LEAF_HASHES = [
+    "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+    "96a296d224f285c67bee93c30f8a309157f0daa35dc5b87e410b78630a09cfc7",
+    "0298d122906dcfc10892cb53a73992fc5b9f493ea4c9badb27b791b4127a7fe7",
+    "07506a85fd9dd2f120eb694f86011e5bb4662e5c415a62917033d4a9624487e7",
+    "bc1a0643b12e4d2d7c77918f44e0f4f79a838b6cf9ec5b5c283e1f4d88599e6b",
+    "4271a26be0d8a84f0bd54c8c302e7cb3a3b5d1fa6780a40bcce2873477dab658",
+    "b08693ec2e721597130641e8211e7eedccb4c26413963eee6c1e2ed16ffb1a5f",
+    "46f6ffadd3d06a09ff3c5860d2755c8b9819db7df44251788c7d8e3180de8eb1",
+]
+# CT_ROOTS[n] is the root of the first n leaves (n = 0 is the empty tree).
+CT_ROOTS = [
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+    "fac54203e7cc696cf0dfcb42c92a1d9dbaf70ad9e621f4bd8d98662f00e3c125",
+    "aeb6bcfe274b70a14fb067a5e5578264db0fa9b51af5e0ba159158f329e06e77",
+    "d37ee418976dd95753c1c73862b9398fa2a2cf9b4ff0fdfe8b30cd95209614b7",
+    "4e3bbb1f7b478dcfe71fb631631519a3bca12c9aefca1612bfce4c13a86264d4",
+    "76e67dadbcdf1e10e1b74ddc608abd2f98dfb16fbce75277b5232a127f2087ef",
+    "ddb89be403809e325750d3d263cd78929c2942b7942a34b77e122c9594a74c8c",
+    "5dc9da79a70659a9ad559cb701ded9a2ab9d823aad2f4960cfe370eff4604328",
+]
+
+
+def h(text: str) -> bytes:
+    return bytes.fromhex(text)
+
+
+def ct_leaf_hashes(count: int = 8) -> list[bytes]:
+    return [leaf_hash(entry) for entry in CT_LEAVES[:count]]
+
+
+# --- an independent reading of RFC 9162 section 2.1.1 (shares nothing with the module) --------
+
+
+def naive_leaf(data: bytes) -> bytes:
+    return sha256(b"\x00" + data).digest()
+
+
+def naive_mth(entries: list[bytes]) -> bytes:
+    """MTH(D[n]) written as the RFC states it: split at the largest power of two below n."""
+    n = len(entries)
+    if n == 0:
+        return sha256(b"").digest()
+    if n == 1:
+        return naive_leaf(entries[0])
+    k = 1
+    while k * 2 < n:
+        k *= 2
+    return sha256(b"\x01" + naive_mth(entries[:k]) + naive_mth(entries[k:])).digest()
+
+
+def entries_of(count: int) -> list[bytes]:
+    return [b"FAKE entry %d" % number for number in range(count)]
+
+
+def damaged(proof: list[bytes]) -> list[list[bytes]]:
+    """Every single-step damage of a proof: each hash with a bit flipped, one added, one dropped."""
+    variants = []
+    for position, value in enumerate(proof):
+        flipped = bytes([value[0] ^ 1]) + value[1:]
+        variants.append([*proof[:position], flipped, *proof[position + 1 :]])
+        variants.append([*proof[:position], *proof[position + 1 :]])
+    variants.append([*proof, b"\x00" * 32])
+    variants.append([b"\x00" * 32, *proof])
+    if len(proof) > 1:
+        variants.append(list(reversed(proof)) if list(reversed(proof)) != proof else proof[1:])
+    return variants
+
+
+# --- 1. the CT reference vectors -----------------------------------------------------------------
+
+
+def test_the_ct_reference_leaf_hashes_and_every_prefix_root_are_reproduced() -> None:
+    assert [leaf_hash(entry).hex() for entry in CT_LEAVES] == CT_LEAF_HASHES
+    for count, root in enumerate(CT_ROOTS):
+        assert merkle_tree_hash(CT_LEAVES[:count]).hex() == root, count
+        assert root_from_leaf_hashes(ct_leaf_hashes(count)).hex() == root, count
+    assert empty_root().hex() == CT_ROOTS[0]
+
+
+def test_the_ct_reference_inclusion_proofs_are_reproduced() -> None:
+    leaves = ct_leaf_hashes()
+    # Leaf 0 of eight, and the others of eight, as published.
+    assert [value.hex() for value in inclusion_proof(leaves, 0)] == [
+        "96a296d224f285c67bee93c30f8a309157f0daa35dc5b87e410b78630a09cfc7",
+        "5f083f0a1a33ca076a95279832580db3e0ef4584bdff1f54c8a360f50de3031e",
+        "6b47aaf29ee3c2af9af889bc1fb9254dabd31177f16232dd6aab035ca39bf6e4",
+    ]
+    # The sibling of leaf 0 is leaf 1; the pair above them is the root of leaves 2 and 3, and the
+    # last is the root of leaves 4 to 7.
+    assert inclusion_proof(leaves, 0)[0] == leaves[1]
+    assert inclusion_proof(leaves, 0)[1] == node_hash(leaves[2], leaves[3])
+    assert inclusion_proof(leaves, 0)[2] == root_from_leaf_hashes(leaves[4:8])
+    # A tree of one has an empty proof; of two, the other leaf.
+    assert inclusion_proof(leaves[:1], 0) == []
+    assert inclusion_proof(leaves[:2], 1) == [leaves[0]]
+    for size in range(1, 9):
+        root = h(CT_ROOTS[size])
+        for index in range(size):
+            proof = inclusion_proof(leaves[:size], index)
+            assert verify_inclusion(leaves[index], index, size, proof, root), (size, index)
+
+
+def test_the_ct_reference_consistency_proofs_are_reproduced() -> None:
+    leaves = ct_leaf_hashes()
+    # 1 -> 8, 6 -> 8 and 2 -> 5: the published proofs.
+    assert [value.hex() for value in consistency_proof(leaves, 1)] == [
+        "96a296d224f285c67bee93c30f8a309157f0daa35dc5b87e410b78630a09cfc7",
+        "5f083f0a1a33ca076a95279832580db3e0ef4584bdff1f54c8a360f50de3031e",
+        "6b47aaf29ee3c2af9af889bc1fb9254dabd31177f16232dd6aab035ca39bf6e4",
+    ]
+    assert [value.hex() for value in consistency_proof(leaves, 6)] == [
+        "0ebc5d3437fbe2db158b9f126a1d118e308181031d0a949f8dededebc558ef6a",
+        "ca854ea128ed050b41b35ffc1b87b8eb2bde461e9e3b5596ece6b9d5975a0ae0",
+        "d37ee418976dd95753c1c73862b9398fa2a2cf9b4ff0fdfe8b30cd95209614b7",
+    ]
+    assert [value.hex() for value in consistency_proof(leaves[:5], 2)] == [
+        "5f083f0a1a33ca076a95279832580db3e0ef4584bdff1f54c8a360f50de3031e",
+        "bc1a0643b12e4d2d7c77918f44e0f4f79a838b6cf9ec5b5c283e1f4d88599e6b",
+    ]
+    for first in range(1, 9):
+        for second in range(first, 9):
+            proof = consistency_proof(leaves[:second], first)
+            assert verify_consistency(
+                first, second, h(CT_ROOTS[first]), h(CT_ROOTS[second]), proof
+            ), (first, second)
+
+
+# --- 2. an independent reading of the RFC, for every size up to 70 --------------------------------
+
+
+def test_the_root_matches_an_independent_recursive_reading_of_the_rfc_for_every_size() -> None:
+    for count in range(0, 71):
+        entries = entries_of(count)
+        assert merkle_tree_hash(entries) == naive_mth(entries), count
+
+
+def test_a_leaf_can_never_be_read_as_a_node() -> None:
+    # Domain separation: the hash of two entries is not the hash of one entry made of two hashes.
+    left, right = b"FAKE left", b"FAKE right"
+    node = merkle_tree_hash([left, right])
+    forged_entry = leaf_hash(left) + leaf_hash(right)
+    assert node != leaf_hash(forged_entry)
+    assert node == node_hash(leaf_hash(left), leaf_hash(right))
+    assert leaf_hash(b"") != empty_root()
+
+
+# --- 3. exhaustive properties -------------------------------------------------------------------
+
+
+def test_every_inclusion_proof_of_every_tree_up_to_40_verifies_and_every_damage_fails() -> None:
+    for size in range(1, 41):
+        leaves = [leaf_hash(entry) for entry in entries_of(size)]
+        root = root_from_leaf_hashes(leaves)
+        for index in range(size):
+            proof = inclusion_proof(leaves, index)
+            assert len(proof) <= (size - 1).bit_length(), (size, index)
+            assert verify_inclusion(leaves[index], index, size, proof, root), (size, index)
+            # A different entry, index, size or root, and each damaged proof, is refused.
+            assert not verify_inclusion(leaf_hash(b"FAKE other"), index, size, proof, root)
+            assert not verify_inclusion(leaves[index], index, size, proof, b"\x00" * 32)
+            if size > 1:
+                other = (index + 1) % size
+                if other != index:
+                    assert not verify_inclusion(leaves[index], other, size, proof, root), (
+                        size,
+                        index,
+                    )
+            if size > 1:
+                # (A tree of one entry has its leaf hash for its root, so that case is a yes.)
+                assert not verify_inclusion(leaves[index], index, size, proof, leaves[index])
+            for variant in damaged(proof):
+                if variant != proof:
+                    assert not verify_inclusion(leaves[index], index, size, variant, root), (
+                        size,
+                        index,
+                    )
+
+
+def test_every_consistency_proof_of_every_pair_up_to_40_verifies_and_every_damage_fails() -> None:
+    all_leaves = [leaf_hash(entry) for entry in entries_of(40)]
+    roots = [root_from_leaf_hashes(all_leaves[:size]) for size in range(41)]
+    for second in range(1, 41):
+        for first in range(1, second + 1):
+            proof = consistency_proof(all_leaves[:second], first)
+            assert verify_consistency(first, second, roots[first], roots[second], proof), (
+                first,
+                second,
+            )
+            if first == second:
+                assert proof == []
+                continue
+            assert len(proof) >= 1
+            # Not the other way round, not other roots, not another size, and no damaged proof.
+            assert not verify_consistency(second, first, roots[second], roots[first], proof)
+            assert not verify_consistency(first, second, roots[second], roots[second], proof)
+            assert not verify_consistency(first, second, roots[first], roots[first], proof)
+            assert not verify_consistency(first, second, roots[first], roots[second], [])
+            for variant in damaged(proof):
+                if variant != proof:
+                    assert not verify_consistency(
+                        first, second, roots[first], roots[second], variant
+                    ), (first, second)
+
+
+def test_a_proof_binds_the_roots_and_the_sizes_are_claims_to_check_elsewhere() -> None:
+    # Documented, not a defect: the proof from one entry to three also verifies against the same
+    # second root when the second size is claimed to be four, because the verifier never sees the
+    # entries and the size-three tree's last node can stand as a size-four tree's right half. A
+    # head is therefore (size, root) signed together, and the size is checked where it is signed.
+    # The same holds for an inclusion proof of entry 0 of three, claimed as entry 0 of four.
+    leaves = [leaf_hash(entry) for entry in entries_of(4)]
+    path = inclusion_proof(leaves[:3], 0)
+    three_root = root_from_leaf_hashes(leaves[:3])
+    assert verify_inclusion(leaves[0], 0, 3, path, three_root)
+    assert verify_inclusion(leaves[0], 0, 4, path, three_root)
+    assert not verify_inclusion(leaves[0], 0, 4, path, root_from_leaf_hashes(leaves))
+    first_root = root_from_leaf_hashes(leaves[:1])
+    second_root = root_from_leaf_hashes(leaves[:3])
+    proof = consistency_proof(leaves[:3], 1)
+    assert verify_consistency(1, 3, first_root, second_root, proof)
+    assert verify_consistency(1, 4, first_root, second_root, proof)
+    # The honest size-four tree has another root, and the honest proof for it is another proof.
+    honest_root = root_from_leaf_hashes(leaves)
+    assert honest_root != second_root
+    assert not verify_consistency(1, 4, first_root, honest_root, proof)
+    assert verify_consistency(1, 4, first_root, honest_root, consistency_proof(leaves, 1))
+
+
+def test_a_log_that_rewrote_an_old_entry_is_not_consistent_with_the_old_head() -> None:
+    entries = entries_of(13)
+    old_root = merkle_tree_hash(entries[:9])
+    # The later tree changed entry 3 before growing to 13: no proof of the honest kind connects
+    # the old head to it.
+    rewritten = list(entries)
+    rewritten[3] = b"FAKE rewritten entry"
+    new_leaves = [leaf_hash(entry) for entry in rewritten]
+    new_root = root_from_leaf_hashes(new_leaves)
+    proof = consistency_proof(new_leaves, 9)
+    assert not verify_consistency(9, 13, old_root, new_root, proof)
+    # And the same tree with the entry removed (and one added to keep the size) is no better.
+    removed = [entry for position, entry in enumerate(entries) if position != 3] + [b"FAKE new"]
+    removed_leaves = [leaf_hash(entry) for entry in removed]
+    removed_proof = consistency_proof(removed_leaves, 9)
+    assert not verify_consistency(
+        9, 13, old_root, root_from_leaf_hashes(removed_leaves), removed_proof
+    )
+    # The honest growth is consistent.
+    honest = [leaf_hash(entry) for entry in entries]
+    assert verify_consistency(
+        9, 13, old_root, root_from_leaf_hashes(honest), consistency_proof(honest, 9)
+    )
+
+
+# --- the verifiers are total; the generators refuse what they cannot answer ---------------------
+
+
+def test_the_verifiers_say_no_to_anything_malformed_and_never_raise() -> None:
+    leaves = [leaf_hash(entry) for entry in entries_of(6)]
+    root = root_from_leaf_hashes(leaves)
+    proof = inclusion_proof(leaves, 2)
+    assert verify_inclusion(leaves[2], 2, 6, proof, root)
+    bad_hashes = [b"", b"\x00" * 31, b"\x00" * 33, bytearray(32), "00" * 32, None, 7]
+    for value in bad_hashes:
+        assert not verify_inclusion(value, 2, 6, proof, root)  # type: ignore[arg-type]
+        assert not verify_inclusion(leaves[2], 2, 6, proof, value)  # type: ignore[arg-type]
+        assert not verify_inclusion(leaves[2], 2, 6, [*proof[:-1], value], root)  # type: ignore[list-item]
+        assert not verify_consistency(3, 6, root, root, [value])  # type: ignore[list-item]
+        assert not verify_consistency(3, 6, value, root, proof)  # type: ignore[arg-type]
+    for index, size in [(-1, 6), (6, 6), (7, 6), (0, 0), (True, 6), (2.0, 6), ("2", 6), (2, None)]:
+        assert not verify_inclusion(leaves[2], index, size, proof, root)  # type: ignore[arg-type]
+    sizes = [(0, 6), (-1, 6), (7, 6), (3, -1), (True, 6), (3.0, 6), (3, "6"), (None, 6)]
+    for first, second in sizes:
+        assert not verify_consistency(first, second, root, root, proof)  # type: ignore[arg-type]
+    assert not verify_inclusion(leaves[2], 2, 6, None, root)  # type: ignore[arg-type]
+    assert not verify_inclusion(leaves[2], 2, 6, proof, root[:-1])
+    # A tree too large to exist, and a proof longer than any tree needs, are refused before hashing.
+    assert not verify_inclusion(leaves[2], 2, 2**63, proof, root)
+    assert not verify_inclusion(leaves[2], 2, 6, [b"\x00" * 32] * (MAX_PROOF_HASHES + 1), root)
+    assert not verify_consistency(3, 6, root, root, [b"\x00" * 32] * (MAX_PROOF_HASHES + 1))
+    # An empty tree is consistent with nothing; the same size needs the same root and no proof.
+    assert not verify_consistency(0, 0, empty_root(), empty_root(), [])
+    assert verify_consistency(6, 6, root, root, [])
+    assert not verify_consistency(6, 6, root, root, [root])
+    assert not verify_consistency(6, 6, root, leaves[0], [])
+    # Proofs given as tuples are fine; a bytes object standing in for the list is not.
+    assert verify_inclusion(leaves[2], 2, 6, tuple(proof), root)
+    assert not verify_inclusion(leaves[2], 2, 6, b"".join(proof), root)  # type: ignore[arg-type]
+
+
+def test_the_generators_refuse_what_they_cannot_answer() -> None:
+    leaves = ct_leaf_hashes(4)
+    for index in (-1, 4, 5, True, 1.0, "1", None):
+        with pytest.raises(ValueError):
+            inclusion_proof(leaves, index)  # type: ignore[arg-type]
+    for first in (0, -1, 5, True, 2.0, None):
+        with pytest.raises(ValueError):
+            consistency_proof(leaves, first)  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        inclusion_proof([], 0)
+    with pytest.raises(ValueError):
+        consistency_proof([], 1)
+    for bad in ([b"short"], [b"\x00" * 32, "x" * 32], [bytearray(32)]):
+        with pytest.raises(ValueError):
+            root_from_leaf_hashes(bad)  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            inclusion_proof(bad, 0)  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            consistency_proof(bad, 1)  # type: ignore[arg-type]
+
+
+def test_the_core_is_not_wired_to_anything() -> None:
+    # Inert until #37's decisions are made: nothing but this test imports the module.
+    import pathlib
+
+    package = pathlib.Path(log.__file__).parent
+    importers = [
+        path.name
+        for path in package.rglob("*.py")
+        if path.name != "merkle_log.py" and "merkle_log" in path.read_text(encoding="utf-8")
+    ]
+    assert importers == []
