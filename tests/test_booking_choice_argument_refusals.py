@@ -19,6 +19,8 @@ result. None of these reads or writes a row, so no session is needed (a bare obj
 Every value is FAKE.
 """
 
+from datetime import UTC, datetime
+
 import pytest
 
 from carlos_patient_portal.booking_choices import (
@@ -26,6 +28,7 @@ from carlos_patient_portal.booking_choices import (
     list_pending_choices,
     record_choice_result,
 )
+from carlos_patient_portal.booking_offers import OfferedSlotSpec
 from carlos_patient_portal.models import (
     BOOKING_CHOICE_STATE_BOOKED,
     BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE,
@@ -71,3 +74,71 @@ def test_the_two_supported_results_are_what_the_refusal_names() -> None:
     assert {BOOKING_CHOICE_STATE_BOOKED, BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE}.isdisjoint(
         {"pending", "", "BOOKED", "cancelled"}
     )
+
+
+# The refusals above must not be too tight: a value that IS allowed gets past the argument checks
+# and starts work. The session below raises a marker on its first use, so reaching it proves the
+# arguments were accepted (a bare `object()` would also raise, but as an unrelated AttributeError).
+
+
+class ReachedTheDatabase(Exception):
+    pass
+
+
+class UntouchableSession:
+    def __getattr__(self, name: str):
+        raise ReachedTheDatabase(name)
+
+
+@pytest.mark.parametrize("limit", [1, MAX_PENDING_CHOICE_LIST], ids=["smallest", "largest"])
+def test_the_smallest_and_largest_page_sizes_get_past_the_check_to_the_database(
+    limit: int,
+) -> None:
+    with pytest.raises(ReachedTheDatabase):
+        list_pending_choices(
+            UntouchableSession(),  # type: ignore[arg-type]
+            clinic_id="clinic-a",
+            actor="job",
+            actor_id=None,
+            limit=limit,
+        )
+
+
+@pytest.mark.parametrize(
+    ("result", "with_replacements"),
+    [
+        (BOOKING_CHOICE_STATE_BOOKED, False),
+        (BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE, False),
+        (BOOKING_CHOICE_STATE_SLOT_UNAVAILABLE, True),
+    ],
+    ids=["booked", "slot unavailable", "slot unavailable with replacements"],
+)
+def test_the_allowed_result_combinations_get_past_the_checks_to_the_database(
+    result: str, with_replacements: bool
+) -> None:
+    replacements = (
+        (
+            OfferedSlotSpec(
+                slot_id="FAKE:slot:9",
+                starts_at=datetime(2030, 1, 15, 15, 0, tzinfo=UTC),
+                duration_minutes=30,
+                visit_mode="phone",
+            ),
+        )
+        if with_replacements
+        else ()
+    )
+
+    with pytest.raises(ReachedTheDatabase):
+        record_choice_result(
+            UntouchableSession(),  # type: ignore[arg-type]
+            1,
+            clinic_id="clinic-a",
+            choice_id=1,
+            result=result,
+            replacement_slots=replacements,
+            booking_location_codes={"FAKE-loc"},
+            actor="job",
+            actor_id=None,
+            notice=object(),  # type: ignore[arg-type]
+        )
