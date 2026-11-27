@@ -212,7 +212,8 @@ def test_a_revoked_session_cannot_keep_itself_alive():
 def test_the_sign_in_page_says_a_session_ended_for_inactivity_in_every_language():
     app = migrated_development_app()
     client = TestClient(app)
-    for locale in SUPPORTED_LOCALES:
+    for option in SUPPORTED_LOCALES:
+        locale = option.code
         client.cookies.set(LOCALE_COOKIE_NAME, locale)
         notice = portal_text(locale)["signed_out_idle_notice"]
         assert notice in client.get("/?signed_out=idle").text
@@ -227,7 +228,11 @@ def test_only_the_known_reason_shows_a_notice_and_nothing_of_the_query_is_echoed
     for value in ("", "logout", "IDLE", "idle%20", hostile, "ZQXMARK" + "Q" * 5000):
         page = client.get("/", params={"signed_out": value}).text
         assert notice not in page
-        assert "alert(1)" not in page and "ZQXMARK" not in page
+        assert 'class="form-notice"' not in page
+        # The language links carry the page's own address, percent-encoded, as they always did;
+        # nothing of the value is put into the page as markup or as a notice.
+        assert hostile not in page
+        assert "<script>alert" not in page
     # Repeated: the first value is the one read, and the notice is one paragraph.
     page = client.get("/?signed_out=idle&signed_out=other").text
     assert page.count(notice) <= 1

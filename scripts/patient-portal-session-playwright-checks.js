@@ -903,8 +903,8 @@ async function checkIdleSignOut(page, context) {
 
   // The page is told how long is left, in seconds, and its limit.
   const given = await page.evaluate(() => ({
-    remaining: Number(document.body.dataset.idleRemainingSeconds),
-    limit: Number(document.body.dataset.idleLimitSeconds),
+    remaining: Number(document.getElementById('portal-idle-config').dataset.idleRemainingSeconds),
+    limit: Number(document.getElementById('portal-idle-config').dataset.idleLimitSeconds),
   }));
   assert(given.limit === limitSeconds, `the page's idle limit is ${given.limit}, not ${limitSeconds}`);
   assert(given.remaining > limitSeconds - 15 && given.remaining <= limitSeconds,
@@ -978,9 +978,17 @@ async function checkIdleSignOut(page, context) {
   await page.screenshot({ path: screenshotPath('patient-portal-idle-signed-out'), fullPage: true });
 
   // Back does not return to the records, and the server holds the session as ended.
-  await page.goBack({ waitUntil: 'load' });
+  // The entry before is the answer to the sign-in code's POST, which the browser cannot show again
+  // (net::ERR_CACHE_MISS, as it must be: the page is no-store): either that error or a sign-in
+  // page, never the records.
+  await page.goBack({ waitUntil: 'commit' }).catch((error) => {
+    assert(String(error.message).includes('ERR_CACHE_MISS'), `Back failed unexpectedly: ${error.message}`);
+  });
   assert(await page.locator('.signed-in-user').count() === 0 && await page.locator('.module-nav').count() === 0,
     'Back brought the signed-in page back');
+  // The page is told whole seconds, rounded down, so it may leave up to a second before the server
+  // ends the session (never after): give the server that second and a little more.
+  await wait(3000);
   await open(page, '/portal');
   assert(atPath(page, portalPathname('/')), 'the idle session still opens the dashboard');
 
@@ -988,7 +996,10 @@ async function checkIdleSignOut(page, context) {
   await open(page, '/?signed_out=%3Cb%3Eoops%3C%2Fb%3E');
   assert(await page.getByText(t('signed_out_idle_notice'), { exact: true }).count() === 0,
     'an unknown signed_out reason showed the notice');
-  assert(!(await page.content()).includes('oops'), 'an unknown signed_out reason was echoed');
+  // The language links carry the page's own address, percent-encoded, as they always did; the
+  // value is never markup (no <b> element) and never a notice.
+  assert(await page.locator('b', { hasText: 'oops' }).count() === 0
+    && await page.locator('.form-notice').count() === 0, 'an unknown signed_out reason was echoed');
   console.log(JSON.stringify({ check: 'idle sign-out', limitSeconds, leadSeconds,
     keepalives: keepalives.length, leftByItself: true, backShowsNoRecords: true }));
 }

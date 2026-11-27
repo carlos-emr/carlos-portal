@@ -266,10 +266,14 @@
   globalThis.CarlosIdleSession = api;
 
   // ---- The page -------------------------------------------------------------------------
-  if (typeof document === "undefined" || !document.body || !document.body.dataset) {
+  if (typeof document === "undefined" || !document.body) {
     return;
   }
-  const data = document.body.dataset;
+  const config = document.getElementById("portal-idle-config");
+  if (!config) {
+    return;
+  }
+  const data = config.dataset;
   const remainingSeconds = Number(data.idleRemainingSeconds);
   const limitSeconds = Number(data.idleLimitSeconds);
   if (

@@ -17,16 +17,21 @@
   <script src="{{ url_for('static', path='/portal.js') }}" defer></script>
   <script src="{{ url_for('static', path='/idle-session.js') }}" defer></script>
 </head>
-<body
-  data-idle-remaining-seconds="{{ idle_remaining_seconds }}"
-  data-idle-limit-seconds="{{ idle_limit_seconds }}"
-  data-idle-keepalive-url="{{ url_for('portal_session_keepalive') }}"
-  data-idle-signed-out-url="{{ url_for('index') }}?signed_out=idle"
-  data-idle-csrf-token="{{ csrf_token }}"
->
+<body>
   {# The skip link jumps past the module navigation too: to the workspace, inside main. #}
   {% from "_skip_link.jinja" import skip_link %}{{ skip_link(text, "module-content") }}
   {% include "_live_status.jinja" %}
+  {# What the idle sign-out script (#149, static/idle-session.js) is given: seconds left, the limit,
+     where to send a keep-alive and where to go when the time is up. Seconds, never a time. #}
+  <div
+    id="portal-idle-config"
+    hidden
+    data-idle-remaining-seconds="{{ idle_remaining_seconds }}"
+    data-idle-limit-seconds="{{ idle_limit_seconds }}"
+    data-idle-keepalive-url="{{ url_for('portal_session_keepalive').path }}"
+    data-idle-signed-out-url="{{ url_for('index').path }}?signed_out=idle"
+    data-idle-csrf-token="{{ csrf_token }}"
+  ></div>
   <div class="app-shell">
     <div class="portal-screen dashboard-screen">
       <header class="patient-topbar portal-topbar">
