@@ -6,12 +6,13 @@ raises a marker the moment anything touches it, so a refusal that came only afte
 would show as that marker and not as the expected message. FAKE and synthetic values only.
 """
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
 
 from carlos_patient_portal import booking_prompts
+from carlos_patient_portal.booking_offers import OfferedSlotSpec
 from carlos_patient_portal.models import (
     BOOKING_PROMPT_APPOINTMENT_TYPES,
     BOOKING_PROMPT_URGENCIES,
@@ -100,3 +101,45 @@ def test_an_operation_id_is_trimmed_and_the_limit_is_the_trimmed_length() -> Non
     # ... and one more character does.
     with pytest.raises(ValueError):
         booking_prompts._normalize_operation_id(longest + "x")
+
+
+@pytest.mark.parametrize("demographic_no", [0, -1, 2**31, 2**40])
+def test_a_demographic_number_outside_one_to_the_largest_is_refused_first(
+    demographic_no: int,
+) -> None:
+    with pytest.raises(ValueError, match="demographic_no must be between 1 and 2147483647"):
+        create(demographic_no=demographic_no)
+    # The two ends that are allowed get past the check, to the database.
+    for allowed in (1, 2**31 - 1):
+        with pytest.raises(ReachedTheDatabase):
+            create(demographic_no=allowed)
+
+
+@pytest.mark.parametrize(
+    ("clinic_id", "message"),
+    [
+        ("", "clinic_id must not be blank"),
+        ("   ", "clinic_id must not be blank"),
+        ("c" * 65, "clinic_id must be 64 characters or fewer"),
+    ],
+)
+def test_a_blank_or_over_long_clinic_id_is_refused_first(clinic_id: str, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        create(clinic_id=clinic_id)
+    with pytest.raises(ReachedTheDatabase):
+        create(clinic_id="c" * 64)
+
+
+def test_offered_times_need_the_digest_secret_and_get_to_the_database_with_it() -> None:
+    slot = OfferedSlotSpec(
+        slot_id="FAKE:slot:1",
+        starts_at=datetime(2030, 1, 15, 15, 0, tzinfo=UTC),
+        duration_minutes=30,
+        visit_mode="phone",
+    )
+    for secret in (None, ""):
+        with pytest.raises(ValueError, match="offer_digest_secret is required to offer times"):
+            create(offered_slots=[slot], offer_digest_secret=secret)
+    # With a secret the arguments are accepted and the work begins.
+    with pytest.raises(ReachedTheDatabase):
+        create(offered_slots=[slot], offer_digest_secret="FAKE-digest-secret-0000000000000001")

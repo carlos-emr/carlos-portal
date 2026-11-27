@@ -1,13 +1,16 @@
 """Link codes and recipient ids that clash with a stored one, and a link whose account is gone.
 
 The ids are random, so a clash is rare: these tests make it certain by fixing the random source, and
-check what a caller can rely on. A clash is redrawn; a clash every time is an error and stores
-nothing; a link that cannot be tied to its account is refused as "invalid" with nothing counted.
-FAKE and synthetic values only; the migrated development app's in-memory database.
+check what a caller can rely on. A clash is redrawn; a clash every time is an error after exactly
+the attempts the module allows, and stores nothing; a link that cannot be tied to its account is
+refused as "invalid" with nothing counted. FAKE and synthetic values only; the migrated
+development app's in-memory database.
 """
 
+import secrets
 from datetime import UTC, datetime, timedelta
 from itertools import chain, repeat
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import func, select
@@ -61,17 +64,23 @@ def link_count(session) -> int:
     return session.scalar(select(func.count()).select_from(PatientPortalMyCarlosLinkCode))
 
 
-def fixed_ids(monkeypatch, ids):
-    """Every link id drawn comes from `ids` (then the last again); a code is always one value."""
+def fixed_ids(monkeypatch, ids) -> list[str]:
+    """Every link id drawn comes from `ids` (then the last again); a code is always one value.
+
+    Returns the list the draws are recorded in, so a test can count them.
+    """
     source = chain(ids, repeat(ids[-1]))
+    drawn: list[str] = []
 
     def draw(length: int) -> str:
         if length == MYCARLOS_LINK_ID_LENGTH:
-            return next(source)
+            drawn.append(next(source))
+            return drawn[-1]
         assert length == MYCARLOS_LINK_CODE_LENGTH
         return "Z" * length
 
     monkeypatch.setattr(links, "random_link_text", draw)
+    return drawn
 
 
 def issue(session, account_id: int, session_id: int):
@@ -94,15 +103,18 @@ def test_a_link_id_that_clashes_is_drawn_again_and_the_clash_stores_nothing(monk
         assert issue(session, account_id, session_id).link_id == "AAAAAAAA"
 
     with app.state.session_factory() as session, session.begin():
-        # The first draw is the stored id again, the second is free.
-        fixed_ids(monkeypatch, ["AAAAAAAA", "BBBBBBBB"])
-        second = issue(session, 1, 1)
+        # The first draw is the stored id again, the second is free: two draws, one new link.
+        drawn = fixed_ids(monkeypatch, ["AAAAAAAA", "BBBBBBBB"])
+        second = issue(session, account_id, session_id)
         assert second.link_id == "BBBBBBBB"
+        assert drawn == ["AAAAAAAA", "BBBBBBBB"]
         ids = sorted(session.scalars(select(PatientPortalMyCarlosLinkCode.link_id)))
         assert ids == ["AAAAAAAA", "BBBBBBBB"]
 
 
-def test_a_link_id_that_clashes_every_time_is_an_error_and_makes_no_link(monkeypatch) -> None:
+def test_a_link_id_that_clashes_every_time_is_an_error_after_the_attempts_there_are(
+    monkeypatch,
+) -> None:
     app = migrated_development_app(session_secret="t" * 32)
     with app.state.session_factory() as session, session.begin():
         account_id = make_account(session, 1)
@@ -111,19 +123,36 @@ def test_a_link_id_that_clashes_every_time_is_an_error_and_makes_no_link(monkeyp
         issue(session, account_id, session_id)
 
     with app.state.session_factory() as session:
-        # The next code would be "AAAAAAAA" on every one of the attempts there are.
-        fixed_ids(monkeypatch, ["AAAAAAAA"])
+        # The next id would be "AAAAAAAA" on every attempt: exactly MAX_LINK_ID_ATTEMPTS of them,
+        # so a change to the limit changes this test.
+        drawn = fixed_ids(monkeypatch, ["AAAAAAAA"])
         with pytest.raises(RuntimeError, match="could not find a free link_id"):
             with session.begin():
-                issue(session, 1, 1)
+                issue(session, account_id, session_id)
+        assert len(drawn) == links.MAX_LINK_ID_ATTEMPTS == 5
 
     with app.state.session_factory() as session:
         assert link_count(session) == 1
 
 
-def recipient_bytes(monkeypatch, values):
+def recipient_bytes(monkeypatch, values) -> list[bytes]:
+    """The recipient-id draws come from `values` (then the last again), recorded in the result.
+
+    Only `links.secrets` is replaced, by a stand-in with the one other function that module uses,
+    so no other user of the real `secrets` module in this process is affected.
+    """
     source = chain(values, repeat(values[-1]))
-    monkeypatch.setattr(links.secrets, "token_bytes", lambda count: next(source))
+    drawn: list[bytes] = []
+
+    def token_bytes(count: int) -> bytes:
+        assert count == links.RECIPIENT_ID_BYTES
+        drawn.append(next(source))
+        return drawn[-1]
+
+    monkeypatch.setattr(
+        links, "secrets", SimpleNamespace(token_bytes=token_bytes, choice=secrets.choice)
+    )
+    return drawn
 
 
 def test_a_recipient_id_that_clashes_is_drawn_again_and_an_account_keeps_its_own(
@@ -137,25 +166,31 @@ def test_a_recipient_id_that_clashes_is_drawn_again_and_an_account_keeps_its_own
         first = links.recipient_id_for(session, first_account)
         assert first == b64url(first_bytes)
         # The second account's first draw is the first account's id: a clash, drawn again.
-        recipient_bytes(monkeypatch, [first_bytes, second_bytes])
+        drawn = recipient_bytes(monkeypatch, [first_bytes, second_bytes])
         second = links.recipient_id_for(session, second_account)
         assert second == b64url(second_bytes) != first
+        assert drawn == [first_bytes, second_bytes]
         # Asked again, each gets what it has, and nothing is drawn.
-        recipient_bytes(monkeypatch, [b"\x09" * 16])
+        drawn = recipient_bytes(monkeypatch, [b"\x09" * 16])
         assert links.recipient_id_for(session, first_account) == first
         assert links.recipient_id_for(session, second_account) == second
+        assert drawn == []
         owners = sorted(session.scalars(select(PatientPortalMyCarlosRecipient.account_id)))
         assert owners == sorted([first_account, second_account])
 
 
-def test_a_recipient_id_that_clashes_every_time_is_an_error_and_makes_none(monkeypatch) -> None:
+def test_a_recipient_id_that_clashes_every_time_is_an_error_after_the_attempts_there_are(
+    monkeypatch,
+) -> None:
     app = migrated_development_app(session_secret="t" * 32)
     with app.state.session_factory() as session, session.begin():
         first_account, second_account = make_account(session, 1), make_account(session, 2)
         recipient_bytes(monkeypatch, [b"\x01" * 16])
         links.recipient_id_for(session, first_account)
+        drawn = recipient_bytes(monkeypatch, [b"\x01" * 16])
         with pytest.raises(RuntimeError, match="could not make a recipient ID"):
             links.recipient_id_for(session, second_account)
+        assert len(drawn) == links.MAX_RECIPIENT_ID_ATTEMPTS == 5
         owners = list(session.scalars(select(PatientPortalMyCarlosRecipient.account_id)))
         assert owners == [first_account]
 
@@ -187,7 +222,10 @@ def test_a_link_that_cannot_be_tied_to_its_account_is_invalid_and_counts_nothing
 
     with app.state.session_factory() as session, session.begin():
         # The code exists, but the account it names is not the one that is locked for the link:
-        # gone between the two reads (no account), or a different row (another account).
+        # gone between the two reads (no account), or a different row (another account). Both
+        # stand-ins replace `_lock_account`, the module's private way to lock the account row (a
+        # private name: if it is renamed this test must follow it), which is the only seam between
+        # the two reads.
         if lock == "no account":
             monkeypatch.setattr(links, "_lock_account", lambda session, account_id: None)
         else:
