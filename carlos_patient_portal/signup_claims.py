@@ -563,6 +563,24 @@ def prepare_signup_invite(  # NOSONAR
             or prepared.delivery_operation_id != delivery_operation_id
         ):
             raise SignupInviteConflictError(signup_request.health_card_hash)
+    # An operation id that already names an invite belonging to ANOTHER request is a conflict,
+    # decided before anything is written: the invite layer would otherwise answer a repeat for the
+    # same patient and details with that other request's prepared invite and token, and assigning it
+    # here would only be stopped by the unique index (a raw IntegrityError, so a 500).
+    operation_owner = session.scalar(
+        select(PatientPortalSignupRequest.id)
+        .join(
+            PatientPortalInvite,
+            PatientPortalInvite.id == PatientPortalSignupRequest.prepared_invite_id,
+        )
+        .where(
+            PatientPortalInvite.clinic_id == clinic_id,
+            PatientPortalInvite.delivery_operation_id == delivery_operation_id,
+            PatientPortalSignupRequest.id != signup_request.id,
+        )
+    )
+    if operation_owner is not None:
+        raise SignupInviteConflictError(signup_request.health_card_hash)
     try:
         details = decrypt_signup_request(signup_request, encryption_keys=encryption_keys)
     except (SignupRequestKeyUnavailableError, SignupRequestPayloadError) as exc:

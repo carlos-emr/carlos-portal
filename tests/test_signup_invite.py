@@ -30,6 +30,7 @@ from sqlalchemy import create_engine, inspect, select, text
 from carlos_patient_portal.identity import verify_identity_proof
 from carlos_patient_portal.models import (
     AUDIT_EVENT_SIGNUP_RESULT,
+    AUDIT_EVENT_STAFF_ACTION,
     PatientPortalAccount,
     PatientPortalInvite,
     utc_now,
@@ -61,6 +62,7 @@ from tests.test_signup_claims import (
     post_job,
     recorded_results,
     report,
+    sign_up,
     signup_app,
     store_requests,
     stored_rows,
@@ -238,6 +240,40 @@ def test_a_request_has_one_invite_another_operation_for_it_is_a_conflict() -> No
         {"detail": "invite preparation conflicts"},
     )
     assert len(invites(app)) == 1
+
+
+def test_a_reused_operation_of_another_request_is_a_conflict_and_writes_nothing() -> None:
+    app = signup_app()
+    # Two requests with the very same typed details (the portal allows a few per health card).
+    for address in ("203.0.113.10", "203.0.113.11"):
+        assert sign_up(client_at(app, address)).status_code == 202
+    client = client_at(app, "198.51.100.1")
+    (first, first_token), (second, second_token) = [
+        (item["request_id"], item["lease_token"]) for item in claimed(claim(client, 2))
+    ]
+    first_answer = prepare(client, first, first_token)
+    assert first_answer.status_code == 201
+    [invite] = invites(app)
+    owners = {row.id: row.prepared_invite_id for row in stored_rows(app)}
+    disclosures = len(audit_rows(AUDIT_EVENT_STAFF_ACTION))
+
+    # The second request reuses the first one's operation id, for the same patient and details.
+    reused = prepare(client, second, second_token)
+
+    assert (reused.status_code, reused.json()) == (
+        409,
+        {"detail": "sign-up request invite conflicts"},
+    )
+    assert "invite_token" not in reused.text
+    # Nothing changed: one invite, still the first request's, no second owner, and no token was
+    # disclosed again (that is an audit row of its own).
+    assert [(row.id, row.status) for row in invites(app)] == [(invite.id, invite.status)]
+    assert {row.id: row.prepared_invite_id for row in stored_rows(app)} == owners
+    assert len(audit_rows(AUDIT_EVENT_STAFF_ACTION)) == disclosures
+    # The first request still recovers its own invite and token.
+    again = prepare(client, first, first_token)
+    assert (again.status_code, again.json()["id"]) == (201, invite.id)
+    assert again.json()["invite_token"] == first_answer.json()["invite_token"]
 
 
 def test_commit_releases_the_requests_own_invite_and_nothing_else() -> None:
