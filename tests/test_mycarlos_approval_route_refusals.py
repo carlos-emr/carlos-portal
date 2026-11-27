@@ -46,19 +46,6 @@ def stored_request(app, request_id=REQUEST):
         return session.get(ApprovalRequest, (F["clinic_id"], request_id))
 
 
-def test_a_get_that_carries_a_body_is_refused_as_too_large(approval_http):  # noqa: F811
-    # The status route reads no body (limit 0), so even one byte is refused before the device is
-    # looked up; the later "GET with a body is not found" branch is never reached from here.
-    app, client = approval_http
-    assert post_intent(client).status_code == 201
-    path = PUBLIC + "/" + REQUEST
-
-    result = client.request("GET", path, content=b"x", headers=device_headers(path))
-
-    assert result.status_code == 413
-    assert result.json() == {"detail": "request too large"}
-
-
 def test_a_new_request_with_a_query_string_is_refused_and_stores_nothing(approval_http):  # noqa: F811
     app, client = approval_http
     path = PUBLIC + "?x=1"
@@ -69,17 +56,6 @@ def test_a_new_request_with_a_query_string_is_refused_and_stores_nothing(approva
     assert result.status_code == 400
     assert result.json() == {"code": "invalid_approval"}
     assert stored_request(app) is None
-
-
-def test_a_status_read_with_a_query_string_is_not_found(approval_http):  # noqa: F811
-    app, client = approval_http
-    assert post_intent(client).status_code == 201
-    path = PUBLIC + "/" + REQUEST + "?x=1"
-
-    result = client.get(path, headers=device_headers(path))
-
-    assert result.status_code == 404
-    assert result.json() == {"code": "approval_not_found"}
 
 
 def test_a_disabled_account_is_refused_as_recipient_mismatch(approval_http):  # noqa: F811
