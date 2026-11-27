@@ -87,6 +87,7 @@ from carlos_patient_portal.view_models import (
     EmailPasswordDashboardViewModel,
     MessagesViewModel,
     MyCarlosViewModel,
+    PhoneConfirmationViewModel,
 )
 
 PACKAGE_DIR = FilePath(__file__).resolve().parent
@@ -216,6 +217,14 @@ CSRF_FUTURE_SKEW_SECONDS = 60
 
 PORTAL_SESSION_COOKIE_NAME = "carlos_portal_session"
 PORTAL_MFA_PROOF_COOKIE_NAME = "carlos_portal_mfa_proof"
+
+
+# The pending sign-in code challenge, kept so a sign-in inside the code-send cooldown can return to
+# its code page instead of being refused (#147). Sent to the /auth routes only.
+MFA_PENDING_COOKIE_NAME = "carlos_portal_mfa_pending"
+
+
+MFA_PENDING_COOKIE_PATH = "/auth"
 
 
 PORTAL_SESSION_COOKIE_PATH = PORTAL_ROOT_PATH
@@ -620,6 +629,46 @@ def clear_portal_mfa_proof_cookie(response: Response, *, settings: Settings) -> 
     response.delete_cookie(
         PORTAL_MFA_PROOF_COOKIE_NAME,
         path=deployment_cookie_path(settings, PORTAL_SESSION_COOKIE_PATH),
+        secure=not settings.is_development,
+        httponly=True,
+        samesite="strict",
+    )
+
+
+def set_mfa_pending_cookie(
+    response: Response,
+    challenge_token: str,
+    *,
+    expires_in_seconds: int,
+    settings: Settings,
+) -> None:
+    """Remember the pending sign-in code challenge across "Back to sign in" (#147).
+
+    Only a hash of the challenge token is stored, so without this the code page cannot be reached
+    again once the patient leaves it. The cookie is HttpOnly, Secure outside development,
+    SameSite=Strict and limited to the /auth routes; it lives no longer than the challenge and
+    holds nothing but the token the code page already carries. It proves nothing by itself: a
+    resume still needs the account's correct password, and the challenge must belong to that
+    account (`resume_pending_mfa_challenge`).
+    """
+    if expires_in_seconds <= 0:
+        clear_mfa_pending_cookie(response, settings=settings)
+        return
+    response.set_cookie(
+        MFA_PENDING_COOKIE_NAME,
+        challenge_token,
+        httponly=True,
+        max_age=expires_in_seconds,
+        path=deployment_cookie_path(settings, MFA_PENDING_COOKIE_PATH),
+        samesite="strict",
+        secure=not settings.is_development,
+    )
+
+
+def clear_mfa_pending_cookie(response: Response, *, settings: Settings) -> None:
+    response.delete_cookie(
+        MFA_PENDING_COOKIE_NAME,
+        path=deployment_cookie_path(settings, MFA_PENDING_COOKIE_PATH),
         secure=not settings.is_development,
         httponly=True,
         samesite="strict",
@@ -1101,6 +1150,7 @@ def portal_template_context(
     new_message_count: int = 0,
     documents_tile: DocumentsTileViewModel | None = None,
     mycarlos: MyCarlosViewModel | None = None,
+    phone_confirmation: PhoneConfirmationViewModel | None = None,
 ) -> dict[str, object]:
     account = authenticated_session.account
     locale = request_locale(request)
@@ -1155,6 +1205,8 @@ def portal_template_context(
             ).format(count=documents_tile.waiting_count)
     context["mycarlos_enabled"] = settings.mycarlos_delivery_enabled
     context["mycarlos"] = mycarlos
+    # The Account tab's phone confirmation block; None on the other modules.
+    context["phone_confirmation"] = phone_confirmation
     return context
 
 

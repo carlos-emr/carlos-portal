@@ -141,6 +141,24 @@ class MessagesViewModel:
 
 
 @dataclass(frozen=True, slots=True)
+class PhoneConfirmationViewModel:
+    """View state for the phone confirmation block of the Account tab (#150).
+
+    The presenter decides what is shown; the template only reads these. ``code_pending`` is true
+    when a phone number was added, its code was sent, nothing was confirmed yet and the code is
+    still valid: the code field, Confirm phone and Resend show. ``code_expired`` is true when the
+    code ran out but the contact change itself is still open: only a notice and Resend show (the
+    resend route still accepts it). Both false: nothing is pending and the block is hidden.
+    ``masked_phone`` is the number the code went to with all but its last four digits hidden; the
+    full number never reaches the page.
+    """
+
+    code_pending: bool = False
+    code_expired: bool = False
+    masked_phone: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class MyCarlosDeviceRowViewModel:
     device_key_id: str
     name: str

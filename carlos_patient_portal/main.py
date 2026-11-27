@@ -83,6 +83,7 @@ from carlos_patient_portal.presenters import (
     assemble_email_password_dashboard,
     assemble_messages,
     assemble_mycarlos_devices,
+    assemble_phone_confirmation,
 )
 from carlos_patient_portal.routes.activation import register_activation_routes
 from carlos_patient_portal.routes.auth import register_auth_routes, register_logout_route
@@ -1035,6 +1036,16 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
                     else 0
                 ),
             )
+        # The Account tab shows the phone code field only for a number waiting for its code (#150).
+        phone_confirmation = (
+            assemble_phone_confirmation(
+                session,
+                authenticated_session.account,
+                code_ttl=timedelta(seconds=settings.phone_change_code_ttl_seconds),
+            )
+            if active_module == "account"
+            else None
+        )
         csrf_token = create_csrf_token(runtime.token_keys.csrf)
         response = templates.TemplateResponse(
             request=request,
@@ -1053,6 +1064,7 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
                 new_message_count=new_message_count,
                 documents_tile=documents_tile,
                 mycarlos=mycarlos,
+                phone_confirmation=phone_confirmation,
             ),
             status_code=status_code,
         )

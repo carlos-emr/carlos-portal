@@ -189,6 +189,9 @@
                   {{ password_toggle("contact-current-password", text) }}
                   <button class="primary-action" type="submit">{{ text.update_contact }}</button>
                 </form>
+                {# The presenter decides (#150): a number waiting for its code shows the code field, Confirm phone and Resend; an expired code only the notice and Resend; otherwise nothing. The routes refuse with nothing pending whatever this shows. #}
+                {% if phone_confirmation and phone_confirmation.code_pending %}
+                <p class="form-notice" role="status" id="phone-confirmation-status">{{ text.phone_confirmation_sent_to.format(number=phone_confirmation.masked_phone) }}</p>
                 <form class="form-stack settings-form" method="post" action="{{ url_for('portal_account_confirm_phone') }}">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <label>
@@ -206,10 +209,16 @@
                   </label>
                   <button class="primary-action" type="submit">{{ text.confirm_phone }}</button>
                 </form>
+                {% endif %}
+                {% if phone_confirmation and (phone_confirmation.code_pending or phone_confirmation.code_expired) %}
+                {% if phone_confirmation.code_expired %}
+                <p class="form-notice" role="status" id="phone-confirmation-status">{{ text.phone_confirmation_expired.format(number=phone_confirmation.masked_phone) }}</p>
+                {% endif %}
                 <form method="post" action="{{ url_for('portal_account_resend_phone') }}">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <button class="secondary-action" type="submit">{{ text.resend_phone_confirmation }}</button>
                 </form>
+                {% endif %}
               </section>
 
               <section class="settings-section">
