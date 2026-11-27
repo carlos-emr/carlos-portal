@@ -233,6 +233,12 @@ TEXT: dict[str, str] = {
         "Development password reset link (also sent by email when email is configured):"
     ),
     "documents": "Documents",
+    "documents_link_mycarlos": "Link myCarlos to receive your documents on your device.",
+    "documents_nothing_waiting": "Nothing is waiting.",
+    "documents_waiting_one": "{count} document is waiting for you. Open myCarlos to receive it.",
+    "documents_waiting_other": (
+        "{count} documents are waiting for you. Open myCarlos to receive them."
+    ),
     "email": "Email",
     "email_codes_rate": "Email codes can be resent once per minute.",
     "email_password": "Document password",

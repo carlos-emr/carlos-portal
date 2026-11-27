@@ -255,6 +255,17 @@ TEXT: dict[str, str] = {
         "skonfigurowana):"
     ),
     "documents": "Dokumenty",
+    "documents_link_mycarlos": (
+        "Proszę połączyć myCarlos, aby odbierać dokumenty na swoim urządzeniu."
+    ),
+    "documents_nothing_waiting": "Nic nie czeka.",
+    "documents_waiting_few": (
+        "Czekają {count} dokumenty. Proszę otworzyć myCarlos, aby je odebrać."
+    ),
+    "documents_waiting_many": (
+        "Czeka {count} dokumentów. Proszę otworzyć myCarlos, aby je odebrać."
+    ),
+    "documents_waiting_one": "Czeka {count} dokument. Proszę otworzyć myCarlos, aby go odebrać.",
     "email": "E-mail",
     "email_codes_rate": "Kody e-mail można wysłać ponownie raz na minutę.",
     "email_password": "Hasło dokumentu",

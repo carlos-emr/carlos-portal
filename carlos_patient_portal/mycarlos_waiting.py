@@ -36,7 +36,7 @@ from hashlib import sha256
 from hmac import compare_digest
 from math import ceil
 
-from sqlalchemy import exists, select
+from sqlalchemy import ColumnElement, exists, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -407,6 +407,57 @@ def _aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
+def waiting_copy_conditions(now: datetime) -> tuple[ColumnElement[bool], ColumnElement[bool]]:
+    """What "waits" means for a mailbox copy: still `waiting` and not yet expired.
+
+    The waiting answer for a device and the dashboard's count for an account both use this, so
+    the two can never disagree about whether a copy is waiting.
+    """
+    return (
+        MailboxCopy.status == "waiting",
+        MailboxCopy.expires_at > int(now.timestamp()),
+    )
+
+
+def has_active_device(session: Session, account_id: int) -> bool:
+    """Whether the account has at least one linked myCarlos device that is not removed."""
+    return bool(
+        session.scalar(
+            select(
+                exists().where(
+                    PatientPortalMyCarlosDevice.account_id == account_id,
+                    PatientPortalMyCarlosDevice.status == MYCARLOS_DEVICE_STATUS_ACTIVE,
+                )
+            )
+        )
+    )
+
+
+def count_waiting_for_account(session: Session, account_id: int, *, now: datetime) -> int:
+    """How many copies wait for the account's active linked devices (the dashboard tile).
+
+    Only a number leaves here: no row, name, kind or clinic detail is selected, so the patient's
+    session reads nothing it could not read before. A removed device's copies are not counted
+    (the device is joined and must be active), and the copy must carry the same account as its
+    device, so another patient's copies never count.
+    """
+    return int(
+        session.scalar(
+            select(func.count(MailboxCopy.id))
+            .join(
+                PatientPortalMyCarlosDevice, PatientPortalMyCarlosDevice.id == MailboxCopy.device_id
+            )
+            .where(
+                MailboxCopy.account_id == account_id,
+                PatientPortalMyCarlosDevice.account_id == account_id,
+                PatientPortalMyCarlosDevice.status == MYCARLOS_DEVICE_STATUS_ACTIVE,
+                *waiting_copy_conditions(now),
+            )
+        )
+        or 0
+    )
+
+
 def answer(session: Session, principal: WaitingPrincipal, *, now: datetime) -> bytes:
     """Whether a not-expired mailbox copy waits for the key's device, at most every 120 s."""
     if not session.in_transaction():
@@ -421,8 +472,7 @@ def answer(session: Session, principal: WaitingPrincipal, *, now: datetime) -> b
         select(
             exists().where(
                 MailboxCopy.device_id == principal.device_id,
-                MailboxCopy.status == "waiting",
-                MailboxCopy.expires_at > int(now.timestamp()),
+                *waiting_copy_conditions(now),
             )
         )
     )

@@ -243,6 +243,12 @@ TEXT: dict[str, str] = {
         "electrónico cuando el correo está configurado):"
     ),
     "documents": "Documentos",
+    "documents_link_mycarlos": ("Vincule myCarlos para recibir sus documentos en su dispositivo."),
+    "documents_nothing_waiting": "No hay nada en espera.",
+    "documents_waiting_one": "Tiene {count} documento esperando. Abra myCarlos para recibirlo.",
+    "documents_waiting_other": (
+        "Tiene {count} documentos esperando. Abra myCarlos para recibirlos."
+    ),
     "email": "Correo electrónico",
     "email_codes_rate": "Los códigos por correo electrónico se pueden reenviar una vez por minuto.",
     "email_password": "Contraseña del documento",
