@@ -238,6 +238,7 @@ TEXT: dict[str, str] = {
     "mfa_help_message": "如果您無法接收或使用驗證碼，請聯絡 {clinic_name}。",
     "mfa_new_code_sent_email": "新的驗證碼已以電子郵件傳送。",
     "mfa_new_code_sent_sms": "新的驗證碼已以簡訊傳送。",
+    "mfa_resumed_notice": "{time} UTC 傳送的登入驗證碼仍然有效。請在下方輸入。未傳送新的驗證碼。",
     "mfa_rate_limited_other": "最近已傳送過驗證碼。請在 {seconds} 秒後再試。",
     "mfa_resend": "重新傳送驗證碼",
     "mfa_sign_in_again": "請重新登入以申請新的驗證碼。",

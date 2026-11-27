@@ -300,6 +300,10 @@ TEXT: dict[str, str] = {
     ),
     "mfa_new_code_sent_email": "Nowy kod został wysłany e-mailem.",
     "mfa_new_code_sent_sms": "Nowy kod został wysłany SMS-em.",
+    "mfa_resumed_notice": (
+        "Kod logowania wysłany o {time} UTC jest nadal ważny. Wpisz go poniżej. "
+        "Nie wysłano nowego kodu."
+    ),
     "mfa_rate_limited_few": (
         "Kod został niedawno wysłany. Proszę spróbować ponownie za {seconds} sekundy."
     ),
