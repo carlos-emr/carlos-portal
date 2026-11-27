@@ -198,6 +198,34 @@ class MyCarlosDeviceRowViewModel:
 
 
 @dataclass(frozen=True, slots=True)
+class ClinicContactViewModel:
+    """The clinic's optional contact details on the Help page; only the ones configured are set.
+
+    `phone_href` is the `tel:` link for `phone` (digits, a leading plus and an extension only);
+    `url_label` is the address without its scheme, for the link's visible text.
+    """
+
+    phone: str | None = None
+    phone_href: str | None = None
+    email: str | None = None
+    hours: str | None = None
+    url: str | None = None
+    url_label: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentsTileViewModel:
+    """The dashboard's Documents tile: a count of deliveries waiting, and nothing about them.
+
+    `has_device` is False when no linked device is active, which turns the tile into a link to
+    the Link myCarlos page. No document name, kind or clinic detail is ever carried here.
+    """
+
+    has_device: bool
+    waiting_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class MyCarlosViewModel:
     devices: tuple[MyCarlosDeviceRowViewModel, ...] = ()
     portal_address: str | None = None

@@ -204,7 +204,11 @@ TEXT: dict[str, str] = {
         "revisará los datos correspondientes de su historia clínica en CARLOS."
     ),
     "contact_change_success_heading": "Datos de contacto actualizados",
+    "contact_email": "Correo electrónico",
+    "contact_hours": "Horario",
+    "contact_phone": "Teléfono",
     "contact_the_clinic": "Contactar con la clínica",
+    "contact_website": "Sitio web",
     "copy": "Copiar",
     "copy_failed": "Seleccione y copie manualmente",
     "copied": "Copiado",
@@ -254,6 +258,12 @@ TEXT: dict[str, str] = {
         "electrónico cuando el correo está configurado):"
     ),
     "documents": "Documentos",
+    "documents_link_mycarlos": ("Vincule myCarlos para recibir sus documentos en su dispositivo."),
+    "documents_nothing_waiting": "No hay nada en espera.",
+    "documents_waiting_one": "Tiene {count} documento esperando. Abra myCarlos para recibirlo.",
+    "documents_waiting_other": (
+        "Tiene {count} documentos esperando. Abra myCarlos para recibirlos."
+    ),
     "email": "Correo electrónico",
     "email_codes_rate": "Los códigos por correo electrónico se pueden reenviar una vez por minuto.",
     "email_password": "Contraseña del documento",
@@ -356,6 +366,19 @@ TEXT: dict[str, str] = {
     ),
     "password_reset_success_heading": "Contraseña restablecida",
     "password_reset_update": "Actualizar contraseña",
+    "preferences": "Preferencias",
+    "preferences_appearance": "Apariencia",
+    "preferences_appearance_legend": "Esquema de color",
+    "appearance_system": "Sistema",
+    "appearance_light": "Claro",
+    "appearance_dark": "Oscuro",
+    "appearance_high_contrast": "Alto contraste",
+    "appearance_high_contrast_help": (
+        "Texto y bordes más marcados, y un contorno de enfoque más grueso."
+    ),
+    "preferences_save": "Guardar preferencias",
+    "preferences_saved": "Preferencias guardadas.",
+    "preferences_language": "Idioma",
     "password_updated": "Contraseña actualizada",
     "patient_dashboard": "Panel del paciente",
     "phone": "Teléfono",

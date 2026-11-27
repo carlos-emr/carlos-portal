@@ -220,7 +220,11 @@ TEXT: dict[str, str] = {
         "weryfikacji. Personel przychodni sprawdzi odpowiadające im dane w kartotece CARLOS."
     ),
     "contact_change_success_heading": "Dane kontaktowe zaktualizowane",
+    "contact_email": "E-mail",
+    "contact_hours": "Godziny otwarcia",
+    "contact_phone": "Telefon",
     "contact_the_clinic": "Proszę skontaktować się z przychodnią",
+    "contact_website": "Strona internetowa",
     "copy": "Proszę skopiować",
     "copy_failed": "Proszę zaznaczyć i skopiować ręcznie",
     "copied": "Skopiowano",
@@ -268,6 +272,17 @@ TEXT: dict[str, str] = {
         "skonfigurowana):"
     ),
     "documents": "Dokumenty",
+    "documents_link_mycarlos": (
+        "Proszę połączyć myCarlos, aby odbierać dokumenty na swoim urządzeniu."
+    ),
+    "documents_nothing_waiting": "Nic nie czeka.",
+    "documents_waiting_few": (
+        "Czekają {count} dokumenty. Proszę otworzyć myCarlos, aby je odebrać."
+    ),
+    "documents_waiting_many": (
+        "Czeka {count} dokumentów. Proszę otworzyć myCarlos, aby je odebrać."
+    ),
+    "documents_waiting_one": "Czeka {count} dokument. Proszę otworzyć myCarlos, aby go odebrać.",
     "email": "E-mail",
     "email_codes_rate": "Kody e-mail można wysłać ponownie raz na minutę.",
     "email_password": "Hasło dokumentu",
@@ -378,6 +393,17 @@ TEXT: dict[str, str] = {
     ),
     "password_reset_success_heading": "Hasło zresetowane",
     "password_reset_update": "Proszę zaktualizować hasło",
+    "preferences": "Preferencje",
+    "preferences_appearance": "Wygląd",
+    "preferences_appearance_legend": "Motyw kolorystyczny",
+    "appearance_system": "Systemowy",
+    "appearance_light": "Jasny",
+    "appearance_dark": "Ciemny",
+    "appearance_high_contrast": "Wysoki kontrast",
+    "appearance_high_contrast_help": "Wyraźniejszy tekst i obramowania oraz grubszy obrys fokusu.",
+    "preferences_save": "Zapisz preferencje",
+    "preferences_saved": "Preferencje zapisane.",
+    "preferences_language": "Język",
     "password_updated": "Hasło zaktualizowane",
     "patient_dashboard": "Panel pacjenta",
     "phone": "Telefon",

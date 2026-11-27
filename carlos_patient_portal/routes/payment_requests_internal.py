@@ -188,6 +188,7 @@ def register_internal_payment_request_routes(
                 created_by=principal.display_name,
                 created_by_id=principal.provider_id,
                 ttl=timedelta(days=runtime.settings.payment_request_ttl_days),
+                timezone_name=runtime.settings.clinic_timezone,
             )
         except PaymentRequestAccountUnavailableError as exc:
             # CARLOS tells staff to contact the patient another way; nothing was stored.

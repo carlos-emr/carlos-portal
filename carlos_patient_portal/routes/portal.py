@@ -48,6 +48,13 @@ from carlos_patient_portal.account_settings import (
     update_account_mfa_method,
     verify_current_password,
 )
+from carlos_patient_portal.appearance import (
+    CONTRAST_MORE,
+    CONTRAST_STANDARD,
+    Appearance,
+    normalize_theme,
+    set_appearance_cookies,
+)
 from carlos_patient_portal.audit import record_audit_event
 from carlos_patient_portal.auth import AuthenticatedPortalSession
 from carlos_patient_portal.booking_choices import (
@@ -1180,6 +1187,57 @@ def register_portal_routes(
         session: Annotated[Session, function_scoped_database_dependency(get_app_database_session)],
     ) -> Response:
         return render_portal_page(request, session, active_module="help")
+
+    @app.get("/portal/preferences")
+    def portal_preferences(
+        request: Request,
+        session: Annotated[Session, function_scoped_database_dependency(get_app_database_session)],
+        preferences_status: Annotated[str | None, Query(alias="status", max_length=16)] = None,
+    ) -> Response:
+        notice = (
+            portal_text(request_locale(request)).get("preferences_saved")
+            if preferences_status == "saved"
+            else None
+        )
+        return render_portal_page(
+            request, session, active_module="preferences", account_notice=notice
+        )
+
+    @app.post("/portal/preferences")
+    async def portal_save_preferences(
+        request: Request,
+        session: Annotated[Session, function_scoped_database_dependency(get_app_database_session)],
+    ) -> Response:
+        """Remember the appearance this browser chose (System, Light or Dark, and High contrast).
+
+        Nothing is stored for the account: the choice is two cookies (see appearance.py), so it
+        needs no migration and also applies on the sign-in page. A value that is not on the
+        allow-list is the default rather than an error: a hand-edited form can only ever get the
+        default look.
+        """
+        form_values = await get_portal_account_form_values(
+            request,
+            csrf_error_detail="preferences could not be saved",
+        )
+        authenticated_session = await authenticate_browser_session(request, session)
+        if isinstance(authenticated_session, RedirectResponse):
+            return authenticated_session
+        appearance = Appearance(
+            theme=normalize_theme(first_form_value(form_values, "theme")),
+            contrast=(
+                CONTRAST_MORE
+                if first_form_value(form_values, "contrast") == CONTRAST_MORE
+                else CONTRAST_STANDARD
+            ),
+        )
+        response = RedirectResponse(
+            # URLPath.path cannot contain the scheme or authority from the request.
+            # nosemgrep: python.fastapi.web.tainted-redirect-fastapi.tainted-redirect-fastapi
+            f"{request.url_for('portal_preferences').path}?status=saved",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+        set_appearance_cookies(response, appearance, secure=not settings.is_development)
+        return response
 
     @app.post("/portal/logout", responses=PORTAL_LOGOUT_RESPONSES)
     async def portal_logout(

@@ -221,7 +221,11 @@ TEXT: dict[str, str] = {
         "clinique vérifiera les renseignements correspondants du dossier CARLOS."
     ),
     "contact_change_success_heading": "Coordonnées mises à jour",
+    "contact_email": "Courriel",
+    "contact_hours": "Heures d’ouverture",
+    "contact_phone": "Téléphone",
     "contact_the_clinic": "Contactez la clinique",
+    "contact_website": "Site Web",
     "copy": "Copier",
     "copy_failed": "Sélectionnez et copiez manuellement",
     "copied": "Copié",
@@ -273,6 +277,14 @@ TEXT: dict[str, str] = {
         "lorsque le courriel est configuré) :"
     ),
     "documents": "Documents",
+    "documents_link_mycarlos": (
+        "Associez myCarlos pour recevoir vos documents sur votre appareil."
+    ),
+    "documents_nothing_waiting": "Rien n’est en attente.",
+    "documents_waiting_one": "{count} document vous attend. Ouvrez myCarlos pour le recevoir.",
+    "documents_waiting_other": (
+        "{count} documents vous attendent. Ouvrez myCarlos pour les recevoir."
+    ),
     "email": "Courriel",
     "email_codes_rate": "Les codes par courriel peuvent être renvoyés une fois par minute.",
     "email_password": "Mot de passe du document",
@@ -375,6 +387,19 @@ TEXT: dict[str, str] = {
     ),
     "password_reset_success_heading": "Mot de passe réinitialisé",
     "password_reset_update": "Mettre à jour le mot de passe",
+    "preferences": "Préférences",
+    "preferences_appearance": "Apparence",
+    "preferences_appearance_legend": "Thème de couleurs",
+    "appearance_system": "Système",
+    "appearance_light": "Clair",
+    "appearance_dark": "Sombre",
+    "appearance_high_contrast": "Contraste élevé",
+    "appearance_high_contrast_help": (
+        "Texte et bordures plus marqués, et un contour de focus plus épais."
+    ),
+    "preferences_save": "Enregistrer les préférences",
+    "preferences_saved": "Préférences enregistrées.",
+    "preferences_language": "Langue",
     "password_updated": "Mot de passe mis à jour",
     "patient_dashboard": "Tableau de bord du patient",
     "phone": "Téléphone",

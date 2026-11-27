@@ -18,7 +18,8 @@ The portal takes no payment. A request carries an amount due now, its tax portio
 opaque invoice reference and a due date; the patient reads it in Messages and CARLOS marks it paid.
 """
 
-from datetime import date, timedelta
+import re
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from alembic import command
@@ -44,6 +45,7 @@ from carlos_patient_portal.models import (
     PatientPortalPaymentRequest,
     utc_now,
 )
+from carlos_patient_portal.payment_requests import create_payment_request
 from tests.support import (
     INTERNAL_API_TOKEN,
     OUTBOX_ENCRYPTION_SECRET,
@@ -449,6 +451,108 @@ def test_an_expired_unpaid_request_leaves_the_patients_messages_but_can_still_be
     assert listed[0]["state"] == "expired"
     assert paid.status_code == 200
     assert paid.json()["state"] == "paid"
+
+
+def test_a_patient_opening_another_patients_live_request_gets_the_same_page_as_an_unknown_id() -> (
+    None
+):
+    """Isolation: patient A holds a session, patient B (same clinic) has a live request."""
+    app = payment_app()
+    client = TestClient(app)
+    other = TestClient(app)
+    activate_seeded_patient_account(
+        app,
+        other,
+        username="other.patient",
+        demographic_no=5678,
+        email="other.patient@example.com",
+        health_card_number="ZYXW 9876-5432",
+    )
+    browser_sign_in_seeded_patient(app, client)
+    others = TestClient(app).post(
+        "/internal/carlos/patients/5678/payment-requests", headers=headers(), json=request_body()
+    )
+    assert others.status_code == 201
+    others_id = others.json()["id"]
+
+    live = client.get(f"/portal/messages/payment/{others_id}")
+    unknown = client.get("/portal/messages/payment/99999")
+    listed = client.get("/portal/messages")
+
+    def without_tokens(html: str) -> str:
+        # The page echoes the address the caller asked for (the language switch keeps it), so the
+        # id in that path is the one thing that may differ.
+        html = re.sub(r"/portal/messages/payment/\d+", "/portal/messages/payment/<id>", html)
+        return re.sub(r'(name="csrf_token" value=")[^"]*', r"\1", html)
+
+    assert live.status_code == unknown.status_code == 404
+    # Nothing tells the two apart: not the status, the page, or any amount, title or reference.
+    assert without_tokens(live.text) == without_tokens(unknown.text)
+    assert "45.00 CAD" not in live.text
+    assert "A payment is requested" not in live.text
+    assert "A payment is requested" not in listed.text
+    # And it was not read: the owner's request is untouched and nothing was audited.
+    assert audit_events(app, AUDIT_EVENT_PAYMENT_REQUEST_READ) == []
+    row = next(item for item in stored_requests(app) if item.id == others_id)
+    assert (row.status, row.read_at) == ("sent", None)
+
+
+def test_a_due_date_of_today_is_accepted_late_in_the_evening_in_the_clinic_timezone() -> None:
+    """23:30 on 27 Nov in Toronto is already 28 Nov in UTC; "today" is the clinic's date."""
+    app = payment_app()
+    client = TestClient(app)
+    activate_seeded_patient_account(app, client)
+    late_evening = datetime(2026, 11, 28, 4, 30, tzinfo=UTC)  # 23:30 EST on 27 November
+
+    def create(due_on: date, timezone_name: str, operation_id: str):
+        with app.state.session_factory() as session:
+            created = create_payment_request(
+                session,
+                clinic_id="clinic-a",
+                demographic_no=1234,
+                operation_id=operation_id,
+                invoice_ref=f"ref-{operation_id}",
+                category="other",
+                payment_method="clinic_instructions",
+                currency="CAD",
+                amount_cents=100,
+                tax_cents=0,
+                due_on=due_on,
+                created_by="Front Desk",
+                created_by_id=None,
+                ttl=timedelta(days=90),
+                timezone_name=timezone_name,
+                now=late_evening,
+            )
+            session.commit()
+            return created
+
+    assert create(date(2026, 11, 27), "America/Toronto", "today-local").created is True
+    # Yesterday, by the clinic's calendar, is still refused.
+    with pytest.raises(ValueError, match="due_on"):
+        create(date(2026, 11, 26), "America/Toronto", "yesterday-local")
+    # The last accepted day is a year (366 days) after the clinic's date, not the UTC date's.
+    assert create(date(2027, 11, 28), "America/Toronto", "last-day").created is True
+    with pytest.raises(ValueError, match="due_on"):
+        create(date(2027, 11, 29), "America/Toronto", "after-last-day")
+    # The pre-fix behaviour (UTC's date) refused today's date: pin that the timezone is what
+    # decides, so the setting cannot be dropped again.
+    with pytest.raises(ValueError, match="due_on"):
+        create(date(2026, 11, 27), "UTC", "today-in-utc")
+
+
+def test_the_internal_route_uses_the_clinic_timezone_for_the_due_date(monkeypatch) -> None:
+    app = payment_app(clinic_timezone="America/Toronto")
+    client = TestClient(app)
+    activate_seeded_patient_account(app, client)
+    monkeypatch.setattr(
+        "carlos_patient_portal.payment_requests.utc_now",
+        lambda: datetime(2026, 11, 28, 4, 30, tzinfo=UTC),
+    )
+
+    response = client.post(PATH, headers=headers(), json=request_body(due_on="2026-11-27"))
+
+    assert response.status_code == 201
 
 
 def test_the_signed_out_patient_is_redirected_not_shown_the_request() -> None:

@@ -24,6 +24,7 @@ was for would tell a reader about the care, so it is not here.
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -218,13 +219,19 @@ def create_payment_request(
     created_by: str,
     created_by_id: str | None,
     ttl: timedelta,
+    timezone_name: str = "UTC",
     today: date | None = None,
+    now: datetime | None = None,
 ) -> CreatedPaymentRequest:
     """Create a request in one transaction.
 
     Retrying the same operation returns the same request and writes nothing more. The same
     operation, or the same invoice reference, with different values is refused. A patient without
     an active account gets nothing stored, so CARLOS can tell staff to contact them another way.
+
+    "Today" for the due date is the date in the clinic's time zone (``timezone_name``), not UTC:
+    after about 19:00 in Ontario the UTC date is already tomorrow, and a due date of today must
+    still be accepted then. ``today`` and ``now`` exist so a test can fix the clock.
     """
     validate_demographic_no(demographic_no)
     if category not in PAYMENT_REQUEST_CATEGORIES:
@@ -243,8 +250,8 @@ def create_payment_request(
         raise ValueError("tax_cents must be between 0 and amount_cents")
     if ttl <= timedelta(0):
         raise ValueError("ttl must be positive")
-    now = utc_now()
-    first_day = today or now.date()
+    now = now or utc_now()
+    first_day = today or as_utc(now).astimezone(ZoneInfo(timezone_name)).date()
     if not first_day <= due_on <= first_day + timedelta(days=MAX_DUE_DAYS_AHEAD):
         raise ValueError("due_on must be from today to a year ahead")
     normalized_clinic_id = normalize_clinic_id(clinic_id)
