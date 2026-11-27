@@ -129,18 +129,39 @@ test('the newest outbox message reads like captured mail, so the same reader fin
   }), '222222');
 });
 
-test('a message of another kind is never mistaken for a sign-in code', () => {
+test('a notice written after the code does not hide it, and only a code or a link is read', () => {
   const file = outboxFile();
   fs.writeFileSync(file, line({ kind: 'mfa_code', recipient: 'a@example.com', code: '111111' })
-    + line({ kind: 'password_reset', recipient: 'a@example.com', reset_url: 'https://p/r#token=Z' })
-    + line({ kind: 'contact_change_notice', recipient: 'a@example.com' }));
+    + line({ kind: 'contact_change_notice', recipient: 'a@example.com' })
+    + line({ kind: 'booking_prompt_notice', recipient: 'a@example.com', sign_in_url: 'https://p/x' })
+    + line({ kind: 'email_change_requested_notice', recipient: 'a@example.com' }));
+  // The portal wrote three notices after the code; the newest line is not what a check waits for.
   const message = latestOutboxMessage(file);
-  assert.match(message, /^Subject: CARLOS Patient Portal contact_change_notice$/m);
-  assert.throws(() => readCapturedMfaCode({
-    expectedRecipient: 'a@example.com', readLatest: () => message, wait: () => {}, maxAttempts: 2, pollIntervalMs: 0,
-  }), /did not arrive/);
+  assert.match(message, /^Subject: Your CARLOS Patient Portal verification code$/m);
+  assert.equal(readCapturedMfaCode({
+    expectedRecipient: 'a@example.com', readLatest: () => latestOutboxMessage(file), wait: () => {}, maxAttempts: 1,
+  }), '111111');
+  // A newer reset link is the newest of the two kinds a check reads; the code is no longer the answer.
   fs.appendFileSync(file, line({ kind: 'password_reset', recipient: 'a@example.com', reset_url: 'https://p/r#token=Z' }));
   assert.match(latestOutboxMessage(file), /\nhttps:\/\/p\/r#token=Z\n$/);
+  // The runner can be asked for another kind.
+  assert.match(latestOutboxMessage(file, ['booking_prompt_notice']), /^Subject: CARLOS Patient Portal booking_prompt_notice$/m);
+});
+
+test('an outbox with only notices has nothing to read', () => {
+  const file = outboxFile();
+  fs.writeFileSync(file, line({ kind: 'contact_change_notice', recipient: 'a@example.com' }));
+  assert.throws(() => latestOutboxMessage(file), /holds no message of kind mfa_code or password_reset/);
+});
+
+test('clearing the outbox does not follow a link to some other file', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'portal-outbox-link-'));
+  const target = path.join(directory, 'someone-elses-file.txt');
+  fs.writeFileSync(target, 'keep me');
+  const link = path.join(directory, 'outbox.jsonl');
+  fs.symlinkSync(target, link);
+  assert.throws(() => clearOutbox(link), (error) => error.code === 'ELOOP' || error.code === 'EMLINK');
+  assert.equal(fs.readFileSync(target, 'utf8'), 'keep me');
 });
 
 test('the default outbox file is in the temp directory, which TMPDIR moves, as the portal reads it', () => {

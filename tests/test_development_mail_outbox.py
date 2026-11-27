@@ -102,6 +102,55 @@ def test_a_link_in_place_of_the_file_is_not_followed(tmp_path) -> None:
     assert target.read_text(encoding="utf-8") == "untouched"
 
 
+@pytest.mark.skipif(not hasattr(os, "geteuid"), reason="owner and mode bits need POSIX")
+def test_a_file_that_is_not_private_is_refused_and_never_written(tmp_path, caplog) -> None:
+    # The default path is a fixed name in the shared temp directory: another user can create it
+    # first, readable by everyone. O_NOFOLLOW stops a link, not that. Only a regular file that is
+    # this user's alone is written to.
+    settings = outbox_settings(tmp_path)
+    path = settings.resolved_development_mail_outbox_path
+    sender = build_portal_email_sender(settings)
+    path.write_text("planted\n", encoding="utf-8")
+    for mode in (0o644, 0o640, 0o660, 0o602):
+        os.chmod(path, mode)
+        with caplog.at_level("WARNING"), pytest.raises(PortalEmailDeliveryError):
+            sender.send_code(recipient="a@example.test", code="654321", expires_in_seconds=60)
+        assert path.read_text(encoding="utf-8") == "planted\n", oct(mode)
+    # The warning names the file and says why; it never carries the code or the address.
+    assert "not a private file" in caplog.text and str(path) in caplog.text
+    assert "654321" not in caplog.text and "a@example.test" not in caplog.text
+    # A private file of ours that was there already is appended to, not refused.
+    os.chmod(path, 0o600)
+    sender.send_code(recipient="a@example.test", code="654321", expires_in_seconds=60)
+    assert path.read_text(encoding="utf-8").startswith("planted\n")
+    assert json.loads(path.read_text(encoding="utf-8").splitlines()[-1])["code"] == "654321"
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "geteuid") or os.geteuid() != 0, reason="needs root, to give a file away"
+)
+def test_a_private_file_owned_by_someone_else_is_refused(tmp_path) -> None:
+    settings = outbox_settings(tmp_path)
+    path = settings.resolved_development_mail_outbox_path
+    path.write_text("theirs\n", encoding="utf-8")
+    os.chmod(path, 0o600)
+    os.chown(path, 65534, 65534)
+    with pytest.raises(PortalEmailDeliveryError):
+        build_portal_email_sender(settings).send_code(
+            recipient="a@example.test", code="654321", expires_in_seconds=60
+        )
+    assert path.read_text(encoding="utf-8") == "theirs\n"
+
+
+def test_a_directory_in_place_of_the_file_is_refused(tmp_path) -> None:
+    settings = outbox_settings(tmp_path)
+    settings.resolved_development_mail_outbox_path.mkdir()
+    with pytest.raises(PortalEmailDeliveryError):
+        build_portal_email_sender(settings).send_code(
+            recipient="a@example.test", code="654321", expires_in_seconds=60
+        )
+
+
 def test_a_path_that_cannot_be_written_is_a_delivery_error(tmp_path) -> None:
     sender = build_portal_email_sender(outbox_settings(tmp_path / "no-such-directory"))
     with pytest.raises(PortalEmailDeliveryError):

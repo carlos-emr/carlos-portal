@@ -1419,7 +1419,9 @@ does not print them on its pages or return them from the API either. Configured 
 codes and one-time password-reset links without storing their raw values; for local testing point
 `PATIENT_PORTAL_SMTP_HOST` (and `PATIENT_PORTAL_SMTP_PORT`) at a test inbox and read the code or the
 link there. A development portal with no SMTP host sends nothing: it appends each email (the code
-or link included, one JSON line each) to a file only its owner can read, `patient-portal-development-mail.jsonl`
+or link included, one JSON line each) to a file only its owner can read (a file that already exists is
+written to only if it is a regular file of the portal's user with no group or other permission),
+`patient-portal-development-mail.jsonl`
 in the system temp directory, or `PATIENT_PORTAL_DEVELOPMENT_MAIL_OUTBOX_PATH`; set
 `PATIENT_PORTAL_DEVELOPMENT_MAIL_OUTBOX=false` to turn that off. The path is refused outside
 development, and the file is never part of an answer or a page. The database
