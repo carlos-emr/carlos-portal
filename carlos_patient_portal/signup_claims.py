@@ -576,6 +576,7 @@ def prepare_signup_invite(  # NOSONAR
         .where(
             PatientPortalInvite.clinic_id == clinic_id,
             PatientPortalInvite.delivery_operation_id == delivery_operation_id,
+            PatientPortalSignupRequest.clinic_id == clinic_id,
             PatientPortalSignupRequest.id != signup_request.id,
         )
     )
