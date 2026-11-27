@@ -54,9 +54,11 @@ from tests.support import (
     STRONG_PASSWORD,
     RecordingPortalEmailSender,
     activate_seeded_patient_account,
+    bearer_headers,
     get_csrf_token,
     migrated_development_app,
     non_development_settings_values,
+    sign_in_patient_api_session,
 )
 from tests.test_mycarlos_availability_store import migrated  # noqa: F401
 
@@ -381,6 +383,28 @@ def test_the_audit_outcome_resumed_has_its_own_migration_and_a_refusing_downgrad
                     )
                 )
     command.upgrade(config, "head")
+
+
+def test_logging_out_clears_the_pending_cookie() -> None:
+    app = migrated_development_app()
+    client = TestClient(app)
+    activate_seeded_patient_account(app, client)
+    session_token = sign_in_patient_api_session(client)
+    client.cookies.set(PENDING_COOKIE, "t" * 43, path="/auth")
+
+    response = client.post("/auth/logout", headers=bearer_headers(session_token))
+
+    assert response.status_code == 200
+    cleared = [
+        value
+        for key, value in response.headers.multi_items()
+        if key.lower() == "set-cookie" and value.startswith(f"{PENDING_COOKIE}=")
+    ]
+    assert len(cleared) == 1
+    assert "Max-Age=0" in cleared[0]
+    assert "Path=/auth" in cleared[0]
+    assert "HttpOnly" in cleared[0]
+    assert "SameSite=strict" in cleared[0]
 
 
 def test_the_cookie_is_secure_outside_development_and_cleared_when_nothing_is_left() -> None:
