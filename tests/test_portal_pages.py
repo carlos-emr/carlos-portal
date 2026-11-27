@@ -3,7 +3,7 @@
 import re
 from dataclasses import fields
 from datetime import UTC, datetime, timedelta
-from html import unescape
+from html import escape, unescape
 from types import SimpleNamespace
 
 import pytest
@@ -332,8 +332,7 @@ def test_signed_in_dashboard_links_the_source_code() -> None:
         response = client.get(path)
         assert response.status_code == 200
         assert (
-            rendered_source_code_url(response.text)
-            == "https://github.com/carlos-emr/carlos-portal"
+            rendered_source_code_url(response.text) == "https://github.com/carlos-emr/carlos-portal"
         )
 
 
@@ -348,8 +347,7 @@ def test_configured_source_code_url_replaces_the_upstream_link() -> None:
 
     for response in (index_response, dashboard_response):
         assert (
-            rendered_source_code_url(response.text)
-            == "https://git.example.test/clinic/portal-fork"
+            rendered_source_code_url(response.text) == "https://git.example.test/clinic/portal-fork"
         )
         assert "github.com/carlos-emr/carlos-portal" not in response.text
 
@@ -466,7 +464,7 @@ def test_account_contact_update_creates_staff_review_request() -> None:
     assert phone_confirmed.status_code == 200
     assert "Contact information updated" in phone_confirmed.text
     assert "you have been signed out" in phone_confirmed.text
-    assert "carlos_portal_session=\"\"" in phone_confirmed.headers["set-cookie"]
+    assert 'carlos_portal_session=""' in phone_confirmed.headers["set-cookie"]
     signed_out_account = client.get("/portal/account", follow_redirects=False)
     assert signed_out_account.status_code == 303
     assert signed_out_account.headers["location"] == "/"
@@ -505,9 +503,7 @@ def test_account_contact_update_creates_staff_review_request() -> None:
         assert review_request.email_after == "new.patient@example.com"
         assert review_request.phone_number_before is None
         assert review_request.phone_number_after == "+15550105555"
-        assert [
-            (event.event_type, event.outcome, event.reason) for event in audit_events
-        ] == [
+        assert [(event.event_type, event.outcome, event.reason) for event in audit_events] == [
             (AUDIT_EVENT_ACCOUNT_CONTACT_UPDATE, AUDIT_OUTCOME_FAILURE, "step_up_failed"),
             (
                 AUDIT_EVENT_ACCOUNT_EMAIL_CHANGE_REQUEST,
@@ -677,7 +673,10 @@ def test_email_password_dashboard_empty_search_and_unavailable_password_states()
     empty_search_response = client.get("/portal/email-passwords?q=missing")
 
     assert empty_response.status_code == 200
-    assert "No document passwords" in empty_response.text
+    # The empty section explains itself (Ben: "keep the section, but say what it is for").
+    assert "No document passwords yet." in empty_response.text
+    assert "documents your clinic does not send to myCarlos automatically" in empty_response.text
+    assert "encrypted PDF sent by email" in empty_response.text
     assert "Page 1 of 1" in empty_response.text
     assert empty_search_response.status_code == 200
     assert "No matching document passwords" in empty_search_response.text
@@ -712,6 +711,9 @@ def test_email_password_dashboard_empty_search_and_unavailable_password_states()
 
     assert unavailable_response.status_code == 200
     assert "Broken message" in unavailable_response.text
+    # With a password listed, the empty-state note is not shown.
+    assert "No document passwords yet." not in unavailable_response.text
+    assert "documents your clinic does not send to myCarlos" not in unavailable_response.text
     assert "Hidden" in unavailable_response.text
     assert raw_secret not in unavailable_response.text
     assert reveal_response.status_code == 503
@@ -727,6 +729,34 @@ def test_email_password_dashboard_empty_search_and_unavailable_password_states()
 
         assert read_event is not None
         assert read_event.reason == "decryption_failed"
+
+
+def test_empty_document_passwords_section_explains_itself_in_every_language() -> None:
+    app = migrated_development_app()
+    client = TestClient(app)
+    browser_sign_in_seeded_patient(app, client)
+
+    for entry in SUPPORTED_LOCALES:
+        locale = entry.code
+        note = portal_text(locale)["no_email_passwords"]
+        # Short and plain: a sentence or three, not a page.
+        assert 40 <= len(note) <= 300, (locale, len(note))
+        client.cookies.set(LOCALE_COOKIE_NAME, locale)
+        response = client.get("/portal/email-passwords")
+
+        assert response.status_code == 200, locale
+        assert escape(note) in response.text, locale
+        # The note takes the place of the bare empty line; the section itself stays.
+        assert escape(portal_text(locale)["email_passwords"]) in response.text, locale
+        # A search that finds nothing keeps its own short line and does not repeat the note.
+        searched = client.get("/portal/email-passwords?q=missing")
+        assert escape(portal_text(locale)["no_matching_email_passwords"]) in searched.text
+        assert escape(note) not in searched.text, locale
+    # Every language has its own words, not English left in place.
+    english = portal_text(DEFAULT_LOCALE)["no_email_passwords"]
+    for entry in SUPPORTED_LOCALES:
+        if entry.code != DEFAULT_LOCALE:
+            assert portal_text(entry.code)["no_email_passwords"] != english, entry.code
 
 
 def test_email_password_dashboard_escapes_stored_and_reflected_values() -> None:
@@ -1127,10 +1157,7 @@ def test_email_change_confirmation_delivery_failure_revokes_the_pending_request(
     app = app_holder["app"]
 
     assert response.status_code == 303
-    assert (
-        response.headers["location"]
-        == "/portal/account?status=email-confirmation-notice-failed"
-    )
+    assert response.headers["location"] == "/portal/account?status=email-confirmation-notice-failed"
     with app.state.session_factory() as session:
         account = session.scalar(select(PatientPortalAccount))
         email_change_request = session.scalar(select(PatientPortalEmailChangeRequest))
@@ -1139,8 +1166,7 @@ def test_email_change_confirmation_delivery_failure_revokes_the_pending_request(
             for event in session.scalars(
                 select(PatientPortalAuditEvent)
                 .where(
-                    PatientPortalAuditEvent.event_type
-                    == AUDIT_EVENT_ACCOUNT_EMAIL_CHANGE_REQUEST
+                    PatientPortalAuditEvent.event_type == AUDIT_EVENT_ACCOUNT_EMAIL_CHANGE_REQUEST
                 )
                 .order_by(PatientPortalAuditEvent.id)
             )
@@ -1177,7 +1203,7 @@ def test_phone_removal_does_not_create_an_unsendable_confirmation_code() -> None
     assert response.status_code == 200
     assert "Contact information updated" in response.text
     assert "you have been signed out" in response.text
-    assert "carlos_portal_session=\"\"" in response.headers["set-cookie"]
+    assert 'carlos_portal_session=""' in response.headers["set-cookie"]
     assert sms_sender.messages == []
     signed_out_account = client.get("/portal/account", follow_redirects=False)
     assert signed_out_account.status_code == 303
@@ -1271,8 +1297,7 @@ def test_contact_change_records_a_failure_when_the_security_notice_cannot_be_sen
             for event in session.scalars(
                 select(PatientPortalAuditEvent)
                 .where(
-                    PatientPortalAuditEvent.event_type
-                    == AUDIT_EVENT_ACCOUNT_EMAIL_CHANGE_REQUEST
+                    PatientPortalAuditEvent.event_type == AUDIT_EVENT_ACCOUNT_EMAIL_CHANGE_REQUEST
                 )
                 .order_by(PatientPortalAuditEvent.id)
             )
@@ -1464,9 +1489,7 @@ def test_phone_code_resend_inside_the_cooldown_is_rate_limited_not_an_error() ->
     then raised TypeError and the patient got a 500 page.
     """
     sms_sender = RecordingPortalSmsSender()
-    app = migrated_development_app(
-        email_sender=RecordingPortalEmailSender(), sms_sender=sms_sender
-    )
+    app = migrated_development_app(email_sender=RecordingPortalEmailSender(), sms_sender=sms_sender)
     client = TestClient(app)
     browser_sign_in_seeded_patient(app, client)
     account_page = client.get("/portal/account")
@@ -1481,9 +1504,7 @@ def test_phone_code_resend_inside_the_cooldown_is_rate_limited_not_an_error() ->
         follow_redirects=False,
     )
     assert requested.status_code == 303
-    assert (
-        requested.headers["location"] == "/portal/account?status=phone-confirmation-required"
-    )
+    assert requested.headers["location"] == "/portal/account?status=phone-confirmation-required"
     sent_codes = len(sms_sender.messages)
 
     confirmation_page = client.get("/portal/account")
@@ -1494,10 +1515,7 @@ def test_phone_code_resend_inside_the_cooldown_is_rate_limited_not_an_error() ->
     )
 
     assert resent.status_code == 303
-    assert (
-        resent.headers["location"]
-        == "/portal/account?status=phone-confirmation-rate-limited"
-    )
+    assert resent.headers["location"] == "/portal/account?status=phone-confirmation-rate-limited"
     assert len(sms_sender.messages) == sent_codes
 
 

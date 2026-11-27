@@ -288,7 +288,11 @@ TEXT: dict[str, str] = {
     "new_password": "New password",
     "new_password_confirmation": "Confirm new password",
     "next": "Next",
-    "no_email_passwords": "No document passwords",
+    "no_email_passwords": (
+        "No document passwords yet. This section is for documents your clinic does not send to "
+        "myCarlos automatically (for example, an encrypted PDF sent by email). Their passwords "
+        "appear here."
+    ),
     "no_matching_email_passwords": "No matching document passwords",
     "open_reset_page": "Open reset page",
     "password_label": "Password",

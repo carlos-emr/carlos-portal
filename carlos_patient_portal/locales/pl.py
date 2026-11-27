@@ -327,7 +327,11 @@ TEXT: dict[str, str] = {
     "new_password": "Nowe hasło",
     "new_password_confirmation": "Proszę potwierdzić nowe hasło",
     "next": "Następna",
-    "no_email_passwords": "Brak haseł dokumentów",
+    "no_email_passwords": (
+        "Brak haseł dokumentów. Ta sekcja dotyczy dokumentów, których Twoja klinika nie wysyła "
+        "automatycznie do myCarlos (na przykład zaszyfrowanego pliku PDF wysłanego e-mailem). "
+        "Ich hasła pojawią się tutaj."
+    ),
     "no_matching_email_passwords": "Brak pasujących haseł dokumentów",
     "of": "z",
     "open_reset_page": "Proszę otworzyć stronę resetowania",

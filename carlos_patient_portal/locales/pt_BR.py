@@ -309,7 +309,11 @@ TEXT: dict[str, str] = {
     "new_password": "Nova senha",
     "new_password_confirmation": "Confirmar nova senha",
     "next": "Próxima",
-    "no_email_passwords": "Nenhuma senha de documento",
+    "no_email_passwords": (
+        "Nenhuma senha de documento por enquanto. Esta seção é para documentos que sua clínica "
+        "não envia automaticamente ao myCarlos (por exemplo, um PDF criptografado enviado por "
+        "e-mail). As senhas deles aparecem aqui."
+    ),
     "no_matching_email_passwords": "Nenhuma senha de documento correspondente",
     "open_reset_page": "Abrir página de redefinição",
     "password_label": "Senha",
@@ -457,8 +461,7 @@ TEXT: dict[str, str] = {
     "outbound_booking_update_note": "A atualização só é exibida depois que você entrar.",
     "outbound_email_confirm_subject": "Confirme seu novo e-mail do {service_name}",
     "outbound_email_confirm_intro": (
-        "Este endereço foi informado como o novo e-mail de contato de uma conta do "
-        "{service_name}."
+        "Este endereço foi informado como o novo e-mail de contato de uma conta do {service_name}."
     ),
     "outbound_email_confirm_link_lead": "Abra este link para confirmá-lo:",
     "outbound_email_confirm_expiry_one": (
