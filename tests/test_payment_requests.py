@@ -531,10 +531,10 @@ def test_a_due_date_of_today_is_accepted_late_in_the_evening_in_the_clinic_timez
     # Yesterday, by the clinic's calendar, is still refused.
     with pytest.raises(ValueError, match="due_on"):
         create(date(2026, 11, 26), "America/Toronto", "yesterday-local")
-    # The last accepted day is a year (366 days) after the clinic's date, not the UTC date's.
-    assert create(date(2027, 11, 28), "America/Toronto", "last-day").created is True
+    # The CARLOS and portal date windows both end 365 days after the clinic's date.
+    assert create(date(2027, 11, 27), "America/Toronto", "last-day").created is True
     with pytest.raises(ValueError, match="due_on"):
-        create(date(2027, 11, 29), "America/Toronto", "after-last-day")
+        create(date(2027, 11, 28), "America/Toronto", "after-last-day")
     # The pre-fix behaviour (UTC's date) refused today's date: pin that the timezone is what
     # decides, so the setting cannot be dropped again.
     with pytest.raises(ValueError, match="due_on"):

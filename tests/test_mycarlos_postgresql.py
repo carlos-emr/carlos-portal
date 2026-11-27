@@ -23,7 +23,7 @@ the database constraints, audit event vocabulary and downgrade guards.
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
 from itertools import count
 from threading import Barrier, Event
@@ -59,6 +59,7 @@ from carlos_patient_portal.mycarlos_devices import (
     publish_clinic_keys,
 )
 from carlos_patient_portal.mycarlos_links import create_link_code, link_device
+from carlos_patient_portal.payment_requests import create_payment_request
 from carlos_patient_portal.routes import mycarlos as mycarlos_routes
 from carlos_patient_portal.runtime import auth_policy_from_settings
 from carlos_patient_portal.token_keys import PortalTokenKeys
@@ -283,6 +284,60 @@ def account_with_session(
         session.add(portal_session)
         session.flush()
         return account.id, portal_session.id
+
+
+def test_payment_lookup_after_midnight_waits_for_the_uncommitted_create(migrated_postgresql_engine):
+    engine = migrated_postgresql_engine
+    factory = sessionmaker(engine)
+    account_with_session(factory, demographic_no=123)
+    waiter_pid = []
+
+    def operation(session, now, lookup_only):
+        return create_payment_request(
+            session,
+            clinic_id="postgres-clinic",
+            demographic_no=123,
+            operation_id="FAKE-midnight",
+            invoice_ref="FAKE-invoice",
+            category="other",
+            payment_method="clinic_instructions",
+            currency="CAD",
+            amount_cents=100,
+            tax_cents=0,
+            due_on=date(2026, 11, 27),
+            created_by="FAKE Staff",
+            created_by_id=None,
+            ttl=timedelta(days=90),
+            timezone_name="America/Toronto",
+            now=now,
+            lookup_only=lookup_only,
+        )
+
+    def probe():
+        with factory.begin() as session:
+            waiter_pid.append(session.scalar(text("select pg_backend_pid()")))
+            result = operation(session, datetime(2026, 11, 28, 5, 1, tzinfo=UTC), True)
+            return result.request.id, result.created
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with factory.begin() as session:
+            holder = session.scalar(text("select pg_backend_pid()"))
+            created = operation(session, datetime(2026, 11, 28, 4, 59, tzinfo=UTC), False)
+            request_id = created.request.id
+            future = pool.submit(probe)
+            deadline = monotonic() + 5
+            with engine.connect() as observer:
+                while monotonic() < deadline:
+                    if waiter_pid and observer.scalar(
+                        text("select :holder = any(pg_blocking_pids(:waiter))"),
+                        {"holder": holder, "waiter": waiter_pid[0]},
+                    ):
+                        break
+                    assert not future.done(), "probe completed before create committed"
+                    sleep(0.02)
+                else:
+                    pytest.fail("probe did not wait for the creating transaction")
+        assert future.result(timeout=5) == (request_id, False)
 
 
 def new_code(session_factory: sessionmaker, account_id: int, session_id: int):

@@ -71,7 +71,7 @@ from carlos_patient_portal.models import (
 MAX_STAFF_PAYMENT_REQUEST_LIST = 100
 MAX_PATIENT_PAYMENT_REQUEST_LIST = 50
 # A due date is a plain date a person reads: today up to a year ahead.
-MAX_DUE_DAYS_AHEAD = 366
+MAX_DUE_DAYS_AHEAD = 365
 
 
 class PaymentRequestNotFoundError(Exception):
