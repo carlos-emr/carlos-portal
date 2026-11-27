@@ -1,0 +1,786 @@
+"""Accessibility basics that must not slip back (carlos-emr/carlos-portal#57): a skip link and a
+focusable <main> on every full page, a page title that names the page, text sizes that follow the
+browser's text size, and no live region around a whole page. Browser checks (an automatic axe run)
+are in scripts/patient-portal-playwright-checks.js; these run without a browser. FAKE data only."""
+
+import re
+from html.parser import HTMLParser
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from carlos_patient_portal import main
+from carlos_patient_portal.i18n import LOCALE_COOKIE_NAME
+from carlos_patient_portal.locales import en, es, fr, pl, pt_BR, zh_CN, zh_TW
+from tests.support import development_settings
+
+PACKAGE = Path(main.__file__).resolve().parent
+TEMPLATES = PACKAGE / "templates"
+STYLES = PACKAGE / "static" / "styles.css"
+
+# Every full page (the ones with their own <html>); the partials are included in them.
+FULL_PAGES = sorted(
+    path.name for path in TEMPLATES.glob("*.jinja") if "<html" in path.read_text(encoding="utf-8")
+)
+
+
+def test_the_full_pages_are_the_ones_that_are_checked() -> None:
+    # A new full page must be added to the checks below by being a full page; this fails if the
+    # list is ever empty or loses a known page.
+    assert {"index.jinja", "dashboard.jinja", "mfa.jinja", "activate.jinja"} <= set(FULL_PAGES)
+
+
+@pytest.mark.parametrize("name", FULL_PAGES)
+def test_every_full_page_has_a_skip_link_to_a_focusable_main(name: str) -> None:
+    source = (TEMPLATES / name).read_text(encoding="utf-8")
+    # The skip link is the first thing in the body.
+    assert re.search(
+        r"<body>\s*(?:\{#.*?#\}\s*)?"
+        r"\{% from \"_skip_link\.jinja\" import skip_link %\}"
+        r"\{\{ skip_link\(text(?:, \"[^\"]+\")?\) \}\}",
+        source,
+        re.S,
+    ), name
+    assert source.count('<main id="main-content" tabindex="-1">') == 1, name
+    assert source.count("<main") == 1 and source.count("</main>") == 1, name
+
+
+@pytest.mark.parametrize("name", FULL_PAGES)
+def test_every_full_page_has_a_banner_before_main_and_a_footer_after_it(name: str) -> None:
+    # The top bar is a <header> whose ancestors are only <div>s, so it is the banner landmark
+    # (inside <main> or a <section> it would not be); the footer stays the contentinfo.
+    source = (TEMPLATES / name).read_text(encoding="utf-8")
+    assert '<section class="portal-screen' not in source, name
+    top_bar = min(
+        i
+        for i in (source.find('<header class="patient-topbar'), source.find("_public_header.jinja"))
+        if i >= 0
+    )
+    assert top_bar < source.index("<main"), name
+    assert source.index("</main>") < source.index("_page_footer.jinja"), name
+
+
+def test_the_skip_link_points_at_the_main_it_skips_to() -> None:
+    link = (TEMPLATES / "_skip_link.jinja").read_text(encoding="utf-8")
+    assert 'target="main-content"' in link
+    assert 'href="#{{ target }}"' in link
+    assert "{{ text.skip_to_content }}" in link
+
+
+@pytest.mark.parametrize("name", FULL_PAGES)
+def test_every_full_page_title_names_the_page(name: str) -> None:
+    source = (TEMPLATES / name).read_text(encoding="utf-8")
+    title = re.search(r"<title>(.*?)</title>", source, re.S)
+    assert title, name
+    # Not the service name alone: the page's own words come first (WCAG 2.4.2).
+    assert title.group(1).strip() != "{{ service_name }}", name
+    assert title.group(1).strip().endswith("- {{ service_name }}"), name
+
+
+def test_the_dashboard_title_follows_the_module_shown() -> None:
+    source = (TEMPLATES / "dashboard.jinja").read_text(encoding="utf-8")
+    for module in ("mycarlos", "account", "email-passwords", "messages", "help"):
+        assert f'"{module}":' in source
+    assert "{{ page_heading }} - {{ service_name }}" in source
+
+
+def test_the_module_workspace_is_not_one_big_live_region() -> None:
+    # Status messages carry their own role="status" / role="alert"; a live region around the
+    # whole workspace announces every change in it together (WCAG 4.1.3 done badly).
+    source = (TEMPLATES / "dashboard.jinja").read_text(encoding="utf-8")
+    assert 'class="module-workspace"' in source
+    assert 'class="module-workspace" aria-live' not in source
+
+
+def test_text_sizes_follow_the_browsers_text_size() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    pixel_sizes = re.findall(r"font-size:\s*[0-9.]+px", css)
+    assert pixel_sizes == [], "font sizes in px ignore the browser's text size; use rem"
+    assert "font-size: 0.8125rem;" in css  # the former 13px
+
+
+def test_the_skip_link_is_hidden_until_it_has_the_focus() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    assert re.search(r"\.skip-link\s*\{[^}]*transform:\s*translateY\(-120%\)", css, re.S)
+    assert re.search(r"\.skip-link:focus\s*\{[^}]*transform:\s*translateY\(0\)", css, re.S)
+
+
+@pytest.mark.parametrize("module", [es, fr, pl, pt_BR, zh_CN, zh_TW])
+def test_the_skip_link_words_are_translated_in_every_language(module) -> None:
+    words = module.TEXT["skip_to_content"]
+    assert words.strip()
+    assert words != en.TEXT["skip_to_content"]
+
+
+@pytest.mark.parametrize(
+    ("code", "module"),
+    [
+        ("en", en),
+        ("es", es),
+        ("fr", fr),
+        ("pl", pl),
+        ("pt-BR", pt_BR),
+        ("zh-CN", zh_CN),
+        ("zh-TW", zh_TW),
+    ],
+)
+def test_the_sign_in_page_has_the_skip_link_and_a_page_title(code: str, module) -> None:
+    client = TestClient(main.create_app(development_settings()))
+    client.cookies.set(LOCALE_COOKIE_NAME, code)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    page = response.text
+    assert f'<a class="skip-link" href="#main-content">{module.TEXT["skip_to_content"]}</a>' in page
+    assert '<main id="main-content" tabindex="-1">' in page
+    assert page.index("<header") < page.index("<main")
+    title = re.search(r"<title>(.*?)</title>", page, re.S)
+    assert title
+    assert module.TEXT["sign_in_heading"] in title.group(1)
+    # The skip link comes before the header's language buttons in the page.
+    assert page.index('class="skip-link"') < page.index('class="language-switch"')
+
+
+DASHBOARD = (TEMPLATES / "dashboard.jinja").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("key", ["mycarlos", "account", "email-passwords", "help", "messages"])
+def test_a_module_tile_link_is_named_by_its_heading_and_not_by_view(key: str) -> None:
+    link = re.search(
+        rf'<a class="module-tile"[^>]*aria-labelledby="tile-{key}-title[^"]*"[^>]*>(.*?)</a>',
+        DASHBOARD,
+        re.S,
+    )
+    assert link, key
+    body = link.group(1)
+    assert f'id="tile-{key}-title"' in body
+    assert f'id="tile-{key}-description"' in body
+    assert 'aria-describedby="tile-' + key + '-description"' in link.group(0)
+    # The trailing "View" is for the eye only.
+    assert '<span aria-hidden="true">{{ text.view_module }}</span>' in body
+
+
+def test_the_unread_count_is_part_of_the_messages_tile_name() -> None:
+    assert (
+        'aria-labelledby="tile-messages-title'
+        "{% if new_message_count %} tile-messages-count{% endif %}"
+        '"' in DASHBOARD
+    )
+    assert 'id="tile-messages-count"' in DASHBOARD
+
+
+def test_the_disabled_documents_tile_has_no_meaningless_aria_disabled() -> None:
+    assert 'class="module-tile disabled">' in DASHBOARD
+    assert "aria-disabled" not in DASHBOARD
+
+
+def test_repeated_reveal_and_copy_buttons_say_which_password_they_are_for() -> None:
+    assert 'id="email-password-subject-{{ row.id }}"' in DASHBOARD
+    # Reveal and Copy both describe themselves by the row's subject; their own words stay first.
+    assert DASHBOARD.count('aria-describedby="email-password-subject-{{ row.id }}"') == 2
+    # The password itself is a named, read-only text box (a plain <code>'s name is not announced).
+    assert re.search(
+        r'<code[^>]*role="textbox"[^>]*aria-readonly="true"[^>]*aria-label=', DASHBOARD, re.S
+    )
+
+
+@pytest.mark.parametrize(
+    ("template", "error_id"), [("index.jinja", "sign-in-error"), ("mfa.jinja", "mfa-error")]
+)
+def test_a_failed_sign_in_or_code_marks_the_boxes_and_points_them_at_the_error(
+    template: str, error_id: str
+) -> None:
+    source = (TEMPLATES / template).read_text(encoding="utf-8")
+    assert f'role="alert" id="{error_id}"' in source
+    marked = (
+        f'{{% if error_message %}}aria-invalid="true" aria-describedby="{error_id}"{{% endif %}}'
+    )
+    assert source.count(marked) == (2 if template == "index.jinja" else 1)
+
+
+def test_what_a_button_changes_by_its_words_alone_is_announced() -> None:
+    script = (PACKAGE / "static" / "portal.js").read_text(encoding="utf-8")
+    region = (TEMPLATES / "_live_status.jinja").read_text(encoding="utf-8")
+    assert 'id="portal-live-status"' in region
+    assert 'role="status"' in region and 'aria-live="polite"' in region
+    assert 'getElementById("portal-live-status")' in script
+    # Revealing, reveal failed, copied, copy failed.
+    assert script.count("announce(") == 4  # the four uses
+    css = STYLES.read_text(encoding="utf-8")
+    assert re.search(r"\.sr-only\s*\{[^}]*clip:", css, re.S)
+
+
+def test_language_buttons_are_big_enough_to_touch() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    block = re.search(r"@media \(pointer: coarse\)\s*\{\s*\.text-tab\s*\{([^}]*)\}", css, re.S)
+    assert block
+    assert "min-width: 2.75rem" in block.group(1)
+    assert "min-height: 2.75rem" in block.group(1)
+
+
+# --- Structure, read from the parsed page rather than grepped from the template text ----------
+
+_VOID = {
+    "area",
+    "base",
+    "br",
+    "col",
+    "embed",
+    "hr",
+    "img",
+    "input",
+    "link",
+    "meta",
+    "source",
+    "track",
+    "wbr",
+}
+
+
+class _Outline(HTMLParser):
+    """The elements of a page in document order, each with the tags it sits inside."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.stack: list[tuple[str, dict[str, str | None]]] = []
+        self.elements: list[
+            tuple[str, dict[str, str | None], tuple[tuple[str, dict[str, str | None]], ...]]
+        ] = []
+
+    def handle_starttag(self, tag, attrs) -> None:
+        attributes = dict(attrs)
+        self.elements.append((tag, attributes, tuple(self.stack)))
+        if tag not in _VOID:
+            self.stack.append((tag, attributes))
+
+    def handle_startendtag(self, tag, attrs) -> None:
+        self.elements.append((tag, dict(attrs), tuple(self.stack)))
+
+    def handle_endtag(self, tag) -> None:
+        for index in range(len(self.stack) - 1, -1, -1):
+            if self.stack[index][0] == tag:
+                del self.stack[index:]
+                return
+
+
+def _outline(html: str) -> _Outline:
+    parser = _Outline()
+    parser.feed(html)
+    return parser
+
+
+def _page_source(name: str) -> str:
+    """A template as the browser would get it: its includes written in, its Jinja tags removed
+    (every branch of a conditional stays, which is why this is for structure, not for words).
+    The skip link macro is written out as the link it makes."""
+    source = (TEMPLATES / name).read_text(encoding="utf-8")
+    source = re.sub(
+        r"\{%-?\s*include\s+\"([^\"]+)\"\s*-?%\}",
+        lambda match: _page_source(match.group(1)),
+        source,
+    )
+    source = re.sub(
+        r"\{\{\s*skip_link\(text(?:,\s*\"([^\"]+)\")?\)\s*\}\}",
+        lambda match: f'<a class="skip-link" href="#{match.group(1) or "main-content"}">x</a>',
+        source,
+    )
+    source = re.sub(r"\{#.*?#\}", "", source, flags=re.S)
+    source = re.sub(r"\{%.*?%\}", "", source, flags=re.S)
+    return re.sub(r"\{\{.*?\}\}", "x", source, flags=re.S)
+
+
+def _is_focusable(tag: str, attributes: dict[str, str | None]) -> bool:
+    if "hidden" in attributes or attributes.get("type") == "hidden":
+        return False
+    if tag in {"button", "select", "textarea"}:
+        return "disabled" not in attributes
+    if tag == "input":
+        return "disabled" not in attributes
+    if tag == "a":
+        return "href" in attributes
+    return attributes.get("tabindex") not in (None, "-1")
+
+
+def _check_skip_link_structure(html: str, label: str) -> None:
+    outline = _outline(html)
+    mains = [e for e in outline.elements if e[0] == "main"]
+    assert len(mains) == 1, label
+    assert mains[0][1].get("id") == "main-content", label
+    assert mains[0][1].get("tabindex") == "-1", label
+    # The skip link is the first thing a keyboard reaches, and points at an element of the page.
+    focusables = [(i, e) for i, e in enumerate(outline.elements) if _is_focusable(e[0], e[1])]
+    first = focusables[0][1]
+    assert first[0] == "a" and (first[1].get("href") or "").startswith("#"), label
+    assert "skip-link" in (first[1].get("class") or ""), label
+    target_id = first[1]["href"][1:]
+    targets = [e for e in outline.elements if e[1].get("id") == target_id]
+    assert len(targets) == 1, f"{label}: the skip link points at #{target_id}"
+    target = targets[0]
+    assert target[1].get("tabindex") == "-1", label
+    # The target is main itself, or something inside main (the dashboard's content, after its
+    # module navigation).
+    assert target is mains[0] or any(tag == "main" for tag, _ in target[2]), label
+    target_at = outline.elements.index(target)
+
+    def in_target(element) -> bool:
+        return element is target or any(a.get("id") == target_id for _, a in element[2])
+
+    inside_target = [i for i, e in focusables if in_target(e)]
+    assert inside_target, f"{label}: nothing in the page content can be reached"
+    # What the skip link skips: the top bar (and the module navigation), before the target.
+    before_target = [e for i, e in focusables if i < target_at]
+    assert len(before_target) > 1, f"{label}: the skip link would skip nothing"
+    # The first stop at or after the target begins is inside it.
+    after = [e for i, e in focusables if i >= target_at][0]
+    assert in_target(after), label
+    for tag, attributes, ancestors in outline.elements:
+        in_main = any(t == "main" for t, _ in ancestors)
+        classes = (attributes.get("class") or "").split()
+        # The top bar (banner) and the language switch are outside main; so is the footer. The one
+        # exception is the signed-in dashboard, where the language buttons moved into the
+        # Preferences module (inside main), and the top bar no longer has them.
+        if "patient-topbar" in classes or "page-footer" in classes:
+            assert not in_main, f"{label}: {tag}.{'.'.join(classes)} is inside main"
+        if "language-switch" in classes:
+            assert in_main == label.startswith("dashboard"), (
+                f"{label}: the language switch is {'inside' if in_main else 'outside'} main"
+            )
+    # The live region is in the page from the start, outside main, empty.
+    regions = [e for e in outline.elements if e[1].get("id") == "portal-live-status"]
+    assert len(regions) == 1, label
+    assert regions[0][1].get("role") == "status", label
+    assert not any(t == "main" for t, _ in regions[0][2]), label
+    topbars = [e for e in outline.elements if "patient-topbar" in (e[1].get("class") or "").split()]
+    assert len(topbars) == 1 and topbars[0][0] == "header", label
+    # A <header> is the page's banner only when no section, article, aside, nav or main holds it.
+    assert not any(t in {"main", "section", "article", "aside", "nav"} for t, _ in topbars[0][2]), (
+        label
+    )
+
+
+@pytest.mark.parametrize("name", FULL_PAGES)
+def test_the_skip_link_skips_the_top_bar_on_every_page(name: str) -> None:
+    _check_skip_link_structure(_page_source(name), name)
+
+
+@pytest.mark.parametrize("code", ["en", "es", "fr", "pl", "pt-BR", "zh-CN", "zh-TW"])
+def test_the_rendered_sign_in_page_has_the_same_structure(code: str) -> None:
+    client = TestClient(main.create_app(development_settings()))
+    client.cookies.set(LOCALE_COOKIE_NAME, code)
+    _check_skip_link_structure(client.get("/").text, f"rendered / in {code}")
+
+
+def test_every_message_the_script_puts_into_a_button_is_announced_or_deliberately_not() -> None:
+    script = (PACKAGE / "static" / "portal.js").read_text(encoding="utf-8")
+    # Announced: Revealing..., the failed reveal, Copied, Copy failed.
+    for words in (
+        "revealButton.dataset.revealingLabel",
+        "revealButton.dataset.revealFailedLabel",
+        "copyButton.dataset.copiedLabel",
+        "copyButton.dataset.copyFailedLabel",
+    ):
+        block = script[script.index(words) :].split(";", 1)[1:2]
+        assert block and "announce(" in script[script.index(words) : script.index(words) + 260], (
+            words
+        )
+    # Not announced on purpose: putting a label back (after 2.5 s, on hiding the page), the
+    # password box (the focus moves to it), the modal (a dialog) and the booking notice
+    # (its element is role="status" already).
+    assert 'role="status"' in DASHBOARD
+
+
+def _luminance(colour: str) -> float:
+    channels = [int(colour.lstrip("#")[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+    linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def _contrast(foreground: str, background: str) -> float:
+    lighter, darker = sorted((_luminance(foreground), _luminance(background)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def _token(name: str) -> str:
+    match = re.search(rf"--{name}:\s*(#[0-9a-fA-F]{{6}});", STYLES.read_text(encoding="utf-8"))
+    assert match, name
+    return match.group(1)
+
+
+def test_the_brand_blue_is_readable_as_text_on_the_page_and_on_white() -> None:
+    blue = _token("carlos-blue")
+    assert blue.lower() == "#4065b2"
+    # WCAG 1.4.3: 4.5:1 for normal-size text, on the page's pale blue and on white; and white text
+    # on the blue (buttons, the message count) too.
+    assert _contrast(blue, _token("page")) >= 4.5
+    assert _contrast(blue, "#ffffff") >= 4.5
+    assert _contrast("#ffffff", blue) >= 4.5
+
+
+def test_no_old_brand_blue_is_left_in_the_stylesheet() -> None:
+    assert "#486ebd" not in STYLES.read_text(encoding="utf-8").lower()
+
+
+def test_the_axe_check_runs_in_both_colour_schemes_and_with_forced_colours() -> None:
+    script = (PACKAGE.parent / "scripts" / "patient-portal-axe.js").read_text(encoding="utf-8")
+    assert "disableRules" not in script  # colour contrast is on
+    assert "emulateMedia({ colorScheme: 'dark' })" in script
+    assert "emulateMedia({ forcedColors: 'active' })" in script
+    # Emulation is always switched off again for the caller's own steps.
+    assert "emulateMedia({ colorScheme: null, contrast: null, forcedColors: null })" in script
+    # The browser's real cascade is read too (the CSS tests are textual): with more contrast the
+    # computed text token is the strong one, with no choice on a dark device and with Dark chosen.
+    assert "emulateMedia({ colorScheme: 'dark', contrast: 'more' })" in script
+    assert "assertContrastCascade(page, surface)" in script
+    assert "finally" in script
+    # The choice made in Preferences is checked too, each way it can be set, then put back.
+    for mode in (
+        "chosen dark'",
+        "chosen dark, high contrast'",
+        "chosen light, high contrast'",
+        "chosen light on a dark device'",
+    ):
+        assert mode in script, mode
+    assert "setAttribute('data-theme'" in script and "setAttribute('data-contrast'" in script
+    assert "setAppearance(previous.theme, previous.contrast)" in script
+
+
+# --- Both palettes: every token pair, computed from the stylesheet --------------------------------
+
+
+def _block(source: str, opening: str) -> str:
+    """The text between the braces that follow `opening` (braces may nest one level)."""
+    start = source.index(opening) + len(opening)
+    depth = 1
+    for index in range(start, len(source)):
+        depth += {"{": 1, "}": -1}.get(source[index], 0)
+        if depth == 0:
+            return source[start:index]
+    raise AssertionError(opening)
+
+
+# The device's dark setting applies unless Light was chosen in Preferences; a chosen Dark has its
+# own copy of the same palette (see test_a_chosen_dark_has_exactly_the_devices_dark_palette).
+DARK_FOLLOWS_DEVICE = ':root:not([data-theme="light"]) {'
+DARK_CHOSEN = ':root[data-theme="dark"] {'
+
+
+def _palettes() -> dict[str, dict[str, str]]:
+    css = STYLES.read_text(encoding="utf-8")
+    light_block = _block(css, ":root {")
+    dark_block = _block(_block(css, "@media (prefers-color-scheme: dark) {"), DARK_FOLLOWS_DEVICE)
+    declared = re.compile(r"--([a-z-]+):\s*(#[0-9a-fA-F]{6});")
+    light = dict(declared.findall(light_block))
+    dark = {**light, **dict(declared.findall(dark_block))}
+    return {"light": light, "dark": dark}
+
+
+PALETTES = _palettes()
+TEXT_TOKENS = ["text-strong", "text", "text-soft", "muted", "brand-text"]
+SURFACES = ["page", "surface", "surface-subtle", "surface-muted", "surface-topbar"]
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_every_text_colour_is_readable_on_every_surface_in_both_palettes(scheme: str) -> None:
+    palette = PALETTES[scheme]
+    for text in TEXT_TOKENS:
+        for surface in SURFACES:
+            ratio = _contrast(palette[text], palette[surface])
+            assert ratio >= 4.5, f"{scheme}: {text} on {surface} is {ratio:.2f}:1"
+    for text, background in [
+        ("warn-text", "warn-bg"),
+        ("error-text", "error-bg"),
+        ("success-text", "success-bg"),
+        ("on-accent", "carlos-blue"),
+        ("on-accent", "brand-bg"),
+    ]:
+        ratio = _contrast(palette[text], palette[background])
+        assert ratio >= 4.5, f"{scheme}: {text} on {background} is {ratio:.2f}:1"
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_borders_the_focus_ring_and_the_blue_are_visible_in_both_palettes(scheme: str) -> None:
+    palette = PALETTES[scheme]
+    for token in ("border-control", "focus-ring", "carlos-blue"):
+        for surface in SURFACES:
+            ratio = _contrast(palette[token], palette[surface])
+            assert ratio >= 3.0, f"{scheme}: {token} on {surface} is {ratio:.2f}:1"
+    # The status borders are decoration beside text that already says it; the blue as text is
+    # not used (the text tokens above are).
+    assert palette["on-accent"].lower() == "#ffffff"
+
+
+def test_the_dark_palette_defines_every_token_the_light_one_does() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    light = set(re.findall(r"--([a-z-]+):\s*#", _block(css, ":root {")))
+    dark = set(
+        re.findall(
+            r"--([a-z-]+):\s*#",
+            _block(_block(css, "@media (prefers-color-scheme: dark) {"), DARK_FOLLOWS_DEVICE),
+        )
+    )
+    assert light == dark
+
+
+def test_a_chosen_dark_has_exactly_the_devices_dark_palette() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    declared = re.compile(r"--([a-z-]+):\s*(#[0-9a-fA-F]{6});")
+    device = dict(
+        declared.findall(
+            _block(_block(css, "@media (prefers-color-scheme: dark) {"), DARK_FOLLOWS_DEVICE)
+        )
+    )
+    chosen = dict(declared.findall(_block(css, DARK_CHOSEN)))
+    assert chosen == device and len(chosen) == len(PALETTES["light"])
+    # A chosen Dark also draws form controls and scrollbars dark, and a chosen Light light.
+    assert "color-scheme: dark;" in _block(css, DARK_CHOSEN)
+    assert "color-scheme: light;" in _block(css, ':root[data-theme="light"] {')
+
+
+def test_the_logo_keeps_its_white_backing_on_both_ways_into_dark() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    device = _block(
+        _block(css, "@media (prefers-color-scheme: dark) {"),
+        ':root:not([data-theme="light"]) .brand-logo {',
+    )
+    chosen = _block(css, ':root[data-theme="dark"] .brand-logo {')
+    assert " ".join(device.split()) == " ".join(chosen.split()) != ""
+    assert "background: #ffffff;" in chosen
+
+
+def test_the_chosen_light_theme_is_not_darkened_by_the_device() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    # The device's dark palette must not reach a page that chose Light: it is scoped out.
+    media = _block(css, "@media (prefers-color-scheme: dark) {")
+    assert ':root:not([data-theme="light"])' in media
+    assert "\n  :root {" not in media
+
+
+def test_the_high_contrast_switch_has_the_same_declarations_as_the_devices_setting() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    media = _block(css, "@media (prefers-contrast: more) {")
+    from_device = _block(media, ":root:not([data-theme]),\n  :root[data-theme] {")
+    chosen = _block(css, ':root[data-contrast="more"] {')
+    declaration = re.compile(r"--[a-z-]+:\s*var\(--[a-z-]+\);")
+    assert declaration.findall(chosen) == declaration.findall(from_device) != []
+    # The thicker focus outline too, on every kind of focusable control the media block covers.
+    for control in ("a", "button", "input", "select", "textarea", "[tabindex]"):
+        assert f':where([data-contrast="more"]) {control}:focus-visible' in css
+    assert css.count("outline: 4px solid var(--focus-ring);") == 2
+    # It comes after every palette it adjusts, so it wins at the same specificity.
+    assert css.index(':root[data-contrast="more"] {') > css.index(DARK_CHOSEN)
+    assert css.index(':root[data-contrast="more"] {') > css.index(
+        "@media (prefers-color-scheme: dark)"
+    )
+
+
+def _cascade_rules(css: str) -> list[tuple[int, list[str], str | None, dict[str, str]]]:
+    """The rules deciding the palette and contrast tokens: (position, selectors, media, decls)."""
+    dark_media = "@media (prefers-color-scheme: dark) {"
+    contrast_media = "@media (prefers-contrast: more) {"
+    contrast_selectors = ":root:not([data-theme]),\n  :root[data-theme] {"
+    sources = [
+        (css.index(":root {"), [":root"], None, _block(css, ":root {")),
+        (
+            css.index(dark_media)
+            + len(dark_media)
+            + _block(css, dark_media).index(DARK_FOLLOWS_DEVICE),
+            [DARK_FOLLOWS_DEVICE.removesuffix(" {")],
+            "dark",
+            _block(_block(css, dark_media), DARK_FOLLOWS_DEVICE),
+        ),
+        (css.index(DARK_CHOSEN), [DARK_CHOSEN.removesuffix(" {")], None, _block(css, DARK_CHOSEN)),
+        (
+            css.index(contrast_media) + len(contrast_media),
+            [":root:not([data-theme])", ":root[data-theme]"],
+            "more",
+            _block(_block(css, contrast_media), contrast_selectors),
+        ),
+        (
+            css.index(':root[data-contrast="more"] {'),
+            [':root[data-contrast="more"]'],
+            None,
+            _block(css, ':root[data-contrast="more"] {'),
+        ),
+    ]
+    declaration = re.compile(r"(--[a-z-]+):\s*([^;]+);")
+    return [
+        (position, selectors, media, dict(declaration.findall(body)))
+        for position, selectors, media, body in sources
+    ]
+
+
+def _selector_matches(selector: str, attributes: dict[str, str | None]) -> bool:
+    for negated, name, value in re.findall(
+        r'(:not\()?\[([a-z-]+)(?:="([^"]*)")?\]\)?', selector.replace(":root", "", 1)
+    ):
+        actual = attributes[name]
+        holds = actual is not None if not value else actual == value
+        if holds == bool(negated):
+            return False
+    return True
+
+
+def _cascaded(css: str, token: str, *, device_dark, device_more, theme, contrast) -> str:
+    """What `token` comes to on <html>, by specificity then source order, with var() resolved."""
+    attributes = {"data-theme": theme, "data-contrast": contrast}
+    best: tuple[tuple[int, int], str] | None = None
+    for position, selectors, media, declarations in _cascade_rules(css):
+        if token not in declarations:
+            continue
+        if (media == "dark" and not device_dark) or (media == "more" and not device_more):
+            continue
+        for selector in selectors:
+            if _selector_matches(selector, attributes):
+                rank = (selector.count(":root") + selector.count("["), position)
+                if best is None or rank > best[0]:
+                    best = (rank, declarations[token].strip())
+    assert best is not None, token
+    value = best[1]
+    reference = re.fullmatch(r"var\((--[a-z-]+)\)", value)
+    if reference:
+        return _cascaded(
+            css,
+            reference.group(1),
+            device_dark=device_dark,
+            device_more=device_more,
+            theme=theme,
+            contrast=contrast,
+        )
+    return value
+
+
+@pytest.mark.parametrize("device_dark", [False, True])
+@pytest.mark.parametrize("device_more", [False, True])
+@pytest.mark.parametrize("theme", [None, "light", "dark"])
+@pytest.mark.parametrize("contrast", [None, "more"])
+def test_the_cascade_gives_the_right_tokens_for_every_device_and_choice(
+    device_dark, device_more, theme, contrast
+) -> None:
+    """The device's setting and the patient's choice combine as documented, whichever way in.
+
+    No choice made, on a dark device with "more contrast", must get both: the dark palette's
+    strong text and border (the dark block is more specific than a bare `:root`, so the
+    contrast block names `:root:not([data-theme])` too).
+    """
+    css = STYLES.read_text(encoding="utf-8")
+    dark = theme == "dark" or (theme is None and device_dark)
+    more = contrast == "more" or device_more
+    palette = PALETTES["dark" if dark else "light"]
+    expected = {
+        "--text": palette["text-strong"] if more else palette["text"],
+        "--muted": palette["text-strong"] if more else palette["muted"],
+        "--text-soft": palette["text-strong"] if more else palette["text-soft"],
+        "--line": palette["border-control"] if more else palette["line"],
+        "--surface": palette["surface"],
+    }
+    for token, wanted in expected.items():
+        got = _cascaded(
+            css,
+            token,
+            device_dark=device_dark,
+            device_more=device_more,
+            theme=theme,
+            contrast=contrast,
+        )
+        assert got.lower() == wanted.lower(), (
+            f"{token} with dark device={device_dark}, more-contrast device={device_more}, "
+            f"theme={theme}, contrast={contrast}: {got} != {wanted}"
+        )
+
+
+def test_the_colour_and_motion_media_blocks_are_present() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    for opening in (
+        "@media (prefers-color-scheme: dark)",
+        "@media (prefers-contrast: more)",
+        "@media (forced-colors: active)",
+        "@media (prefers-reduced-motion: reduce)",
+    ):
+        assert css.count(opening) == 1, opening
+    assert "color-scheme: light dark;" in css
+    # The meta value is chosen on the server: "light dark" while the device decides (the default),
+    # and the one scheme when Light or Dark was chosen (tests/test_appearance_preferences.py).
+    assert '<meta name="color-scheme" content="{{ appearance_color_scheme() }}">' in (
+        TEMPLATES / "_head_assets.jinja"
+    ).read_text(encoding="utf-8")
+    # Order matters: the contrast block must come after the palettes it adjusts.
+    assert css.index("prefers-color-scheme: dark") < css.index("prefers-contrast: more")
+
+
+def test_more_contrast_strengthens_text_and_borders_and_the_focus_ring() -> None:
+    block = _block(STYLES.read_text(encoding="utf-8"), "@media (prefers-contrast: more) {")
+    for token in ("--muted", "--text-soft", "--text"):
+        assert f"{token}: var(--text-strong);" in block
+    for token in ("--line", "--border-soft", "--border-card"):
+        assert f"{token}: var(--border-control);" in block
+    assert "outline: 4px solid var(--focus-ring);" in block
+
+
+def test_forced_colours_keep_focus_selection_and_errors_visible_by_shape() -> None:
+    block = _block(STYLES.read_text(encoding="utf-8"), "@media (forced-colors: active) {")
+    assert "outline: 3px solid Highlight;" in block
+    # Selected and checked states are a thicker or underlined border, not only a colour.
+    assert "border: 2px solid Highlight;" in block and "text-decoration: underline;" in block
+    assert "border: 3px solid Highlight;" in block
+    # Errors and notices are drawn with lines, in system colours.
+    assert "border: 3px double CanvasText;" in block
+    assert "border: 2px solid CanvasText;" in block
+
+
+def test_reduced_motion_stops_animation_transition_and_smooth_scrolling() -> None:
+    block = _block(STYLES.read_text(encoding="utf-8"), "@media (prefers-reduced-motion: reduce) {")
+    for declaration in (
+        "animation: none !important;",
+        "transition: none !important;",
+        "scroll-behavior: auto !important;",
+    ):
+        assert declaration in block
+
+
+def test_no_colour_is_hard_coded_outside_the_palettes() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    light = _block(css, ":root {")
+    dark_media = _block(css, "@media (prefers-color-scheme: dark) {")
+    # A chosen Dark repeats the device's dark palette and the logo's white backing.
+    dark_chosen = _block(css, DARK_CHOSEN)
+    dark_chosen_logo = _block(css, ':root[data-theme="dark"] .brand-logo {')
+    outside = (
+        css.replace(light, "")
+        .replace(dark_media, "")
+        .replace(dark_chosen, "")
+        .replace(dark_chosen_logo, "")
+    )
+    literals = re.findall(r"#[0-9a-fA-F]{3,6}\b", outside)
+    # Every colour is a token, so the dark palette and the contrast modes reach all of them.
+    assert literals == [], literals
+
+
+def test_placeholders_use_the_muted_text_colour() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    assert re.search(
+        r"::placeholder\s*\{[^}]*color:\s*var\(--muted\);[^}]*opacity:\s*1;", css, re.S
+    )
+
+
+def test_the_dashboard_skip_link_skips_the_module_navigation_too() -> None:
+    page = _page_source("dashboard.jinja")
+    assert 'href="#module-content"' in page
+    outline = _outline(page)
+    nav = [
+        e for e in outline.elements if e[0] == "nav" and "module-nav" in (e[1].get("class") or "")
+    ]
+    content = [e for e in outline.elements if e[1].get("id") == "module-content"]
+    assert len(nav) == 1 and len(content) == 1
+    # The workspace comes after the navigation, so the skip link jumps over it.
+    assert outline.elements.index(nav[0]) < outline.elements.index(content[0])
+    assert content[0][1].get("tabindex") == "-1"
+
+
+def test_no_unused_colour_token_is_left_in_the_stylesheet() -> None:
+    css = STYLES.read_text(encoding="utf-8")
+    declared = set(re.findall(r"--([a-z-]+):", css))
+    used = set(re.findall(r"var\(--([a-z-]+)\)", css))
+    # A token nothing reads is dead; the media blocks read tokens too.
+    assert declared - used == set(), declared - used

@@ -200,7 +200,11 @@ TEXT: dict[str, str] = {
         "clinique vérifiera les renseignements correspondants du dossier CARLOS."
     ),
     "contact_change_success_heading": "Coordonnées mises à jour",
+    "contact_email": "Courriel",
+    "contact_hours": "Heures d’ouverture",
+    "contact_phone": "Téléphone",
     "contact_the_clinic": "Contactez la clinique",
+    "contact_website": "Site Web",
     "copy": "Copier",
     "copy_failed": "Sélectionnez et copiez manuellement",
     "copied": "Copié",
@@ -252,6 +256,14 @@ TEXT: dict[str, str] = {
         "lorsque le courriel est configuré) :"
     ),
     "documents": "Documents",
+    "documents_link_mycarlos": (
+        "Associez myCarlos pour recevoir vos documents sur votre appareil."
+    ),
+    "documents_nothing_waiting": "Rien n’est en attente.",
+    "documents_waiting_one": "{count} document vous attend. Ouvrez myCarlos pour le recevoir.",
+    "documents_waiting_other": (
+        "{count} documents vous attendent. Ouvrez myCarlos pour les recevoir."
+    ),
     "email": "Courriel",
     "email_codes_rate": "Les codes par courriel peuvent être renvoyés une fois par minute.",
     "email_password": "Mot de passe du document",
@@ -271,6 +283,7 @@ TEXT: dict[str, str] = {
     "incorrect_username_or_password": "Nom d’utilisateur ou mot de passe incorrect",
     "invite_code": "Code d’invitation",
     "language_aria_label": "Langue",
+    "skip_to_content": "Passer au contenu principal",
     "logo_alt": "CARLOS",
     "logout": "Déconnexion",
     "message_back": "Retour aux messages",
@@ -296,6 +309,10 @@ TEXT: dict[str, str] = {
     ),
     "mfa_new_code_sent_email": "Un nouveau code a été envoyé par courriel.",
     "mfa_new_code_sent_sms": "Un nouveau code a été envoyé par SMS.",
+    "mfa_resumed_notice": (
+        "Le code de connexion envoyé à {time} UTC est toujours valide. Saisissez-le "
+        "ci-dessous. Aucun nouveau code n'a été envoyé."
+    ),
     "mfa_rate_limited_one": "Un code a été envoyé récemment. Réessayez dans {seconds} seconde.",
     "mfa_rate_limited_other": "Un code a été envoyé récemment. Réessayez dans {seconds} secondes.",
     "mfa_resend": "Renvoyer le code",
@@ -349,6 +366,19 @@ TEXT: dict[str, str] = {
     ),
     "password_reset_success_heading": "Mot de passe réinitialisé",
     "password_reset_update": "Mettre à jour le mot de passe",
+    "preferences": "Préférences",
+    "preferences_appearance": "Apparence",
+    "preferences_appearance_legend": "Thème de couleurs",
+    "appearance_system": "Système",
+    "appearance_light": "Clair",
+    "appearance_dark": "Sombre",
+    "appearance_high_contrast": "Contraste élevé",
+    "appearance_high_contrast_help": (
+        "Texte et bordures plus marqués, et un contour de focus plus épais."
+    ),
+    "preferences_save": "Enregistrer les préférences",
+    "preferences_saved": "Préférences enregistrées.",
+    "preferences_language": "Langue",
     "password_updated": "Mot de passe mis à jour",
     "patient_dashboard": "Tableau de bord du patient",
     "phone": "Téléphone",
@@ -356,6 +386,10 @@ TEXT: dict[str, str] = {
     "phone_confirmation_code": "Code de confirmation du téléphone",
     "confirm_phone": "Confirmer le numéro de téléphone",
     "resend_phone_confirmation": "Envoyer un autre code",
+    "phone_confirmation_sent_to": "Un code de confirmation a été envoyé par SMS au {number}.",
+    "phone_confirmation_expired": (
+        "Le code de confirmation envoyé au {number} a expiré. Envoyez un autre code."
+    ),
     "previous": "Précédent",
     "provider": "Professionnel",
     "provider_options_truncated": (
@@ -561,7 +595,13 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_another": "Créer un autre code",
     "mycarlos_linked": "Associé le",
     "mycarlos_last_seen": "Dernière activité",
-    "mycarlos_empty": "Aucun appareil associé. Choisissez Associer myCarlos pour en ajouter un.",
+    "mycarlos_devices_moved": "Gérez vos appareils associés sur la page Associer myCarlos.",
+    "mycarlos_status_active": "Actif",
+    "mycarlos_status_stale": "Non vu récemment",
+    "mycarlos_devices_empty_title": "Aucun appareil associé pour l’instant",
+    "mycarlos_devices_empty_body": (
+        "Créez un code, puis saisissez-le dans myCarlos pour associer votre appareil à ce compte."
+    ),
     "mycarlos_remove_question": "Retirer cet appareil ?",
     "mycarlos_remove_effect": (
         "Cet appareil ne recevra plus de nouveaux documents. Pour le réutiliser, associez-le à "
@@ -579,6 +619,7 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_not_seen": "Aucune activité",
     "mycarlos_mfa_required": "Vérifiez votre connexion avant d’associer ou de retirer un appareil.",
     "mycarlos_verify": "Vérifier la connexion",
+    "mycarlos_verify_to_create": "Vérifier la connexion pour créer un code",
     "mycarlos_portal_address": "Adresse du portail",
     "mycarlos_qr_label": "Scanner dans myCarlos",
     "mycarlos_qr_alt": "Code QR pour associer myCarlos à ce portail.",

@@ -409,8 +409,11 @@ def test_should_preserve_unrelated_retained_data_when_empty_signup_is_rolled_bac
         for c in sa.inspect(engine).get_check_constraints("patient_portal_audit_events")
         if c["name"] == "ck_patient_portal_audit_events_event_type"
     )
+    # The sign-up event types are all gone with 0019's rollback, those 0025 added included.
     assert frozenset(re.findall(r"'([a-z][a-z_.]*)'", check["sqltext"])) == EVENTS - {
-        "signup.request"
+        "signup.request",
+        "signup.claim",
+        "signup.result",
     }
     with engine.connect() as connection:
         assert MigrationContext.configure(connection).get_current_heads() == (CODES,)

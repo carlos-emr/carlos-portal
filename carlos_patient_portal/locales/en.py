@@ -182,7 +182,11 @@ TEXT: dict[str, str] = {
         "CARLOS chart details."
     ),
     "contact_change_success_heading": "Contact information updated",
+    "contact_email": "Email",
+    "contact_hours": "Hours",
+    "contact_phone": "Phone",
     "contact_the_clinic": "Contact the clinic",
+    "contact_website": "Website",
     "copy": "Copy",
     "copy_failed": "Select and copy manually",
     "copied": "Copied",
@@ -229,6 +233,12 @@ TEXT: dict[str, str] = {
         "Development password reset link (also sent by email when email is configured):"
     ),
     "documents": "Documents",
+    "documents_link_mycarlos": "Link myCarlos to receive your documents on your device.",
+    "documents_nothing_waiting": "Nothing is waiting.",
+    "documents_waiting_one": "{count} document is waiting for you. Open myCarlos to receive it.",
+    "documents_waiting_other": (
+        "{count} documents are waiting for you. Open myCarlos to receive them."
+    ),
     "email": "Email",
     "email_codes_rate": "Email codes can be resent once per minute.",
     "email_password": "Document password",
@@ -246,6 +256,7 @@ TEXT: dict[str, str] = {
     "incorrect_username_or_password": "Incorrect Username or Password",
     "invite_code": "Invitation code",
     "language_aria_label": "Language",
+    "skip_to_content": "Skip to main content",
     "logo_alt": "CARLOS",
     "logout": "Logout",
     "message_back": "Back to messages",
@@ -268,6 +279,9 @@ TEXT: dict[str, str] = {
     "mfa_help_message": ("Contact {clinic_name} if you cannot receive or use your sign-in code."),
     "mfa_new_code_sent_email": "A new code was sent by email.",
     "mfa_new_code_sent_sms": "A new code was sent by SMS.",
+    "mfa_resumed_notice": (
+        "The sign-in code sent at {time} UTC is still valid. Enter it below. No new code was sent."
+    ),
     "mfa_rate_limited_one": "A code was sent recently. Try again in {seconds} second.",
     "mfa_rate_limited_other": "A code was sent recently. Try again in {seconds} seconds.",
     "mfa_resend": "Resend code",
@@ -312,6 +326,17 @@ TEXT: dict[str, str] = {
     "password_reset_success": "Your password has been reset. Sign in with the new password.",
     "password_reset_success_heading": "Password reset",
     "password_reset_update": "Update password",
+    "preferences": "Preferences",
+    "preferences_appearance": "Appearance",
+    "preferences_appearance_legend": "Colour scheme",
+    "appearance_system": "System",
+    "appearance_light": "Light",
+    "appearance_dark": "Dark",
+    "appearance_high_contrast": "High contrast",
+    "appearance_high_contrast_help": "Stronger text and borders, and a thicker focus outline.",
+    "preferences_save": "Save preferences",
+    "preferences_saved": "Preferences saved.",
+    "preferences_language": "Language",
     "password_updated": "Password updated",
     "patient_dashboard": "Patient dashboard",
     "phone": "Phone",
@@ -319,6 +344,10 @@ TEXT: dict[str, str] = {
     "phone_confirmation_code": "Phone confirmation code",
     "confirm_phone": "Confirm phone number",
     "resend_phone_confirmation": "Send another code",
+    "phone_confirmation_sent_to": "A confirmation code was sent by SMS to {number}.",
+    "phone_confirmation_expired": (
+        "The confirmation code sent to {number} has expired. Send another code."
+    ),
     "previous": "Previous",
     "provider": "Provider",
     "provider_options_truncated": (
@@ -499,7 +528,13 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_another": "Create another code",
     "mycarlos_linked": "Linked",
     "mycarlos_last_seen": "Last seen",
-    "mycarlos_empty": "No linked devices. Choose Link myCarlos to add one.",
+    "mycarlos_devices_moved": "Manage your linked devices on the Link myCarlos page.",
+    "mycarlos_status_active": "Active",
+    "mycarlos_status_stale": "Not seen recently",
+    "mycarlos_devices_empty_title": "No linked devices yet",
+    "mycarlos_devices_empty_body": (
+        "Create a code, then enter it in myCarlos to link your device to this account."
+    ),
     "mycarlos_remove_question": "Remove this device?",
     "mycarlos_remove_effect": (
         "This device will stop receiving new documents. To use it again, link it "
@@ -514,6 +549,7 @@ MYCARLOS_TEXT: dict[str, str] = {
     "mycarlos_not_seen": "Not yet seen",
     "mycarlos_mfa_required": "Verify your sign-in before linking or removing a device.",
     "mycarlos_verify": "Verify sign-in",
+    "mycarlos_verify_to_create": "Verify sign-in to create a code",
     "mycarlos_portal_address": "Portal address",
     "mycarlos_qr_label": "Scan in myCarlos",
     "mycarlos_qr_alt": "QR code for linking myCarlos to this portal.",

@@ -30,7 +30,9 @@ from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 from alembic import command
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, update
+from sqlalchemy.exc import InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.orm import Session, sessionmaker
 
 from carlos_patient_portal import device_identity
@@ -322,3 +324,191 @@ def test_a_refusal_code_must_be_one_of_the_specs() -> None:
         vector["expect"] for vector in PORTAL["device_requests"] + PORTAL["link_requests"]
     }
     assert DEVICE_REFUSAL_CODES <= vector_codes
+
+
+# --------------------------------------------------------------------------------------
+# A device's last_seen_at and vault head anchor (carlos-portal#134)
+# --------------------------------------------------------------------------------------
+
+ANCHOR_A = "ab" * 32
+ANCHOR_B = "cd" * 32
+INTERVAL = int(device_identity.DEVICE_LAST_SEEN_UPDATE_INTERVAL.total_seconds())
+
+
+def seen_device(
+    portal: sessionmaker[Session], key_id: str | None = None
+) -> PatientPortalMyCarlosDevice:
+    """The stored row of the fixture's device 1 (or the one with this key ID), freshly read."""
+    key_id = key_id or ref.DeviceKeys("device 1").device_key_id
+    with portal() as session:
+        return session.scalars(
+            select(PatientPortalMyCarlosDevice).where(
+                PatientPortalMyCarlosDevice.device_key_id == key_id
+            )
+        ).one()
+
+
+def as_utc(moment: datetime | None) -> datetime | None:
+    return None if moment is None else moment.replace(tzinfo=moment.tzinfo or UTC)
+
+
+def request_at(label: str, at: int, **claims: object) -> dict[str, object]:
+    """A FAKE device request valid at Unix second `at`, with its own nonce."""
+    return signed_request(jti=fake_jti(label), iat=at, exp=at + 60, **claims)
+
+
+def test_the_first_accepted_request_stamps_the_device_with_a_timestamp_only(portal) -> None:
+    assert seen_device(portal).last_seen_at is None
+    assert device_outcome(portal, request_at("first", NOW), now=NOW)[0] == "accept"
+    device = seen_device(portal)
+    assert as_utc(device.last_seen_at) == datetime.fromtimestamp(NOW, tz=UTC)
+    # No anchor was carried, so none was written.
+    assert (device.vault_head_link, device.vault_head_link_at) == (None, None)
+
+
+def test_a_second_request_inside_the_interval_does_not_write_again(portal) -> None:
+    device_outcome(portal, request_at("first", NOW), now=NOW)
+    inside = NOW + INTERVAL - 1
+    assert device_outcome(portal, request_at("inside", inside), now=inside)[0] == "accept"
+    assert as_utc(seen_device(portal).last_seen_at) == datetime.fromtimestamp(NOW, tz=UTC)
+
+
+def test_a_request_after_the_interval_stamps_it_again(portal) -> None:
+    device_outcome(portal, request_at("first", NOW), now=NOW)
+    # Exactly at the interval is not yet due (the stamp must be older than it); one second later is.
+    at_edge = NOW + INTERVAL
+    device_outcome(portal, request_at("edge", at_edge), now=at_edge)
+    assert as_utc(seen_device(portal).last_seen_at) == datetime.fromtimestamp(NOW, tz=UTC)
+    later = NOW + INTERVAL + 1
+    device_outcome(portal, request_at("later", later), now=later)
+    assert as_utc(seen_device(portal).last_seen_at) == datetime.fromtimestamp(later, tz=UTC)
+
+
+def test_a_removed_device_is_never_stamped(portal) -> None:
+    vector = by_name(PORTAL["device_requests"], "removed device")
+    removed_key = next(
+        row["device_key_id"] for row in STATE["devices"] if row["status"] == "removed"
+    )
+    assert device_outcome(portal, vector)[0] == "device_removed"
+    assert seen_device(portal, removed_key).last_seen_at is None
+
+
+def test_a_device_removed_after_its_request_was_verified_is_not_stamped(portal) -> None:
+    request = request_at("raced", NOW)
+    with portal() as session:
+        principal = verify_device_assertion(
+            request["assertion"],
+            find_device=lambda kid: find_device_record(session, kid),
+            expected_request_hash=expected_hash(request),
+            now=NOW,
+        )
+    with portal() as session, session.begin():
+        session.execute(
+            update(PatientPortalMyCarlosDevice)
+            .where(PatientPortalMyCarlosDevice.id == principal.device_id)
+            .values(status="removed", removed_at=utc_now(), removed_by="patient")
+        )
+    consume_device_assertion(portal, principal, now=NOW)
+    assert seen_device(portal).last_seen_at is None
+
+
+def test_a_refused_request_does_not_stamp_the_device(portal) -> None:
+    first = request_at("first", NOW)
+    assert device_outcome(portal, first, now=NOW)[0] == "accept"
+    with portal() as session, session.begin():
+        session.execute(update(PatientPortalMyCarlosDevice).values(last_seen_at=None))
+    # The same assertion again is a replay; a late one is expired; a changed one is invalid.
+    assert device_outcome(portal, first, now=NOW)[0] == "replay"
+    assert device_outcome(portal, request_at("late", NOW), now=NOW + 60 + 30)[0] == "expired"
+    assert device_outcome(portal, {**request_at("bad", NOW), "assertion": "x.y"}, now=NOW)[0] == (
+        "invalid_assertion"
+    )
+    assert seen_device(portal).last_seen_at is None
+
+
+def test_the_anchor_a_request_carries_is_copied_onto_the_device_with_its_time(portal) -> None:
+    device_outcome(portal, request_at("first", NOW, vault_head_link=ANCHOR_A), now=NOW)
+    device = seen_device(portal)
+    assert device.vault_head_link == ANCHOR_A
+    assert as_utc(device.vault_head_link_at) == datetime.fromtimestamp(NOW, tz=UTC)
+    assert as_utc(device.last_seen_at) == datetime.fromtimestamp(NOW, tz=UTC)
+
+
+def test_the_same_anchor_inside_the_interval_writes_nothing_and_a_new_one_is_copied(portal) -> None:
+    device_outcome(portal, request_at("first", NOW, vault_head_link=ANCHOR_A), now=NOW)
+    same = NOW + 10
+    device_outcome(portal, request_at("same", same, vault_head_link=ANCHOR_A), now=same)
+    device = seen_device(portal)
+    assert as_utc(device.vault_head_link_at) == datetime.fromtimestamp(NOW, tz=UTC)
+    # A different anchor is the newest one: it is copied at once, without waiting for the interval.
+    newer = NOW + 20
+    device_outcome(portal, request_at("newer", newer, vault_head_link=ANCHOR_B), now=newer)
+    device = seen_device(portal)
+    assert device.vault_head_link == ANCHOR_B
+    assert as_utc(device.vault_head_link_at) == datetime.fromtimestamp(newer, tz=UTC)
+    # The seen time has its own throttle: inside the interval it still shows the first request.
+    assert as_utc(device.last_seen_at) == datetime.fromtimestamp(NOW, tz=UTC)
+
+
+def test_an_anchor_signed_earlier_but_consumed_later_does_not_replace_a_newer_one(portal) -> None:
+    newer, older = NOW + 30, NOW
+    # Both are valid at NOW + 30, and the newer one reaches the portal first.
+    first = request_at("newer", newer, vault_head_link=ANCHOR_B)
+    second = request_at("older", older, vault_head_link=ANCHOR_A)
+    assert device_outcome(portal, first, now=newer)[0] == "accept"
+    assert device_outcome(portal, second, now=newer)[0] == "accept"
+    device = seen_device(portal)
+    assert device.vault_head_link == ANCHOR_B
+    assert as_utc(device.vault_head_link_at) == datetime.fromtimestamp(newer, tz=UTC)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OperationalError("UPDATE", {}, Exception("FAKE database unavailable")),
+        InterfaceError("UPDATE", {}, Exception("FAKE connection closed")),
+        PoolTimeoutError("FAKE pool had no connection to give"),
+    ],
+    ids=["operational", "interface", "pool-timeout"],
+)
+def test_a_database_error_in_the_stamp_never_fails_a_request_whose_nonce_is_spent(
+    portal, monkeypatch, caplog, error
+) -> None:
+    def down(*args: object, **kwargs: object) -> None:
+        raise error
+
+    monkeypatch.setattr(device_identity, "update", down)
+    request = request_at("first", NOW, vault_head_link=ANCHOR_A)
+    assert device_outcome(portal, request, now=NOW)[0] == "accept"
+    # The nonce is spent (a second use is a replay), the stamp was skipped, and the log line names
+    # no device.
+    assert device_outcome(portal, request, now=NOW)[0] == "replay"
+    assert seen_device(portal).last_seen_at is None
+    skipped = [r for r in caplog.records if "last-seen stamp was skipped" in r.getMessage()]
+    assert len(skipped) == 1
+    device_key = ref.DeviceKeys("device 1").device_key_id
+    assert all(device_key not in record.getMessage() for record in caplog.records)
+
+
+def test_a_request_without_an_anchor_leaves_the_stored_anchor_alone(portal) -> None:
+    device_outcome(portal, request_at("first", NOW, vault_head_link=ANCHOR_A), now=NOW)
+    later = NOW + INTERVAL + 1
+    device_outcome(portal, request_at("plain", later), now=later)
+    device = seen_device(portal)
+    assert device.vault_head_link == ANCHOR_A
+    assert as_utc(device.vault_head_link_at) == datetime.fromtimestamp(NOW, tz=UTC)
+    assert as_utc(device.last_seen_at) == datetime.fromtimestamp(later, tz=UTC)
+
+
+def test_a_link_request_has_no_device_to_stamp(portal) -> None:
+    vector = by_name(PORTAL["link_requests"], PORTAL["link_requests"][0]["name"])
+    link_outcome(portal, vector)
+    with portal() as session:
+        assert (
+            session.scalars(
+                select(PatientPortalMyCarlosDevice.last_seen_at).where(
+                    PatientPortalMyCarlosDevice.last_seen_at.is_not(None)
+                )
+            ).all()
+            == []
+        )

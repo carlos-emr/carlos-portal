@@ -76,6 +76,12 @@ CLINIC_BOOKING_PHONE_PATTERN = re.compile(
     r"(?=(?:[^0-9]*[0-9]){7})\+?\(?[0-9][0-9 ().-]{2,24}(?:\s*(?:ext\.?|x)\s*[0-9]{1,6})?",
     re.IGNORECASE,
 )
+# One plain address: no display name, no angle brackets, no comma list; the Help page links it as
+# `mailto:`. The local part leaves out `? & % # = /` on purpose: `?bcc=`, `&body=`, `%0d%0a` and a
+# `#` would turn into mail-client headers or a second recipient in the link.
+CLINIC_CONTACT_EMAIL_PATTERN = re.compile(
+    r"[A-Za-z0-9.!$'*+^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+)
 BOOKING_LOCATIONS_VARIABLE = "PATIENT_PORTAL_BOOKING_LOCATIONS"
 BOOKING_LOCATION_CODE_PATTERN = re.compile(rf"[a-z0-9_-]{{1,{MAX_BOOKING_LOCATION_CODE_LENGTH}}}")
 MAX_BOOKING_LOCATION_LABEL_LENGTH = 64
@@ -331,6 +337,13 @@ class Settings(BaseSettings):
     # Shown with a booking prompt so the patient knows how to book. Without it the prompt says to
     # contact the clinic.
     clinic_booking_phone: str | None = Field(default=None, max_length=32)
+    # Optional contact details for the Help page. All blank by default, and Help then only says
+    # "Contact the clinic". Any that are set are shown in place of that line, in every language
+    # (the clinic writes the hours itself); the labels are translated.
+    clinic_contact_phone: str | None = Field(default=None, max_length=32)
+    clinic_contact_email: str | None = Field(default=None, max_length=254)
+    clinic_contact_hours: str | None = Field(default=None, max_length=200)
+    clinic_contact_url: str | None = Field(default=None, max_length=2048)
     # A booking prompt disappears from the patient's messages after this long.
     booking_prompt_ttl_days: int = Field(default=90, ge=1, le=366)
     # Where an offered appointment time can be, as comma-separated `code=Label` pairs such as
@@ -363,6 +376,19 @@ class Settings(BaseSettings):
     # credentials and notice keys (mycarlos_availability_dispatch.AvailabilityDispatch), which no
     # setting provides yet.
     mycarlos_availability_enabled: bool = False
+    # iPhone push (carlos-portal, piece 7). The portal signs Apple's provider token with the
+    # team's `.p8` key, which it holds on its own disk (0600, outside the repository; see
+    # docs/apns-key-operations.md). Off by default. Needs a delivery, mailbox and availability
+    # switch on, a real encryption keyring (the device tokens are encrypted at rest) and the
+    # notice-token key below. A bad key file stops the portal at start-up.
+    mycarlos_apns_enabled: bool = False
+    mycarlos_apns_team_id: str | None = None
+    mycarlos_apns_key_id: str | None = None
+    mycarlos_apns_key_path: Path | None = None
+    mycarlos_apns_bundle_id: str | None = None
+    # The portal's own HMAC key for the opaque notice token a push carries (URL-safe base64 of at
+    # least 32 random bytes). Never leaves the portal.
+    mycarlos_notice_token_key: SecretStr | None = None
     mycarlos_mailbox_device_bytes: int = Field(default=268435456, ge=20971520)
     mycarlos_mailbox_account_bytes: int = Field(default=1073741824, ge=20971520)
     mycarlos_mailbox_clinic_bytes: int = Field(default=21474836480, ge=20971520)
@@ -556,6 +582,9 @@ class Settings(BaseSettings):
     # a full password-reset queue does, so a stopped CARLOS poller cannot grow it without limit.
     self_signup_queue_max_pending: int = Field(default=1_000, ge=10, le=1_000_000)
     self_signup_queue_retry_after_seconds: int = Field(default=5 * 60, ge=1, le=60 * 60)
+    # CARLOS's claim (carlos-portal#16) leases a request for this long. A poller that stops before
+    # reporting its result releases the request to the next claim once the lease has run out.
+    self_signup_claim_lease_seconds: int = Field(default=5 * 60, ge=30, le=60 * 60)
     # Every answered request takes at least this long, so a stored request and one refused by a
     # rate limit cannot be told apart by timing. 0 turns the floor off (tests only).
     self_signup_response_floor_ms: int = Field(default=250, ge=0, le=5_000)
@@ -712,6 +741,10 @@ class Settings(BaseSettings):
         "service_name",
         "clinic_name",
         "clinic_booking_phone",
+        "clinic_contact_phone",
+        "clinic_contact_email",
+        "clinic_contact_hours",
+        "clinic_contact_url",
         "booking_locations",
         "maintenance_database_url",
         mode="before",
@@ -737,6 +770,65 @@ class Settings(BaseSettings):
             raise ValueError(
                 "PATIENT_PORTAL_CLINIC_BOOKING_PHONE must be a phone number, optionally with an "
                 "extension, such as 555-123-4567 ext. 2"
+            )
+        return value
+
+    @field_validator("clinic_contact_phone")
+    @classmethod
+    def validate_clinic_contact_phone(cls, value: str | None) -> str | None:
+        if value is not None and CLINIC_BOOKING_PHONE_PATTERN.fullmatch(value) is None:
+            raise ValueError(
+                "PATIENT_PORTAL_CLINIC_CONTACT_PHONE must be a phone number, optionally with an "
+                "extension, such as 555-123-4567 ext. 2"
+            )
+        return value
+
+    @field_validator("clinic_contact_email")
+    @classmethod
+    def validate_clinic_contact_email(cls, value: str | None) -> str | None:
+        if value is not None and CLINIC_CONTACT_EMAIL_PATTERN.fullmatch(value) is None:
+            raise ValueError(
+                "PATIENT_PORTAL_CLINIC_CONTACT_EMAIL must be one email address, such as "
+                "frontdesk@clinic.example"
+            )
+        return value
+
+    @field_validator("clinic_contact_hours")
+    @classmethod
+    def validate_clinic_contact_hours(cls, value: str | None) -> str | None:
+        if value is not None and any(
+            ord(character) < 32 or ord(character) == 127 for character in value
+        ):
+            raise ValueError(
+                "PATIENT_PORTAL_CLINIC_CONTACT_HOURS must be one line of text without control "
+                "characters"
+            )
+        return value
+
+    @field_validator("clinic_contact_url")
+    @classmethod
+    def validate_clinic_contact_url(cls, value: str | None) -> str | None:
+        """An https link only: the value becomes an `href` every patient sees on the Help page."""
+        if value is None:
+            return value
+        if any(ord(character) < 33 or ord(character) == 127 for character in value):
+            raise ValueError(
+                "PATIENT_PORTAL_CLINIC_CONTACT_URL must not contain spaces or control characters"
+            )
+        parsed_url = urlsplit(value)
+        try:
+            _ = parsed_url.port
+        except ValueError as exc:
+            raise ValueError("PATIENT_PORTAL_CLINIC_CONTACT_URL must contain a valid port") from exc
+        if (
+            parsed_url.scheme != "https"
+            or parsed_url.hostname is None
+            or parsed_url.username is not None
+            or parsed_url.password is not None
+        ):
+            raise ValueError(
+                "PATIENT_PORTAL_CLINIC_CONTACT_URL must be an https:// address without a user "
+                "name or password"
             )
         return value
 
@@ -958,6 +1050,7 @@ class Settings(BaseSettings):
         "dev_admin_token",
         "smtp_password",
         "sms_webhook_token",
+        "mycarlos_notice_token_key",
         mode="before",
     )
     @classmethod
@@ -1473,6 +1566,45 @@ class Settings(BaseSettings):
         """Whether this deployment runs below the regulatory-default retention."""
         return self.audit_retention_days < DEFAULT_AUDIT_RETENTION_DAYS
 
+    def validate_apns_policy(self) -> None:
+        """The iPhone push settings: all present and well formed when it is on, nothing read from
+        disk here (the key file is checked when the runtime is built)."""
+        if not self.mycarlos_apns_enabled:
+            return
+        if not (
+            self.mycarlos_delivery_enabled
+            and self.mycarlos_mailbox_enabled
+            and self.mycarlos_availability_enabled
+        ):
+            raise ValueError(
+                "PATIENT_PORTAL_MYCARLOS_APNS_ENABLED requires the myCarlos delivery, mailbox and "
+                "availability switches"
+            )
+        for name, value in (
+            ("TEAM_ID", self.mycarlos_apns_team_id),
+            ("KEY_ID", self.mycarlos_apns_key_id),
+            ("BUNDLE_ID", self.mycarlos_apns_bundle_id),
+        ):
+            if not value:
+                raise ValueError(f"PATIENT_PORTAL_MYCARLOS_APNS_{name} is required for push")
+        if self.mycarlos_apns_key_path is None or not self.mycarlos_apns_key_path.is_absolute():
+            raise ValueError("PATIENT_PORTAL_MYCARLOS_APNS_KEY_PATH must be an absolute path")
+        if not self.resolved_outbox_keyring:
+            raise ValueError(
+                "PATIENT_PORTAL_MYCARLOS_APNS_ENABLED requires an outbox encryption secret or "
+                "keyring: device tokens are encrypted at rest"
+            )
+        encoded = self.secret_value("mycarlos_notice_token_key")
+        try:
+            key = urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)) if encoded else b""
+        except (Base64DecodeError, ValueError):
+            key = b""
+        if len(key) < 32:
+            raise ValueError(
+                "PATIENT_PORTAL_MYCARLOS_NOTICE_TOKEN_KEY must be URL-safe base64 of at "
+                "least 32 bytes"
+            )
+
     @model_validator(mode="after")
     def reject_unsafe_runtime_policy(self) -> "Settings":
         if self.mycarlos_approval_enabled:
@@ -1494,6 +1626,7 @@ class Settings(BaseSettings):
         self.validate_database_transport_policy()
         self.validate_clinic_policy()
         self.validate_session_policy()
+        self.validate_apns_policy()
         return self
 
 

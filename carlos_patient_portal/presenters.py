@@ -26,6 +26,7 @@ from datetime import time as datetime_time
 from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from carlos_patient_portal.booking_choices import latest_choice
@@ -48,6 +49,7 @@ from carlos_patient_portal.models import (
     BOOKING_PROMPT_STATUS_CHOICE_PENDING,
     BOOKING_PROMPT_STATUS_READ,
     BOOKING_PROMPT_STATUS_SENT,
+    EMAIL_CHANGE_STATUS_PENDING,
     MYCARLOS_DEVICE_STATUS_ACTIVE,
     UNLOCK_SECRET_STATUS_ACTIVE,
     UNLOCK_SECRET_TYPE_EMAIL,
@@ -55,6 +57,7 @@ from carlos_patient_portal.models import (
     PatientPortalBookingChoice,
     PatientPortalBookingOfferedSlot,
     PatientPortalBookingPrompt,
+    PatientPortalEmailChangeRequest,
     PatientPortalUnlockSecret,
     utc_now,
 )
@@ -80,6 +83,7 @@ from carlos_patient_portal.view_models import (
     MessagesViewModel,
     MyCarlosDeviceRowViewModel,
     MyCarlosViewModel,
+    PhoneConfirmationViewModel,
     ProviderFilterOptionViewModel,
 )
 
@@ -550,6 +554,15 @@ def assemble_messages(
     )
 
 
+# A device not seen for this long is shown as "Not seen recently" (a device never seen is judged
+# from when it was linked).
+STALE_DEVICE_DAYS = 30
+
+
+def _utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
 def assemble_mycarlos_devices(
     session: Session,
     account: PatientPortalAccount,
@@ -575,8 +588,64 @@ def assemble_mycarlos_devices(
                 remove_href=(
                     f"{account_path}/mycarlos/devices/{quote(device.device_key_id, safe='')}/remove"
                 ),
+                linked_iso=_utc(device.linked_at).isoformat(),
+                last_seen_iso=(
+                    _utc(device.last_seen_at).isoformat() if device.last_seen_at is not None else ""
+                ),
+                stale=(
+                    datetime.now(UTC) - _utc(device.last_seen_at or device.linked_at)
+                    > timedelta(days=STALE_DEVICE_DAYS)
+                ),
             )
             for device in devices_for_account(session, account.id)
             if device.status == MYCARLOS_DEVICE_STATUS_ACTIVE
         ),
     )
+
+
+def mask_phone_number(phone_number: str) -> str:
+    """A phone number as "••• ••• 1234": only its last four digits, or no digit at all when the
+    number has fewer than four (a masked number can never be longer than what it hides)."""
+    digits = "".join(character for character in phone_number if character.isdigit())
+    return f"••• ••• {digits[-4:]}" if len(digits) >= 4 else "••• •••"
+
+
+def assemble_phone_confirmation(
+    session: Session,
+    account: PatientPortalAccount,
+    *,
+    code_ttl: timedelta,
+    now: datetime | None = None,
+) -> PhoneConfirmationViewModel:
+    """What the Account tab shows of a phone number waiting for its confirmation code (#150).
+
+    Shown only for the account's open contact change that carries a new phone number whose code
+    was sent and not yet confirmed: the code field, Confirm phone and Resend while the code is
+    valid (``code_pending``), only a notice and Resend once the code ran out while the change
+    itself is still open (``code_expired``). Anything else (no phone added, nothing pending, the
+    number already confirmed, the whole change expired or cancelled) is the default model and the
+    block is hidden. The rules are the ones the confirm and resend routes enforce, which keep
+    refusing with nothing pending whatever the page shows: a hidden form is not the boundary.
+    """
+    moment = _utc(now or utc_now())
+    request = session.scalar(
+        select(PatientPortalEmailChangeRequest)
+        .where(
+            PatientPortalEmailChangeRequest.account_id == account.id,
+            PatientPortalEmailChangeRequest.status == EMAIL_CHANGE_STATUS_PENDING,
+        )
+        .order_by(PatientPortalEmailChangeRequest.id.desc())
+    )
+    if (
+        request is None
+        or request.new_phone_number is None
+        or request.phone_code_hash is None
+        or request.phone_confirmed_at is not None
+        or request.phone_code_sent_at is None
+        or _utc(request.expires_at) <= moment
+    ):
+        return PhoneConfirmationViewModel()
+    masked = mask_phone_number(request.new_phone_number)
+    if _utc(request.phone_code_sent_at) + code_ttl <= moment:
+        return PhoneConfirmationViewModel(code_expired=True, masked_phone=masked)
+    return PhoneConfirmationViewModel(code_pending=True, masked_phone=masked)

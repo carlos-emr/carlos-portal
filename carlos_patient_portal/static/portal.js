@@ -1,3 +1,18 @@
+// What a button's changed words alone do not announce (Copied, Copy failed, Revealing..., Password
+// could not be revealed) is written to the page's polite live region (_live_status.jinja). It is
+// in the HTML from the start, empty, so the first message is announced; the text is cleared and
+// set again so that the same words twice in a row are announced twice.
+const announce = (message) => {
+  const liveStatus = document.getElementById("portal-live-status");
+  if (!liveStatus) {
+    return;
+  }
+  liveStatus.textContent = "";
+  window.setTimeout(() => {
+    liveStatus.textContent = message;
+  }, 60);
+};
+
 // A revealed password must not outlive the page's session, nor stay on a page left hidden
 // (carlos-emr/mycarlos#194). It is cleared at once when the session ends (signing out here or in
 // another tab of this browser) and when the page itself goes (it is left, or put in the
@@ -116,6 +131,7 @@ document.addEventListener("click", (event) => {
   const generation = revealGeneration;
   revealButton.disabled = true;
   revealButton.textContent = revealButton.dataset.revealingLabel || "Revealing...";
+  announce(revealButton.textContent);
   const requestBody = new URLSearchParams({
     csrf_token: csrfToken,
     current_password: passwordInput.value,
@@ -171,6 +187,7 @@ document.addEventListener("click", (event) => {
       revealButton.textContent = (
         revealButton.dataset.revealFailedLabel || "Password could not be revealed."
       );
+      announce(revealButton.textContent);
       window.setTimeout(() => {
         revealButton.textContent = revealButton.dataset.revealLabel || "Reveal";
         revealButton.disabled = false;
@@ -266,11 +283,13 @@ document.addEventListener("click", (event) => {
   void copyPromise
     .then(() => {
       copyButton.textContent = copyButton.dataset.copiedLabel || "Copied";
+      announce(copyButton.textContent);
     })
     .catch(() => {
       copyButton.textContent = (
         copyButton.dataset.copyFailedLabel || "Select and copy manually"
       );
+      announce(copyButton.textContent);
       target.focus();
       const selection = window.getSelection();
       if (!(target instanceof HTMLInputElement) && selection) {
@@ -496,3 +515,53 @@ if (bookingStatus instanceof HTMLElement) {
     }, remainingMs);
   }
 }
+
+// Linked devices (issue 100): each moment is first the written date (what a page without script, and a
+// screen reader, get). Where the browser can say it as a relative time ("3 days ago", in the
+// page's language), that is what is shown; the written date stays as the title (hover) and is
+// read after it by a screen reader.
+const relativeUnits = [
+  ["year", 365 * 24 * 60 * 60 * 1000],
+  ["month", 30 * 24 * 60 * 60 * 1000],
+  ["day", 24 * 60 * 60 * 1000],
+  ["hour", 60 * 60 * 1000],
+  ["minute", 60 * 1000],
+];
+// "3 days ago", "last month", "now": whole units, rounded down, so 45 days is "last month", never "2
+// months ago"; a moment in the future (a device clock ahead of the portal's) or under a minute ago
+// is "now", never "in 3 minutes".
+const relativeText = (formatter, elapsed) => {
+  if (elapsed > -60 * 1000) {
+    return formatter.format(0, "second");
+  }
+  const age = -elapsed;
+  const [unit, size] = relativeUnits.find(([, ms]) => age >= ms);
+  return formatter.format(-Math.floor(age / size), unit);
+};
+const showRelativeTimes = () => {
+  if (typeof Intl === "undefined" || typeof Intl.RelativeTimeFormat !== "function") {
+    return;
+  }
+  // Nothing to do where there is no page to read (the client tests run this file against a
+  // reduced document).
+  if (!document.documentElement || typeof document.querySelectorAll !== "function") {
+    return;
+  }
+  const formatter = new Intl.RelativeTimeFormat(document.documentElement.lang || undefined, {
+    numeric: "auto",
+  });
+  for (const element of document.querySelectorAll("time[data-relative]")) {
+    const moment = Date.parse(element.getAttribute("datetime") || "");
+    if (Number.isNaN(moment) || element.dataset.relativeDone === "1") {
+      continue;
+    }
+    const written = element.textContent;
+    element.textContent = relativeText(formatter, moment - Date.now());
+    element.dataset.relativeDone = "1";
+    const full = document.createElement("span");
+    full.className = "mycarlos-time-full";
+    full.textContent = ` (${written})`;
+    element.append(full);
+  }
+};
+showRelativeTimes();

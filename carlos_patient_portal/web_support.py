@@ -40,12 +40,13 @@ from fastapi import HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, pass_context
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 from starlette.responses import Response
 from starlette.routing import Match, Mount
 
+from carlos_patient_portal.appearance import Appearance, read_appearance
 from carlos_patient_portal.audit import UNKNOWN_CLIENT_REFERENCE
 from carlos_patient_portal.auth import (
     AuthenticatedPortalSession,
@@ -83,9 +84,12 @@ from carlos_patient_portal.schemas import (
     PasswordResetRequest,
 )
 from carlos_patient_portal.view_models import (
+    ClinicContactViewModel,
+    DocumentsTileViewModel,
     EmailPasswordDashboardViewModel,
     MessagesViewModel,
     MyCarlosViewModel,
+    PhoneConfirmationViewModel,
 )
 
 PACKAGE_DIR = FilePath(__file__).resolve().parent
@@ -105,6 +109,31 @@ templates = Jinja2Templates(  # nosemgrep: direct-use-of-jinja2 -- see comment a
         autoescape=True,
     )
 )
+
+
+def _request_appearance(context: object) -> Appearance:
+    """The appearance cookies of the request the template is being rendered for."""
+    getter = getattr(context, "get", None)
+    request = getter("request") if getter is not None else None
+    return read_appearance(getattr(request, "cookies", None))
+
+
+@pass_context
+def appearance_html_attributes(context: object) -> object:
+    """The ` data-theme` and ` data-contrast` attributes for `<html>`: only what was chosen."""
+    return _request_appearance(context).html_attributes
+
+
+@pass_context
+def appearance_color_scheme(context: object) -> str:
+    """The `color-scheme` meta value for this request."""
+    return _request_appearance(context).color_scheme
+
+
+# Every full page puts these on its `<html>` and in its head, so the choice is already in the first
+# response and nothing flashes (see appearance.py).
+templates.env.globals["appearance_html_attributes"] = appearance_html_attributes
+templates.env.globals["appearance_color_scheme"] = appearance_color_scheme
 
 
 CONTENT_SECURITY_POLICY = (
@@ -217,6 +246,14 @@ PORTAL_SESSION_COOKIE_NAME = "carlos_portal_session"
 PORTAL_MFA_PROOF_COOKIE_NAME = "carlos_portal_mfa_proof"
 
 
+# The pending sign-in code challenge, kept so a sign-in inside the code-send cooldown can return to
+# its code page instead of being refused (#147). Sent to the /auth routes only.
+MFA_PENDING_COOKIE_NAME = "carlos_portal_mfa_pending"
+
+
+MFA_PENDING_COOKIE_PATH = "/auth"
+
+
 PORTAL_SESSION_COOKIE_PATH = PORTAL_ROOT_PATH
 
 
@@ -230,6 +267,7 @@ PORTAL_MODULES = (
     },
     {"slug": "messages", "label_key": "messages", "route_name": "portal_messages"},
     {"slug": "help", "label_key": "help", "route_name": "portal_help"},
+    {"slug": "preferences", "label_key": "preferences", "route_name": "portal_preferences"},
 )
 
 
@@ -619,6 +657,46 @@ def clear_portal_mfa_proof_cookie(response: Response, *, settings: Settings) -> 
     response.delete_cookie(
         PORTAL_MFA_PROOF_COOKIE_NAME,
         path=deployment_cookie_path(settings, PORTAL_SESSION_COOKIE_PATH),
+        secure=not settings.is_development,
+        httponly=True,
+        samesite="strict",
+    )
+
+
+def set_mfa_pending_cookie(
+    response: Response,
+    challenge_token: str,
+    *,
+    expires_in_seconds: int,
+    settings: Settings,
+) -> None:
+    """Remember the pending sign-in code challenge across "Back to sign in" (#147).
+
+    Only a hash of the challenge token is stored, so without this the code page cannot be reached
+    again once the patient leaves it. The cookie is HttpOnly, Secure outside development,
+    SameSite=Strict and limited to the /auth routes; it lives no longer than the challenge and
+    holds nothing but the token the code page already carries. It proves nothing by itself: a
+    resume still needs the account's correct password, and the challenge must belong to that
+    account (`resume_pending_mfa_challenge`).
+    """
+    if expires_in_seconds <= 0:
+        clear_mfa_pending_cookie(response, settings=settings)
+        return
+    response.set_cookie(
+        MFA_PENDING_COOKIE_NAME,
+        challenge_token,
+        httponly=True,
+        max_age=expires_in_seconds,
+        path=deployment_cookie_path(settings, MFA_PENDING_COOKIE_PATH),
+        samesite="strict",
+        secure=not settings.is_development,
+    )
+
+
+def clear_mfa_pending_cookie(response: Response, *, settings: Settings) -> None:
+    response.delete_cookie(
+        MFA_PENDING_COOKIE_NAME,
+        path=deployment_cookie_path(settings, MFA_PENDING_COOKIE_PATH),
         secure=not settings.is_development,
         httponly=True,
         samesite="strict",
@@ -1098,7 +1176,9 @@ def portal_template_context(
     email_passwords: EmailPasswordDashboardViewModel | None = None,
     messages: MessagesViewModel | None = None,
     new_message_count: int = 0,
+    documents_tile: DocumentsTileViewModel | None = None,
     mycarlos: MyCarlosViewModel | None = None,
+    phone_confirmation: PhoneConfirmationViewModel | None = None,
 ) -> dict[str, object]:
     account = authenticated_session.account
     locale = request_locale(request)
@@ -1134,13 +1214,61 @@ def portal_template_context(
     # Modules with their own view state; typed so a rename is a type error, not a blank page.
     context["email_passwords"] = email_passwords
     context["messages"] = messages
+    context["clinic_contact"] = (
+        clinic_contact_for_help(settings) if active_module == "help" else None
+    )
     context["new_message_count"] = new_message_count
     context["new_messages_label"] = plural_text(
         text, "messages_new_count", new_message_count, locale
     ).format(count=new_message_count)
+    # The Documents tile (None: the feature is off, so the tile stays the greyed "Future" one).
+    # Its sentence is built here from the plural forms; only a count ever reaches the page.
+    context["documents_tile"] = documents_tile
+    context["documents_tile_text"] = None
+    if documents_tile is not None:
+        if not documents_tile.has_device:
+            context["documents_tile_text"] = text["documents_link_mycarlos"]
+        elif documents_tile.waiting_count == 0:
+            context["documents_tile_text"] = text["documents_nothing_waiting"]
+        else:
+            context["documents_tile_text"] = plural_text(
+                text, "documents_waiting", documents_tile.waiting_count, locale
+            ).format(count=documents_tile.waiting_count)
     context["mycarlos_enabled"] = settings.mycarlos_delivery_enabled
     context["mycarlos"] = mycarlos
+    # The Preferences module shows what this browser has chosen (see appearance.py).
+    context["appearance"] = read_appearance(request.cookies)
+    # The Account tab's phone confirmation block; None on the other modules.
+    context["phone_confirmation"] = phone_confirmation
     return context
+
+
+_PHONE_EXTENSION = re.compile(r"\s*(?:ext\.?|x)\s*([0-9]{1,6})\s*$", re.IGNORECASE)
+
+
+def phone_tel_href(phone: str) -> str:
+    """A `tel:` link for a validated phone number: digits, a leading plus, and `;ext=` if given."""
+    extension = _PHONE_EXTENSION.search(phone)
+    number = phone[: extension.start()] if extension else phone
+    digits = re.sub(r"[^0-9]", "", number)
+    href = f"tel:{'+' if number.lstrip().startswith('+') else ''}{digits}"
+    return f"{href};ext={extension.group(1)}" if extension else href
+
+
+def clinic_contact_for_help(settings: Settings) -> ClinicContactViewModel | None:
+    """The configured Help contact details, or None when none are set ("Contact the clinic")."""
+    phone = settings.clinic_contact_phone
+    url = settings.clinic_contact_url
+    if not (phone or settings.clinic_contact_email or settings.clinic_contact_hours or url):
+        return None
+    return ClinicContactViewModel(
+        phone=phone,
+        phone_href=phone_tel_href(phone) if phone else None,
+        email=settings.clinic_contact_email,
+        hours=settings.clinic_contact_hours,
+        url=url,
+        url_label=url.removeprefix("https://").rstrip("/") if url else None,
+    )
 
 
 def parse_optional_email_password_date(value: str | None) -> date | None:

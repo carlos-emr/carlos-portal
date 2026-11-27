@@ -218,12 +218,17 @@ def register_mycarlos_device_routes(app: FastAPI, runtime: PortalRuntime) -> Non
                 status_code=status.HTTP_413_CONTENT_TOO_LARGE,
                 content={"detail": "request too large"},
             )
-        body = await request.body()
-        if len(body) > MAX_LINK_BODY_BYTES:
-            return JSONResponse(
-                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-                content={"detail": "request too large"},
-            )
+        # The declared length is only a claim, and a chunked body declares none: count what
+        # arrives and stop at the limit, rather than reading it all and measuring afterwards.
+        received = bytearray()
+        async for chunk in request.stream():
+            if len(received) + len(chunk) > MAX_LINK_BODY_BYTES:
+                return JSONResponse(
+                    status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                    content={"detail": "request too large"},
+                )
+            received.extend(chunk)
+        body = bytes(received)
         expected_request_hash = staff_request_hash(
             request.method,
             signed_path(runtime, request),

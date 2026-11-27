@@ -1,20 +1,40 @@
-<section class="settings-section" aria-labelledby="mycarlos-devices-heading">
-  <h2 id="mycarlos-devices-heading">{{ text.mycarlos_devices }}</h2>
+{# Linked devices (#100): a card for each, on the Link myCarlos page. #}
+<section class="settings-section mycarlos-devices-section" aria-labelledby="mycarlos-devices-heading">
+  {# A removal redirects here and focuses the heading. A status region already in the page is not
+     announced, so the heading also names the notice as its description, read with the focus. #}
+  <h2 id="mycarlos-devices-heading" tabindex="-1"{% if account_notice %} aria-describedby="mycarlos-devices-notice"{% endif %}>{{ text.mycarlos_devices }}</h2>
+  {% if account_notice %}
+    <p class="form-notice" role="status" id="mycarlos-devices-notice">{{ account_notice }}</p>
+  {% endif %}
   {% if mycarlos.devices %}
     <ul class="mycarlos-devices">
       {% for device in mycarlos.devices %}
-        <li>
-          <h3 class="mycarlos-device-name">{{ device.name }}</h3>
+        <li class="mycarlos-device-card" aria-labelledby="mycarlos-device-name-{{ loop.index }}">
+          <div class="mycarlos-device-head">
+            <svg class="mycarlos-device-icon" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" focusable="false"><rect x="7" y="2.5" width="10" height="19" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><line x1="10.5" y1="18.5" x2="13.5" y2="18.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            <h3 class="mycarlos-device-name" id="mycarlos-device-name-{{ loop.index }}">{{ device.name }}</h3>
+            <span class="mycarlos-device-status {{ 'mycarlos-device-status-stale' if device.stale else 'mycarlos-device-status-active' }}">{{ text.mycarlos_status_stale if device.stale else text.mycarlos_status_active }}</span>
+          </div>
           <dl>
-            <dt>{{ text.mycarlos_linked }}</dt><dd>{{ device.linked_at }}</dd>
-            <dt>{{ text.mycarlos_last_seen }}</dt><dd>{{ device.last_seen_at }}</dd>
+            <div>
+              <dt>{{ text.mycarlos_linked }}</dt>
+              <dd>{% if device.linked_iso %}<time class="mycarlos-time" datetime="{{ device.linked_iso }}" title="{{ device.linked_at }}" data-relative>{{ device.linked_at }}</time>{% else %}{{ device.linked_at }}{% endif %}</dd>
+            </div>
+            <div>
+              <dt>{{ text.mycarlos_last_seen }}</dt>
+              <dd>{% if device.last_seen_iso %}<time class="mycarlos-time" datetime="{{ device.last_seen_iso }}" title="{{ device.last_seen_at }}" data-relative>{{ device.last_seen_at }}</time>{% else %}{{ device.last_seen_at }}{% endif %}</dd>
+            </div>
           </dl>
-          <a class="secondary-action" href="{{ device.remove_href }}" aria-label="{{ text.mycarlos_remove_named.format(name=device.name) }}">{{ text.mycarlos_remove }}</a>
+          <a class="secondary-action mycarlos-device-remove" href="{{ device.remove_href }}" aria-label="{{ text.mycarlos_remove_named.format(name=device.name) }}">{{ text.mycarlos_remove }}</a>
         </li>
       {% endfor %}
     </ul>
   {% else %}
-    <p>{{ text.mycarlos_empty }}</p>
+    <div class="mycarlos-device-card mycarlos-devices-empty">
+      <h3>{{ text.mycarlos_devices_empty_title }}</h3>
+      <p>{{ text.mycarlos_devices_empty_body }}</p>
+      {# The target is the page's one action: Create a code, or Verify sign-in first; the label says which. #}
+      <a class="primary-action" href="#mycarlos-link-action">{{ text.mycarlos_verify_to_create if mycarlos.mfa_required else text.mycarlos_create }}</a>
+    </div>
   {% endif %}
-  <p><a href="{{ url_for('portal_mycarlos') }}">{{ text.mycarlos_link }}</a></p>
 </section>

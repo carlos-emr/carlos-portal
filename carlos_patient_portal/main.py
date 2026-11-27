@@ -24,7 +24,7 @@ import json
 import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from secrets import token_urlsafe
 from time import monotonic
 from typing import Annotated
@@ -51,6 +51,7 @@ from carlos_patient_portal.auth import (
     PortalSessionInvalidError,
     authenticate_session_token,
 )
+from carlos_patient_portal.body_limit import BodyLimitMiddleware
 from carlos_patient_portal.booking_prompts import count_unread_prompts_for_account
 from carlos_patient_portal.config import (
     DEFAULT_AUDIT_RETENTION_DAYS,
@@ -76,10 +77,13 @@ from carlos_patient_portal.models import (
     AUDIT_OUTCOME_SUCCESS,
     PatientPortalBookingPrompt,
 )
+from carlos_patient_portal.mycarlos_apns_wiring import HttpClient, availability_dispatch_for
+from carlos_patient_portal.mycarlos_waiting import count_waiting_for_account, has_active_device
 from carlos_patient_portal.presenters import (
     assemble_email_password_dashboard,
     assemble_messages,
     assemble_mycarlos_devices,
+    assemble_phone_confirmation,
 )
 from carlos_patient_portal.routes.activation import register_activation_routes
 from carlos_patient_portal.routes.auth import register_auth_routes, register_logout_route
@@ -96,6 +100,7 @@ from carlos_patient_portal.routes.signup import register_signup_routes
 from carlos_patient_portal.runtime import (
     FhirApiError,
     InMemoryRateLimiter,
+    PortalOperationalMetrics,
     PortalRuntime,
     RouteDependencies,
     auth_policy_from_settings,
@@ -105,6 +110,7 @@ from carlos_patient_portal.sms_delivery import PortalSmsSender, build_portal_sms
 from carlos_patient_portal.token_keys import PortalTokenKeys
 from carlos_patient_portal.unlock_secrets import load_unlock_secret_words
 from carlos_patient_portal.view_models import (
+    DocumentsTileViewModel,
     EmailPasswordDashboardViewModel,
     MessagesViewModel,
     MyCarlosViewModel,
@@ -179,6 +185,7 @@ def build_portal_runtime(
     *,
     email_sender: PortalEmailSender | None = None,
     sms_sender: PortalSmsSender | None = None,
+    apns_http_client: HttpClient | None = None,
 ) -> PortalRuntime:
     # Development without a configured secret gets an ephemeral one, so tokens minted by this
     # process stay valid for its lifetime and nothing survives a restart.
@@ -239,6 +246,7 @@ def build_portal_runtime(
         max_requests=settings.auth_rate_limit_max_requests,
         max_buckets=settings.rate_limit_max_buckets,
     )
+    metrics = PortalOperationalMetrics()
     return PortalRuntime(
         settings=settings,
         database_engine=database_engine,
@@ -260,6 +268,12 @@ def build_portal_runtime(
             email_sender if email_sender is not None else build_portal_email_sender(settings)
         ),
         sms_sender=(sms_sender if sms_sender is not None else build_portal_sms_sender(settings)),
+        # iPhone push: None while it is off; a bad key file or a missing HTTP client stops the
+        # portal here, at start-up.
+        availability_dispatch=availability_dispatch_for(
+            settings, session_factory, apns_http_client, record_failure=metrics.record_failure
+        ),
+        operational_metrics=metrics,
     )
 
 
@@ -736,6 +750,9 @@ def register_security_middleware(app: FastAPI, runtime: PortalRuntime) -> None:
     # got counted: a credential-stuffing burst tripping auth_rate_limiter produced 429s that
     # were absent from operational_metrics, emitted no http_request log line and carried no
     # X-Request-ID, so /internal/metrics showed a quiet service for the duration of the attack.
+    # The body limit goes first, so it is innermost: its 413 still passes through the security
+    # headers and the request log.
+    app.add_middleware(BodyLimitMiddleware)
     app.middleware("http")(add_security_headers)
     app.middleware("http")(record_operational_signal)
 
@@ -1003,6 +1020,32 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
             if active_module == "dashboard"
             else 0
         )
+        documents_tile: DocumentsTileViewModel | None = None
+        if (
+            active_module == "dashboard"
+            and settings.mycarlos_delivery_enabled
+            and settings.mycarlos_mailbox_enabled
+        ):
+            account_id = authenticated_session.account.id
+            has_device = has_active_device(session, account_id)
+            documents_tile = DocumentsTileViewModel(
+                has_device=has_device,
+                waiting_count=(
+                    count_waiting_for_account(session, account_id, now=datetime.now(UTC))
+                    if has_device
+                    else 0
+                ),
+            )
+        # The Account tab shows the phone code field only for a number waiting for its code (#150).
+        phone_confirmation = (
+            assemble_phone_confirmation(
+                session,
+                authenticated_session.account,
+                code_ttl=timedelta(seconds=settings.phone_change_code_ttl_seconds),
+            )
+            if active_module == "account"
+            else None
+        )
         csrf_token = create_csrf_token(runtime.token_keys.csrf)
         response = templates.TemplateResponse(
             request=request,
@@ -1019,7 +1062,9 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
                 email_passwords=email_passwords,
                 messages=messages,
                 new_message_count=new_message_count,
+                documents_tile=documents_tile,
                 mycarlos=mycarlos,
+                phone_confirmation=phone_confirmation,
             ),
             status_code=status_code,
         )
@@ -1095,6 +1140,7 @@ def create_app(
     *,
     email_sender: PortalEmailSender | None = None,
     sms_sender: PortalSmsSender | None = None,
+    apns_http_client: HttpClient | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
     # Before anything can serve a request, so no hash is ever produced with the module defaults
@@ -1109,6 +1155,7 @@ def create_app(
         settings,
         email_sender=email_sender,
         sms_sender=sms_sender,
+        apns_http_client=apns_http_client,
     )
 
     app = FastAPI(

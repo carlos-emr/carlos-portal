@@ -28,6 +28,7 @@ const { isIP } = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const { assertNoSeriousAxeIssues } = require('./patient-portal-axe');
 const { readCapturedMfaCode } = require('./patient-portal-mail-capture');
 
 const allowNonLocalBaseUrl = (
@@ -175,6 +176,7 @@ async function assertAccessiblePage(page, surface) {
   assert(problems.imagesWithoutAlt === 0, `${surface} has an image without alt text`);
   assert(problems.unnamedControls.length === 0,
     `${surface} has unnamed controls: ${problems.unnamedControls.join(', ')}`);
+  await assertNoSeriousAxeIssues(page, surface);
 }
 
 // Stands in for the CARLOS polling job: reports a result for the patient's pending pick on the
@@ -743,6 +745,7 @@ function screenshotPath(name) {
     const activationResponse = await activationResponsePromise;
     assert(activationResponse.status() === 201, `activation returned ${activationResponse.status()}`);
     await page.getByRole('heading', { name: 'Account activated' }).waitFor();
+    await assertAccessiblePage(page, 'activation result page');
     const activationResultText = await page.locator('body').innerText();
     assert(
       !activationResultText.includes(activationFixture.inviteCode)
@@ -918,6 +921,7 @@ function screenshotPath(name) {
     await page.getByRole('status').filter({
       hasText: 'If the account details match, a password reset link has been sent by email.',
     }).waitFor();
+    await assertAccessiblePage(page, 'password-reset request result');
     assert(
       await page.getByRole('link', { name: 'Open reset page' }).count() === 0,
       'unknown-account reset request exposed a development reset link'
@@ -1036,6 +1040,7 @@ function screenshotPath(name) {
     assert(successfulResetResponse.status() === 200,
       `valid password reset returned ${successfulResetResponse.status()}`);
     await page.getByRole('heading', { name: 'Password reset' }).waitFor();
+    await assertAccessiblePage(page, 'password-reset result page');
     const resetResultText = await page.locator('body').innerText();
     assert(
       !resetResultText.includes(passwordResetFixture.token)
@@ -1063,6 +1068,7 @@ function screenshotPath(name) {
     await page.locator('[role="alert"]').filter({
       hasText: 'The password reset link is invalid or has expired.',
     }).first().waitFor();
+    await assertAccessiblePage(page, 'password-reset page with an invalid link');
 
     await page.getByRole('link', { name: 'Back to sign in' }).click();
     await page.locator('input[name="username"]').fill(passwordResetFixture.username);
@@ -1113,6 +1119,37 @@ function screenshotPath(name) {
     );
     await page.getByRole('alert').filter({ hasText: 'Incorrect Username or Password' }).waitFor();
     await page.getByRole('heading', { name: 'Sign in' }).waitFor();
+    await assertAccessiblePage(page, 'sign-in page after a failed sign-in');
+
+    // The "request failed" notice a browser gets when a form arrives with a form token the portal
+    // refuses (service_notice.jinja, a 403: an expired or tampered page). Opened in its own browser
+    // context: the 403 and its console line stay out of this page's expected-error counters, and
+    // the refused post cannot replace the form-token cookie this page's next sign-in relies on.
+    const noticeContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    const noticePage = await noticeContext.newPage();
+    try {
+      await noticePage.goto(portalUrl('/auth/password-reset'), {
+        waitUntil: 'networkidle',
+        timeout: 30000,
+      });
+      const noticeResponsePromise = noticePage.waitForResponse(
+        (response) => new URL(response.url()).pathname
+            === portalPathname('/auth/password-reset/request')
+          && response.request().method() === 'POST'
+      );
+      await noticePage.evaluate(() => {
+        const form = document.querySelector('form[action$="/auth/password-reset/request"]');
+        form.querySelector('input[name="csrf_token"]').value = 'not-a-valid-token';
+        form.submit();
+      });
+      const noticeResponse = await noticeResponsePromise;
+      assert(noticeResponse.status() === 403,
+        `a password-reset request with a bad form token returned ${noticeResponse.status()}`);
+      await noticePage.getByRole('alert').first().waitFor();
+      await assertAccessiblePage(noticePage, 'request-failed notice page');
+    } finally {
+      await noticeContext.close();
+    }
 
     await page.locator('input[name="username"]').fill(testUser);
     await page.locator('input[name="password"]').fill(testPassword);
@@ -1200,6 +1237,7 @@ function screenshotPath(name) {
       hasText: 'The code was not accepted. Try again or request a new code.',
     }).waitFor();
     await page.getByRole('heading', { name: 'Sign-in code' }).waitFor();
+    await assertAccessiblePage(page, 'MFA page after a wrong code');
 
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.locator('input[name="code"]').fill(mfaCode);
@@ -1247,7 +1285,7 @@ function screenshotPath(name) {
     );
 
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.getByRole('link', { name: 'Account', exact: true }).click();
+    await page.locator('.module-nav').getByRole('link', { name: 'Account', exact: true }).click();
     await page.waitForURL((url) => url.pathname === portalPathname('/portal/account'));
     await page.getByRole('heading', { name: 'Account' }).waitFor();
     await assertAccessiblePage(page, 'account page');
@@ -1341,7 +1379,7 @@ function screenshotPath(name) {
       path: screenshotPath('patient-portal-account-mobile'),
       fullPage: true,
     });
-    await page.getByRole('link', { name: 'Messages', exact: true }).click();
+    await page.locator('.module-nav').getByRole('link', { name: 'Messages', exact: true }).click();
     await page.waitForURL((url) => url.pathname === portalPathname('/portal/messages'));
     await page.getByRole('heading', { name: 'Messages' }).waitFor();
     await assertAccessiblePage(page, 'messages page');
@@ -1463,7 +1501,7 @@ function screenshotPath(name) {
       await page.locator('.message-badge').count() === 0,
       'opened booking prompts should no longer be marked new'
     );
-    await page.getByRole('link', { name: 'Help', exact: true }).click();
+    await page.locator('.module-nav').getByRole('link', { name: 'Help', exact: true }).click();
     await page.waitForURL((url) => url.pathname === portalPathname('/portal/help'));
     await page.getByRole('heading', { name: 'Help' }).waitFor();
     await assertAccessiblePage(page, 'help page');

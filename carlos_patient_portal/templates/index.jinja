@@ -1,20 +1,24 @@
 {% from "_password_toggle.jinja" import password_toggle -%}
 <!doctype html>
-<html lang="{{ locale }}">
+<html lang="{{ locale }}"{{ appearance_html_attributes() }}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ service_name }}</title>
+  <title>{{ text.sign_in_heading }} - {{ service_name }}</title>
   {% include "_head_assets.jinja" %}
   <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
   <script src="{{ url_for('static', path='/portal.js') }}" defer></script>
 </head>
 <body>
-  <main class="app-shell">
-    <section class="portal-screen" aria-label="{{ text.sign_in_aria_label }}">
+  {% from "_skip_link.jinja" import skip_link %}{{ skip_link(text) }}
+  {% include "_live_status.jinja" %}
+  <div class="app-shell">
+    <div class="portal-screen">
       {# Was a byte-for-byte copy of the shared partial, which is how the language switch here
          drifted out of step with every other public page. #}
       {% include "_public_header.jinja" %}
+
+      <main id="main-content" tabindex="-1">
 
       <div class="auth-layout">
         <section class="auth-panel" aria-labelledby="signin-title">
@@ -22,7 +26,7 @@
           <form class="form-stack" method="post" action="{{ url_for('login') }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             {% if error_message %}
-              <p class="form-error" role="alert">{{ error_message }}</p>
+              <p class="form-error" role="alert" id="sign-in-error">{{ error_message }}</p>
             {% endif %}
             <label>
               <span>{{ text.username_label }}</span>
@@ -31,6 +35,7 @@
                 name="username"
                 placeholder="{{ text.username_placeholder }}"
                 autocomplete="username"
+                {% if error_message %}aria-invalid="true" aria-describedby="sign-in-error"{% endif %}
                 required
               >
             </label>
@@ -42,6 +47,7 @@
                 name="password"
                 placeholder="{{ text.password_placeholder }}"
                 autocomplete="current-password"
+                {% if error_message %}aria-invalid="true" aria-describedby="sign-in-error"{% endif %}
                 required
                 id="sign-in-password"
               >
@@ -66,8 +72,9 @@
       </div>
 
       {% include "_public_modal.jinja" %}
-    </section>
-  </main>
+      </main>
+    </div>
+  </div>
   {% include "_page_footer.jinja" %}
 </body>
 </html>

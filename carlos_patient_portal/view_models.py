@@ -141,12 +141,64 @@ class MessagesViewModel:
 
 
 @dataclass(frozen=True, slots=True)
+class PhoneConfirmationViewModel:
+    """View state for the phone confirmation block of the Account tab (#150).
+
+    The presenter decides what is shown; the template only reads these. ``code_pending`` is true
+    when a phone number was added, its code was sent, nothing was confirmed yet and the code is
+    still valid: the code field, Confirm phone and Resend show. ``code_expired`` is true when the
+    code ran out but the contact change itself is still open: only a notice and Resend show (the
+    resend route still accepts it). Both false: nothing is pending and the block is hidden.
+    ``masked_phone`` is the number the code went to with all but its last four digits hidden; the
+    full number never reaches the page.
+    """
+
+    code_pending: bool = False
+    code_expired: bool = False
+    masked_phone: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class MyCarlosDeviceRowViewModel:
     device_key_id: str
     name: str
     linked_at: str
     last_seen_at: str
     remove_href: str
+    # For the device card (#100): the two moments in ISO 8601 UTC (the page writes "3 days ago"
+    # from them, the written date stays as the title and for a screen reader), and whether the
+    # device has not been seen for STALE_DEVICE_DAYS ("Not seen recently").
+    linked_iso: str = ""
+    last_seen_iso: str = ""
+    stale: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ClinicContactViewModel:
+    """The clinic's optional contact details on the Help page; only the ones configured are set.
+
+    `phone_href` is the `tel:` link for `phone` (digits, a leading plus and an extension only);
+    `url_label` is the address without its scheme, for the link's visible text.
+    """
+
+    phone: str | None = None
+    phone_href: str | None = None
+    email: str | None = None
+    hours: str | None = None
+    url: str | None = None
+    url_label: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentsTileViewModel:
+    """The dashboard's Documents tile: a count of deliveries waiting, and nothing about them.
+
+    `has_device` is False when no linked device is active, which turns the tile into a link to
+    the Link myCarlos page. No document name, kind or clinic detail is ever carried here.
+    """
+
+    has_device: bool
+    waiting_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)

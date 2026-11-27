@@ -261,7 +261,10 @@ def test_jinja_templates_always_autoescape_jinja_files() -> None:
     assert web_support.templates.env.autoescape is True
 
 
-FOOTER_PATTERN = re.compile(r"</main>\s*<footer class=\"page-footer\">(.*?)</footer>", re.DOTALL)
+# The page's wrapper <div>s close between </main> and the footer: it is still outside <main>.
+FOOTER_PATTERN = re.compile(
+    r"</main>(?:\s*</div>)*\s*<footer class=\"page-footer\">(.*?)</footer>", re.DOTALL
+)
 SOURCE_CODE_LINK_PATTERN = re.compile(r'<a class="link-action" href="([^"]*)">Source code</a>')
 
 
