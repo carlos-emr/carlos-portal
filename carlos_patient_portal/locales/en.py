@@ -279,6 +279,9 @@ TEXT: dict[str, str] = {
     "mfa_help_message": ("Contact {clinic_name} if you cannot receive or use your sign-in code."),
     "mfa_new_code_sent_email": "A new code was sent by email.",
     "mfa_new_code_sent_sms": "A new code was sent by SMS.",
+    "mfa_resumed_notice": (
+        "The sign-in code sent at {time} UTC is still valid. Enter it below. No new code was sent."
+    ),
     "mfa_rate_limited_one": "A code was sent recently. Try again in {seconds} second.",
     "mfa_rate_limited_other": "A code was sent recently. Try again in {seconds} seconds.",
     "mfa_resend": "Resend code",
@@ -330,6 +333,10 @@ TEXT: dict[str, str] = {
     "phone_confirmation_code": "Phone confirmation code",
     "confirm_phone": "Confirm phone number",
     "resend_phone_confirmation": "Send another code",
+    "phone_confirmation_sent_to": "A confirmation code was sent by SMS to {number}.",
+    "phone_confirmation_expired": (
+        "The confirmation code sent to {number} has expired. Send another code."
+    ),
     "previous": "Previous",
     "provider": "Provider",
     "provider_options_truncated": (

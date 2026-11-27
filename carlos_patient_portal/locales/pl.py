@@ -315,6 +315,10 @@ TEXT: dict[str, str] = {
     ),
     "mfa_new_code_sent_email": "Nowy kod został wysłany e-mailem.",
     "mfa_new_code_sent_sms": "Nowy kod został wysłany SMS-em.",
+    "mfa_resumed_notice": (
+        "Kod logowania wysłany o {time} UTC jest nadal ważny. Wpisz go poniżej. "
+        "Nie wysłano nowego kodu."
+    ),
     "mfa_rate_limited_few": (
         "Kod został niedawno wysłany. Proszę spróbować ponownie za {seconds} sekundy."
     ),
@@ -379,6 +383,10 @@ TEXT: dict[str, str] = {
     "phone_confirmation_code": "Kod potwierdzający numer telefonu",
     "confirm_phone": "Proszę potwierdzić numer telefonu",
     "resend_phone_confirmation": "Proszę wysłać kolejny kod",
+    "phone_confirmation_sent_to": "Kod potwierdzający został wysłany SMS-em na numer {number}.",
+    "phone_confirmation_expired": (
+        "Kod potwierdzający wysłany na numer {number} wygasł. Proszę wysłać kolejny kod."
+    ),
     "previous": "Poprzednia",
     "provider": "Pracownik medyczny",
     "provider_options_truncated": (
