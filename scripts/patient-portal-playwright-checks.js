@@ -194,12 +194,20 @@ async function assertLargeDateOfBirthFits(page, surface) {
         return box.width <= 0 || box.left < Math.max(0, row.left) - 1
           || box.right > Math.min(window.innerWidth, row.right) + 1;
       }).map((control) => control.name);
-      return { count: controls.length, clipped, textSize: parseFloat(getComputedStyle(document.documentElement).fontSize) };
+      return {
+        count: controls.length,
+        clipped,
+        textSize: parseFloat(getComputedStyle(document.documentElement).fontSize),
+        viewportWidth: window.innerWidth,
+        documentWidth: document.documentElement.scrollWidth,
+      };
     });
     assert(layout.textSize === defaultTextSize * 2 && layout.count === 3,
       `${surface} did not render all three date controls at 200% text`);
     assert(layout.clipped.length === 0,
       `${surface} at 320px with 200% text clips ${layout.clipped.join(', ')}`);
+    assert(layout.documentWidth <= layout.viewportWidth + 1,
+      `${surface} at 320px with 200% text scrolls sideways (${layout.documentWidth}px)`);
   } finally {
     await session.send('Page.setFontSizes', { fontSizes: { standard: defaultTextSize } });
     await session.detach();
