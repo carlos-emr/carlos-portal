@@ -561,6 +561,20 @@ def test_the_internal_route_uses_the_clinic_timezone_for_the_due_date(monkeypatc
     assert retry.status_code == 201
     assert retry.json()["created"] is False
     assert retry.json()["id"] == response.json()["id"]
+    probe = request_body(
+        operation_id="lost", invoice_ref="new-ref", due_on="2026-11-27", lookup_only=True
+    )
+    missing = client.post(PATH, headers=headers(), json=probe)
+    assert missing.status_code == 422
+    assert missing.json()["detail"] == "payment operation absent after its due date"
+    probe["due_on"] = "2026-11-28"
+    assert client.post(PATH, headers=headers(), json=probe).status_code == 404
+    found = client.post(
+        PATH, headers=headers(), json=request_body(due_on="2026-11-27", lookup_only=True)
+    )
+    assert found.status_code == 201
+    assert found.json()["id"] == response.json()["id"]
+    assert len(stored_requests(app)) == 1
 
 
 def test_the_signed_out_patient_is_redirected_not_shown_the_request() -> None:

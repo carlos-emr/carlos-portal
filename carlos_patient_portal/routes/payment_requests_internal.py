@@ -53,6 +53,7 @@ from carlos_patient_portal.payment_requests import (
     PaymentRequestAccountUnavailableError,
     PaymentRequestNotFoundError,
     PaymentRequestOperationConflictError,
+    PaymentRequestPastDueError,
     PaymentRequestStateConflictError,
     create_payment_request,
     list_payment_requests,
@@ -72,6 +73,7 @@ PAYMENT_REQUEST_OPERATION_CONFLICT_DETAIL = (
 )
 PAYMENT_REQUEST_STATE_CONFLICT_DETAIL = "payment request is in a state this cannot apply to"
 PAYMENT_REQUEST_INVALID_DETAIL = "payment request is invalid"
+PAYMENT_REQUEST_PAST_DUE_DETAIL = "payment operation absent after its due date"
 
 PaymentRequestStateName = Literal["sent", "read", "paid", "withdrawn", "expired"]
 
@@ -100,6 +102,7 @@ class InternalPaymentRequestRequest(BaseModel):
     amount_cents: int = Field(ge=MIN_PAYMENT_AMOUNT_CENTS, le=MAX_PAYMENT_AMOUNT_CENTS, strict=True)
     tax_cents: int = Field(ge=0, le=MAX_PAYMENT_AMOUNT_CENTS, strict=True)
     due_on: date
+    lookup_only: bool = Field(default=False, strict=True)
 
 
 class InternalPaymentRequestResponse(BaseModel):
@@ -189,7 +192,12 @@ def register_internal_payment_request_routes(
                 created_by_id=principal.provider_id,
                 ttl=timedelta(days=runtime.settings.payment_request_ttl_days),
                 timezone_name=runtime.settings.clinic_timezone,
+                lookup_only=payload.lookup_only,
             )
+        except PaymentRequestNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=PAYMENT_REQUEST_NOT_FOUND_DETAIL) from exc
+        except PaymentRequestPastDueError as exc:
+            raise HTTPException(status_code=422, detail=PAYMENT_REQUEST_PAST_DUE_DETAIL) from exc
         except PaymentRequestAccountUnavailableError as exc:
             # CARLOS tells staff to contact the patient another way; nothing was stored.
             raise HTTPException(status_code=404, detail=INTERNAL_ACCOUNT_NOT_FOUND_DETAIL) from exc

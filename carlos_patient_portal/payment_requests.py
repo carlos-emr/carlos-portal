@@ -78,6 +78,10 @@ class PaymentRequestNotFoundError(Exception):
     """Raised when a request does not exist in the caller's scope."""
 
 
+class PaymentRequestPastDueError(ValueError):
+    """No matching operation exists, and the clinic date precludes a later create."""
+
+
 class PaymentRequestAccountUnavailableError(Exception):
     """Raised when the patient has no active portal account to receive a request."""
 
@@ -220,6 +224,7 @@ def create_payment_request(
     created_by_id: str | None,
     ttl: timedelta,
     timezone_name: str = "UTC",
+    lookup_only: bool = False,
     today: date | None = None,
     now: datetime | None = None,
 ) -> CreatedPaymentRequest:
@@ -250,7 +255,6 @@ def create_payment_request(
         raise ValueError("tax_cents must be between 0 and amount_cents")
     if ttl <= timedelta(0):
         raise ValueError("ttl must be positive")
-    now = now or utc_now()
     normalized_clinic_id = normalize_clinic_id(clinic_id)
     normalized_operation_id = _normalize_operation_id(operation_id)
     normalized_invoice_ref = _normalize_invoice_ref(invoice_ref)
@@ -266,13 +270,25 @@ def create_payment_request(
         due_on=due_on,
     )
 
+    # Serialize same-patient creates and probes before reading the operation and clinic clock.
+    # A probe that reports a past-due miss must see any earlier writer's committed operation.
+    account = session.scalar(
+        select(PatientPortalAccount)
+        .where(*payment_account_conditions(normalized_clinic_id, demographic_no))
+        .with_for_update()
+    )
     existing = _request_for_operation(
         session, clinic_id=normalized_clinic_id, operation_id=normalized_operation_id
     )
     if existing is not None:
         return _retry_result(existing, values)
+    now = now or utc_now()
     first_day = today or as_utc(now).astimezone(ZoneInfo(timezone_name)).date()
-    if not first_day <= due_on <= first_day + timedelta(days=MAX_DUE_DAYS_AHEAD):
+    if due_on < first_day:
+        raise PaymentRequestPastDueError("due_on is before today")
+    if lookup_only:
+        raise PaymentRequestNotFoundError()
+    if due_on > first_day + timedelta(days=MAX_DUE_DAYS_AHEAD):
         raise ValueError("due_on must be from today to a year ahead")
     # One request per invoice reference: a different operation for the same reference is a second
     # request for the same invoice, which staff withdraw and resend rather than stack.
@@ -284,12 +300,6 @@ def create_payment_request(
     ):
         raise PaymentRequestOperationConflictError()
 
-    # FOR SHARE, as for booking prompts: staff turning the account off lock it first.
-    account = session.scalar(
-        select(PatientPortalAccount)
-        .where(*payment_account_conditions(normalized_clinic_id, demographic_no))
-        .with_for_update(read=True)
-    )
     if account is None:
         raise PaymentRequestAccountUnavailableError()
 
