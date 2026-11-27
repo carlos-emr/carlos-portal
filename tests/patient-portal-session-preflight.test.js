@@ -23,7 +23,7 @@ async function bootstrap(limit, maintenance = false) {
   if (!maintenance) {
     payload.settings.authRateLimitMaxRequests = limit;
     payload.settings.idleTimeoutSeconds = 60;
-    payload.accounts = Object.fromEntries(['sms', 'phone', 'locale', 'throttle', 'idle'].map(
+    payload.accounts = Object.fromEntries(['sms', 'phone', 'locale', 'throttle', 'idle', 'warning'].map(
       (role) => [role, {
         username: `FAKE-${role}`, password: 'FAKE-preflight-only', email: `${role}@example.test`,
         phone: '+15555550141',
@@ -61,16 +61,17 @@ async function bootstrap(limit, maintenance = false) {
   }
 }
 
-for (const limit of [12, 13]) {
+// The steps before the throttle step make 14 sign-ins now (the idle sign-out step of #149 adds one).
+for (const limit of [13, 14]) {
   test(`full session preflight refuses a ${limit}-request budget before launching Chromium`, async () => {
     const observed = await bootstrap(limit);
     assert.equal(observed.launches, 0);
-    assert.match(observed.error, /must exceed the 13 sign-ins/);
+    assert.match(observed.error, /must exceed the 14 sign-ins/);
   });
 }
 
-test('a 14-request budget passes real preflight', async () => {
-  assert.deepEqual(await bootstrap(14), { launches: 1, error: null });
+test('a 15-request budget passes real preflight', async () => {
+  assert.deepEqual(await bootstrap(15), { launches: 1, error: null });
 });
 
 test('maintenance preflight still needs no account, MFA, SMS or login budget', async () => {
