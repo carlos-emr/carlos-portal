@@ -283,6 +283,10 @@ TEXT: dict[str, str] = {
     ),
     "mfa_new_code_sent_email": "Se envió un código nuevo por correo electrónico.",
     "mfa_new_code_sent_sms": "Se envió un código nuevo por SMS.",
+    "mfa_resumed_notice": (
+        "El código de inicio de sesión enviado a las {time} UTC sigue siendo válido. "
+        "Introdúzcalo a continuación. No se envió ningún código nuevo."
+    ),
     "mfa_rate_limited_one": (
         "Se envió un código hace poco. Inténtelo de nuevo en {seconds} segundo."
     ),
@@ -357,6 +361,10 @@ TEXT: dict[str, str] = {
     "phone_confirmation_code": "Código de confirmación del teléfono",
     "confirm_phone": "Confirmar número de teléfono",
     "resend_phone_confirmation": "Enviar otro código",
+    "phone_confirmation_sent_to": "Se envió un código de confirmación por SMS al {number}.",
+    "phone_confirmation_expired": (
+        "El código de confirmación enviado al {number} ha caducado. Envíe otro código."
+    ),
     "previous": "Anterior",
     "provider": "Profesional",
     "provider_options_truncated": (

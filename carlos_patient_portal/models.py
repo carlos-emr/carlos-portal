@@ -97,6 +97,9 @@ AUDIT_EVENT_UNLOCK_SECRET_PUBLISH = "unlock_secret.publish"
 AUDIT_EVENT_UNLOCK_SECRET_READ = "unlock_secret.read"
 AUDIT_EVENT_UNLOCK_SECRET_REVOKE = "unlock_secret.revoke"
 AUDIT_OUTCOME_FAILURE = "failure"
+# A sign-in inside the code-send cooldown went back to the code page of the challenge that was
+# already pending (no new code sent): its own outcome, apart from a throttled refusal (#147).
+AUDIT_OUTCOME_RESUMED = "resumed"
 AUDIT_OUTCOME_SUCCESS = "success"
 AUDIT_OUTCOME_THROTTLED = "throttled"
 MFA_DELIVERY_METHOD_EMAIL = "email"
@@ -1760,7 +1763,7 @@ class PatientPortalAuditEvent(Base):
             name="ck_patient_portal_audit_events_event_type",
         ),
         CheckConstraint(
-            "outcome in ('success', 'failure', 'throttled')",
+            "outcome in ('success', 'failure', 'throttled', 'resumed')",
             name="ck_patient_portal_audit_events_outcome",
         ),
         CheckConstraint(
