@@ -255,7 +255,7 @@ def test_a_reused_operation_of_another_request_is_a_conflict_and_writes_nothing(
     assert first_answer.status_code == 201
     [invite] = invites(app)
     owners = {row.id: row.prepared_invite_id for row in stored_rows(app)}
-    disclosures = len(audit_rows(AUDIT_EVENT_STAFF_ACTION))
+    disclosures = len(audit_rows(app, AUDIT_EVENT_STAFF_ACTION))
 
     # The second request reuses the first one's operation id, for the same patient and details.
     reused = prepare(client, second, second_token)
@@ -269,7 +269,7 @@ def test_a_reused_operation_of_another_request_is_a_conflict_and_writes_nothing(
     # disclosed again (that is an audit row of its own).
     assert [(row.id, row.status) for row in invites(app)] == [(invite.id, invite.status)]
     assert {row.id: row.prepared_invite_id for row in stored_rows(app)} == owners
-    assert len(audit_rows(AUDIT_EVENT_STAFF_ACTION)) == disclosures
+    assert len(audit_rows(app, AUDIT_EVENT_STAFF_ACTION)) == disclosures
     # The first request still recovers its own invite and token.
     again = prepare(client, first, first_token)
     assert (again.status_code, again.json()["id"]) == (201, invite.id)
