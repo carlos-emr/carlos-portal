@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
 from carlos_patient_portal.clinic_key_proofs import (
+    MAX_CLINIC_KEY_INVENTORY,
     ClinicKeyInventoryError,
     ClinicKeyMaterial,
     checked_public_key,
@@ -87,8 +88,9 @@ def test_a_public_key_of_another_kind_or_curve_is_refused() -> None:
     other_algorithm = spki_of(rsa.generate_private_key(65537, 2048).public_key())
 
     for spki in (other_curve, other_algorithm):
-        with pytest.raises(ClinicKeyInventoryError):
+        with pytest.raises(ClinicKeyInventoryError) as refused:
             checked_public_key(material(spki))
+        assert refused.value.code == "invalid_key"
 
 
 def test_a_kid_that_is_not_the_hash_of_its_key_is_refused() -> None:
@@ -98,8 +100,43 @@ def test_a_kid_that_is_not_the_hash_of_its_key_is_refused() -> None:
     _, other_spki = new_pair()
 
     for kid in (b64url(sha256(other_spki).digest()), "FAKE-kid", ""):
-        with pytest.raises(ClinicKeyInventoryError):
+        with pytest.raises(ClinicKeyInventoryError) as refused:
             checked_public_key(ClinicKeyMaterial(kid=kid, spki=spki, status="active"))
+        assert refused.value.code == "invalid_key"
+
+
+def compressed_spki(public_key) -> bytes:
+    """The same P-256 key as an SPKI whose point is written compressed (33 bytes, not 65)."""
+    point = public_key.public_bytes(
+        serialization.Encoding.X962, serialization.PublicFormat.CompressedPoint
+    )
+    header = bytes.fromhex("3039301306072a8648ce3d020106082a8648ce3d030107032200")
+    return header + point
+
+
+def test_the_bytes_stored_for_a_key_must_be_its_canonical_encoding_not_another_spelling() -> None:
+    # The same key can be written more than one way and still load. The kid is the hash of the
+    # CANONICAL encoding, so a kid that is right for this key does not by itself prove the bytes
+    # next to it are the canonical ones: a different spelling under the right kid would store
+    # other bytes for the same name (and a replacement proof signs the stored bytes). Only the
+    # canonical encoding is accepted. Here the key loads, and the kid is the canonical hash, so
+    # only the canonical-encoding check can refuse it.
+    private, canonical = new_pair()
+    other_spelling = compressed_spki(private.public_key())
+    assert serialization.load_der_public_key(other_spelling).public_numbers() == (
+        private.public_key().public_numbers()
+    )
+    assert other_spelling != canonical
+    right_kid = b64url(sha256(canonical).digest())
+
+    with pytest.raises(ClinicKeyInventoryError) as refused:
+        checked_public_key(
+            ClinicKeyMaterial(kid=right_kid, spki=other_spelling, status="active")
+        )
+
+    assert refused.value.code == "invalid_key"
+    # The canonical bytes under the same kid are accepted.
+    checked_public_key(ClinicKeyMaterial(kid=right_kid, spki=canonical, status="active"))
 
 
 # --- the list itself --------------------------------------------------------------------------
@@ -113,6 +150,20 @@ def test_the_same_key_listed_twice_is_refused_with_the_list_code() -> None:
         validate_clinic_key_inventory(CLINIC, [key, key])
 
     assert refused.value.code == "invalid_key_list"
+
+
+def test_an_empty_list_and_a_list_over_the_limit_are_refused_and_the_limit_itself_is_not() -> None:
+    limit = MAX_CLINIC_KEY_INVENTORY
+    keys = [material(new_pair()[1]) for _ in range(limit + 1)]
+
+    for too_many_or_none in ([], keys):
+        with pytest.raises(ClinicKeyInventoryError) as refused:
+            validate_clinic_key_inventory(CLINIC, too_many_or_none)
+        assert refused.value.code == "invalid_key_list"
+
+    # Exactly the limit is a valid inventory, and so is one key.
+    assert validate_clinic_key_inventory(CLINIC, keys[:limit]) == ()
+    assert validate_clinic_key_inventory(CLINIC, keys[:1]) == ()
 
 
 @pytest.mark.parametrize("status", ["", "pending", "ACTIVE", "retired"])
