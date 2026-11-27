@@ -255,7 +255,11 @@ def test_a_reused_operation_of_another_request_is_a_conflict_and_writes_nothing(
     assert first_answer.status_code == 201
     [invite] = invites(app)
     owners = {row.id: row.prepared_invite_id for row in stored_rows(app)}
-    disclosures = len(audit_rows(app, AUDIT_EVENT_STAFF_ACTION))
+    # The job's refusals are audited as failed staff actions; a success row is a write or a token
+    # disclosure.
+    successes = len(
+        [row for row in audit_rows(app, AUDIT_EVENT_STAFF_ACTION) if row.outcome == "success"]
+    )
 
     # The second request reuses the first one's operation id, for the same patient and details.
     reused = prepare(client, second, second_token)
@@ -266,10 +270,12 @@ def test_a_reused_operation_of_another_request_is_a_conflict_and_writes_nothing(
     )
     assert "invite_token" not in reused.text
     # Nothing changed: one invite, still the first request's, no second owner, and no token was
-    # disclosed again (that is an audit row of its own).
+    # disclosed again (that would be a success audit row of its own).
     assert [(row.id, row.status) for row in invites(app)] == [(invite.id, invite.status)]
     assert {row.id: row.prepared_invite_id for row in stored_rows(app)} == owners
-    assert len(audit_rows(app, AUDIT_EVENT_STAFF_ACTION)) == disclosures
+    staff_actions = audit_rows(app, AUDIT_EVENT_STAFF_ACTION)
+    assert len([row for row in staff_actions if row.outcome == "success"]) == successes
+    assert [row.outcome for row in staff_actions].count("failure") >= 1
     # The first request still recovers its own invite and token.
     again = prepare(client, first, first_token)
     assert (again.status_code, again.json()["id"]) == (201, invite.id)
