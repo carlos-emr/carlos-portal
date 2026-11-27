@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from carlos_patient_portal import web_support
+from carlos_patient_portal.appearance import CONTRAST_COOKIE_NAME, THEME_COOKIE_NAME
 from carlos_patient_portal.models import (
     EMAIL_CHANGE_STATUS_REVOKED,
     PatientPortalAccount,
@@ -75,6 +76,26 @@ def test_a_page_of_the_signed_in_portal_sends_a_visitor_to_sign_in(path: str) ->
     response = client.get(path, follow_redirects=False)
     assert response.status_code == 303, path
     assert response.headers["location"] == "/", path
+
+
+def test_a_lost_session_cannot_open_document_passwords_or_save_appearance() -> None:
+    client, token = signed_in()
+    before = stored_state(client.app)
+    client.cookies.delete(web_support.PORTAL_SESSION_COOKIE_NAME)
+
+    passwords = client.get("/portal/email-passwords", follow_redirects=False)
+    preferences = client.post(
+        "/portal/preferences",
+        data={"csrf_token": token, "theme": "dark", "contrast": "more"},
+        follow_redirects=False,
+    )
+
+    for response in (passwords, preferences):
+        assert response.status_code == 303
+        assert response.headers["location"] == "/"
+    assert client.cookies.get(THEME_COOKIE_NAME) is None
+    assert client.cookies.get(CONTRAST_COOKIE_NAME) is None
+    assert stored_state(client.app) == before
 
 
 def stored_state(app) -> dict[str, object]:  # noqa: ANN001
