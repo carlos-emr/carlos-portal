@@ -178,7 +178,6 @@ class LoginResponse(BaseModel):
     mfa_challenge_token: str | None = None
     mfa_delivery_method: MfaDeliveryMethod | None = None
     session_token: str | None = None
-    development_mfa_code: str | None = None
 
 
 class MfaVerifyRequest(BaseModel):
@@ -204,7 +203,6 @@ class MfaChallengeResponse(BaseModel):
     status: Literal["mfa_required"]
     mfa_challenge_token: str
     mfa_delivery_method: MfaDeliveryMethod
-    development_mfa_code: str | None = None
 
 
 class PasswordResetRequest(BaseModel):
@@ -216,7 +214,6 @@ class PasswordResetRequest(BaseModel):
 
 class PasswordResetRequestResponse(BaseModel):
     status: Literal["reset_requested"]
-    development_reset_token: str | None = None
 
 
 class PasswordResetCompleteRequest(BaseModel):

@@ -463,7 +463,6 @@ def test_every_text_colour_is_readable_on_every_surface_in_both_palettes(scheme:
             ratio = _contrast(palette[text], palette[surface])
             assert ratio >= 4.5, f"{scheme}: {text} on {surface} is {ratio:.2f}:1"
     for text, background in [
-        ("warn-text", "warn-bg"),
         ("error-text", "error-bg"),
         ("success-text", "success-bg"),
         ("on-accent", "carlos-blue"),

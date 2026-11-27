@@ -9,6 +9,7 @@ import json
 import re
 from base64 import urlsafe_b64encode
 from datetime import UTC, datetime, timedelta
+from urllib.parse import unquote
 from uuid import uuid4
 
 from alembic import command
@@ -133,12 +134,6 @@ WRONG_DEV_ADMIN_TOKEN = "x" * MIN_PRODUCTION_SECRET_LENGTH
 
 
 CSRF_TOKEN_PATTERN = re.compile(r'name="csrf_token" value="([^"]+)"')
-
-
-DEVELOPMENT_MFA_CODE_PATTERN = re.compile(
-    r"Development sign-in code \(same code as sent by email, to make testing quicker, "
-    r"will be removed later\): (\d{6})"
-)
 
 
 MFA_CHALLENGE_TOKEN_PATTERN = re.compile(r'name="mfa_challenge_token" value="([^"]+)"')
@@ -332,7 +327,9 @@ def carlos_job_headers(
 
 
 def development_settings(**overrides: object) -> Settings:
-    values = {"environment": "development", **overrides}
+    # The development mail outbox (#135) is off here: a test brings its own recording sender, and
+    # none should write to the temp directory. The tests of the outbox itself turn it on.
+    values = {"environment": "development", "development_mail_outbox": False, **overrides}
     return Settings(**values)
 
 
@@ -378,6 +375,7 @@ def migrated_development_app(
     *,
     email_sender: PortalEmailSender | None = None,
     sms_sender: PortalSmsSender | None = None,
+    no_email_sender: bool = False,
     **overrides: object,
 ) -> main.FastAPI:
     settings_values = {
@@ -390,13 +388,58 @@ def migrated_development_app(
         "internal_staff_assertion_public_key": TEST_STAFF_ASSERTION_PUBLIC_KEY,
         **overrides,
     }
-    app = main.create_app(
-        development_settings(**settings_values),
-        email_sender=email_sender,
-        sms_sender=sms_sender,
-    )
+    # A development portal prints no code and returns none (#135): a test reads what was sent,
+    # from the recording sender it gets here unless it brings its own (`sent_mfa_code`,
+    # `sent_reset_token`).
+    settings = development_settings(**settings_values)
+    sender = email_sender
+    if sender is None and not no_email_sender:
+        # A builder a test patched in (`run_with_email_sender`) wins; the real one answers None
+        # in development without SMTP, which is where the recording sender stands in.
+        sender = main.build_portal_email_sender(settings) or RecordingPortalEmailSender()
+    app = main.create_app(settings, email_sender=sender, sms_sender=sms_sender)
+    app.state.test_email_sender = sender
     upgrade_to_head(app.state.database_engine)
     return app
+
+
+def _sent_messages(sender: object) -> list[dict[str, object]]:
+    messages = getattr(sender, "messages", None)
+    assert messages is not None, "this test's email sender does not record what it sends"
+    return messages
+
+
+def sent_mfa_codes(sender: object) -> list[str]:
+    """Every sign-in code `sender` was asked to email, oldest first."""
+    return [str(m["code"]) for m in _sent_messages(sender) if "code" in m]
+
+
+def sent_mfa_code(app_or_sender: object) -> str:
+    """The sign-in code most recently emailed, to an app's recording sender or to a sender."""
+    sender = getattr(getattr(app_or_sender, "state", None), "test_email_sender", app_or_sender)
+    codes = sent_mfa_codes(sender)
+    assert codes, "no sign-in code was emailed"
+    return codes[-1]
+
+
+def sent_reset_urls(sender: object) -> list[str]:
+    """Every password-reset link `sender` was asked to email, oldest first."""
+    return [str(m["reset_url"]) for m in _sent_messages(sender) if "reset_url" in m]
+
+
+def reset_token_of(reset_url: str) -> str:
+    """The token in a password-reset link (it is the URL fragment, never sent to a server)."""
+    marker = "#token="
+    assert marker in reset_url
+    return unquote(reset_url.split(marker, 1)[1])
+
+
+def sent_reset_token(app_or_sender: object) -> str:
+    """The reset token of the password-reset link most recently emailed."""
+    sender = getattr(getattr(app_or_sender, "state", None), "test_email_sender", app_or_sender)
+    urls = sent_reset_urls(sender)
+    assert urls, "no password-reset link was emailed"
+    return reset_token_of(urls[-1])
 
 
 def migrated_staging_app(
@@ -727,10 +770,8 @@ def browser_sign_in_seeded_patient(app: main.FastAPI, client: TestClient) -> int
     assert "Sign-in code" in login_response.text
     assert web_support.PORTAL_SESSION_COOKIE_NAME not in login_response.cookies
     mfa_challenge_token_match = MFA_CHALLENGE_TOKEN_PATTERN.search(login_response.text)
-    mfa_code_match = DEVELOPMENT_MFA_CODE_PATTERN.search(login_response.text)
     csrf_token_match = CSRF_TOKEN_PATTERN.search(login_response.text)
     assert mfa_challenge_token_match is not None
-    assert mfa_code_match is not None
     assert csrf_token_match is not None
 
     verify_response = client.post(
@@ -738,7 +779,7 @@ def browser_sign_in_seeded_patient(app: main.FastAPI, client: TestClient) -> int
         data={
             "csrf_token": csrf_token_match.group(1),
             "mfa_challenge_token": mfa_challenge_token_match.group(1),
-            "code": mfa_code_match.group(1),
+            "code": sent_mfa_code(app),
         },
         follow_redirects=False,
     )
@@ -770,7 +811,7 @@ def sign_in_patient_api_session(
         "/auth/mfa/verify",
         json={
             "mfa_challenge_token": login_payload["mfa_challenge_token"],
-            "code": login_payload["development_mfa_code"],
+            "code": sent_mfa_code(client.app),
         },
     )
 
@@ -796,9 +837,11 @@ class FailingNoticeSender:
 
     def __init__(self, *, fail_confirmation: bool = False) -> None:
         self.fail_confirmation = fail_confirmation
+        # Only the codes are kept, so a test can sign in with what was emailed (#135).
+        self.messages: list[dict[str, object]] = []
 
     def send_code(self, **kwargs: object) -> None:
-        return None
+        self.messages.append(dict(kwargs))
 
     def send_password_reset(self, **kwargs: object) -> None:
         return None

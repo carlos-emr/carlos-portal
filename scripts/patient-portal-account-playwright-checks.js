@@ -42,7 +42,6 @@
  *   export PYTHONPATH=.
  *   export PORTAL_BASE_URL=http://127.0.0.1:8491
  *   export PORTAL_ACCOUNT_FIXTURE_FILE="$PORTAL_ACCOUNT_CHECK_DIR/account-fixtures.json"
- *   export PORTAL_USE_DEVELOPMENT_MFA_CODE=true
  *   export PORTAL_SCREENSHOT_DIR="$PORTAL_ACCOUNT_CHECK_DIR/screenshots"
  *   python -m alembic -c alembic.ini upgrade head
  *   python tests/seed_browser_account.py
@@ -65,8 +64,8 @@
  * (the devcontainer's Postfix) it completes the step-up instead.
  *
  * Optional environment:
- *   PORTAL_USE_DEVELOPMENT_MFA_CODE=true to read codes rendered by a development server, otherwise
- *     they are read through PORTAL_MAIL_COMMAND (default /scripts/mail), as the main check does
+ *   PORTAL_MAIL_COMMAND (default /scripts/mail): the codes are read from the test inbox the
+ *     portal's SMTP settings point at, as the main check does (a portal prints no code, #135)
  *   PORTAL_CHROME_PATH=/path/to/chrome-or-chromium
  */
 
@@ -78,12 +77,11 @@ const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { assertNoSeriousAxeIssues } = require('./patient-portal-axe');
-const { readCapturedMfaCode } = require('./patient-portal-mail-capture');
+const { mailRunner, readCapturedMfaCode } = require('./patient-portal-mail-capture');
 
 const baseUrl = validateBaseUrl(process.env.PORTAL_BASE_URL || 'http://127.0.0.1:8491');
 const fixturePath = process.env.PORTAL_ACCOUNT_FIXTURE_FILE
   || path.join(os.tmpdir(), 'patient-portal-account-fixtures.json');
-const useDevelopmentMfaCode = process.env.PORTAL_USE_DEVELOPMENT_MFA_CODE === 'true';
 const mailCommand = process.env.PORTAL_MAIL_COMMAND || '/scripts/mail';
 const screenshotDir = path.resolve(process.env.PORTAL_SCREENSHOT_DIR || os.tmpdir());
 const chromePath = process.env.PORTAL_CHROME_PATH || process.env.CHROME_PATH || '';
@@ -219,24 +217,11 @@ function sleep(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
-function runMailCommand(...args) {
-  return execFileSync(mailCommand, args, {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: 10000,
-  });
-}
+// The mail command when there is one, else the development mail outbox file (#135).
+const runMailCommand = mailRunner({ mailCommand, execFileSync });
 
 // readBrowserMfaCode: copied from scripts/patient-portal-playwright-checks.js.
 async function readBrowserMfaCode(page, expectedRecipient) {
-  if (useDevelopmentMfaCode) {
-    const code = await page.locator('[data-development-mfa-code]').getAttribute(
-      'data-development-mfa-code'
-    );
-    assert(code, 'development MFA code was not available');
-    return code;
-  }
-
   return readCapturedMfaCode({
     expectedRecipient,
     readLatest: () => runMailCommand('read', 'latest'),
@@ -430,9 +415,7 @@ async function signIn(page, account, { recipient = account.email, destination } 
   await waitForMfaCooldown(account);
   await open(page, '/');
   await fillSignIn(page, account.username, account.password);
-  if (!useDevelopmentMfaCode) {
-    runMailCommand('clear');
-  }
+  runMailCommand('clear');
   const loginResponse = await submit(page, signInButton(page), {
     pathname: portalPathname('/auth/login'),
   });
@@ -1068,9 +1051,7 @@ async function checkMfaProofGate(page, context) {
 
   // A mail server is configured: complete the step-up, then the gate opens again.
   await waitForMfaCooldown(linkAccount);
-  if (!useDevelopmentMfaCode) {
-    runMailCommand('clear');
-  }
+  runMailCommand('clear');
   const stepUp = await submit(page, verifyButton, {
     pathname: portalPathname('/portal/mycarlos/mfa'),
   });
@@ -1594,9 +1575,7 @@ async function checkRevealThroughTabSwitch(page, context) {
   }
 
   try {
-    if (!useDevelopmentMfaCode) {
-      runMailCommand('clear');
-    }
+    runMailCommand('clear');
     const lock = await newPage('lock');
     await checkWrongPasswordsAndLockout(lock.page, lock.context);
 

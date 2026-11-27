@@ -45,7 +45,9 @@ def test_session_survives_same_secret_restart_but_not_secret_rotation(tmp_path) 
     rotated_settings = settings.model_copy(
         update={"session_secret": SecretStr("FAKE-new-session-secret-000000002")}
     )
-    rotated = create_app(rotated_settings, email_sender=RecordingPortalEmailSender())
+    rotated_sender = RecordingPortalEmailSender()
+    rotated = create_app(rotated_settings, email_sender=rotated_sender)
+    rotated.state.test_email_sender = rotated_sender
     with TestClient(rotated) as client:
         refused = client.get("/auth/session", headers=bearer_headers(original_token))
         assert refused.status_code == 401

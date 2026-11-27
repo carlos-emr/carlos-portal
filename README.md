@@ -88,7 +88,10 @@ Open <http://127.0.0.1:8090/> and sign in with:
 
 - Username: `CarlosPatient`
 - Password: `Nectar` + `-Sparrow` + `-Quartz` + `-87!` (concatenate without spaces)
-- MFA: use the development code displayed on the verification page
+- MFA: the portal prints no code (#135). With no SMTP host a development portal writes the email to
+  a private file, `patient-portal-development-mail.jsonl` in the system temp directory (set
+  `PATIENT_PORTAL_DEVELOPMENT_MAIL_OUTBOX_PATH` to move it): read the newest `"kind":"mfa_code"` line.
+  With `PATIENT_PORTAL_SMTP_HOST` set, read the message at your test inbox instead.
 
 The seeded account has twelve sample email-password records. Stop the server with `Ctrl+C`. The
 database is stored under the temporary directory printed by `echo "$PORTAL_DEMO_DIRECTORY"`; remove
@@ -359,9 +362,11 @@ npm run test:patient-portal-playwright
 
 The test clears the local capture inbox, exercises account activation and password recovery, signs
 in as the configurable development patient, verifies the dashboard on desktop and mobile viewports,
-and logs out. It reads MFA codes through `/scripts/mail` by default; set
-`PORTAL_USE_DEVELOPMENT_MFA_CODE=true` when the server exposes development codes in the page.
-Override `PORTAL_BASE_URL`, `PORTAL_TEST_USER`, `PORTAL_TEST_PASSWORD`, `PORTAL_EXPECTED_USER`,
+and logs out. It reads MFA codes through `/scripts/mail` (the test inbox the portal's SMTP settings
+point at) when that command exists or `PORTAL_MAIL_COMMAND` is set, and otherwise from the
+development mail outbox file a development portal with no SMTP host writes (`PORTAL_DEVELOPMENT_MAIL_OUTBOX`
+names it when the portal's `PATIENT_PORTAL_DEVELOPMENT_MAIL_OUTBOX_PATH` is not the default in the
+temp directory). A portal prints no code on its pages (#135). Override `PORTAL_BASE_URL`, `PORTAL_TEST_USER`, `PORTAL_TEST_PASSWORD`, `PORTAL_EXPECTED_USER`,
 `PORTAL_EXPECTED_EMAIL`, `PORTAL_MAIL_COMMAND`, `PORTAL_BROWSER_FIXTURE_FILE`, or
 `PORTAL_SCREENSHOT_DIR` when the local setup differs from the defaults. Set `PORTAL_CHROME_PATH` to
 use a particular Chrome or Chromium executable. The test refuses public hosts unless
@@ -1409,9 +1414,15 @@ curl -X POST http://127.0.0.1:8090/auth/password-reset/complete \
   -d '{"reset_token": "<reset_token>", "new_password": "Changed1!word"}'
 ```
 
-Development responses include `development_mfa_code` and `development_reset_token` only when needed
-for local testing. Production responses do not expose raw MFA codes or reset tokens. Configured SMTP
-delivers MFA codes and one-time password-reset links without storing their raw values. The database
+No response, in any environment, carries a raw MFA code or reset token (#135): a development portal
+does not print them on its pages or return them from the API either. Configured SMTP delivers MFA
+codes and one-time password-reset links without storing their raw values; for local testing point
+`PATIENT_PORTAL_SMTP_HOST` (and `PATIENT_PORTAL_SMTP_PORT`) at a test inbox and read the code or the
+link there. A development portal with no SMTP host sends nothing: it appends each email (the code
+or link included, one JSON line each) to a file only its owner can read, `patient-portal-development-mail.jsonl`
+in the system temp directory, or `PATIENT_PORTAL_DEVELOPMENT_MAIL_OUTBOX_PATH`; set
+`PATIENT_PORTAL_DEVELOPMENT_MAIL_OUTBOX=false` to turn that off. The path is refused outside
+development, and the file is never part of an answer or a page. The database
 stores keyed hashes of MFA codes, reset tokens, and session tokens. Sign-in, MFA, reset, lockout,
 unlock, and logout write audit events.
 

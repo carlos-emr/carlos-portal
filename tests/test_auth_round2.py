@@ -545,12 +545,12 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from tests.support import (  # noqa: E402
     CSRF_TOKEN_PATTERN,
-    DEVELOPMENT_MFA_CODE_PATTERN,
     MFA_CHALLENGE_TOKEN_PATTERN,
     RecordingPortalEmailSender,
     activate_seeded_patient_account,
     get_csrf_token,
     migrated_development_app,
+    sent_mfa_code,
 )
 
 
@@ -570,7 +570,7 @@ def browser_challenge():
     assert login.status_code == 200
     fields = {
         "mfa_challenge_token": MFA_CHALLENGE_TOKEN_PATTERN.search(login.text).group(1),
-        "code": DEVELOPMENT_MFA_CODE_PATTERN.search(login.text).group(1),
+        "code": sent_mfa_code(app),
         "csrf_token": CSRF_TOKEN_PATTERN.search(login.text).group(1),
     }
     return app, client, fields

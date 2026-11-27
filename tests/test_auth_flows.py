@@ -60,7 +60,6 @@ from carlos_patient_portal.token_keys import PortalTokenKeys
 from tests.support import (
     CONCURRENT_WRONG_PASSWORD,
     CSRF_TOKEN_PATTERN,
-    DEVELOPMENT_MFA_CODE_PATTERN,
     MFA_CHALLENGE_TOKEN_PATTERN,
     SEEDED_INVITE_EMAIL,
     STRONG_PASSWORD,
@@ -79,6 +78,8 @@ from tests.support import (
     get_csrf_token,
     migrated_development_app,
     request_seeded_email_change,
+    sent_mfa_code,
+    sent_reset_token,
     sign_in_patient_api_session,
     upgrade_to_head,
 )
@@ -121,7 +122,7 @@ def test_non_development_policy_cancels_a_preexisting_email_mfa_challenge() -> N
             auth.verify_mfa_challenge(
                 session,
                 challenge_token=login_payload["mfa_challenge_token"],
-                code=login_payload["development_mfa_code"],
+                code=sent_mfa_code(app),
                 policy=production_policy,
                 challenge_token_secret=token_keys.mfa,
                 session_token_secret=token_keys.session,
@@ -207,7 +208,9 @@ def test_login_mfa_session_and_logout_happy_path() -> None:
     assert login_payload["status"] == "mfa_required"
     assert login_payload["mfa_delivery_method"] == "email"
     assert login_payload["mfa_challenge_token"]
-    assert re.fullmatch(r"\d{6}", login_payload["development_mfa_code"])
+    # The answer carries no code, even in development (#135): it went by email only.
+    assert "development_mfa_code" not in login_payload
+    assert re.fullmatch(r"\d{6}", sent_mfa_code(app))
     assert login_payload["session_token"] is None
     assert login_response.headers["cache-control"] == "no-store"
 
@@ -215,7 +218,7 @@ def test_login_mfa_session_and_logout_happy_path() -> None:
         "/auth/mfa/verify",
         json={
             "mfa_challenge_token": login_payload["mfa_challenge_token"],
-            "code": login_payload["development_mfa_code"],
+            "code": sent_mfa_code(app),
         },
     )
 
@@ -301,12 +304,11 @@ def test_failed_mfa_grant_commit_does_not_release_a_cookie_or_consume_the_code(m
         )
         assert login.status_code == 200
         challenge = MFA_CHALLENGE_TOKEN_PATTERN.search(login.text)
-        code = DEVELOPMENT_MFA_CODE_PATTERN.search(login.text)
         csrf = CSRF_TOKEN_PATTERN.search(login.text)
-        assert challenge is not None and code is not None and csrf is not None
+        assert challenge is not None and csrf is not None
         verification = {
             "mfa_challenge_token": challenge.group(1),
-            "code": code.group(1),
+            "code": sent_mfa_code(sender),
             "csrf_token": csrf.group(1),
         }
         assert len(sender.messages) == 1
@@ -412,10 +414,12 @@ def test_login_sends_mfa_email_after_committing_challenge() -> None:
 
     assert response.status_code == 200
     assert sender.challenge_was_committed is True
+    assert "development_mfa_code" not in response.json()
+    assert re.fullmatch(r"\d{6}", sent_mfa_code(sender))
     assert sender.messages == [
         {
             "recipient": SEEDED_INVITE_EMAIL,
-            "code": response.json()["development_mfa_code"],
+            "code": sent_mfa_code(sender),
             "expires_in_seconds": 600,
         }
     ]
@@ -493,7 +497,8 @@ def test_failed_challenge_commit_sends_no_mfa_and_allows_a_clean_retry(monkeypat
 
         assert recovered.status_code == 200
         assert len(sender.messages) == 1
-        assert sender.messages[0]["code"] == recovered.json()["development_mfa_code"]
+        assert "development_mfa_code" not in recovered.json()
+        assert re.fullmatch(r"\d{6}", str(sender.messages[0]["code"]))
         with app.state.session_factory() as session:
             assert (
                 session.scalar(
@@ -611,9 +616,10 @@ def test_mfa_email_resend_delivers_new_code_after_cooldown() -> None:
     assert resend_response.status_code == 200
     assert len(sender.messages) == 2
     assert sender.messages[0]["code"] != sender.messages[1]["code"]
+    assert "development_mfa_code" not in resend_response.json()
     assert sender.messages[1] == {
         "recipient": SEEDED_INVITE_EMAIL,
-        "code": resend_response.json()["development_mfa_code"],
+        "code": sender.messages[1]["code"],
         "expires_in_seconds": 600,
     }
 
@@ -699,13 +705,11 @@ def test_form_mfa_error_keeps_retry_and_resend_screen() -> None:
         },
     )
     mfa_challenge_token_match = MFA_CHALLENGE_TOKEN_PATTERN.search(login_response.text)
-    mfa_code_match = DEVELOPMENT_MFA_CODE_PATTERN.search(login_response.text)
     csrf_token_match = CSRF_TOKEN_PATTERN.search(login_response.text)
     assert login_response.status_code == 200
     assert mfa_challenge_token_match is not None
-    assert mfa_code_match is not None
     assert csrf_token_match is not None
-    invalid_mfa_code = "000000" if mfa_code_match.group(1) != "000000" else "111111"
+    invalid_mfa_code = "000000" if sent_mfa_code(app) != "000000" else "111111"
 
     response = client.post(
         "/auth/mfa/verify",
@@ -740,11 +744,12 @@ def test_form_mfa_resend_sends_new_email_after_cooldown() -> None:
         },
     )
     challenge_token_match = MFA_CHALLENGE_TOKEN_PATTERN.search(login_response.text)
-    original_code_match = DEVELOPMENT_MFA_CODE_PATTERN.search(login_response.text)
+    original_code = sent_mfa_code(sender)
     resend_csrf_match = CSRF_TOKEN_PATTERN.search(login_response.text)
     assert challenge_token_match is not None
-    assert original_code_match is not None
     assert resend_csrf_match is not None
+    # The page names no code, in development either (#135).
+    assert original_code not in login_response.text
     assert "Code sent to ex***@example.com by email." in login_response.text
     assert "Resend code" in login_response.text
     with app.state.session_factory() as session:
@@ -767,13 +772,12 @@ def test_form_mfa_resend_sends_new_email_after_cooldown() -> None:
         },
     )
 
-    resent_code_match = DEVELOPMENT_MFA_CODE_PATTERN.search(response.text)
     assert response.status_code == 200
     assert "A new code was sent by email." in response.text
-    assert resent_code_match is not None
-    assert resent_code_match.group(1) != original_code_match.group(1)
     assert len(sender.messages) == 2
-    assert sender.messages[-1]["code"] == resent_code_match.group(1)
+    resent_code = sent_mfa_code(sender)
+    assert resent_code != original_code
+    assert resent_code not in response.text
 
 
 def test_form_mfa_resend_shows_cooldown_without_leaving_screen() -> None:
@@ -1082,7 +1086,8 @@ def test_account_contact_update_revokes_reset_token_for_old_email() -> None:
         "/auth/password-reset/request",
         json={"username": "patient.user", "email": SEEDED_INVITE_EMAIL},
     )
-    reset_token = reset_response.json()["development_reset_token"]
+    assert reset_response.status_code == 202
+    reset_token = sent_reset_token(app)
     account_response = client.get("/portal/account")
 
     changed = client.post(
@@ -1137,7 +1142,8 @@ def test_confirming_an_email_change_revokes_reset_tokens_for_the_old_address() -
         "/auth/password-reset/request",
         json={"username": "patient.user", "email": SEEDED_INVITE_EMAIL},
     )
-    reset_token = reset_response.json()["development_reset_token"]
+    assert reset_response.status_code == 202
+    reset_token = sent_reset_token(app)
     confirmation_page = client.get("/auth/email-change/confirm")
     confirmed = client.post(
         "/auth/email-change/confirm",
@@ -1503,7 +1509,7 @@ def test_bad_mfa_attempts_lock_account() -> None:
     )
     login_payload = login_response.json()
     challenge_token = login_payload["mfa_challenge_token"]
-    wrong_code = "111111" if login_payload["development_mfa_code"] == "000000" else "000000"
+    wrong_code = "111111" if sent_mfa_code(app) == "000000" else "000000"
 
     first_bad_response = client.post(
         "/auth/mfa/verify",
@@ -1569,7 +1575,7 @@ def test_password_lockout_staff_unlock_and_forced_reset() -> None:
         "/auth/password-reset/request",
         json={"username": "patient.user", "email": SEEDED_INVITE_EMAIL},
     )
-    reset_token = reset_request_response.json()["development_reset_token"]
+    reset_token = sent_reset_token(app)
     complete_reset_response = client.post(
         "/auth/password-reset/complete",
         json={"reset_token": reset_token, "new_password": STRONG_RESET_PASSWORD},
@@ -1666,7 +1672,7 @@ def test_browser_password_reset_sends_fragment_link_and_completes_reset() -> Non
         json={"username": "patient.user", "email": SEEDED_INVITE_EMAIL},
     )
     assert cooldown_response.status_code == 202
-    assert cooldown_response.json()["development_reset_token"] is None
+    assert "development_reset_token" not in cooldown_response.json()
     assert len(sender.messages) == 1
 
     complete_page = client.get(parsed_reset_url.path)
@@ -1717,7 +1723,7 @@ def test_password_reset_delivery_failure_revokes_token_and_is_audited(
     )
 
     assert response.status_code == 202
-    assert response.json()["development_reset_token"] is None
+    assert "development_reset_token" not in response.json()
     assert SEEDED_INVITE_EMAIL not in caplog.text
     with app.state.session_factory() as session:
         reset_record = session.scalar(select(PatientPortalPasswordResetToken))
@@ -1764,7 +1770,7 @@ def test_locked_account_browser_page_and_reset_require_staff_unlock() -> None:
     assert "Account locked" in locked_response.text
     assert "Clinic staff must unlock this account" in locked_response.text
     assert reset_response.status_code == 202
-    assert reset_response.json()["development_reset_token"] is None
+    assert "development_reset_token" not in reset_response.json()
     assert sender.messages == []
 
     unlock_response = client.post(
@@ -1777,8 +1783,9 @@ def test_locked_account_browser_page_and_reset_require_staff_unlock() -> None:
     )
 
     assert unlock_response.status_code == 200
-    assert unlocked_reset_response.json()["development_reset_token"]
+    assert "development_reset_token" not in unlocked_reset_response.json()
     assert len(sender.messages) == 1
+    assert sent_reset_token(sender)
 
 
 def test_account_lock_revokes_preexisting_password_reset_token() -> None:
@@ -1789,7 +1796,8 @@ def test_account_lock_revokes_preexisting_password_reset_token() -> None:
         "/auth/password-reset/request",
         json={"username": "patient.user", "email": SEEDED_INVITE_EMAIL},
     )
-    reset_token = reset_response.json()["development_reset_token"]
+    assert reset_response.status_code == 202
+    reset_token = sent_reset_token(app)
 
     lock_response = client.post(
         "/auth/login",
@@ -1887,6 +1895,7 @@ def test_changing_mfa_method_cancels_codes_already_sent_to_the_old_channel() -> 
         json={"username": "patient.user", "password": STRONG_PASSWORD},
     )
     assert stale_login.status_code == 200
+    stale_code = sent_mfa_code(app)
 
     with app.state.session_factory() as session:
         account = session.get(PatientPortalAccount, account_id)
@@ -1906,7 +1915,7 @@ def test_changing_mfa_method_cancels_codes_already_sent_to_the_old_channel() -> 
         "/auth/mfa/verify",
         json={
             "mfa_challenge_token": stale_login.json()["mfa_challenge_token"],
-            "code": stale_login.json()["development_mfa_code"],
+            "code": stale_code,
         },
     )
 
@@ -1939,7 +1948,7 @@ def test_saving_unchanged_mfa_method_preserves_live_challenge() -> None:
         "/auth/mfa/verify",
         json={
             "mfa_challenge_token": login.json()["mfa_challenge_token"],
-            "code": login.json()["development_mfa_code"],
+            "code": sent_mfa_code(app),
         },
     )
 
@@ -2013,7 +2022,8 @@ def test_password_change_revokes_a_reset_token_issued_before_the_change() -> Non
         "/auth/password-reset/request",
         json={"username": "patient.user", "email": SEEDED_INVITE_EMAIL},
     )
-    stale_token = reset_request.json()["development_reset_token"]
+    assert reset_request.status_code == 202
+    stale_token = sent_reset_token(app)
     assert stale_token
 
     csrf_token = CSRF_TOKEN_PATTERN.search(client.get("/portal/account").text)
@@ -2266,7 +2276,8 @@ def test_password_reset_redemption_revokes_every_preexisting_session() -> None:
         "/auth/password-reset/request",
         json={"username": "patient.user", "email": SEEDED_INVITE_EMAIL},
     )
-    reset_token = reset_request.json()["development_reset_token"]
+    assert reset_request.status_code == 202
+    reset_token = sent_reset_token(app)
 
     completed = client.post(
         "/auth/password-reset/complete",
@@ -2342,9 +2353,12 @@ def test_pending_email_change_leaves_password_reset_on_the_current_address() -> 
 
     # Both return the same generic acceptance; only the current address actually matches.
     assert to_new_address.status_code == 202
-    assert to_new_address.json().get("development_reset_token") is None
     assert to_current_address.status_code == 202
-    assert to_current_address.json().get("development_reset_token") is not None
+    assert to_new_address.json() == to_current_address.json() == {"status": "reset_requested"}
+    # The only reset link that was emailed went to the address on the account.
+    assert [
+        message["recipient"] for message in sender.messages if "reset_url" in message
+    ] == [SEEDED_INVITE_EMAIL]
 
 
 def test_email_change_confirmation_is_refused_for_a_locked_account() -> None:
@@ -2374,13 +2388,13 @@ def test_email_change_confirmation_is_refused_for_a_locked_account() -> None:
 
 
 def _reset_token_for(app, client) -> str:
-    """Request a reset and return the raw token from the development response."""
+    """Request a reset and return the raw token from the link that was emailed."""
     response = client.post(
         "/auth/password-reset/request",
         json={"username": "patient.user", "email": SEEDED_INVITE_EMAIL},
     )
     assert response.status_code == 202
-    return response.json()["development_reset_token"]
+    return sent_reset_token(app)
 
 
 def test_expired_mfa_challenge_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2400,7 +2414,7 @@ def test_expired_mfa_challenge_is_rejected(monkeypatch: pytest.MonkeyPatch) -> N
         "/auth/mfa/verify",
         json={
             "mfa_challenge_token": payload["mfa_challenge_token"],
-            "code": payload["development_mfa_code"],
+            "code": sent_mfa_code(app),
         },
     )
 
@@ -2703,7 +2717,7 @@ def test_password_reset_eagerly_cancels_a_delivered_live_mfa_before_replay() -> 
         completed = client.post(
             "/auth/password-reset/complete",
             json={
-                "reset_token": reset.json()["development_reset_token"],
+                "reset_token": sent_reset_token(sender),
                 "new_password": STRONG_RESET_PASSWORD,
             },
         )

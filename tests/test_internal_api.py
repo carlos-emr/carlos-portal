@@ -51,10 +51,12 @@ from tests.support import (
     TEST_STAFF_ASSERTION_KEY_ID,
     TEST_STAFF_ASSERTION_PUBLIC_KEY,
     TEST_STAFF_ASSERTION_PUBLIC_KEYRING,
+    RecordingPortalEmailSender,
     activation_request,
     carlos_job_headers,
     carlos_staff_headers,
     migrated_staging_app,
+    sent_mfa_code,
     sign_staff_assertion,
     upgrade_to_head,
 )
@@ -126,9 +128,13 @@ def internal_app(**overrides: object):
         "unlock_secret_encryption_secret": UNLOCK_SECRET,
         **overrides,
     }
+    # A development portal returns and prints no code (#135): a test reads what was emailed.
+    sender = RecordingPortalEmailSender()
     app = create_app(
-        Settings(**settings_values)
+        Settings(**settings_values),
+        email_sender=sender,
     )
+    app.state.test_email_sender = sender
     upgrade_to_head(app.state.database_engine)
     return app
 
@@ -1245,7 +1251,7 @@ def test_internal_unlock_secret_is_hidden_until_carlos_publishes_it() -> None:
         "/auth/mfa/verify",
         json={
             "mfa_challenge_token": login.json()["mfa_challenge_token"],
-            "code": login.json()["development_mfa_code"],
+            "code": sent_mfa_code(app),
         },
     )
     patient_headers = {
@@ -1302,7 +1308,7 @@ def test_pending_unlock_secret_cannot_be_retrieved_by_id_before_publication() ->
         "/auth/mfa/verify",
         json={
             "mfa_challenge_token": login.json()["mfa_challenge_token"],
-            "code": login.json()["development_mfa_code"],
+            "code": sent_mfa_code(app),
         },
     )
     patient_headers = {"Authorization": f"Bearer {verified.json()['session_token']}"}
@@ -1467,7 +1473,8 @@ def test_password_reset_does_not_cross_clinic_boundaries() -> None:
 
     # The external response stays generic; only the absence of a token proves the scope check.
     assert reset_request.status_code == 202
-    assert reset_request.json()["development_reset_token"] is None
+    assert reset_request.json() == {"status": "reset_requested"}
+    assert app.state.test_email_sender.messages == []
     with app.state.session_factory() as session:
         assert session.scalars(select(PatientPortalPasswordResetToken)).all() == []
 
@@ -2244,7 +2251,7 @@ def test_staff_disable_immediately_revokes_an_already_authenticated_session() ->
         "/auth/mfa/verify",
         json={
             "mfa_challenge_token": login.json()["mfa_challenge_token"],
-            "code": login.json()["development_mfa_code"],
+            "code": sent_mfa_code(app),
         },
     )
     token = verified.json()["session_token"]

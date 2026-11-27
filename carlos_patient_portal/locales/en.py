@@ -221,13 +221,6 @@ TEXT: dict[str, str] = {
     "date_of_birth_month_choose": "Choose a month",
     "date_of_birth_year": "Year",
     "date_to": "To date",
-    "development_mfa_code": (
-        "Development sign-in code (same code as sent by email, to make testing quicker, "
-        "will be removed later):"
-    ),
-    "development_reset_link": (
-        "Development password reset link (also sent by email when email is configured):"
-    ),
     "documents": "Documents",
     "email": "Email",
     "email_codes_rate": "Email codes can be resent once per minute.",
@@ -287,7 +280,6 @@ TEXT: dict[str, str] = {
     "next": "Next",
     "no_email_passwords": "No document passwords",
     "no_matching_email_passwords": "No matching document passwords",
-    "open_reset_page": "Open reset page",
     "password_label": "Password",
     "password_hidden": "Hidden",  # NOSONAR - translation label, not a credential
     "password_for": "Password for {subject}",

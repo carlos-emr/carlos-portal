@@ -230,14 +230,6 @@ TEXT: dict[str, str] = {
     "date_of_birth_month_choose": "Elija un mes",
     "date_of_birth_year": "Año",
     "date_to": "Fecha hasta",
-    "development_mfa_code": (
-        "Código de acceso de desarrollo (el mismo código que se envía por correo electrónico, "
-        "para agilizar las pruebas; se eliminará más adelante):"
-    ),
-    "development_reset_link": (
-        "Enlace de desarrollo para restablecer la contraseña (también se envía por correo "
-        "electrónico cuando el correo está configurado):"
-    ),
     "documents": "Documentos",
     "email": "Correo electrónico",
     "email_codes_rate": "Los códigos por correo electrónico se pueden reenviar una vez por minuto.",
@@ -305,7 +297,6 @@ TEXT: dict[str, str] = {
     "next": "Siguiente",
     "no_email_passwords": "No hay contraseñas de documentos",
     "no_matching_email_passwords": "No hay contraseñas de documentos que coincidan",
-    "open_reset_page": "Abrir la página de restablecimiento",
     "password_label": "Contraseña",
     "password_hidden": "Oculta",
     "password_for": "Contraseña para {subject}",

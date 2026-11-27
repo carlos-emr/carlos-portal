@@ -14,6 +14,7 @@
 
 import json
 import re
+import tempfile
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from binascii import Error as Base64DecodeError
 from email.utils import parseaddr
@@ -469,6 +470,12 @@ class Settings(BaseSettings):
     smtp_username: str | None = Field(default=None, max_length=254)
     smtp_password: SecretStr | None = None
     smtp_timeout_seconds: int = Field(default=10, ge=1, le=60)
+    # Development only (#135). A development portal prints no sign-in code and returns none; with
+    # no SMTP host it writes each outgoing email to this private file instead (default: a file in
+    # the system temp directory), so a developer and the browser checks can read it. Set the
+    # first to false to turn that off; the path is refused outside development.
+    development_mail_outbox: bool = True
+    development_mail_outbox_path: Path | None = None
     sms_webhook_url: str | None = Field(default=None, max_length=2048)
     sms_webhook_token: SecretStr | None = None
     sms_sender_id: str = Field(default="CARLOS", min_length=1, max_length=32)
@@ -1211,7 +1218,15 @@ class Settings(BaseSettings):
                 "PATIENT_PORTAL_SMTP_FROM_ADDRESS is required when PATIENT_PORTAL_SMTP_HOST is set"
             )
 
+    @property
+    def resolved_development_mail_outbox_path(self) -> Path:
+        return self.development_mail_outbox_path or (
+            Path(tempfile.gettempdir()) / "patient-portal-development-mail.jsonl"
+        )
+
     def validate_smtp_transport(self) -> None:
+        if not self.is_development and self.development_mail_outbox_path is not None:
+            raise ValueError("PATIENT_PORTAL_DEVELOPMENT_MAIL_OUTBOX_PATH is only for development")
         if not self.is_development and self.smtp_host is not None:
             if not self.smtp_starttls:
                 raise ValueError("PATIENT_PORTAL_SMTP_STARTTLS must be enabled outside development")

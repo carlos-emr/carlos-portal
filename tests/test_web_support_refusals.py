@@ -227,9 +227,9 @@ def test_logging_out_without_a_session_token_does_nothing() -> None:
 
 def test_the_login_payload_carries_the_session_token_only_when_there_is_one() -> None:
     plain = SimpleNamespace(status="authenticated", session_token=None, mfa_challenge=None)
-    assert ws.login_response_payload(plain, settings=settings()) == {"status": "authenticated"}
+    assert ws.login_response_payload(plain) == {"status": "authenticated"}
     kept = SimpleNamespace(status="authenticated", session_token="FAKE-token", mfa_challenge=None)
-    assert ws.login_response_payload(kept, settings=settings()) == {
+    assert ws.login_response_payload(kept) == {
         "status": "authenticated",
         "session_token": "FAKE-token",
     }

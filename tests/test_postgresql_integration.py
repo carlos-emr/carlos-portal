@@ -106,8 +106,10 @@ from carlos_patient_portal.staff_identity import (
 from carlos_patient_portal.token_keys import PortalTokenKeys
 from tests.support import (
     TEST_STAFF_ASSERTION_PUBLIC_KEY,
+    RecordingPortalEmailSender,
     alembic_config_for_tests,
     carlos_staff_headers,
+    sent_reset_token,
 )
 
 POSTGRES_URL = os.getenv("PORTAL_TEST_POSTGRES_URL")
@@ -487,7 +489,8 @@ def test_postgresql_password_reset_and_contact_update_serialize_without_deadlock
         demographic_no=5234,
     )
     settings = postgres_settings()
-    app = create_app(settings)
+    sender = RecordingPortalEmailSender()
+    app = create_app(settings, email_sender=sender)
     client = TestClient(app)
     reset_request = client.post(
         "/auth/password-reset/request",
@@ -497,7 +500,7 @@ def test_postgresql_password_reset_and_contact_update_serialize_without_deadlock
         },
     )
     assert reset_request.status_code == 202
-    reset_token = reset_request.json()["development_reset_token"]
+    reset_token = sent_reset_token(sender)
     assert reset_token
 
     engine = create_portal_engine(POSTGRES_URL)

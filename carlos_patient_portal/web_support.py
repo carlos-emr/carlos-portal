@@ -827,43 +827,28 @@ def fhir_operation_outcome_response(
     )
 
 
-def mfa_challenge_response_payload(
-    delivery: MfaChallengeDelivery,
-    *,
-    settings: Settings,
-) -> dict[str, object]:
-    payload: dict[str, object] = {
+def mfa_challenge_response_payload(delivery: MfaChallengeDelivery) -> dict[str, object]:
+    # The code itself is never part of an answer: it reaches the patient only through the email
+    # or SMS sender, in every environment (#135).
+    return {
         "status": "mfa_required",
         "mfa_challenge_token": delivery.challenge_token,
         "mfa_delivery_method": delivery.delivery_method,
     }
-    if settings.is_development:
-        payload["development_mfa_code"] = delivery.code
-    return payload
 
 
-def login_response_payload(
-    result: LoginResult,
-    *,
-    settings: Settings,
-) -> dict[str, object]:
+def login_response_payload(result: LoginResult) -> dict[str, object]:
     payload: dict[str, object] = {"status": result.status}
     if result.session_token is not None:
         payload["session_token"] = result.session_token
     if result.mfa_challenge is not None:
-        payload.update(mfa_challenge_response_payload(result.mfa_challenge, settings=settings))
+        payload.update(mfa_challenge_response_payload(result.mfa_challenge))
     return payload
 
 
-def password_reset_request_response_payload(
-    reset_token: str | None,
-    *,
-    settings: Settings,
-) -> dict[str, object]:
-    payload: dict[str, object] = {"status": "reset_requested"}
-    if settings.is_development and reset_token is not None:
-        payload["development_reset_token"] = reset_token
-    return payload
+def password_reset_request_response_payload() -> dict[str, object]:
+    # The reset link reaches the patient only by email, in every environment (#135).
+    return {"status": "reset_requested"}
 
 
 def auth_error_response(
@@ -924,11 +909,10 @@ def public_auth_template_context(
     sms_mfa_available: bool | None = None,
     email_mfa_available: bool | None = None,
     reset_token: str | None = None,
-    development_reset_url: str | None = None,
     result_heading: str | None = None,
     result_message: str | None = None,
 ) -> dict[str, object]:
-    # Declared explicitly rather than as **extra_context: these five keys are read by individual
+    # Declared explicitly rather than as **extra_context: these keys are read by individual
     # public templates, and a kwargs bag let a caller typo one into silence.
     locale = request_locale(request)
     text = portal_text(locale)
@@ -950,7 +934,6 @@ def public_auth_template_context(
             settings.is_development if email_mfa_available is None else email_mfa_available
         ),
         "reset_token": reset_token,
-        "development_reset_url": development_reset_url,
         "result_heading": result_heading,
         "result_message": result_message,
     }
@@ -968,7 +951,6 @@ def render_public_auth_template(
     form_values: dict[str, str] | None = None,
     sms_mfa_available: bool | None = None,
     reset_token: str | None = None,
-    development_reset_url: str | None = None,
     result_heading: str | None = None,
     result_message: str | None = None,
 ) -> Response:
@@ -985,7 +967,6 @@ def render_public_auth_template(
             form_values=form_values,
             sms_mfa_available=sms_mfa_available,
             reset_token=reset_token,
-            development_reset_url=development_reset_url,
             result_heading=result_heading,
             result_message=result_message,
         ),
@@ -1012,9 +993,6 @@ def mfa_template_context(
         "locale": locale,
         "clinic_name": settings.clinic_name,
         "csrf_token": csrf_token,
-        "development_mfa_code": (
-            delivery.code if settings.is_development and delivery.code else None
-        ),
         "error_message": error_message,
         "notice_message": notice_message,
         "mfa_code_sent_message": mfa_code_sent_message(delivery, text),

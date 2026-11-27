@@ -35,7 +35,6 @@ async function bootstrap(limit, maintenance = false) {
   const env = { PORTAL_SESSION_FIXTURE_FILE: fixture, PORTAL_BASE_URL: 'http://127.0.0.1:8495' };
   if (maintenance) env.PORTAL_SESSION_STEPS = 'maintenance';
   else {
-    env.PORTAL_USE_DEVELOPMENT_MFA_CODE = 'true';
     env.PORTAL_SMS_CAPTURE_FILE = path.join(directory, 'unused-sms.jsonl');
   }
   let launches = 0;

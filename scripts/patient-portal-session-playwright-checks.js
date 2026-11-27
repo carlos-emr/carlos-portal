@@ -50,7 +50,9 @@
  *   export PYTHONPATH=.
  *   export PORTAL_BASE_URL=http://127.0.0.1:8495
  *   export PORTAL_SESSION_FIXTURE_FILE="$PORTAL_SESSION_CHECK_DIR/session-fixtures.json"
- *   export PORTAL_USE_DEVELOPMENT_MFA_CODE=true
+ *   # The email codes are read from the test inbox the portal's SMTP settings point at (a portal
+ *   # prints no code, #135), through the same command the other browser checks use:
+ *   export PORTAL_MAIL_COMMAND=/scripts/mail
  *   export PORTAL_SCREENSHOT_DIR="$PORTAL_SESSION_CHECK_DIR/screenshots"
  *   node scripts/patient-portal-sms-capture.js --serve --port 8496 --file "$PORTAL_SMS_CAPTURE_FILE" &
  *   python -m alembic -c alembic.ini upgrade head
@@ -73,14 +75,16 @@ const { mkdirSync, readFileSync, statSync } = require('node:fs');
 const { isIP } = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 const { chromium } = require('playwright');
 const { assertNoSeriousAxeIssues } = require('./patient-portal-axe');
+const { mailRunner, readCapturedMfaCode } = require('./patient-portal-mail-capture');
 const { readCapturedSmsCode, readCaptures } = require('./patient-portal-sms-capture');
 
 const baseUrl = validateBaseUrl(process.env.PORTAL_BASE_URL || 'http://127.0.0.1:8495');
 const fixturePath = process.env.PORTAL_SESSION_FIXTURE_FILE
   || path.join(os.tmpdir(), 'patient-portal-session-fixtures.json');
-const useDevelopmentMfaCode = process.env.PORTAL_USE_DEVELOPMENT_MFA_CODE === 'true';
+const mailCommand = process.env.PORTAL_MAIL_COMMAND || '/scripts/mail';
 const smsCaptureFile = process.env.PORTAL_SMS_CAPTURE_FILE || '';
 const screenshotDir = path.resolve(process.env.PORTAL_SCREENSHOT_DIR || os.tmpdir());
 const chromePath = process.env.PORTAL_CHROME_PATH || process.env.CHROME_PATH || '';
@@ -103,7 +107,6 @@ assert(!selectedSteps.includes('maintenance') || selectedSteps.length === 1,
 const runs = (name) => selectedSteps.length === 0 || selectedSteps.includes(name);
 // Maintenance uses only the public notice and language preference, with no patient sign-in.
 if (!selectedSteps.includes('maintenance')) {
-  assert(useDevelopmentMfaCode, 'this check reads email codes from the page: set PORTAL_USE_DEVELOPMENT_MFA_CODE=true');
   assert(smsCaptureFile, 'PORTAL_SMS_CAPTURE_FILE must name the SMS capture file');
   for (const role of ['sms', 'phone', 'locale', 'throttle', 'idle']) {
     assert(accounts[role] && accounts[role].username && accounts[role].password && accounts[role].email,
@@ -357,18 +360,29 @@ async function waitForCooldown(account, seconds, what) {
   }
 }
 
-function developmentCode(page) {
-  return page.locator('[data-development-mfa-code]').getAttribute('data-development-mfa-code');
+// The mail command when there is one, else the development mail outbox file (#135).
+const runMailCommand = mailRunner({ mailCommand, execFileSync });
+
+function sleepSync(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
-/* The code the portal just sent by SMS to `to` (captured after `since`), cross-checked against the
- * development code the page shows: the SMS carried what the server expects. */
-async function smsCode(page, to, since) {
+/* The sign-in code the portal emailed to `account` (the newest message in the test inbox: clear it
+ * with runMailCommand('clear') just before the step that sends). A portal prints no code (#135). */
+function emailCode(account) {
+  return readCapturedMfaCode({
+    expectedRecipient: account.email,
+    readLatest: () => runMailCommand('read', 'latest'),
+    wait: sleepSync,
+  });
+}
+
+/* The code the portal just sent by SMS to `to` (captured after `since`). The sign-in that follows
+ * proves the SMS carried the code the server expects: a wrong one would be refused. */
+async function smsCode(_page, to, since) {
   const captured = await readCapturedSmsCode({ file: smsCaptureFile, to, after: since, wait });
   assert(captured.senderId === settings.smsSenderId,
     `the SMS came from sender ${captured.senderId}, expected ${settings.smsSenderId}`);
-  const shown = await developmentCode(page);
-  assert(captured.code === shown, 'the SMS did not carry the code the server expects');
   return captured.code;
 }
 
@@ -411,8 +425,9 @@ async function verifyCode(page, code, { expectRefused = false, text = t } = {}) 
 
 async function signInWithEmailCode(page, account, text = t) {
   await waitForCooldown(account, settings.mfaEmailCooldownSeconds, 'email');
+  runMailCommand('clear');
   await startSignIn(page, account, text);
-  await verifyCode(page, await developmentCode(page), { text });
+  await verifyCode(page, emailCode(account), { text });
 }
 
 async function signOut(page, context, text = t) {
@@ -497,17 +512,19 @@ async function checkSmsSignInAndResend(page, context) {
   await verifyCode(page, after);
   await signOut(page, context);
 
-  // The email method: the same resend proof with the code shown on the page.
+  // The email method: the same resend proof with the code read from the test inbox.
   const emailAccount = accounts.throttle;
   await waitForCooldown(emailAccount, settings.mfaEmailCooldownSeconds, 'email');
+  runMailCommand('clear');
   await startSignIn(page, emailAccount);
-  const emailBefore = await developmentCode(page);
+  const emailBefore = emailCode(emailAccount);
   await resendCode(page, { expectThrottled: true });
   await waitForCooldown(emailAccount, settings.mfaEmailCooldownSeconds, 'email');
+  runMailCommand('clear');
   await resendCode(page);
   emailAccount.lastCodeSentAt = Date.now();
-  const emailAfter = await developmentCode(page);
-  assert(emailAfter && emailAfter !== emailBefore, 'Resend by email did not show a new code');
+  const emailAfter = emailCode(emailAccount);
+  assert(emailAfter && emailAfter !== emailBefore, 'Resend by email did not send a new code');
   await verifyCode(page, emailBefore, { expectRefused: true });
   await verifyCode(page, emailAfter);
   await signOut(page, context);
