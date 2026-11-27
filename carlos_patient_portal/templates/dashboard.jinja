@@ -85,13 +85,23 @@
                 <p id="tile-help-description">{{ text.dashboard_help_description }}</p>
                 <span aria-hidden="true">{{ text.view_module }}</span>
               </a>
-              <section class="module-tile disabled">
-                <div class="module-tile-heading">
-                  <h2>{{ text.documents }}</h2>
-                  <span>{{ text.future }}</span>
-                </div>
-                <p>{{ text.dashboard_documents_description }}</p>
-              </section>
+              {% if documents_tile %}
+                {# Live count only: how many deliveries wait for this patient's linked devices.
+                   Never a document name, kind or clinic; the link goes to the myCarlos page. #}
+                <a class="module-tile" href="{{ url_for('portal_mycarlos') }}" aria-labelledby="tile-documents-title" aria-describedby="tile-documents-description">
+                  <h2 id="tile-documents-title">{{ text.documents }}</h2>
+                  <p id="tile-documents-description">{{ documents_tile_text }}</p>
+                  <span aria-hidden="true">{{ text.view_module }}</span>
+                </a>
+              {% else %}
+                <section class="module-tile disabled">
+                  <div class="module-tile-heading">
+                    <h2>{{ text.documents }}</h2>
+                    <span>{{ text.future }}</span>
+                  </div>
+                  <p>{{ text.dashboard_documents_description }}</p>
+                </section>
+              {% endif %}
               <a class="module-tile" href="{{ url_for('portal_messages') }}" aria-labelledby="tile-messages-title{% if new_message_count %} tile-messages-count{% endif %}" aria-describedby="tile-messages-description">
                 <div class="module-tile-heading">
                   <h2 id="tile-messages-title">{{ text.messages }}</h2>

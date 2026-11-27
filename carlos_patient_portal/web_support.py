@@ -84,6 +84,7 @@ from carlos_patient_portal.schemas import (
     PasswordResetRequest,
 )
 from carlos_patient_portal.view_models import (
+    DocumentsTileViewModel,
     EmailPasswordDashboardViewModel,
     MessagesViewModel,
     MyCarlosViewModel,
@@ -1174,6 +1175,7 @@ def portal_template_context(
     email_passwords: EmailPasswordDashboardViewModel | None = None,
     messages: MessagesViewModel | None = None,
     new_message_count: int = 0,
+    documents_tile: DocumentsTileViewModel | None = None,
     mycarlos: MyCarlosViewModel | None = None,
     phone_confirmation: PhoneConfirmationViewModel | None = None,
 ) -> dict[str, object]:
@@ -1215,6 +1217,19 @@ def portal_template_context(
     context["new_messages_label"] = plural_text(
         text, "messages_new_count", new_message_count, locale
     ).format(count=new_message_count)
+    # The Documents tile (None: the feature is off, so the tile stays the greyed "Future" one).
+    # Its sentence is built here from the plural forms; only a count ever reaches the page.
+    context["documents_tile"] = documents_tile
+    context["documents_tile_text"] = None
+    if documents_tile is not None:
+        if not documents_tile.has_device:
+            context["documents_tile_text"] = text["documents_link_mycarlos"]
+        elif documents_tile.waiting_count == 0:
+            context["documents_tile_text"] = text["documents_nothing_waiting"]
+        else:
+            context["documents_tile_text"] = plural_text(
+                text, "documents_waiting", documents_tile.waiting_count, locale
+            ).format(count=documents_tile.waiting_count)
     context["mycarlos_enabled"] = settings.mycarlos_delivery_enabled
     context["mycarlos"] = mycarlos
     # The Preferences module shows what this browser has chosen (see appearance.py).
