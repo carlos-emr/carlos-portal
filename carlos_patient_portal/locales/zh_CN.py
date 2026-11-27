@@ -252,8 +252,8 @@ TEXT: dict[str, str] = {
     "new_password_confirmation": "确认新密码",
     "next": "下一页",
     "no_email_passwords": (
-        "暂无文档密码。此部分适用于您的诊所不会自动发送到 myCarlos 的文档"
-        "（例如通过电子邮件发送的加密 PDF）。它们的密码会显示在这里。"
+        "暂无文档密码。您的诊所通过 myCarlos 以外的方式发送的加密文档"
+        "（例如通过电子邮件发送的 PDF）的密码，会在诊所提供后显示在这里。"
     ),
     "no_matching_email_passwords": "没有符合条件的文档密码",
     "of": "/",

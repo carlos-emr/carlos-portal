@@ -255,8 +255,8 @@ TEXT: dict[str, str] = {
     "new_password_confirmation": "確認新密碼",
     "next": "下一頁",
     "no_email_passwords": (
-        "目前沒有文件密碼。此區塊適用於您的診所不會自動傳送到 myCarlos 的文件"
-        "（例如透過電子郵件寄送的加密 PDF）。它們的密碼會顯示在這裡。"
+        "目前沒有文件密碼。您的診所透過 myCarlos 以外的方式傳送的加密文件"
+        "（例如透過電子郵件寄送的 PDF）的密碼，會在診所提供後顯示在這裡。"
     ),
     "no_matching_email_passwords": "沒有符合條件的文件密碼",
     "of": "/",

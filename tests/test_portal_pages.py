@@ -675,8 +675,9 @@ def test_email_password_dashboard_empty_search_and_unavailable_password_states()
     assert empty_response.status_code == 200
     # The empty section explains itself (Ben: "keep the section, but say what it is for").
     assert "No document passwords yet." in empty_response.text
-    assert "documents your clinic does not send to myCarlos automatically" in empty_response.text
-    assert "encrypted PDF sent by email" in empty_response.text
+    assert "encrypted documents your clinic sends outside myCarlos" in empty_response.text
+    assert "a PDF by email" in empty_response.text
+    assert "when your clinic provides them" in empty_response.text
     assert "Page 1 of 1" in empty_response.text
     assert empty_search_response.status_code == 200
     assert "No matching document passwords" in empty_search_response.text
@@ -713,7 +714,7 @@ def test_email_password_dashboard_empty_search_and_unavailable_password_states()
     assert "Broken message" in unavailable_response.text
     # With a password listed, the empty-state note is not shown.
     assert "No document passwords yet." not in unavailable_response.text
-    assert "documents your clinic does not send to myCarlos" not in unavailable_response.text
+    assert "documents your clinic sends outside myCarlos" not in unavailable_response.text
     assert "Hidden" in unavailable_response.text
     assert raw_secret not in unavailable_response.text
     assert reveal_response.status_code == 503

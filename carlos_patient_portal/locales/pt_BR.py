@@ -310,9 +310,9 @@ TEXT: dict[str, str] = {
     "new_password_confirmation": "Confirmar nova senha",
     "next": "Próxima",
     "no_email_passwords": (
-        "Nenhuma senha de documento por enquanto. Esta seção é para documentos que sua clínica "
-        "não envia automaticamente ao myCarlos (por exemplo, um PDF criptografado enviado por "
-        "e-mail). As senhas deles aparecem aqui."
+        "Nenhuma senha de documento por enquanto. As senhas dos documentos criptografados que "
+        "sua clínica envia fora do myCarlos (por exemplo, um PDF por e-mail) aparecem aqui "
+        "quando a clínica as fornece."
     ),
     "no_matching_email_passwords": "Nenhuma senha de documento correspondente",
     "open_reset_page": "Abrir página de redefinição",
