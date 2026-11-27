@@ -200,7 +200,11 @@ TEXT: dict[str, str] = {
         "clinique vérifiera les renseignements correspondants du dossier CARLOS."
     ),
     "contact_change_success_heading": "Coordonnées mises à jour",
+    "contact_email": "Courriel",
+    "contact_hours": "Heures d’ouverture",
+    "contact_phone": "Téléphone",
     "contact_the_clinic": "Contactez la clinique",
+    "contact_website": "Site Web",
     "copy": "Copier",
     "copy_failed": "Sélectionnez et copiez manuellement",
     "copied": "Copié",

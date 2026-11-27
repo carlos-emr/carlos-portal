@@ -916,6 +916,21 @@ a.module-tile:focus-visible {
   font-size: 0.875rem;
 }
 
+.contact-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.contact-list .contact-label {
+  display: inline-block;
+  min-width: 7em;
+  color: var(--muted);
+  font-weight: bold;
+}
+
 .settings-sections {
   display: grid;
   gap: 18px;

@@ -203,7 +203,11 @@ TEXT: dict[str, str] = {
         "weryfikacji. Personel przychodni sprawdzi odpowiadające im dane w kartotece CARLOS."
     ),
     "contact_change_success_heading": "Dane kontaktowe zaktualizowane",
+    "contact_email": "E-mail",
+    "contact_hours": "Godziny otwarcia",
+    "contact_phone": "Telefon",
     "contact_the_clinic": "Proszę skontaktować się z przychodnią",
+    "contact_website": "Strona internetowa",
     "copy": "Proszę skopiować",
     "copy_failed": "Proszę zaznaczyć i skopiować ręcznie",
     "copied": "Skopiowano",

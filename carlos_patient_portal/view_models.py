@@ -174,6 +174,22 @@ class MyCarlosDeviceRowViewModel:
 
 
 @dataclass(frozen=True, slots=True)
+class ClinicContactViewModel:
+    """The clinic's optional contact details on the Help page; only the ones configured are set.
+
+    `phone_href` is the `tel:` link for `phone` (digits, a leading plus and an extension only);
+    `url_label` is the address without its scheme, for the link's visible text.
+    """
+
+    phone: str | None = None
+    phone_href: str | None = None
+    email: str | None = None
+    hours: str | None = None
+    url: str | None = None
+    url_label: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class DocumentsTileViewModel:
     """The dashboard's Documents tile: a count of deliveries waiting, and nothing about them.
 
