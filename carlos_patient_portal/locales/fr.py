@@ -329,7 +329,11 @@ TEXT: dict[str, str] = {
     "new_password": "Nouveau mot de passe",
     "new_password_confirmation": "Confirmer le nouveau mot de passe",
     "next": "Suivant",
-    "no_email_passwords": "Aucun mot de passe de document",
+    "no_email_passwords": (
+        "Aucun mot de passe de document pour l’instant. Les mots de passe des documents chiffrés "
+        "que votre clinique envoie en dehors de myCarlos (par exemple, un PDF par courriel) "
+        "apparaissent ici lorsque votre clinique les fournit."
+    ),
     "no_matching_email_passwords": "Aucun mot de passe de document correspondant",
     "open_reset_page": "Ouvrir la page de réinitialisation",
     "password_label": "Mot de passe",

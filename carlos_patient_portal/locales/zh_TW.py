@@ -261,7 +261,10 @@ TEXT: dict[str, str] = {
     "new_password": "新密碼",
     "new_password_confirmation": "確認新密碼",
     "next": "下一頁",
-    "no_email_passwords": "沒有文件密碼",
+    "no_email_passwords": (
+        "目前沒有文件密碼。您的診所透過 myCarlos 以外的方式傳送的加密文件"
+        "（例如透過電子郵件寄送的 PDF）的密碼，會在診所提供後顯示在這裡。"
+    ),
     "no_matching_email_passwords": "沒有符合條件的文件密碼",
     "of": "/",
     "open_reset_page": "開啟重設頁面",
@@ -383,8 +386,7 @@ TEXT: dict[str, str] = {
     "outbound_email_confirm_intro": "此地址被提供為 {service_name} 帳戶的新聯絡電子郵件。",
     "outbound_email_confirm_link_lead": "請開啟此連結以確認：",
     "outbound_email_confirm_expiry_other": (
-        "此連結將在 {hours} 小時後失效，且只能使用一次。在使用之前，帳戶仍保留原來的電子郵件地址"
-        "。"
+        "此連結將在 {hours} 小時後失效，且只能使用一次。在使用之前，帳戶仍保留原來的電子郵件地址。"
     ),
     "outbound_email_confirm_contact": "如果您沒有預期收到此郵件，請忽略它或聯絡 {clinic_name}。",
     "outbound_email_requested_subject": "有人要求變更 {service_name} 的聯絡方式",

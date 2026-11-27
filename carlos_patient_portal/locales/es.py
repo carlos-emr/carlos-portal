@@ -317,7 +317,11 @@ TEXT: dict[str, str] = {
     "new_password": "Nueva contraseña",
     "new_password_confirmation": "Confirmar nueva contraseña",
     "next": "Siguiente",
-    "no_email_passwords": "No hay contraseñas de documentos",
+    "no_email_passwords": (
+        "Aún no hay contraseñas de documentos. Las contraseñas de los documentos cifrados que su "
+        "clínica envía fuera de myCarlos (por ejemplo, un PDF por correo electrónico) aparecen "
+        "aquí cuando su clínica las proporciona."
+    ),
     "no_matching_email_passwords": "No hay contraseñas de documentos que coincidan",
     "open_reset_page": "Abrir la página de restablecimiento",
     "password_label": "Contraseña",
