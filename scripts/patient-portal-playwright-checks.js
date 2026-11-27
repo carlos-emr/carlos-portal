@@ -179,6 +179,46 @@ async function assertAccessiblePage(page, surface) {
   await assertNoSeriousAxeIssues(page, surface);
 }
 
+async function checkAccessiblePreferences(page) {
+  const focused = (control) => control.evaluate((element) => element === document.activeElement);
+  const preferences = page.locator('.module-nav').getByRole('link', { name: 'Preferences', exact: true });
+  for (let tab = 0; tab < 20 && !(await focused(preferences)); tab += 1) {
+    await page.keyboard.press('Tab');
+  }
+  assert(await focused(preferences), 'Preferences was not reachable by Tab from the dashboard');
+  await Promise.all([
+    page.waitForURL((url) => url.pathname === portalPathname('/portal/preferences')),
+    page.keyboard.press('Enter'),
+  ]);
+  await page.getByRole('heading', { name: 'Preferences', exact: true }).waitFor();
+
+  await page.keyboard.press('Tab');
+  const skip = page.getByRole('link', { name: 'Skip to main content', exact: true });
+  assert(await focused(skip), 'Preferences did not start with the skip link');
+  await page.keyboard.press('Enter');
+  assert(await focused(page.locator('#module-content')), 'the skip link did not focus the Preferences workspace');
+
+  const scheme = page.getByRole('group', { name: 'Colour scheme', exact: true });
+  const system = scheme.getByRole('radio', { name: 'System', exact: true });
+  await page.keyboard.press('Tab');
+  assert(await focused(system) && await system.isChecked(), 'Tab did not reach the selected System radio');
+  await page.keyboard.press('ArrowRight');
+  const light = scheme.getByRole('radio', { name: 'Light', exact: true });
+  assert(await focused(light) && await light.isChecked(), 'the arrow key did not select Light');
+
+  const contrast = page.getByRole('checkbox', { name: 'High contrast', exact: true });
+  await page.keyboard.press('Tab');
+  assert(await focused(contrast) && !(await contrast.isChecked()), 'Tab did not reach High contrast');
+  await page.keyboard.press('Space');
+  assert(await contrast.isChecked(), 'Space did not select High contrast');
+  await page.keyboard.press('Tab');
+  assert(await focused(page.getByRole('button', { name: 'Save preferences', exact: true })),
+    'Tab did not reach Save preferences after High contrast');
+
+  // Leaving these choices unsaved keeps the next journey on the seeded appearance.
+  await assertAccessiblePage(page, 'Preferences page');
+}
+
 async function assertLargeDateOfBirthFits(page, surface) {
   const viewport = page.viewportSize();
   const defaultTextSize = await page.locator('html').evaluate((root) => parseFloat(getComputedStyle(root).fontSize));
@@ -1323,6 +1363,7 @@ function screenshotPath(name) {
     );
 
     await page.setViewportSize({ width: 390, height: 844 });
+    await checkAccessiblePreferences(page);
     await page.locator('.module-nav').getByRole('link', { name: 'Account', exact: true }).click();
     await page.waitForURL((url) => url.pathname === portalPathname('/portal/account'));
     await page.getByRole('heading', { name: 'Account' }).waitFor();
