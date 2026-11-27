@@ -180,11 +180,18 @@ _next_demographic_no = iter(range(2000, 3000))
 
 
 def make_invite(
-    app, *, clinic_id: str = CLINIC, identity: IdentityProof | None = None, **columns: object
+    app,
+    *,
+    clinic_id: str = CLINIC,
+    identity: IdentityProof | None = None,
+    for_request: int | None = 1,
+    **columns: object,
 ) -> int:
-    """An invite as CARLOS makes it for a match: the chart's identity, hashed as an invite does.
+    """An invite as the sign-up job makes it for a match: the identity hashed as an invite does.
 
-    Each invite is for a patient of its own, so creating one never supersedes another.
+    `for_request` is the request it is the prepared invite of (a match can only be reported with
+    that one); None leaves it unlinked. Each invite is for a patient of its own, so creating one
+    never supersedes another.
     """
     with app.state.session_factory() as session, session.begin():
         invite, _ = create_service_invite(
@@ -195,6 +202,9 @@ def make_invite(
         )
         for name, value in columns.items():
             setattr(invite, name, value)
+        session.flush()
+        if for_request is not None:
+            session.get(PatientPortalSignupRequest, for_request).prepared_invite_id = invite.id
         return invite.id
 
 
@@ -556,7 +566,7 @@ def test_a_different_result_for_a_reported_request_is_a_conflict() -> None:
     client = client_at(app, "198.51.100.1")
     token = claimed(claim(client))[0]["lease_token"]
     invite_id = make_invite(app)
-    other_invite_id = make_invite(app)
+    other_invite_id = make_invite(app, for_request=None)
     assert report(client, 1, token, "matched", invite_id).status_code == 200
 
     for attempt in (
@@ -617,22 +627,28 @@ def test_a_match_must_name_an_invite_made_for_this_request() -> None:
     token = claimed(claim(client))[0]["lease_token"]
     refused = {
         "no such invite": 424242,
-        "another clinic's invite": make_invite(app, clinic_id="clinic-b"),
+        "another clinic's invite": make_invite(app, clinic_id="clinic-b", for_request=None),
         "another patient's email": make_invite(
-            app, identity=typed_identity(email="someone.else@example.test")
+            app, identity=typed_identity(email="someone.else@example.test"), for_request=None
         ),
         "another date of birth": make_invite(
-            app, identity=typed_identity(date_of_birth=date(1975, 3, 15))
+            app, identity=typed_identity(date_of_birth=date(1975, 3, 15)), for_request=None
         ),
         "another health card": make_invite(
-            app, identity=typed_identity(health_card_number="1111 222 333 AB")
+            app, identity=typed_identity(health_card_number="1111 222 333 AB"), for_request=None
         ),
         "an invite older than the request": make_invite(
-            app, created_at=utc_now() - timedelta(days=2)
+            app, created_at=utc_now() - timedelta(days=2), for_request=None
         ),
+        # Live, and made for exactly these details, but not the one prepared for this request.
+        "an invite that is not the request's own": make_invite(app, for_request=None),
     }
 
     for reason, invite_id in refused.items():
+        # Each one is the request's prepared invite in turn, so the link is never the reason,
+        # except for the one that is not linked at all.
+        if reason != "an invite that is not the request's own":
+            update_row(app, 1, prepared_invite_id=invite_id)
         response = report(client, 1, token, "matched", invite_id)
         assert response.status_code == 422, reason
         # One answer for every reason: it says nothing about which check failed.
@@ -642,7 +658,7 @@ def test_a_match_must_name_an_invite_made_for_this_request() -> None:
     assert row.encrypted_payload is not None
     assert recorded_results(app) == []
     # The invite made for these details (a version code typed or left off alike) is accepted.
-    good = make_invite(app, identity=typed_identity(health_card_number="9876543210"))
+    good = make_invite(app, identity=typed_identity(health_card_number="9876543210"))  # linked
     assert report(client, 1, token, "matched", good).status_code == 200
 
 
@@ -703,7 +719,9 @@ def test_every_refused_result_leaves_an_audit_row_the_caller_never_sees() -> Non
     update_row(app, 3, lease_expires_at=utc_now() - timedelta(seconds=1))
     done_invite = make_invite(app)
     assert report(client, 1, tokens[1], "matched", done_invite).status_code == 200
-    stranger = make_invite(app, identity=typed_identity(email="someone.else@example.test"))
+    stranger = make_invite(
+        app, identity=typed_identity(email="someone.else@example.test"), for_request=2
+    )
     before = len(audit_rows(app, AUDIT_EVENT_SIGNUP_RESULT))
 
     attempts = {
@@ -888,7 +906,9 @@ def test_cleanup_keeps_a_running_lease_past_the_ttl_and_deletes_the_rest() -> No
     client = client_at(app, "198.51.100.1")
     leased = claimed(claim(client, 1))[0]
     token_two = claimed(claim(client, 1))[0]["lease_token"]
-    invite_id = make_invite(app, identity=typed_identity(health_card_number="9876543211XY"))
+    invite_id = make_invite(
+        app, identity=typed_identity(health_card_number="9876543211XY"), for_request=2
+    )
     assert report(client, 2, token_two, "matched", invite_id).status_code == 200
     long_ago = utc_now() - timedelta(days=3)
     gone = utc_now() - timedelta(minutes=1)

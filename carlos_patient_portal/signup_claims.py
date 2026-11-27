@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from hmac import compare_digest
+from math import ceil
 from secrets import token_urlsafe
 
 from sqlalchemy import ColumnElement, and_, func, or_, select
@@ -49,6 +50,11 @@ from sqlalchemy.orm import Session
 
 from carlos_patient_portal.audit import record_audit_event
 from carlos_patient_portal.identity import IdentityProof, verify_identity_proof
+from carlos_patient_portal.invites import (
+    activate_prepared_invite,
+    prepare_create_invite,
+    prepare_resend_invite,
+)
 from carlos_patient_portal.models import (
     AUDIT_ACTOR_TYPE_SYSTEM,
     AUDIT_EVENT_SIGNUP_CLAIM,
@@ -57,6 +63,7 @@ from carlos_patient_portal.models import (
     AUDIT_OUTCOME_SUCCESS,
     INVITE_STATUS_ACCEPTED,
     INVITE_STATUS_PENDING,
+    INVITE_STATUS_PREPARED,
     SIGNUP_RESULT_MATCHED,
     PatientPortalInvite,
     PatientPortalSignupRequest,
@@ -121,6 +128,34 @@ class SignupResultInvalidError(SignupResultRefusal, ValueError):
     """The result cannot be recorded as sent: a match with no invite made for this request."""
 
     reason = "invite_not_for_request"
+
+
+class SignupRequestClosedError(SignupResultRefusal):
+    """The request already has a result: no invite can be prepared or committed for it."""
+
+    reason = "request_closed"
+
+
+class SignupInviteConflictError(SignupResultRefusal):
+    """The request already has a prepared invite of another operation, or has none to commit."""
+
+    reason = "invite_conflict"
+
+
+class SignupInviteUnavailableError(Exception):
+    """The request's details cannot be read, so no invite can be prepared from them."""
+
+
+class SignupInviteTooSoonError(Exception):
+    """The request's invite was sent too recently to send again; says how long to wait.
+
+    Not a refusal of the request itself: nothing about the patient or the request is disclosed, and
+    the wait is measured by the portal's clock from when the invite was last sent.
+    """
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        super().__init__("sign-up invite resend too soon")
+        self.retry_after_seconds = retry_after_seconds
 
 
 @dataclass(frozen=True)
@@ -292,6 +327,43 @@ def claim_signup_requests(  # NOSONAR
     return SignupClaim(requests=tuple(claimed), unreadable=unreadable, without_key=without_key)
 
 
+def _lock_request(
+    session: Session,
+    request_id: int,
+    *,
+    clinic_id: str,
+    lease_token: str,
+) -> PatientPortalSignupRequest:
+    """The request, locked, for a caller that holds its lease token.
+
+    An unknown id and another clinic's request are one refusal; a request of this clinic with a
+    token that is not its own is another, which the caller sees as the same answer and the audit
+    trail tells apart. The token is compared even when there is no row or lease, so the work does
+    not depend on which it was.
+    """
+    signup_request = session.scalar(
+        select(PatientPortalSignupRequest)
+        .where(
+            PatientPortalSignupRequest.id == request_id,
+            PatientPortalSignupRequest.clinic_id == clinic_id,
+        )
+        .with_for_update()
+    )
+    stored_hash = signup_request.lease_token_hash if signup_request is not None else None
+    token_matches = compare_digest(hash_lease_token(lease_token), stored_hash or "0" * 64)
+    if signup_request is None:
+        raise SignupRequestNotFoundError()
+    if stored_hash is None or not token_matches:
+        raise SignupLeaseTokenMismatchError(signup_request.health_card_hash)
+    return signup_request
+
+
+def _require_running_lease(signup_request: PatientPortalSignupRequest, now: datetime) -> None:
+    lease_expires_at = signup_request.lease_expires_at
+    if lease_expires_at is None or _as_utc(lease_expires_at) <= now:
+        raise SignupLeaseExpiredError(signup_request.health_card_hash)
+
+
 def _invite_is_live(invite: PatientPortalInvite, now: datetime) -> bool:
     """Whether an invite is one that was sent for a request and can still stand for its answer.
 
@@ -330,6 +402,7 @@ def _require_invite_for_request(
     try:
         if (
             invite is None
+            or signup_request.prepared_invite_id != invite_id
             or not _invite_is_live(invite, now)
             or _as_utc(invite.created_at) < _as_utc(signup_request.created_at)
         ):
@@ -377,7 +450,8 @@ def record_signup_result(  # NOSONAR
     different result than the one already recorded; SignupLeaseExpiredError when the lease ran out
     first; SignupResultInvalidError for a match whose invite is not one made for this request.
 
-    A match must name an invite that (1) is this clinic's, (2) is live: `pending` and not expired,
+    A match must name the invite the sign-up job prepared for this request (`prepared_invite_id`;
+    `prepare_signup_invite`), which (1) is this clinic's, (2) is live: `pending` and not expired,
     or `accepted`, (3) was created after the request was stored, and (4) carries the identity proof
     of exactly what the patient typed: the same email, date of birth and health card number,
     checked with the activation's own comparison (`verify_identity_proof`). The invite model has
@@ -387,21 +461,9 @@ def record_signup_result(  # NOSONAR
     this module cannot tell from a person's.
     """
     current_time = now or utc_now()
-    signup_request = session.scalar(
-        select(PatientPortalSignupRequest)
-        .where(
-            PatientPortalSignupRequest.id == request_id,
-            PatientPortalSignupRequest.clinic_id == clinic_id,
-        )
-        .with_for_update()
+    signup_request = _lock_request(
+        session, request_id, clinic_id=clinic_id, lease_token=lease_token
     )
-    stored_hash = signup_request.lease_token_hash if signup_request is not None else None
-    # Compared even when there is no row or lease, so the work does not depend on which it was.
-    token_matches = compare_digest(hash_lease_token(lease_token), stored_hash or "0" * 64)
-    if signup_request is None:
-        raise SignupRequestNotFoundError()
-    if stored_hash is None or not token_matches:
-        raise SignupLeaseTokenMismatchError(signup_request.health_card_hash)
 
     if signup_request.result is not None:
         if signup_request.result == result and signup_request.invite_id == invite_id:
@@ -457,6 +519,333 @@ def record_signup_result(  # NOSONAR
     )
 
 
+# Keyword-only so each security-relevant value is named at the call site.
+def prepare_signup_invite(  # NOSONAR
+    session: Session,
+    request_id: int,
+    *,
+    clinic_id: str,
+    lease_token: str,
+    demographic_no: int,
+    delivery_operation_id: str,
+    identity_proof_secret: str,
+    encryption_secret: str,
+    encryption_key_id: str,
+    encryption_keys: Mapping[str, str],
+    actor: str,
+    actor_id: str,
+    now: datetime | None = None,
+) -> tuple[PatientPortalInvite, str]:
+    """Prepare the one invite of a request the caller holds the lease on.
+
+    The identity proof is copied from the request's own stored details, never taken from the
+    caller: the invite carries the email, date of birth and health card number the patient typed,
+    which CARLOS matched against the chart. The invite's id is recorded on the request, and a
+    match can only be reported with it. Preparing again with the same operation id recovers the
+    same invite and token; another operation id for a request that has one is a conflict.
+
+    Raises the same refusals as a result for a request that is not the caller's, whose lease ran
+    out, or that already has a result; SignupInviteUnavailableError when its details cannot be
+    read; and the invite layer's own errors (an account or a pending invite already exists).
+    """
+    current_time = now or utc_now()
+    signup_request = _lock_request(
+        session, request_id, clinic_id=clinic_id, lease_token=lease_token
+    )
+    if signup_request.result is not None:
+        raise SignupRequestClosedError(signup_request.health_card_hash)
+    _require_running_lease(signup_request, current_time)
+    if signup_request.prepared_invite_id is not None:
+        prepared = session.get(PatientPortalInvite, signup_request.prepared_invite_id)
+        if (
+            prepared is None
+            or prepared.status != INVITE_STATUS_PREPARED
+            or prepared.delivery_operation_id != delivery_operation_id
+        ):
+            raise SignupInviteConflictError(signup_request.health_card_hash)
+    # An operation id that already names an invite belonging to ANOTHER request is a conflict,
+    # decided before anything is written: the invite layer would otherwise answer a repeat for the
+    # same patient and details with that other request's prepared invite and token, and assigning it
+    # here would only be stopped by the unique index (a raw IntegrityError, so a 500).
+    operation_owner = session.scalar(
+        select(PatientPortalSignupRequest.id)
+        .join(
+            PatientPortalInvite,
+            PatientPortalInvite.id == PatientPortalSignupRequest.prepared_invite_id,
+        )
+        .where(
+            PatientPortalInvite.clinic_id == clinic_id,
+            PatientPortalInvite.delivery_operation_id == delivery_operation_id,
+            PatientPortalSignupRequest.clinic_id == clinic_id,
+            PatientPortalSignupRequest.id != signup_request.id,
+        )
+    )
+    if operation_owner is not None:
+        raise SignupInviteConflictError(signup_request.health_card_hash)
+    try:
+        details = decrypt_signup_request(signup_request, encryption_keys=encryption_keys)
+    except (SignupRequestKeyUnavailableError, SignupRequestPayloadError) as exc:
+        raise SignupInviteUnavailableError() from exc
+    invite, invite_token = prepare_create_invite(
+        session,
+        demographic_no,
+        actor,
+        actor_id=actor_id,
+        delivery_operation_id=delivery_operation_id,
+        identity_proof=IdentityProof(
+            email=details.email,
+            date_of_birth=details.date_of_birth,
+            health_card_number=details.health_card_number,
+        ),
+        proof_secret=identity_proof_secret,
+        encryption_secret=encryption_secret,
+        encryption_key_id=encryption_key_id,
+        encryption_keys=encryption_keys,
+        clinic_id=clinic_id,
+        # No person makes this invite: its audit rows say so (the job's id stays the actor id).
+        actor_type=AUDIT_ACTOR_TYPE_SYSTEM,
+    )
+    signup_request.prepared_invite_id = invite.id
+    session.flush()
+    return invite, invite_token
+
+
+# Keyword-only so each security-relevant value is named at the call site.
+def commit_signup_invite(  # NOSONAR
+    session: Session,
+    request_id: int,
+    *,
+    clinic_id: str,
+    lease_token: str,
+    delivery_operation_id: str,
+    delivery_reference: str,
+    actor: str,
+    actor_id: str,
+    now: datetime | None = None,
+) -> PatientPortalInvite:
+    """Release the invite prepared for a request once CARLOS has durably queued its email.
+
+    Only the request's own prepared invite can be committed: the route names no invite id.
+    """
+    current_time = now or utc_now()
+    signup_request = _lock_request(
+        session, request_id, clinic_id=clinic_id, lease_token=lease_token
+    )
+    if signup_request.result is not None:
+        raise SignupRequestClosedError(signup_request.health_card_hash)
+    _require_running_lease(signup_request, current_time)
+    if signup_request.prepared_invite_id is None:
+        raise SignupInviteConflictError(signup_request.health_card_hash)
+    return activate_prepared_invite(
+        session,
+        signup_request.prepared_invite_id,
+        delivery_operation_id=delivery_operation_id,
+        delivery_reference=delivery_reference,
+        clinic_id=clinic_id,
+        actor=actor,
+        actor_id=actor_id,
+        actor_type=AUDIT_ACTOR_TYPE_SYSTEM,
+    )
+
+
+# The pending invite of the person a request's typed details belong to. One refusal for "no such
+# invite" and "another person's invite", so the answer says nothing about which.
+#
+# Read WITHOUT a lock. The lock order for a replacement is the prepared row first, then the
+# original (commit takes them so); `prepare_resend_invite` locks the original itself, after looking
+# for an already prepared replacement, and re-checks that it is still pending. Locking it here
+# first would invert that order, and a retried prepare racing a commit could deadlock.
+def _pending_invite_of_the_person(
+    session: Session,
+    signup_request: PatientPortalSignupRequest,
+    *,
+    clinic_id: str,
+    demographic_no: int,
+    details: SignupRequestDetails,
+    identity_proof_secret: str,
+) -> PatientPortalInvite:
+    original = session.scalar(
+        select(PatientPortalInvite).where(
+            PatientPortalInvite.clinic_id == clinic_id,
+            PatientPortalInvite.demographic_no == demographic_no,
+            PatientPortalInvite.status == INVITE_STATUS_PENDING,
+        )
+    )
+    if (
+        original is None
+        or original.proof_salt is None
+        or not _carries_the_typed_details(original, details, identity_proof_secret)
+    ):
+        raise SignupInviteConflictError(signup_request.health_card_hash)
+    return original
+
+
+def _carries_the_typed_details(
+    invite: PatientPortalInvite, details: SignupRequestDetails, identity_proof_secret: str
+) -> bool:
+    """Whether the invite's identity proof is exactly what the patient typed on the request."""
+    if invite.proof_salt is None:
+        return False
+    return verify_identity_proof(
+        IdentityProof(
+            email=details.email,
+            date_of_birth=details.date_of_birth,
+            health_card_number=details.health_card_number,
+        ),
+        identity_proof_secret,
+        salt=invite.proof_salt,
+        email_hash=invite.proof_email_hash,
+        date_of_birth_hash=invite.proof_date_of_birth_hash,
+        health_card_hash=invite.proof_health_card_hash,
+    )
+
+
+# Keyword-only so each security-relevant value is named at the call site.
+def prepare_signup_invite_resend(  # NOSONAR
+    session: Session,
+    request_id: int,
+    *,
+    clinic_id: str,
+    lease_token: str,
+    demographic_no: int,
+    delivery_operation_id: str,
+    identity_proof_secret: str,
+    encryption_secret: str,
+    encryption_key_id: str,
+    encryption_keys: Mapping[str, str],
+    resend_cooldown: timedelta,
+    actor: str,
+    actor_id: str,
+    now: datetime | None = None,
+) -> tuple[PatientPortalInvite, str]:
+    """Prepare a new code for the invite the patient already holds, once the cool-down has passed.
+
+    For a request the caller holds the lease on. The invite is the patient's one pending invite
+    (the caller names the patient, as for a first invite), and only if it carries exactly the
+    details this request holds: an invite for another person is the same refusal as none. The
+    cool-down is measured by the portal's clock from when that invite was last sent; inside it the
+    answer is `SignupInviteTooSoonError` and nothing is prepared. The replacement is prepared the
+    way a staff resend is (the old code keeps working until delivery is committed) and the same
+    operation id recovers the same replacement and token.
+    """
+    current_time = now or utc_now()
+    signup_request = _lock_request(
+        session, request_id, clinic_id=clinic_id, lease_token=lease_token
+    )
+    if signup_request.result is not None:
+        raise SignupRequestClosedError(signup_request.health_card_hash)
+    _require_running_lease(signup_request, current_time)
+    try:
+        details = decrypt_signup_request(signup_request, encryption_keys=encryption_keys)
+    except (SignupRequestKeyUnavailableError, SignupRequestPayloadError) as exc:
+        raise SignupInviteUnavailableError() from exc
+    original = _pending_invite_of_the_person(
+        session,
+        signup_request,
+        clinic_id=clinic_id,
+        demographic_no=demographic_no,
+        details=details,
+        identity_proof_secret=identity_proof_secret,
+    )
+    already_prepared = session.scalar(
+        select(PatientPortalInvite.id).where(
+            PatientPortalInvite.clinic_id == clinic_id,
+            PatientPortalInvite.delivery_operation_id == delivery_operation_id,
+        )
+    )
+    if already_prepared is None:
+        sent_at = _as_utc(original.last_sent_at or original.created_at)
+        remaining = resend_cooldown - (current_time - sent_at)
+        if remaining > timedelta(0):
+            raise SignupInviteTooSoonError(max(1, ceil(remaining.total_seconds())))
+    return prepare_resend_invite(
+        session,
+        original.id,
+        actor,
+        delivery_operation_id=delivery_operation_id,
+        encryption_secret=encryption_secret,
+        encryption_key_id=encryption_key_id,
+        encryption_keys=encryption_keys,
+        clinic_id=clinic_id,
+        actor_id=actor_id,
+        actor_type=AUDIT_ACTOR_TYPE_SYSTEM,
+    )
+
+
+# Keyword-only so each security-relevant value is named at the call site.
+def commit_signup_invite_resend(  # NOSONAR
+    session: Session,
+    request_id: int,
+    *,
+    clinic_id: str,
+    lease_token: str,
+    delivery_operation_id: str,
+    delivery_reference: str,
+    identity_proof_secret: str,
+    encryption_keys: Mapping[str, str],
+    actor: str,
+    actor_id: str,
+    now: datetime | None = None,
+) -> PatientPortalInvite:
+    """Release the replacement once CARLOS has durably queued its email; the old code stops working.
+
+    Only the replacement prepared for this operation can be committed, and only if it carries the
+    details this request holds. Releasing it retires the invite it replaces in the same step and
+    makes the replacement the request's own invite, so a match can still only be reported with the
+    invite that belongs to the request. No invite id is named by the caller.
+    """
+    current_time = now or utc_now()
+    signup_request = _lock_request(
+        session, request_id, clinic_id=clinic_id, lease_token=lease_token
+    )
+    if signup_request.result is not None:
+        raise SignupRequestClosedError(signup_request.health_card_hash)
+    _require_running_lease(signup_request, current_time)
+    replacement = session.scalar(
+        select(PatientPortalInvite)
+        .where(
+            PatientPortalInvite.clinic_id == clinic_id,
+            PatientPortalInvite.delivery_operation_id == delivery_operation_id,
+        )
+        .with_for_update()
+    )
+    # Only a replacement this job prepared: one a staff member prepared (the same operation id on
+    # the staff routes) is never released as the system's.
+    if (
+        replacement is None
+        or replacement.supersedes_invite_id is None
+        or replacement.created_by_id != actor_id
+    ):
+        raise SignupInviteConflictError(signup_request.health_card_hash)
+    try:
+        details = decrypt_signup_request(signup_request, encryption_keys=encryption_keys)
+    except (SignupRequestKeyUnavailableError, SignupRequestPayloadError) as exc:
+        raise SignupInviteUnavailableError() from exc
+    other_owner = session.scalar(
+        select(PatientPortalSignupRequest.id).where(
+            PatientPortalSignupRequest.prepared_invite_id == replacement.id,
+            PatientPortalSignupRequest.id != signup_request.id,
+        )
+    )
+    if other_owner is not None or not _carries_the_typed_details(
+        replacement, details, identity_proof_secret
+    ):
+        raise SignupInviteConflictError(signup_request.health_card_hash)
+    invite = activate_prepared_invite(
+        session,
+        replacement.id,
+        delivery_operation_id=delivery_operation_id,
+        delivery_reference=delivery_reference,
+        clinic_id=clinic_id,
+        actor=actor,
+        actor_id=actor_id,
+        actor_type=AUDIT_ACTOR_TYPE_SYSTEM,
+    )
+    signup_request.prepared_invite_id = invite.id
+    session.flush()
+    return invite
+
+
 def record_signup_refusal(
     session: Session,
     refusal: SignupResultRefusal,
@@ -488,4 +877,3 @@ def record_signup_refusal(
         assertion_key_id=assertion_key_id,
         assertion_id=assertion_id,
     )
-

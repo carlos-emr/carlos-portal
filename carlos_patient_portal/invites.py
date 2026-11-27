@@ -35,6 +35,7 @@ from carlos_patient_portal.identity import (
 )
 from carlos_patient_portal.models import (
     AUDIT_ACTOR_TYPE_STAFF,
+    AUDIT_ACTOR_TYPE_SYSTEM,
     AUDIT_EVENT_INVITE_CREATE,
     AUDIT_EVENT_INVITE_RESEND,
     AUDIT_EVENT_INVITE_REVOKE,
@@ -130,6 +131,17 @@ def normalize_staff_actor(actor: str) -> str:
     # patient-side recovery. Failing at the write boundary makes it a 422 CARLOS can act on.
     reject_control_characters(normalized_actor, "actor")
     return normalized_actor
+
+
+# Who an invite's audit rows may name as the actor: a staff member, or (for the sign-up job, which
+# makes invites with no person involved) the system. Never a patient.
+_INVITE_ACTOR_TYPES = frozenset({AUDIT_ACTOR_TYPE_STAFF, AUDIT_ACTOR_TYPE_SYSTEM})
+
+
+def _checked_actor_type(actor_type: str) -> str:
+    if actor_type not in _INVITE_ACTOR_TYPES:
+        raise ValueError("actor_type must be staff or system")
+    return actor_type
 
 
 def normalize_staff_actor_id(actor_id: str | None, actor: str) -> str:
@@ -441,6 +453,7 @@ def _new_prepared_invite(
     encryption_secret: str,
     encryption_key_id: str,
     supersedes_invite_id: int | None,
+    actor_type: str = AUDIT_ACTOR_TYPE_STAFF,
 ) -> tuple[PatientPortalInvite, str]:
     invite_token = create_invite_token()
     now = utc_now()
@@ -476,7 +489,7 @@ def _new_prepared_invite(
         session,
         event_type=AUDIT_EVENT_STAFF_ACTION,
         outcome=AUDIT_OUTCOME_SUCCESS,
-        actor_type=AUDIT_ACTOR_TYPE_STAFF,
+        actor_type=actor_type,
         actor=actor,
         actor_id=actor_id,
         clinic_id=clinic_id,
@@ -495,6 +508,7 @@ def _redisclose_prepared_token(
     actor: str,
     actor_id: str,
     encryption_keys: Mapping[str, str],
+    actor_type: str = AUDIT_ACTOR_TYPE_STAFF,
 ) -> str:
     """Return a prepared token to a retry of its own operation and audit the disclosure."""
     invite_token = _disclose_prepared_token(prepared, encryption_keys=encryption_keys)
@@ -502,7 +516,7 @@ def _redisclose_prepared_token(
         session,
         event_type=AUDIT_EVENT_STAFF_ACTION,
         outcome=AUDIT_OUTCOME_SUCCESS,
-        actor_type=AUDIT_ACTOR_TYPE_STAFF,
+        actor_type=actor_type,
         actor=actor,
         actor_id=actor_id,
         clinic_id=prepared.clinic_id,
@@ -524,6 +538,7 @@ def _retry_first_preparation(
     identity_proof: IdentityProof,
     proof_secret: str,
     encryption_keys: Mapping[str, str],
+    actor_type: str = AUDIT_ACTOR_TYPE_STAFF,
 ) -> tuple[PatientPortalInvite, str]:
     """Answer a repeated first preparation, whether it was found up front or lost the insert.
 
@@ -546,7 +561,12 @@ def _retry_first_preparation(
     ):
         raise InvitePreparationConflictError()
     return existing, _redisclose_prepared_token(
-        session, existing, actor=actor, actor_id=actor_id, encryption_keys=encryption_keys
+        session,
+        existing,
+        actor=actor,
+        actor_id=actor_id,
+        encryption_keys=encryption_keys,
+        actor_type=actor_type,
     )
 
 
@@ -596,6 +616,7 @@ def _release_preparation_slot(
     actor_id: str,
     delivery_operation_id: str | None = None,
     first_preparations_only: bool = False,
+    actor_type: str = AUDIT_ACTOR_TYPE_STAFF,
 ) -> None:
     """Retire an abandoned preparation that would otherwise block a new invite for the patient.
 
@@ -634,7 +655,7 @@ def _release_preparation_slot(
         session,
         event_type=AUDIT_EVENT_INVITE_REVOKE,
         outcome=AUDIT_OUTCOME_SUCCESS,
-        actor_type=AUDIT_ACTOR_TYPE_STAFF,
+        actor_type=actor_type,
         actor=actor,
         actor_id=actor_id,
         clinic_id=clinic_id,
@@ -708,6 +729,7 @@ def prepare_create_invite(
     encryption_keys: Mapping[str, str],
     clinic_id: str = "default",
     actor_id: str | None = None,
+    actor_type: str = AUDIT_ACTOR_TYPE_STAFF,
 ) -> tuple[PatientPortalInvite, str]:
     """Prepare a first invite without making it usable or replacing another token.
 
@@ -719,6 +741,7 @@ def prepare_create_invite(
     normalized_clinic_id = normalize_clinic_id(clinic_id)
     normalized_actor = normalize_staff_actor(actor)
     normalized_actor_id = normalize_staff_actor_id(actor_id, normalized_actor)
+    actor_type = _checked_actor_type(actor_type)
     if not proof_secret or not proof_secret.strip():
         raise ValueError("proof_secret must not be blank")
     # Validate the proof up front, as before; only hashing it waits for a new preparation.
@@ -740,6 +763,7 @@ def prepare_create_invite(
             identity_proof=identity_proof,
             proof_secret=proof_secret,
             encryption_keys=encryption_keys,
+            actor_type=actor_type,
         )
 
     if patient_has_account(session, clinic_id=normalized_clinic_id, demographic_no=demographic_no):
@@ -760,6 +784,7 @@ def prepare_create_invite(
         actor=normalized_actor,
         actor_id=normalized_actor_id,
         delivery_operation_id=delivery_operation_id,
+        actor_type=actor_type,
     )
     # Built only for a new preparation: a retry verifies against the stored proof instead.
     proof_salt = create_proof_salt()
@@ -779,6 +804,7 @@ def prepare_create_invite(
                 encryption_secret=encryption_secret,
                 encryption_key_id=encryption_key_id,
                 supersedes_invite_id=None,
+                actor_type=actor_type,
             )
     except IntegrityError as exc:
         # A retry sent while the first request was still in flight finds no row above and
@@ -799,6 +825,7 @@ def prepare_create_invite(
                 identity_proof=identity_proof,
                 proof_secret=proof_secret,
                 encryption_keys=encryption_keys,
+                actor_type=actor_type,
             )
         raise _preparation_insert_conflict(
             session,
@@ -820,11 +847,13 @@ def prepare_resend_invite(
     encryption_keys: Mapping[str, str],
     clinic_id: str = "default",
     actor_id: str | None = None,
+    actor_type: str = AUDIT_ACTOR_TYPE_STAFF,
 ) -> tuple[PatientPortalInvite, str]:
     """Prepare a replacement while leaving the currently delivered token valid."""
     normalized_clinic_id = normalize_clinic_id(clinic_id)
     normalized_actor = normalize_staff_actor(actor)
     normalized_actor_id = normalize_staff_actor_id(actor_id, normalized_actor)
+    actor_type = _checked_actor_type(actor_type)
     existing = _prepared_for_operation(
         session,
         clinic_id=normalized_clinic_id,
@@ -851,6 +880,7 @@ def prepare_resend_invite(
             actor=normalized_actor,
             actor_id=normalized_actor_id,
             delivery_operation_id=delivery_operation_id,
+            actor_type=actor_type,
         )
 
     invite = get_invite(session, invite_id, clinic_id=normalized_clinic_id, lock=True)
@@ -867,6 +897,7 @@ def prepare_resend_invite(
             actor=normalized_actor,
             actor_id=normalized_actor_id,
             encryption_keys=encryption_keys,
+            actor_type=actor_type,
         )
     if invite.proof_salt is None or invite.proof_hash_version is None:
         raise InvitePreparationConflictError()
@@ -893,6 +924,7 @@ def prepare_resend_invite(
                 encryption_secret=encryption_secret,
                 encryption_key_id=encryption_key_id,
                 supersedes_invite_id=invite.id,
+                actor_type=actor_type,
             )
     except IntegrityError as exc:
         # A retry sent while the first request was still in flight loses the insert; recover
@@ -911,6 +943,7 @@ def prepare_resend_invite(
                 actor=normalized_actor,
                 actor_id=normalized_actor_id,
                 encryption_keys=encryption_keys,
+                actor_type=actor_type,
             )
         raise _preparation_insert_conflict(
             session,
@@ -930,10 +963,12 @@ def activate_prepared_invite(
     clinic_id: str,
     actor: str,
     actor_id: str | None = None,
+    actor_type: str = AUDIT_ACTOR_TYPE_STAFF,
 ) -> PatientPortalInvite:
     """Atomically activate a prepared invite after CARLOS durably records its email job."""
     normalized_actor = normalize_staff_actor(actor)
     normalized_actor_id = normalize_staff_actor_id(actor_id, normalized_actor)
+    actor_type = _checked_actor_type(actor_type)
     invite = get_invite(session, invite_id, clinic_id=clinic_id, lock=True)
     if invite.delivery_operation_id != delivery_operation_id:
         raise InvitePreparationConflictError()
@@ -998,7 +1033,7 @@ def activate_prepared_invite(
             else AUDIT_EVENT_INVITE_CREATE
         ),
         outcome=AUDIT_OUTCOME_SUCCESS,
-        actor_type=AUDIT_ACTOR_TYPE_STAFF,
+        actor_type=actor_type,
         actor=normalized_actor,
         actor_id=normalized_actor_id,
         clinic_id=invite.clinic_id,
@@ -1014,7 +1049,7 @@ def activate_prepared_invite(
             session,
             event_type=AUDIT_EVENT_STAFF_ACTION,
             outcome=AUDIT_OUTCOME_SUCCESS,
-            actor_type=AUDIT_ACTOR_TYPE_STAFF,
+            actor_type=actor_type,
             actor=normalized_actor,
             actor_id=normalized_actor_id,
             clinic_id=invite.clinic_id,

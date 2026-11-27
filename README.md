@@ -765,7 +765,7 @@ one another permission, is a reviewed code change:
 | Job | Shown as | May hold | Routes |
 | --- | --- | --- | --- |
 | `booking-sync` | Clinic booking | `portal.booking_prompt.sync` | the two booking sync endpoints |
-| `signup-poll` | Patient self sign-up | `portal.signup.manage`, `portal.invite.manage` | the two sign-up request endpoints (claim and result); the invite routes still take staff only |
+| `signup-poll` | Patient self sign-up | `portal.signup.manage`, `portal.invite.manage` | the four sign-up request endpoints (claim, result, and the request's own invite: prepare and commit); the staff invite routes still take staff only |
 | `key-publish` | Clinic signing keys | `portal.mycarlos.clinic_keys.publish` | `PUT /internal/carlos/mycarlos/clinic-keys`, only while Send to myCarlos is on |
 
 A job call carries the same Bearer service token and, instead of the staff header, an
@@ -1293,6 +1293,7 @@ are indistinguishable to the caller.
 | `PATIENT_PORTAL_SELF_SIGNUP_QUEUE_RETRY_AFTER_SECONDS` | `300` | `Retry-After` on the full-backlog `503`. |
 | `PATIENT_PORTAL_SELF_SIGNUP_RESPONSE_FLOOR_MS` | `250` | Minimum time for every answered request. |
 | `PATIENT_PORTAL_SELF_SIGNUP_CLAIM_LEASE_SECONDS` | `300` | How long CARLOS's claim leases a request (30 to 3600). |
+| `PATIENT_PORTAL_SELF_SIGNUP_INVITE_RESEND_COOLDOWN_SECONDS` | `1800` | How long after an invite was last sent the job may ask for a new code (60 to 86400). |
 
 - **Rate limits** live in the database, so every web worker shares them. They are counted from
   `signup.request` audit events, as activation failures are, under one PostgreSQL transaction
@@ -1348,6 +1349,55 @@ is refused on every route.
   and the same `404` `sign-up request not found`. A result is still accepted while self sign-up is
   switched off, so details already leased can be deleted. The reported row stays, without its
   details, until its own expiry, so that a repeat can be answered as one.
+- **The request's own invite.** The sign-up job (claiming `portal.invite.manage`, and nobody else:
+  staff holding that right are refused on these two routes, as is every other job) makes the invite
+  for a request it holds a running lease on, in the two phases the staff invite routes use:
+  - `POST /internal/carlos/signup-requests/{id}/invite/prepare` with `{"lease_token", "demographic_no",
+    "delivery_operation_id"}` returns `201` with the prepared invite and its one-time `invite_token`.
+    **The identity proof is the request's own**: the invite carries the hashes of the email, date of
+    birth and health card number the patient typed, copied from the stored details; the call cannot
+    name or change them (any such field is `422`). The invite is created by `Patient self sign-up`
+    (`job:signup-poll`), so staff can tell it apart in lists and revoke it like any other. Its
+    audit rows (the preparation, a token handed out again on a retry, an abandoned preparation it
+    retires, the delivery that releases it) name the actor as **`system`** with the actor id
+    `job:signup-poll`, never `staff`: no person made it. (The invite layer takes an `actor_type` of
+    `staff`, the default, or `system`; anything else is refused.) The invite's id is recorded on
+    the request, and no two requests can hold the same invite (a unique index, migration 0028).
+    Preparing again with the same `delivery_operation_id` returns the same invite and token;
+    another operation for a request that has one is `409`
+    `sign-up request invite conflicts`. The invite layer's own `409`s apply (`portal account already
+    exists`, `pending invite already exists`, `invite preparation conflicts`), and `503`
+    `invite preparation unavailable` when the stored details cannot be read.
+  - `POST /internal/carlos/signup-requests/{id}/invite/commit-delivery` with `{"lease_token",
+    "delivery_operation_id", "delivery_reference"}` releases that invite once CARLOS has durably
+    queued its email. It names no invite: only the request's own can be committed (`409` `sign-up
+    request invite conflicts` if none was prepared).
+  - `POST /internal/carlos/signup-requests/{id}/invite/resend` with `{"lease_token", "demographic_no",
+    "delivery_operation_id"}` asks for a **new code for the invite the patient already holds**, so a
+    patient who deleted the email is not stranded for the invite's seven days. It needs the same
+    lease and the same job, and works on the patient's one *pending* invite (the caller names the
+    patient, as for a first invite) **only if that invite carries exactly the details this request
+    holds** (the email, date of birth and health card number the patient typed, compared as
+    activation compares them): another person's invite, a revoked or used one, and a patient with
+    none are one and the same `409` `sign-up request invite conflicts`. Inside the cool-down
+    (`PATIENT_PORTAL_SELF_SIGNUP_INVITE_RESEND_COOLDOWN_SECONDS`, 30 minutes by default, measured by
+    the **portal's** clock from when that invite was last sent) nothing is prepared and the answer
+    is `429` `invite resend too soon` with `Retry-After` in seconds. After it, a replacement is
+    prepared the way a staff resend is (`201`, the one-time `invite_token`; the old code keeps
+    working) and the same `delivery_operation_id` returns the same replacement and token.
+  - `POST /internal/carlos/signup-requests/{id}/invite/resend/commit-delivery` with `{"lease_token",
+    "delivery_operation_id", "delivery_reference"}` releases it once CARLOS has durably queued the
+    email: the old invite becomes `superseded` (**its code stops working**), the replacement is the
+    patient's one pending invite, and it becomes this request's own invite, so a match is still
+    reported only with the invite that belongs to the request (the retired one is `422`). It names
+    no invite and refuses a replacement that does not carry this request's details (`409`). Both
+    resend routes audit as the `system` actor, like the first invite.
+  - Both need the request's lease token, as the result does, and answer the same refusals: one `404`
+    for an unknown id, another clinic's request, a request never leased or a wrong token; `409`
+    `sign-up request lease expired`; `409` `sign-up request already has a result`. Refusals of the
+    lease or request are audited as a `signup.result` failure with the reason.
+  - **A match can only be reported with the invite prepared for the request.** The result route
+    refuses any other invite (`422`), as it refuses an invite that is not live.
 - **Audit.** A claim writes one `signup.claim` event per leased request, and a result one
   `signup.result` event (with the invite id and the result in `reason`); both name the job as the
   system actor (`Patient self sign-up`, `job:signup-poll`) with the call's key id and assertion id,
@@ -1356,7 +1406,10 @@ is refused on every route.
   health card number, date of birth, email or lease token is ever audited or logged.
 - **Backlog and cleanup.** Reported requests no longer count toward the backlog. The expiry purge
   keeps a request whose lease is still running past its TTL, so its result can still be recorded.
-- Migration `0025_signup_claim` follows `0024_avail_device_removed`. It adds the lease and result
+- Migration `0027_signup_prepared_invite` (the invite route, after `0026_mycarlos_push_handles`) adds
+  `prepared_invite_id` to the signup table; downgrade is refused while a request holds one.
+  Migration `0025_signup_claim` follows
+  `0024_avail_device_removed`. It adds the lease and result
   columns to the signup table and the `signup.claim` and `signup.result` audit event types; the id
   is the next free one at the time of writing and is to be renumbered at merge if another revision
   has taken it. Downgrade is refused while a reported request or an audit event of either new type
