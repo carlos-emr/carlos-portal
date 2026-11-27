@@ -247,14 +247,6 @@ TEXT: dict[str, str] = {
     "date_of_birth_month_choose": "Choisissez un mois",
     "date_of_birth_year": "Année",
     "date_to": "Date de fin",
-    "development_mfa_code": (
-        "Code de connexion de développement (le même code que celui envoyé par courriel, pour "
-        "accélérer les tests; sera retiré plus tard) :"
-    ),
-    "development_reset_link": (
-        "Lien de réinitialisation du mot de passe de développement (aussi envoyé par courriel "
-        "lorsque le courriel est configuré) :"
-    ),
     "documents": "Documents",
     "documents_link_mycarlos": (
         "Associez myCarlos pour recevoir vos documents sur votre appareil."
@@ -331,7 +323,6 @@ TEXT: dict[str, str] = {
     "next": "Suivant",
     "no_email_passwords": "Aucun mot de passe de document",
     "no_matching_email_passwords": "Aucun mot de passe de document correspondant",
-    "open_reset_page": "Ouvrir la page de réinitialisation",
     "password_label": "Mot de passe",
     "password_hidden": "Masqué",
     "password_for": "Mot de passe pour {subject}",

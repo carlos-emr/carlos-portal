@@ -47,6 +47,8 @@ def make_portal(*, enabled=True, require_mfa=True, session_secret=None):
     sms = RecordingPortalSmsSender()
     app = migrated_development_app(
         sms_sender=sms,
+        # These accounts sign in by SMS; the tests that want a mail path bring their own sender.
+        no_email_sender=True,
         mycarlos_delivery_enabled=enabled,
         require_mfa=require_mfa,
         public_base_url="https://portal.example.test",

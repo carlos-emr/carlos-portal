@@ -52,7 +52,6 @@ from carlos_patient_portal.models import PatientPortalMfaChallenge
 from carlos_patient_portal.routes import auth as auth_routes
 from tests.support import (
     CSRF_TOKEN_PATTERN,
-    DEVELOPMENT_MFA_CODE_PATTERN,
     MFA_CHALLENGE_TOKEN_PATTERN,
     STRONG_PASSWORD,
     STRONG_RESET_PASSWORD,
@@ -63,6 +62,7 @@ from tests.support import (
     get_csrf_token,
     migrated_development_app,
     production_settings,
+    sent_mfa_code,
 )
 
 # Locales whose catalogs must define every key. English is the source. A translation PR that
@@ -449,7 +449,7 @@ def test_portal_datetime_uses_each_locales_date_format(locale: str, expected: st
 
 
 def _start_browser_sign_in(app: main.FastAPI, client: TestClient) -> tuple[str, str, str]:
-    """Sign in up to the MFA page; return its CSRF token, challenge token, and development code."""
+    """Sign in up to the MFA page; return its CSRF token, challenge token, and the emailed code."""
     activate_seeded_patient_account(app, client)
     login_response = client.post(
         "/auth/login",
@@ -462,11 +462,9 @@ def _start_browser_sign_in(app: main.FastAPI, client: TestClient) -> tuple[str, 
     assert login_response.status_code == 200
     csrf_match = CSRF_TOKEN_PATTERN.search(login_response.text)
     challenge_match = MFA_CHALLENGE_TOKEN_PATTERN.search(login_response.text)
-    code_match = DEVELOPMENT_MFA_CODE_PATTERN.search(login_response.text)
     assert csrf_match is not None
     assert challenge_match is not None
-    assert code_match is not None
-    return csrf_match.group(1), challenge_match.group(1), code_match.group(1)
+    return csrf_match.group(1), challenge_match.group(1), sent_mfa_code(app)
 
 
 def _challenge_row_values(app: main.FastAPI) -> dict[str, object]:

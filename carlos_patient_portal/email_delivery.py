@@ -12,8 +12,13 @@
 # You should have received a copy of the GNU Affero General Public License along with this program.
 # If not, see <https://www.gnu.org/licenses/>.
 
+import json
+import logging
+import os
 import smtplib
 import ssl
+import stat
+from datetime import UTC, datetime
 from email.message import EmailMessage
 from typing import Protocol
 
@@ -33,6 +38,8 @@ from carlos_patient_portal.outbound_messages import (
 # One deliberately generic message for every adapter failure path. Detailed SMTP/header failure
 # classification belongs in privacy-safe metrics/logs, never in text that can reach a patient.
 PORTAL_EMAIL_DELIVERY_ERROR_MESSAGE = "portal email delivery failed"
+
+logger = logging.getLogger(__name__)
 
 
 class PortalEmailDeliveryError(Exception):
@@ -305,7 +312,145 @@ class SmtpPortalEmailSender:
             raise PortalEmailDeliveryError(PORTAL_EMAIL_DELIVERY_ERROR_MESSAGE) from None
 
 
+class DevelopmentOutboxEmailSender:
+    """Development only: writes each outgoing email to a private file instead of sending it.
+
+    A development portal with no SMTP host used to print the sign-in code and the reset link on
+    its pages and in its answers (#135). It prints and returns neither now, so a developer, the
+    browser checks and the demo read the message here, or at a test inbox when SMTP is set. One
+    JSON object per line (`at`, `kind`, `recipient`, and the code or link the message carries),
+    appended to a file only its owner can read, never followed through a link. It is built only
+    by `build_portal_email_sender` in development, and refuses to be built anywhere else.
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        if not settings.is_development:
+            raise ValueError("the development mail outbox is only for development")
+        self.path = settings.resolved_development_mail_outbox_path
+
+    def _record(self, kind: str, recipient: str, **fields: object) -> None:
+        line = json.dumps(
+            {"at": datetime.now(UTC).isoformat(), "kind": kind, "recipient": recipient, **fields},
+            separators=(",", ":"),
+        )
+        try:
+            descriptor = os.open(
+                self.path,
+                os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+        except OSError as exc:
+            # A link in place of the file (O_NOFOLLOW), a directory, no permission.
+            raise PortalEmailDeliveryError(PORTAL_EMAIL_DELIVERY_ERROR_MESSAGE) from exc
+        try:
+            self._require_private_file(descriptor)
+            os.write(descriptor, (line + "\n").encode("utf-8"))
+        except OSError as exc:
+            raise PortalEmailDeliveryError(PORTAL_EMAIL_DELIVERY_ERROR_MESSAGE) from exc
+        finally:
+            os.close(descriptor)
+
+    def _require_private_file(self, descriptor: int) -> None:
+        """Refuse a file that is not ours alone: the 0600 of `os.open` holds only when it made it.
+
+        The default path is a fixed name in the shared temp directory, so another user can create
+        the file first, readable by everyone, and `O_NOFOLLOW` stops a link but not that. A regular
+        file owned by this process's user with no group or other permission is the only one written
+        to, so the README's "only its owner can read it" is true. (The owner and mode checks need
+        POSIX; on Windows, where this development-only sender has no such bits, only the file kind
+        is checked.)
+        """
+        status = os.fstat(descriptor)
+        geteuid = getattr(os, "geteuid", None)
+        private = stat.S_ISREG(status.st_mode) and (
+            geteuid is None or (status.st_uid == geteuid() and not status.st_mode & 0o077)
+        )
+        if not private:
+            logger.warning(
+                "The development mail outbox %s is not a private file of this user; refusing to "
+                "write a sign-in code to it. Remove it, or set "
+                "PATIENT_PORTAL_DEVELOPMENT_MAIL_OUTBOX_PATH.",
+                self.path,
+            )
+            raise PortalEmailDeliveryError(PORTAL_EMAIL_DELIVERY_ERROR_MESSAGE)
+
+    def send_code(
+        self,
+        *,
+        recipient: str,
+        code: str,
+        expires_in_seconds: int,
+        locale: str = DEFAULT_OUTBOUND_LOCALE,
+    ) -> None:
+        self._record("mfa_code", recipient, code=code, expires_in_seconds=expires_in_seconds)
+
+    def send_password_reset(
+        self,
+        *,
+        recipient: str,
+        reset_url: str,
+        expires_in_seconds: int,
+        message_id: str | None = None,
+        locale: str = DEFAULT_OUTBOUND_LOCALE,
+    ) -> None:
+        self._record(
+            "password_reset", recipient, reset_url=reset_url, expires_in_seconds=expires_in_seconds
+        )
+
+    def send_contact_change_notice(
+        self,
+        *,
+        recipient: str,
+        message_id: str | None = None,
+        locale: str = DEFAULT_OUTBOUND_LOCALE,
+    ) -> None:
+        self._record("contact_change_notice", recipient)
+
+    def send_booking_prompt_notice(
+        self,
+        *,
+        recipient: str,
+        sign_in_url: str,
+        message_id: str | None = None,
+        locale: str = DEFAULT_OUTBOUND_LOCALE,
+    ) -> None:
+        self._record("booking_prompt_notice", recipient, sign_in_url=sign_in_url)
+
+    def send_booking_prompt_update_notice(
+        self,
+        *,
+        recipient: str,
+        sign_in_url: str,
+        message_id: str | None = None,
+        locale: str = DEFAULT_OUTBOUND_LOCALE,
+    ) -> None:
+        self._record("booking_prompt_update_notice", recipient, sign_in_url=sign_in_url)
+
+    def send_email_change_confirmation(
+        self,
+        *,
+        recipient: str,
+        confirmation_url: str,
+        expires_in_seconds: int,
+        locale: str = DEFAULT_OUTBOUND_LOCALE,
+    ) -> None:
+        self._record(
+            "email_change_confirmation",
+            recipient,
+            confirmation_url=confirmation_url,
+            expires_in_seconds=expires_in_seconds,
+        )
+
+    def send_email_change_requested_notice(
+        self, *, recipient: str, locale: str = DEFAULT_OUTBOUND_LOCALE
+    ) -> None:
+        self._record("email_change_requested_notice", recipient)
+
+
 def build_portal_email_sender(settings: Settings) -> PortalEmailSender | None:
-    if settings.smtp_host is None:
-        return None
-    return SmtpPortalEmailSender(settings)
+    if settings.smtp_host is not None:
+        return SmtpPortalEmailSender(settings)
+    # No SMTP host in development: the outbox file is the only way to read what was "sent".
+    if settings.is_development and settings.development_mail_outbox:
+        return DevelopmentOutboxEmailSender(settings)
+    return None

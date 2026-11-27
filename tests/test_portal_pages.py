@@ -1715,8 +1715,12 @@ def test_legacy_sender_without_confirmation_revokes_unusable_email_change() -> N
     """A configured legacy adapter must fail the required link delivery, even in development."""
 
     class LegacySender:
+        def __init__(self) -> None:
+            self.messages: list[dict[str, object]] = []
+
         def send_code(self, **kwargs: object) -> None:
-            pass
+            # Records the code so the test can sign in (#135); still no confirmation method.
+            self.messages.append(dict(kwargs))
 
     app = migrated_development_app(email_sender=LegacySender())
     with TestClient(app) as client:

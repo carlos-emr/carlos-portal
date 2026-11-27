@@ -194,10 +194,6 @@ TEXT: dict[str, str] = {
     "date_of_birth_month_choose": "请选择月份",
     "date_of_birth_year": "年",
     "date_to": "结束日期",
-    "development_mfa_code": (
-        "开发环境登录验证码（与邮件中发送的验证码相同，用于加快测试，之后将移除）："
-    ),
-    "development_reset_link": "开发环境密码重置链接（配置了电子邮件时也会通过邮件发送）：",
     "documents": "文档",
     "documents_link_mycarlos": "请关联 myCarlos，以便在您的设备上接收文档。",
     "documents_nothing_waiting": "没有待接收的内容。",
@@ -261,7 +257,6 @@ TEXT: dict[str, str] = {
     "no_email_passwords": "没有文档密码",
     "no_matching_email_passwords": "没有符合条件的文档密码",
     "of": "/",
-    "open_reset_page": "打开重置页面",
     "page": "页码",
     "password_label": "密码",
     "password_hidden": "已隐藏",

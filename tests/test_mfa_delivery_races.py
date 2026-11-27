@@ -111,7 +111,8 @@ def test_late_resend_delivery_cannot_replace_the_newer_code_or_its_cooldown(
         # deliberately keeps both the numeric code and expiry identical across A/B.
         newer = client.post("/auth/mfa/resend", json={**resend, "mfa_delivery_method": new_method})
         assert newer.status_code == 200
-        new_code = newer.json()["development_mfa_code"]
+        assert "development_mfa_code" not in newer.json()
+        new_code = (sender if new_method == "email" else sms_sender).messages[-1]["code"]
         assert old_code == code_values[1]
         assert new_code == code_values[2]
 
@@ -281,7 +282,8 @@ def test_verified_challenge_provider_outcome_follows_account_reservation(
             )
             assert newer.status_code == 200
             new_token = newer.json()["mfa_challenge_token"]
-            new_code = newer.json()["development_mfa_code"]
+            assert "development_mfa_code" not in newer.json()
+            new_code = sender.messages[-1]["code"]
 
             def newer_state():
                 with app.state.session_factory() as session:
@@ -574,7 +576,8 @@ def test_cancelled_login_delivery_cannot_change_the_newer_login_cooldown(
         newer = client.post("/auth/login", json=login)
         assert newer.status_code == 200
         new_token = newer.json()["mfa_challenge_token"]
-        new_code = newer.json()["development_mfa_code"]
+        assert "development_mfa_code" not in newer.json()
+        new_code = sender.messages[-1]["code"]
 
         def stored_state():
             with app.state.session_factory() as session:

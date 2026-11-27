@@ -208,7 +208,6 @@ def build_auth_dependencies(
         error_message: str | None = None,
         notice_message: str | None = None,
         form_values: dict[str, str] | None = None,
-        development_reset_url: str | None = None,
     ) -> Response:
         return render_public_auth_template(
             request,
@@ -219,7 +218,6 @@ def build_auth_dependencies(
             error_message=error_message,
             notice_message=notice_message,
             form_values=form_values,
-            development_reset_url=development_reset_url,
         )
 
     def render_mfa_page(
@@ -457,7 +455,7 @@ def register_login_routes(
                 settings=deps.settings,
             )
             return redirect_response
-        return login_response_payload(result, settings=deps.settings)
+        return login_response_payload(result)
 
 
 def register_mfa_routes(
@@ -608,7 +606,7 @@ def register_mfa_routes(
                     else "mfa_new_code_sent_sms"
                 ],
             )
-        return mfa_challenge_response_payload(delivery, settings=deps.settings)
+        return mfa_challenge_response_payload(delivery)
 
     @app.post("/auth/mfa/verify", response_model=MfaVerifyResponse)
     async def verify_mfa(
@@ -879,7 +877,7 @@ def register_password_reset_routes(
                         "email": payload.email,
                     },
                 )
-            return password_reset_request_response_payload(None, settings=deps.settings)
+            return password_reset_request_response_payload()
 
         result = await run_in_threadpool(
             request_password_reset,
@@ -891,18 +889,17 @@ def register_password_reset_routes(
             reset_token_secret=runtime.token_keys.password_reset,
             clinic_id=deps.settings.clinic_id,
         )
-        response_reset_token = result.reset_token
-        development_reset_url = None
         if result.reset_token is not None and result.recipient is not None:
             reset_url = build_password_reset_url(
                 request,
                 settings=deps.settings,
                 reset_token=result.reset_token,
             )
-            # Development delivers inline so a developer sees a delivery failure immediately and
-            # gets `development_reset_url` back in the response; the timing signal that leaks
-            # does not matter on a disposable database. Every non-development submission returns
-            # above after enqueuing the same account-neutral command.
+            # Development delivers inline so a developer sees a delivery failure immediately; the
+            # timing signal that leaks does not matter on a disposable database. Every
+            # non-development submission returns above after enqueuing the same account-neutral
+            # command. The link is never part of the answer (#135): it reaches the patient only
+            # by email.
             await run_in_threadpool(session.commit)
             try:
                 await run_in_threadpool(
@@ -928,7 +925,6 @@ def register_password_reset_routes(
                     "Password reset email delivery failed: %s",
                     type(exc).__name__,
                 )
-                response_reset_token = None
             else:
                 await run_in_threadpool(
                     record_password_reset_delivery_outcome,
@@ -937,7 +933,6 @@ def register_password_reset_routes(
                     outcome=AUDIT_OUTCOME_SUCCESS,
                 )
                 await run_in_threadpool(session.commit)
-                development_reset_url = reset_url
         if is_browser_form:
             return deps.render_password_reset_request(
                 request,
@@ -947,9 +942,8 @@ def register_password_reset_routes(
                     "username": payload.username,
                     "email": payload.email,
                 },
-                development_reset_url=development_reset_url,
             )
-        return password_reset_request_response_payload(response_reset_token, settings=deps.settings)
+        return password_reset_request_response_payload()
 
     @app.post("/auth/password-reset/complete", response_model=PasswordResetCompleteResponse)
     async def complete_reset(

@@ -8,6 +8,7 @@ from carlos_patient_portal.config import (
     Settings,
 )
 from carlos_patient_portal.email_delivery import (
+    DevelopmentOutboxEmailSender,
     PortalEmailDeliveryError,
     SmtpPortalEmailSender,
     build_portal_email_sender,
@@ -162,7 +163,18 @@ def test_smtp_sender_wraps_invalid_recipient_header() -> None:
 
 
 def test_smtp_sender_is_only_built_for_complete_configuration() -> None:
-    assert build_portal_email_sender(Settings(environment="development")) is None
+    # No SMTP host in development: the development outbox when it is on (the default, #135), and
+    # no sender at all when it is switched off.
+    assert isinstance(
+        build_portal_email_sender(Settings(environment="development")),
+        DevelopmentOutboxEmailSender,
+    )
+    assert (
+        build_portal_email_sender(
+            Settings(environment="development", development_mail_outbox=False)
+        )
+        is None
+    )
     assert isinstance(build_portal_email_sender(smtp_settings()), SmtpPortalEmailSender)
 
 

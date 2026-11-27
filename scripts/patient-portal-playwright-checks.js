@@ -11,8 +11,8 @@
  *   PORTAL_TEST_PASSWORD=the seeded development password
  *   PORTAL_EXPECTED_USER=carlospatient
  *   PORTAL_EXPECTED_EMAIL=example.patient@example.com
- *   PORTAL_MAIL_COMMAND=/scripts/mail
- *   PORTAL_USE_DEVELOPMENT_MFA_CODE=true to read codes rendered by a development server
+ *   PORTAL_MAIL_COMMAND=/scripts/mail, the test inbox the portal's SMTP settings point at: the
+ *     sign-in code is read from the email it received (a portal prints no code, #135)
  *   PORTAL_BROWSER_FIXTURE_FILE=/tmp/patient-portal-browser-fixtures.json
  *   PORTAL_SCREENSHOT_DIR=/tmp
  *   PORTAL_CHROME_PATH=/path/to/chrome-or-chromium
@@ -29,7 +29,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright');
 const { assertNoSeriousAxeIssues } = require('./patient-portal-axe');
-const { readCapturedMfaCode } = require('./patient-portal-mail-capture');
+const { mailRunner, readCapturedMfaCode } = require('./patient-portal-mail-capture');
 
 const allowNonLocalBaseUrl = (
   process.env.PORTAL_ALLOW_NON_LOCAL_BASE_URL
@@ -42,7 +42,6 @@ const expectedUser = process.env.PORTAL_EXPECTED_USER || testUser.toLowerCase();
 const expectedEmail = process.env.PORTAL_EXPECTED_EMAIL || 'example.patient@example.com';
 const changedPassword = ['Orbit', 'Lantern', 'Meadow', '49!'].join('-');
 const mailCommand = process.env.PORTAL_MAIL_COMMAND || '/scripts/mail';
-const useDevelopmentMfaCode = process.env.PORTAL_USE_DEVELOPMENT_MFA_CODE === 'true';
 const screenshotDir = path.resolve(process.env.PORTAL_SCREENSHOT_DIR || os.tmpdir());
 const chromePath = process.env.PORTAL_CHROME_PATH || process.env.CHROME_PATH || '';
 const pythonCommand = process.env.PORTAL_PYTHON || 'python';
@@ -190,27 +189,15 @@ function reportBookingResult(result) {
   });
 }
 
-function runMailCommand(...args) {
-  return execFileSync(mailCommand, args, {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: 10000,
-  });
-}
+// The mail command when there is one, else the development mail outbox file (a portal prints no
+// code, #135; with no SMTP host it writes its email there).
+const runMailCommand = mailRunner({ mailCommand, execFileSync });
 
 function sleep(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
 async function readBrowserMfaCode(page, expectedRecipient) {
-  if (useDevelopmentMfaCode) {
-    const code = await page.locator('[data-development-mfa-code]').getAttribute(
-      'data-development-mfa-code'
-    );
-    assert(code, 'development MFA code was not available');
-    return code;
-  }
-
   return readCapturedMfaCode({
     expectedRecipient,
     readLatest: () => runMailCommand('read', 'latest'),
@@ -401,9 +388,7 @@ function screenshotPath(name) {
   });
 
   try {
-    if (!useDevelopmentMfaCode) {
-      runMailCommand('clear');
-    }
+    runMailCommand('clear');
     await page.goto(portalUrl('/portal/email-passwords'), {
       waitUntil: 'networkidle',
       timeout: 30000,

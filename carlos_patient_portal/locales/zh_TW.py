@@ -197,10 +197,6 @@ TEXT: dict[str, str] = {
     "date_of_birth_month_choose": "請選擇月份",
     "date_of_birth_year": "年",
     "date_to": "結束日期",
-    "development_mfa_code": (
-        "開發用登入驗證碼（與電子郵件傳送的驗證碼相同，用於加快測試，日後將移除）："
-    ),
-    "development_reset_link": "開發用密碼重設連結（設定電子郵件後也會以電子郵件傳送）：",
     "documents": "文件",
     "documents_link_mycarlos": "請連結 myCarlos，以便在您的裝置上接收文件。",
     "documents_nothing_waiting": "沒有待接收的內容。",
@@ -264,7 +260,6 @@ TEXT: dict[str, str] = {
     "no_email_passwords": "沒有文件密碼",
     "no_matching_email_passwords": "沒有符合條件的文件密碼",
     "of": "/",
-    "open_reset_page": "開啟重設頁面",
     "page": "頁次",
     "password_label": "密碼",
     "password_hidden": "已隱藏",

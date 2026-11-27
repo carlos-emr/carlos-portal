@@ -24,6 +24,7 @@ from tests.support import (
     TEST_CLINIC_ID,
     activate_seeded_patient_account,
     migrated_development_app,
+    sent_mfa_code,
 )
 
 
@@ -82,14 +83,15 @@ def signed_in():
     assert login.status_code == 200, login.text
     keys = PortalTokenKeys.derive(app.state.settings.session_secret.get_secret_value())
     policy = main.auth_policy_from_settings(app.state.settings)
-    return app, login.json(), keys, policy
+    # The answer carries no code (#135): the test reads the one that was emailed.
+    return app, {**login.json(), "emailed_code": sent_mfa_code(app)}, keys, policy
 
 
 def verify(session, payload, keys, policy, *, token=None):
     return auth.verify_mfa_challenge(
         session,
         challenge_token=token or payload["mfa_challenge_token"],
-        code=payload["development_mfa_code"],
+        code=payload["emailed_code"],
         policy=policy,
         challenge_token_secret=keys.mfa,
         session_token_secret=keys.session,

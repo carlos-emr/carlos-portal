@@ -246,14 +246,6 @@ TEXT: dict[str, str] = {
     "date_of_birth_month_choose": "Proszę wybrać miesiąc",
     "date_of_birth_year": "Rok",
     "date_to": "Data do",
-    "development_mfa_code": (
-        "Deweloperski kod logowania (ten sam kod, który wysłano e-mailem; przyspiesza "
-        "testowanie i zostanie później usunięty):"
-    ),
-    "development_reset_link": (
-        "Deweloperski link do resetowania hasła (wysyłany także e-mailem, gdy poczta jest "
-        "skonfigurowana):"
-    ),
     "documents": "Dokumenty",
     "documents_link_mycarlos": (
         "Proszę połączyć myCarlos, aby odbierać dokumenty na swoim urządzeniu."
@@ -345,7 +337,6 @@ TEXT: dict[str, str] = {
     "no_email_passwords": "Brak haseł dokumentów",
     "no_matching_email_passwords": "Brak pasujących haseł dokumentów",
     "of": "z",
-    "open_reset_page": "Proszę otworzyć stronę resetowania",
     "page": "Strona",
     "password_label": "Hasło",
     "password_hidden": "Ukryte",

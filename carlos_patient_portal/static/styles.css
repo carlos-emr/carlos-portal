@@ -19,9 +19,6 @@
   --text: #1f2937;
   --text-soft: #4b5563;
   --focus-ring: #8a5a00;
-  --warn-text: #513a00;
-  --warn-bg: #fff8db;
-  --warn-border: #dcc46d;
   --error-text: #7a1f1f;
   --error-bg: #fff1f1;
   --error-border: #e3a8a8;
@@ -55,9 +52,6 @@
     --text: #e5e7eb;
     --text-soft: #c8cdd8;
     --focus-ring: #ffd166;
-    --warn-text: #ffe9a6;
-    --warn-bg: #3a2e0a;
-    --warn-border: #8a6d1a;
     --error-text: #ffc9c9;
     --error-bg: #3a1519;
     --error-border: #8a3a42;
@@ -319,18 +313,6 @@ button.text-tab:focus-visible {
 .auth-result .primary-action {
   width: fit-content;
   text-decoration: none;
-}
-
-.development-link {
-  margin: 0 0 12px;
-  padding: 8px 10px;
-  color: var(--warn-text);
-  background: var(--warn-bg);
-  border: 1px solid var(--warn-border);
-  border-radius: 4px;
-  font-size: 0.75rem;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
 }
 
 h1 {
