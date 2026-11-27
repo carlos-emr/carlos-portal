@@ -179,6 +179,34 @@ async function assertAccessiblePage(page, surface) {
   await assertNoSeriousAxeIssues(page, surface);
 }
 
+async function assertLargeDateOfBirthFits(page, surface) {
+  const viewport = page.viewportSize();
+  const defaultTextSize = await page.locator('html').evaluate((root) => parseFloat(getComputedStyle(root).fontSize));
+  const session = await page.context().newCDPSession(page);
+  try {
+    await page.setViewportSize({ width: 320, height: viewport.height });
+    await session.send('Page.setFontSizes', { fontSizes: { standard: defaultTextSize * 2 } });
+    const layout = await page.locator('.date-of-birth-parts').evaluate((parts) => {
+      const row = parts.getBoundingClientRect();
+      const controls = [...parts.querySelectorAll('input, select')];
+      const clipped = controls.filter((control) => {
+        const box = control.getBoundingClientRect();
+        return box.width <= 0 || box.left < Math.max(0, row.left) - 1
+          || box.right > Math.min(window.innerWidth, row.right) + 1;
+      }).map((control) => control.name);
+      return { count: controls.length, clipped, textSize: parseFloat(getComputedStyle(document.documentElement).fontSize) };
+    });
+    assert(layout.textSize === defaultTextSize * 2 && layout.count === 3,
+      `${surface} did not render all three date controls at 200% text`);
+    assert(layout.clipped.length === 0,
+      `${surface} at 320px with 200% text clips ${layout.clipped.join(', ')}`);
+  } finally {
+    await session.send('Page.setFontSizes', { fontSizes: { standard: defaultTextSize } });
+    await session.detach();
+    await page.setViewportSize(viewport);
+  }
+}
+
 // Stands in for the CARLOS polling job: reports a result for the patient's pending pick on the
 // seeded offer. The browser run has no CARLOS and no internal API token, so the seed script calls
 // the same service function the internal choice-result endpoint uses.
@@ -510,6 +538,7 @@ function screenshotPath(name) {
       await signUpLink.click();
       await page.getByRole('heading', { name: 'Request a portal account' }).waitFor();
       await assertAccessiblePage(page, 'self sign-up page');
+      await assertLargeDateOfBirthFits(page, 'self sign-up page');
       const signUpMobileLayout = await page.evaluate(() => ({
         viewportWidth: window.innerWidth,
         documentWidth: document.documentElement.scrollWidth,
@@ -612,6 +641,7 @@ function screenshotPath(name) {
         && await page.locator('select[name="date_of_birth_month"] option[value]:not([value=""])').count() === 12,
       'the Day, Month (12 named months) and Year boxes are not each labelled'
     );
+    await assertLargeDateOfBirthFits(page, 'activation page');
     await page.setViewportSize({ width: 390, height: 844 });
     const activationMobileLayout = await page.evaluate(() => ({
       viewportWidth: window.innerWidth,

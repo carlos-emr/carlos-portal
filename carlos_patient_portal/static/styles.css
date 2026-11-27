@@ -350,6 +350,14 @@ h2 {
   gap: 12px;
 }
 
+.auth-panel .form-stack {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.auth-panel .form-stack :is(input, select) {
+  min-width: 0;
+}
+
 .form-stack label {
   display: grid;
   gap: 4px;
@@ -476,13 +484,23 @@ h2 {
 }
 
 .date-of-birth-parts {
-  display: grid;
-  grid-template-columns: 4.5em minmax(0, 1fr) 6em;
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 .date-of-birth-parts label {
+  flex: 1 1 4.75rem;
+  min-width: 0;
   font-weight: normal;
+}
+
+.date-of-birth-parts label:first-child {
+  flex: 0 1 4.5rem;
+}
+
+.date-of-birth-parts label:last-child {
+  flex: 0 1 6rem;
 }
 
 .date-of-birth-parts input,
