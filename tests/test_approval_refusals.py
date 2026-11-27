@@ -6,8 +6,11 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
+from carlos_patient_portal import mailbox
+from carlos_patient_portal.approval_models import ApprovalRequest
+from carlos_patient_portal.mailbox_codec import MailboxRefusal
 from carlos_patient_portal.models import PatientPortalMyCarlosDevice
 from tests import delivery_contract_reference as ref
 from tests.test_approval_http import (
@@ -197,3 +200,75 @@ def test_a_listing_with_a_cursor_that_is_not_one_is_refused(approval_http):
     refused = client.get(path, headers=job_headers(path, "requests.read"))
     assert refused.status_code == 400
     assert code(refused) == "invalid_cursor"
+
+
+def test_an_account_with_fifty_open_requests_is_told_to_wait_before_the_device_rate_limit(
+    approval_http,
+):
+    app, client = approval_http
+    now = F["now"]
+    with app.state.session_factory() as session, session.begin():
+        device = session.scalars(select(PatientPortalMyCarlosDevice)).one()
+        for number in range(1, 51):
+            session.add(
+                ApprovalRequest(
+                    clinic_id=F["clinic_id"],
+                    request_id=str(uuid4()),
+                    account_id=device.account_id,
+                    device_id=device.id,
+                    demographic_no=6001,
+                    recipient_id=F["recipient_id"],
+                    candidate_kid=device.device_key_id,
+                    request_sequence=1000 + number,
+                    intent="FAKE-intent",
+                    intent_body_hash="a" * 64,
+                    expires_at=now + 3600,
+                    status="pending",
+                )
+            )
+    refused = post(client, signed_intent(request_id=str(uuid4())))
+    assert (refused.status_code, code(refused)) == (429, "approval_unavailable")
+    # Nothing was added by the refused request.
+    with app.state.session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(ApprovalRequest)) == 50
+
+
+def test_requests_that_have_ended_do_not_count_toward_the_fifty(approval_http):
+    app, client = approval_http
+    now = F["now"]
+    with app.state.session_factory() as session, session.begin():
+        device = session.scalars(select(PatientPortalMyCarlosDevice)).one()
+        for number in range(1, 51):
+            session.add(
+                ApprovalRequest(
+                    clinic_id=F["clinic_id"],
+                    request_id=str(uuid4()),
+                    account_id=device.account_id,
+                    device_id=device.id,
+                    demographic_no=6001,
+                    recipient_id=F["recipient_id"],
+                    candidate_kid=device.device_key_id,
+                    # Far from the sequence the next real request takes (a unique index).
+                    request_sequence=1000 + number,
+                    intent="FAKE-intent",
+                    intent_body_hash="a" * 64,
+                    # Already past, or no longer open: neither is an open request.
+                    expires_at=now - 1 if number % 2 else now + 3600,
+                    status="pending" if number % 2 else "accepted",
+                )
+            )
+    assert post(client, signed_intent(request_id=str(uuid4()))).status_code == 201
+
+
+def test_an_unexpected_refusal_from_the_rate_check_is_passed_on_unchanged(
+    approval_http, monkeypatch
+):
+    _, client = approval_http
+
+    def refuse(*_args, **_kwargs):
+        raise MailboxRefusal("mailbox_unavailable", 503)
+
+    monkeypatch.setattr(mailbox, "rate", refuse)
+    refused = post(client, signed_intent(request_id=str(uuid4())))
+    # Not turned into "wait": only the quota refusal is.
+    assert (refused.status_code, code(refused)) == (503, "mailbox_unavailable")
