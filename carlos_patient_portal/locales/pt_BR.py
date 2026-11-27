@@ -192,7 +192,11 @@ TEXT: dict[str, str] = {
         "correspondentes do prontuário no CARLOS."
     ),
     "contact_change_success_heading": "Dados de contato atualizados",
+    "contact_email": "E-mail",
+    "contact_hours": "Horário",
+    "contact_phone": "Telefone",
     "contact_the_clinic": "Entrar em contato com a clínica",
+    "contact_website": "Site",
     "copy": "Copiar",
     "copy_failed": "Selecione e copie manualmente",
     "copied": "Copiado",
@@ -242,6 +246,16 @@ TEXT: dict[str, str] = {
         "e-mail está configurado):"
     ),
     "documents": "Documentos",
+    "documents_link_mycarlos": (
+        "Vincule o myCarlos para receber seus documentos no seu dispositivo."
+    ),
+    "documents_nothing_waiting": "Nada está esperando.",
+    "documents_waiting_one": (
+        "{count} documento está esperando por você. Abra o myCarlos para recebê-lo."
+    ),
+    "documents_waiting_other": (
+        "{count} documentos estão esperando por você. Abra o myCarlos para recebê-los."
+    ),
     "email": "E-mail",
     "email_codes_rate": "Os códigos por e-mail podem ser reenviados uma vez por minuto.",
     "email_password": "Senha do documento",
@@ -287,6 +301,10 @@ TEXT: dict[str, str] = {
     ),
     "mfa_new_code_sent_email": "Um novo código foi enviado por e-mail.",
     "mfa_new_code_sent_sms": "Um novo código foi enviado por SMS.",
+    "mfa_resumed_notice": (
+        "O código de acesso enviado às {time} UTC ainda é válido. Digite-o abaixo. "
+        "Nenhum novo código foi enviado."
+    ),
     "mfa_rate_limited_one": "Um código foi enviado há pouco. Tente novamente em {seconds} segundo.",
     "mfa_rate_limited_other": (
         "Um código foi enviado há pouco. Tente novamente em {seconds} segundos."
@@ -341,6 +359,19 @@ TEXT: dict[str, str] = {
     "password_reset_success": "Sua senha foi redefinida. Entre com a nova senha.",
     "password_reset_success_heading": "Senha redefinida",
     "password_reset_update": "Atualizar senha",
+    "preferences": "Preferências",
+    "preferences_appearance": "Aparência",
+    "preferences_appearance_legend": "Esquema de cores",
+    "appearance_system": "Sistema",
+    "appearance_light": "Claro",
+    "appearance_dark": "Escuro",
+    "appearance_high_contrast": "Alto contraste",
+    "appearance_high_contrast_help": (
+        "Texto e bordas mais fortes e um contorno de foco mais espesso."
+    ),
+    "preferences_save": "Salvar preferências",
+    "preferences_saved": "Preferências salvas.",
+    "preferences_language": "Idioma",
     "password_updated": "Senha atualizada",
     "patient_dashboard": "Painel do paciente",
     "phone": "Telefone",
@@ -348,6 +379,10 @@ TEXT: dict[str, str] = {
     "phone_confirmation_code": "Código de confirmação do telefone",
     "confirm_phone": "Confirmar número de telefone",
     "resend_phone_confirmation": "Enviar outro código",
+    "phone_confirmation_sent_to": "Um código de confirmação foi enviado por SMS para {number}.",
+    "phone_confirmation_expired": (
+        "O código de confirmação enviado para {number} expirou. Envie outro código."
+    ),
     "previous": "Anterior",
     "provider": "Profissional",
     "provider_options_truncated": (

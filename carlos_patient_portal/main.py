@@ -24,7 +24,7 @@ import json
 import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from secrets import token_urlsafe
 from time import monotonic
 from typing import Annotated
@@ -78,10 +78,12 @@ from carlos_patient_portal.models import (
     PatientPortalBookingPrompt,
 )
 from carlos_patient_portal.mycarlos_apns_wiring import HttpClient, availability_dispatch_for
+from carlos_patient_portal.mycarlos_waiting import count_waiting_for_account, has_active_device
 from carlos_patient_portal.presenters import (
     assemble_email_password_dashboard,
     assemble_messages,
     assemble_mycarlos_devices,
+    assemble_phone_confirmation,
 )
 from carlos_patient_portal.routes.activation import register_activation_routes
 from carlos_patient_portal.routes.auth import register_auth_routes, register_logout_route
@@ -108,6 +110,7 @@ from carlos_patient_portal.sms_delivery import PortalSmsSender, build_portal_sms
 from carlos_patient_portal.token_keys import PortalTokenKeys
 from carlos_patient_portal.unlock_secrets import load_unlock_secret_words
 from carlos_patient_portal.view_models import (
+    DocumentsTileViewModel,
     EmailPasswordDashboardViewModel,
     MessagesViewModel,
     MyCarlosViewModel,
@@ -1019,6 +1022,32 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
             if active_module == "dashboard"
             else 0
         )
+        documents_tile: DocumentsTileViewModel | None = None
+        if (
+            active_module == "dashboard"
+            and settings.mycarlos_delivery_enabled
+            and settings.mycarlos_mailbox_enabled
+        ):
+            account_id = authenticated_session.account.id
+            has_device = has_active_device(session, account_id)
+            documents_tile = DocumentsTileViewModel(
+                has_device=has_device,
+                waiting_count=(
+                    count_waiting_for_account(session, account_id, now=datetime.now(UTC))
+                    if has_device
+                    else 0
+                ),
+            )
+        # The Account tab shows the phone code field only for a number waiting for its code (#150).
+        phone_confirmation = (
+            assemble_phone_confirmation(
+                session,
+                authenticated_session.account,
+                code_ttl=timedelta(seconds=settings.phone_change_code_ttl_seconds),
+            )
+            if active_module == "account"
+            else None
+        )
         csrf_token = create_csrf_token(runtime.token_keys.csrf)
         response = templates.TemplateResponse(
             request=request,
@@ -1035,7 +1064,9 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
                 email_passwords=email_passwords,
                 messages=messages,
                 new_message_count=new_message_count,
+                documents_tile=documents_tile,
                 mycarlos=mycarlos,
+                phone_confirmation=phone_confirmation,
             ),
             status_code=status_code,
         )

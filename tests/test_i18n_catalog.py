@@ -685,11 +685,14 @@ def test_signed_in_pages_have_the_language_switcher() -> None:
     client = TestClient(app)
     browser_sign_in_seeded_patient(app, client)
 
-    page = client.get("/portal/account").text
+    # The language buttons moved from the signed-in header into the Preferences module; the
+    # sign-in pages keep theirs (tests/test_appearance_preferences.py checks both places).
+    page = client.get("/portal/preferences").text
 
     assert 'class="language-switch"' in page
-    assert 'href="/locale/fr?next=/portal/account"' in page
-    assert 'href="/locale/zh-CN?next=/portal/account"' in page
+    assert 'href="/locale/fr?next=/portal/preferences"' in page
+    assert 'href="/locale/zh-CN?next=/portal/preferences"' in page
+    assert 'class="language-switch"' not in client.get("/portal/account").text
 
 
 def test_a_page_answering_a_post_switches_language_back_to_its_get_page() -> None:
@@ -709,9 +712,11 @@ def test_a_page_answering_a_post_switches_language_back_to_its_get_page() -> Non
         },
     )
 
-    # A wrong current password fails the step-up check: the account page again, with an error.
+    # A wrong current password fails the step-up check: the account page again, with an error. It
+    # offers no language buttons now (they are in Preferences), and in particular none that would
+    # send the patient back to the POST-only path.
     assert failed_change.status_code == 403
-    assert 'href="/locale/fr?next=/portal/account"' in failed_change.text
+    assert 'class="language-switch"' not in failed_change.text
     assert "next=/portal/account/password" not in failed_change.text
 
 

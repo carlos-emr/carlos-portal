@@ -58,6 +58,7 @@ from carlos_patient_portal.auth import (
     record_password_reset_delivery_outcome,
     request_password_reset,
     resend_mfa_challenge,
+    seconds_until,
     start_login,
     verify_mfa_challenge,
 )
@@ -109,12 +110,14 @@ from carlos_patient_portal.web_support import (
     CSRF_COOKIE_PATH,
     EMAIL_CHANGE_TEMPLATE,
     MFA_DELIVERY_UNAVAILABLE_DETAIL,
+    MFA_PENDING_COOKIE_NAME,
     MFA_VERIFICATION_FAILED_DETAIL,
     NOT_FOUND_DETAIL,
     PASSWORD_RESET_COMPLETE_TEMPLATE,
     REQUEST_LOCALE_STATE_ATTRIBUTE,
     BrowserFormValidationError,
     auth_error_response,
+    clear_mfa_pending_cookie,
     clear_portal_session_cookie,
     create_csrf_token,
     first_form_value_or_empty,
@@ -134,6 +137,7 @@ from carlos_patient_portal.web_support import (
     request_locale,
     set_csrf_cookie,
     set_locale_cookie,
+    set_mfa_pending_cookie,
     set_portal_mfa_proof_cookie,
     set_portal_session_cookie,
     templates,
@@ -244,6 +248,14 @@ def build_auth_dependencies(
         if retry_after_seconds is not None:
             response.headers["Retry-After"] = str(retry_after_seconds)
         set_csrf_cookie(response, csrf_token, settings=settings, path=CSRF_COOKIE_PATH)
+        # The code page is the one place the challenge token is in the browser; keep it for as long
+        # as the challenge lives so "Back to sign in" and signing in again can return here (#147).
+        set_mfa_pending_cookie(
+            response,
+            delivery.challenge_token,
+            expires_in_seconds=seconds_until(delivery.expires_at, utc_now()),
+            settings=settings,
+        )
         return response
 
     def get_browser_mfa_delivery_state(
@@ -306,6 +318,12 @@ def register_login_routes(
             "login_client",
             get_request_client_reference(request, deps.settings),
         )
+        # A browser that left the code page ("Back to sign in") still holds the pending challenge's
+        # token in a cookie. It is only an offer: start_login uses it solely when the password is
+        # right AND the send cooldown would otherwise refuse the sign-in (#147).
+        pending_cookie = (
+            (request.cookies.get(MFA_PENDING_COOKIE_NAME) or None) if is_browser_form else None
+        )
         try:
             result = await run_in_threadpool(
                 start_login,
@@ -319,6 +337,7 @@ def register_login_routes(
                 mfa_code_secret=runtime.token_keys.mfa,
                 clinic_id=deps.settings.clinic_id,
                 delivery_method=payload.mfa_delivery_method,
+                resume_challenge_token=pending_cookie,
             )
         except InvalidCredentialsError:
             return auth_error_response(
@@ -366,7 +385,7 @@ def register_login_routes(
                 json_content={"detail": MFA_DELIVERY_UNAVAILABLE_DETAIL},
             )
         except MfaRateLimitedError as exc:
-            return auth_error_response(
+            refusal = auth_error_response(
                 is_browser_form=is_browser_form,
                 request=request,
                 render_index_response=deps.render_index_response,
@@ -374,6 +393,26 @@ def register_login_routes(
                 browser_message=mfa_rate_limited_message(request, exc.retry_after_seconds),
                 json_content={"detail": "MFA code was sent recently; try again later"},
                 headers={"Retry-After": str(exc.retry_after_seconds)},
+            )
+            if pending_cookie is not None:
+                # The offered challenge could not be resumed (another account's, expired, spent or
+                # of the other delivery method): the stale cookie goes, the refusal is as before.
+                clear_mfa_pending_cookie(refusal, settings=deps.settings)
+            return refusal
+        resumed_sent_at = (
+            result.mfa_challenge.resumed_sent_at if result.mfa_challenge is not None else None
+        )
+        if result.mfa_challenge is not None and resumed_sent_at is not None:
+            # Back on the code page of the challenge already pending: its audit row (outcome
+            # "resumed") is committed, and nothing is sent. Browser forms only: the cookie that
+            # makes a resume possible is only read for them.
+            await run_in_threadpool(session.commit)
+            return deps.render_mfa_page(
+                request,
+                result.mfa_challenge,
+                notice_message=localized_auth_text(request)["mfa_resumed_notice"].format(
+                    time=resumed_sent_at.strftime("%H:%M")
+                ),
             )
         if result.mfa_challenge is not None:
             await run_in_threadpool(session.commit)
@@ -655,6 +694,8 @@ def register_mfa_routes(
                 status_code=status.HTTP_303_SEE_OTHER,
             )
             set_portal_session_cookie(redirect_response, session_token, settings=deps.settings)
+            # The challenge is spent: nothing is left to resume (#147).
+            clear_mfa_pending_cookie(redirect_response, settings=deps.settings)
             if deps.settings.mycarlos_delivery_enabled:
                 verified_challenge = await run_in_threadpool(
                     get_mfa_challenge_for_token,
@@ -1155,4 +1196,5 @@ def register_logout_route(
             session.commit()
             raise HTTPException(status_code=401, detail=AUTHENTICATION_REQUIRED_DETAIL) from exc
         clear_portal_session_cookie(response, settings=settings)
+        clear_mfa_pending_cookie(response, settings=settings)
         return {"status": "logged_out"}

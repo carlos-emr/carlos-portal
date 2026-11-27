@@ -13,7 +13,7 @@
 # If not, see <https://www.gnu.org/licenses/>.
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from hashlib import sha256
@@ -56,6 +56,7 @@ from carlos_patient_portal.models import (
     AUDIT_EVENT_PASSWORD_RESET_REQUEST,
     AUDIT_EVENT_SESSION_LOGOUT,
     AUDIT_OUTCOME_FAILURE,
+    AUDIT_OUTCOME_RESUMED,
     AUDIT_OUTCOME_SUCCESS,
     AUDIT_OUTCOME_THROTTLED,
     MAX_PHONE_NUMBER_LENGTH,
@@ -192,6 +193,9 @@ class MfaChallengeDelivery:
     reserved_cooldown: timedelta | None = None
     # The channel reservation this send created; display-only state has no ownership.
     expected_account_sent_at: datetime | None = None
+    # Set when a sign-in inside the send cooldown went back to a challenge that was already
+    # pending (#147): the time its code was sent. Nothing is sent for such a delivery.
+    resumed_sent_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -337,6 +341,17 @@ def seconds_until_allowed(last_sent_at: datetime, now: datetime, cooldown: timed
 
     elapsed_seconds = (comparable_now - comparable_last_sent_at).total_seconds()
     return max(1, ceil(cooldown.total_seconds() - elapsed_seconds))
+
+
+def seconds_until(value: datetime, now: datetime) -> int:
+    """Whole seconds from `now` until `value`, rounded up; 0 once `value` has passed."""
+    comparable_value = value
+    comparable_now = now
+    if comparable_value.tzinfo is None:
+        comparable_value = comparable_value.replace(tzinfo=UTC)
+    if comparable_now.tzinfo is None:
+        comparable_now = comparable_now.replace(tzinfo=UTC)
+    return max(0, ceil((comparable_value - comparable_now).total_seconds()))
 
 
 class PasswordHashUnusableError(Exception):
@@ -612,6 +627,7 @@ def create_mfa_challenge(
     challenge_token_secret: str,
     code_secret: str,
     now: datetime,
+    resume_challenge_token: str | None = None,
 ) -> MfaChallengeDelivery:
     normalized_delivery_method = normalize_mfa_delivery_method(delivery_method)
     if normalized_delivery_method == MFA_DELIVERY_METHOD_EMAIL and not policy.allow_email_mfa:
@@ -624,6 +640,34 @@ def create_mfa_challenge(
         cooldown = policy.mfa_sms_resend_cooldown
         last_sent_at = account.last_mfa_sms_sent_at
     if last_sent_at is not None and not is_past(last_sent_at + cooldown, now):
+        # Inside the send cooldown no new code may go out (that is what the limit is for). But a
+        # patient who left the code page and signed in again still holds the code that was sent:
+        # when the browser can name that challenge, it is still pending and unexpired and it is
+        # this account's, the code page is shown again for it. Nothing is sent and no counter
+        # changes (#147).
+        if resume_challenge_token is not None:
+            resumed = resume_pending_mfa_challenge(
+                session,
+                account,
+                delivery_method=normalized_delivery_method,
+                challenge_token=resume_challenge_token,
+                challenge_token_secret=challenge_token_secret,
+                allow_email=policy.allow_email_mfa,
+                now=now,
+            )
+            if resumed is not None:
+                record_audit_event(
+                    session,
+                    event_type=AUDIT_EVENT_MFA_CHALLENGE,
+                    outcome=AUDIT_OUTCOME_RESUMED,
+                    actor_type=AUDIT_ACTOR_TYPE_PATIENT,
+                    actor=account.username,
+                    clinic_id=account.clinic_id,
+                    demographic_no=account.demographic_no,
+                    account_id=account.id,
+                    reason=normalized_delivery_method,
+                )
+                return resumed
         retry_after_seconds = seconds_until_allowed(last_sent_at, now, cooldown)
         record_audit_event(
             session,
@@ -714,6 +758,7 @@ def start_login(
     mfa_code_secret: str,
     clinic_id: str,
     delivery_method: str | None = None,
+    resume_challenge_token: str | None = None,
 ) -> LoginResult:
     now = utc_now()
     try:
@@ -867,6 +912,7 @@ def start_login(
                 challenge_token_secret=mfa_challenge_token_secret,
                 code_secret=mfa_code_secret,
                 now=now,
+                resume_challenge_token=resume_challenge_token,
             )
         except (MfaDeliveryUnavailableError, MfaRateLimitedError) as exc:
             record_audit_event(
@@ -1015,6 +1061,50 @@ def get_mfa_challenge_delivery_state(
         expires_at=challenge.expires_at,
         expected_code_hash=challenge.code_hash,
     )
+
+
+def resume_pending_mfa_challenge(
+    session: Session,
+    account: PatientPortalAccount,
+    *,
+    delivery_method: str,
+    challenge_token: str,
+    challenge_token_secret: str,
+    allow_email: bool,
+    now: datetime,
+) -> MfaChallengeDelivery | None:
+    """The still-valid challenge a sign-in inside the send cooldown may go back to, or None.
+
+    Read-only: it sends nothing and changes no counter, expiry or attempt limit of the challenge
+    (the code page's own verify and resend routes keep enforcing them). The challenge must be the
+    one the browser named, belong to THIS account (the password just checked), still be pending
+    and unexpired, and be of the delivery method that was asked for (the cooldown is per method);
+    anything else is None, and the caller keeps the refusal. The token is only compared through
+    its hash, as everywhere else.
+    """
+    challenge = get_mfa_challenge_for_token(
+        session,
+        challenge_token,
+        challenge_token_secret=challenge_token_secret,
+    )
+    if (
+        challenge is None
+        or challenge.account_id != account.id
+        or challenge.status != MFA_CHALLENGE_STATUS_PENDING
+        or challenge.delivery_method != delivery_method
+        or is_past(challenge.expires_at, now)
+    ):
+        return None
+    delivery = get_mfa_challenge_delivery_state(
+        session,
+        challenge_token,
+        challenge_token_secret=challenge_token_secret,
+        preferred_delivery_method=delivery_method,
+        allow_email=allow_email,
+    )
+    if delivery is None:
+        return None
+    return replace(delivery, resumed_sent_at=challenge.created_at)
 
 
 def resend_mfa_challenge(

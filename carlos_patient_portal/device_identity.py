@@ -31,11 +31,12 @@ Every refusal is a `DeviceRefusal` whose `code` is one of the spec's response co
 """
 
 import json
+import logging
 import re
 from base64 import urlsafe_b64encode
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from secrets import compare_digest
 from time import time
@@ -43,7 +44,9 @@ from uuid import UUID
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
+from sqlalchemy.exc import InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.orm import Session, sessionmaker
 
 from carlos_patient_portal.models import (
@@ -64,6 +67,8 @@ from carlos_patient_portal.staff_identity import (
     consume_assertion_id,
 )
 
+logger = logging.getLogger(__name__)
+
 DEVICE_ASSERTION_HEADER = "X-MyCarlos-Device-Assertion"
 DEVICE_AUDIENCE = "carlos-patient-portal-device-api"
 LINK_AUDIENCE = "carlos-patient-portal-device-link"
@@ -72,6 +77,8 @@ DEVICE_ISSUER = "mycarlos"
 MAX_DEVICE_ASSERTION_BYTES = 4096
 MAX_DEVICE_ASSERTION_LIFETIME_SECONDS = 120
 DEVICE_CLOCK_SKEW_SECONDS = 30
+# A device's `last_seen_at` is written at most this often (as for browser sessions, 5 minutes).
+DEVICE_LAST_SEEN_UPDATE_INTERVAL = timedelta(minutes=5)
 DEVICE_KEY_ID_LABEL = b"mycarlos-device-key-v1"
 LINK_CODE_ALPHABET = frozenset("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
 MAX_DEVICE_NAME_LENGTH = 64
@@ -138,6 +145,8 @@ class DevicePrincipal:
     assertion_id: str
     assertion_expires_at: int
     vault_head_link: str | None
+    # When the device signed the request (`iat`): which of two anchors is the newer one.
+    assertion_issued_at: int | None = None
 
 
 @dataclass(frozen=True)
@@ -321,6 +330,7 @@ def verify_device_assertion(
         assertion_id=str(claims["jti"]),
         assertion_expires_at=int(claims["exp"]),
         vault_head_link=str(vault_head_link) if vault_head_link is not None else None,
+        assertion_issued_at=int(claims["iat"]),
     )
 
 
@@ -445,6 +455,81 @@ def consume_device_assertion(
         raise DeviceRefusal(REFUSAL_EXPIRED) from exc
     except AssertionReplayError as exc:
         raise DeviceRefusal(REFUSAL_REPLAY) from exc
+    if isinstance(principal, DevicePrincipal):
+        # Only a request that passed checks 1-8 (so never a replay) shows the device as seen.
+        issued_at = principal.assertion_issued_at
+        record_device_seen(
+            session_factory,
+            principal.device_id,
+            now=current_time,
+            anchor=principal.vault_head_link,
+            anchor_at=None if issued_at is None else datetime.fromtimestamp(issued_at, tz=UTC),
+        )
+
+
+def record_device_seen(
+    session_factory: sessionmaker[Session],
+    device_id: int,
+    *,
+    now: datetime | None = None,
+    anchor: str | None = None,
+    anchor_at: datetime | None = None,
+) -> None:
+    """Show a device as seen: stamp `last_seen_at`, and keep the newest vault head anchor it sent.
+
+    Two conditional UPDATEs that match no row (so write nothing) unless the device is still
+    active and
+    - its last stamp is older than `DEVICE_LAST_SEEN_UPDATE_INTERVAL`; or
+    - `anchor` is given, is not older than the stored one (`anchor_at`, the time the device signed
+      it, is compared with the stored `vault_head_link_at`, so a request consumed late never
+      replaces a newer anchor), and differs from it or refreshes a stored one older than the
+      interval.
+    It records a timestamp and the device's own signed anchor only: no IP address, user agent or
+    request detail. A device removed since the request was verified is not stamped.
+
+    Best effort: a database error is logged without identifiers and swallowed, so a valid request
+    whose nonce is already spent never fails because of the stamp.
+    """
+    moment = datetime.now(UTC) if now is None else now
+    device = PatientPortalMyCarlosDevice
+    try:
+        with session_factory() as session, session.begin():
+            session.execute(
+                update(device)
+                .where(
+                    device.id == device_id,
+                    device.status == MYCARLOS_DEVICE_STATUS_ACTIVE,
+                    or_(
+                        device.last_seen_at.is_(None),
+                        device.last_seen_at < moment - DEVICE_LAST_SEEN_UPDATE_INTERVAL,
+                    ),
+                )
+                .values(last_seen_at=moment)
+            )
+            if anchor is not None:
+                signed_at = moment if anchor_at is None else anchor_at
+                session.execute(
+                    update(device)
+                    .where(
+                        device.id == device_id,
+                        device.status == MYCARLOS_DEVICE_STATUS_ACTIVE,
+                        or_(
+                            device.vault_head_link_at.is_(None),
+                            device.vault_head_link_at <= signed_at,
+                        ),
+                        or_(
+                            device.vault_head_link.is_(None),
+                            device.vault_head_link != anchor,
+                            device.vault_head_link_at
+                            < signed_at - DEVICE_LAST_SEEN_UPDATE_INTERVAL,
+                        ),
+                    )
+                    .values(vault_head_link=anchor, vault_head_link_at=signed_at)
+                )
+    except (OperationalError, InterfaceError, PoolTimeoutError):
+        # The database is down, the connection broke, or the pool had none to give (an overloaded
+        # database). A programming error or a constraint failure is a bug and still surfaces.
+        logger.warning("The device last-seen stamp was skipped: the database was not available")
 
 
 def lock_active_device_account(session: Session, account_id: int) -> bool:

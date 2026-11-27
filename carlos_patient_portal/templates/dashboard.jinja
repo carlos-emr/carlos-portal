@@ -1,6 +1,6 @@
 {% from "_password_toggle.jinja" import password_toggle -%}
 <!doctype html>
-<html lang="{{ locale }}">
+<html lang="{{ locale }}"{{ appearance_html_attributes() }}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -10,6 +10,7 @@
     "email-passwords": text.email_passwords,
     "messages": text.messages,
     "help": text.help,
+    "preferences": text.preferences,
   }.get(active_module, text.patient_dashboard) -%}
   <title>{{ page_heading }} - {{ service_name }}</title>
   {% include "_head_assets.jinja" %}
@@ -42,7 +43,7 @@
             <span>{{ clinic_name }}</span>
           </div>
         </div>
-        {% include "_language_switch.jinja" %}
+        {# The language buttons live in the Preferences module here; the sign-in pages keep theirs. #}
         <div class="portal-user-actions">
           <span class="signed-in-user">{{ account.username }}</span>
           <form class="logout-form" method="post" action="{{ url_for('portal_logout') }}">
@@ -96,13 +97,23 @@
                 <p id="tile-help-description">{{ text.dashboard_help_description }}</p>
                 <span aria-hidden="true">{{ text.view_module }}</span>
               </a>
-              <section class="module-tile disabled">
-                <div class="module-tile-heading">
-                  <h2>{{ text.documents }}</h2>
-                  <span>{{ text.future }}</span>
-                </div>
-                <p>{{ text.dashboard_documents_description }}</p>
-              </section>
+              {% if documents_tile %}
+                {# Live count only: how many deliveries wait for this patient's linked devices.
+                   Never a document name, kind or clinic; the link goes to the myCarlos page. #}
+                <a class="module-tile" href="{{ url_for('portal_mycarlos') }}" aria-labelledby="tile-documents-title" aria-describedby="tile-documents-description">
+                  <h2 id="tile-documents-title">{{ text.documents }}</h2>
+                  <p id="tile-documents-description">{{ documents_tile_text }}</p>
+                  <span aria-hidden="true">{{ text.view_module }}</span>
+                </a>
+              {% else %}
+                <section class="module-tile disabled">
+                  <div class="module-tile-heading">
+                    <h2>{{ text.documents }}</h2>
+                    <span>{{ text.future }}</span>
+                  </div>
+                  <p>{{ text.dashboard_documents_description }}</p>
+                </section>
+              {% endif %}
               <a class="module-tile" href="{{ url_for('portal_messages') }}" aria-labelledby="tile-messages-title{% if new_message_count %} tile-messages-count{% endif %}" aria-describedby="tile-messages-description">
                 <div class="module-tile-heading">
                   <h2 id="tile-messages-title">{{ text.messages }}</h2>
@@ -191,6 +202,9 @@
                   {{ password_toggle("contact-current-password", text) }}
                   <button class="primary-action" type="submit">{{ text.update_contact }}</button>
                 </form>
+                {# The presenter decides (#150): a number waiting for its code shows the code field, Confirm phone and Resend; an expired code only the notice and Resend; otherwise nothing. The routes refuse with nothing pending whatever this shows. #}
+                {% if phone_confirmation and phone_confirmation.code_pending %}
+                <p class="form-notice" role="status" id="phone-confirmation-status">{{ text.phone_confirmation_sent_to.format(number=phone_confirmation.masked_phone) }}</p>
                 <form class="form-stack settings-form" method="post" action="{{ url_for('portal_account_confirm_phone') }}">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <label>
@@ -208,10 +222,16 @@
                   </label>
                   <button class="primary-action" type="submit">{{ text.confirm_phone }}</button>
                 </form>
+                {% endif %}
+                {% if phone_confirmation and (phone_confirmation.code_pending or phone_confirmation.code_expired) %}
+                {% if phone_confirmation.code_expired %}
+                <p class="form-notice" role="status" id="phone-confirmation-status">{{ text.phone_confirmation_expired.format(number=phone_confirmation.masked_phone) }}</p>
+                {% endif %}
                 <form method="post" action="{{ url_for('portal_account_resend_phone') }}">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <button class="secondary-action" type="submit">{{ text.resend_phone_confirmation }}</button>
                 </form>
+                {% endif %}
               </section>
 
               <section class="settings-section">
@@ -468,6 +488,44 @@
             {% else %}
               <p class="empty-state">{{ text.messages_empty }}</p>
             {% endif %}
+          {% elif active_module == "preferences" %}
+            <header class="module-header">
+              <h1>{{ text.preferences }}</h1>
+            </header>
+            {% if account_notice %}
+              <p class="form-notice" role="status">{{ account_notice }}</p>
+            {% endif %}
+            <div class="settings-sections">
+              <section class="settings-section">
+                <h2>{{ text.preferences_appearance }}</h2>
+                <form class="form-stack settings-form" method="post" action="{{ url_for('portal_save_preferences') }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  {# A radio group: arrow keys move through it, and a screen reader hears its name and
+                     "n of 3". System sets nothing, so the device's own colour setting decides. #}
+                  <fieldset class="preference-group">
+                    <legend>{{ text.preferences_appearance_legend }}</legend>
+                    <div class="segmented-control segmented-control-three">
+                      {% for value, label in (("system", text.appearance_system), ("light", text.appearance_light), ("dark", text.appearance_dark)) %}
+                        <label class="segmented-option">
+                          <input type="radio" name="theme" value="{{ value }}"{% if appearance.theme == value %} checked{% endif %}>
+                          <span>{{ label }}</span>
+                        </label>
+                      {% endfor %}
+                    </div>
+                  </fieldset>
+                  <label class="checkbox-row">
+                    <input type="checkbox" name="contrast" value="more" aria-describedby="preferences-contrast-help"{% if appearance.contrast == "more" %} checked{% endif %}>
+                    <span>{{ text.appearance_high_contrast }}</span>
+                  </label>
+                  <p class="clinic-help-line" id="preferences-contrast-help">{{ text.appearance_high_contrast_help }}</p>
+                  <button class="primary-action" type="submit">{{ text.preferences_save }}</button>
+                </form>
+              </section>
+              <section class="settings-section">
+                <h2>{{ text.preferences_language }}</h2>
+                {% include "_language_switch.jinja" %}
+              </section>
+            </div>
           {% else %}
             <header class="module-header">
               <h1>{{ text.help }}</h1>
@@ -479,7 +537,39 @@
               </div>
               <div>
                 <dt>{{ text.account_help }}</dt>
-                <dd>{{ text.contact_the_clinic }}</dd>
+                {% if clinic_contact %}
+                  {# The clinic's own contact details, when set; blank settings keep the line below. #}
+                  <dd>
+                    <ul class="contact-list">
+                      {% if clinic_contact.phone %}
+                        <li>
+                          <span class="contact-label">{{ text.contact_phone }}</span>
+                          <a href="{{ clinic_contact.phone_href }}">{{ clinic_contact.phone }}</a>
+                        </li>
+                      {% endif %}
+                      {% if clinic_contact.email %}
+                        <li>
+                          <span class="contact-label">{{ text.contact_email }}</span>
+                          <a href="mailto:{{ clinic_contact.email }}">{{ clinic_contact.email }}</a>
+                        </li>
+                      {% endif %}
+                      {% if clinic_contact.hours %}
+                        <li>
+                          <span class="contact-label">{{ text.contact_hours }}</span>
+                          <span>{{ clinic_contact.hours }}</span>
+                        </li>
+                      {% endif %}
+                      {% if clinic_contact.url %}
+                        <li>
+                          <span class="contact-label">{{ text.contact_website }}</span>
+                          <a href="{{ clinic_contact.url }}" rel="noopener noreferrer">{{ clinic_contact.url_label }}</a>
+                        </li>
+                      {% endif %}
+                    </ul>
+                  </dd>
+                {% else %}
+                  <dd>{{ text.contact_the_clinic }}</dd>
+                {% endif %}
               </div>
             </dl>
           {% endif %}
