@@ -395,16 +395,29 @@ def test_packaged_runtime_grants_match_explicit_preflight_tables_and_sequences()
     table_block = re.search(
         r'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE(.*?)TO :"runtime_role";', script, re.S
     )
+    payment_grant = re.search(
+        r"GRANT SELECT, INSERT, UPDATE ON TABLE\s+public\.patient_portal_payment_requests\s+"
+        r'TO :"runtime_role";',
+        script,
+    )
     sequence_block = re.search(
         r'GRANT USAGE, SELECT ON SEQUENCE(.*?)TO :"runtime_role";', script, re.S
     )
-    assert table_block and sequence_block
+    assert table_block and payment_grant and sequence_block
     tables = {name.strip().removeprefix("public.") for name in table_block.group(1).split(",")}
     sequences = {
         name.strip().removeprefix("public.") for name in sequence_block.group(1).split(",")
     }
-    # Audit UPDATE/DELETE is revoked separately; Alembic SELECT is granted separately.
-    assert tables == set(EXPECTED_TABLE_PRIVILEGES) - {"alembic_version"}
+    # Audit UPDATE/DELETE is revoked separately. Alembic and payment have narrower grants.
+    assert tables == set(EXPECTED_TABLE_PRIVILEGES) - {
+        "alembic_version",
+        "patient_portal_payment_requests",
+    }
     assert sequences == set(EXPECTED_SEQUENCE_PRIVILEGES)
     assert EXPECTED_TABLE_PRIVILEGES["patient_portal_audit_events"] == {"select", "insert"}
     assert EXPECTED_TABLE_PRIVILEGES["alembic_version"] == {"select"}
+    assert EXPECTED_TABLE_PRIVILEGES["patient_portal_payment_requests"] == {
+        "select",
+        "insert",
+        "update",
+    }

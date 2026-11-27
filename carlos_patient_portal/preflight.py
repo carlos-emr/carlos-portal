@@ -45,7 +45,7 @@ EXPECTED_TABLE_PRIVILEGES = {
     "patient_portal_email_change_requests": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_invites": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_mfa_challenges": ORDINARY_TABLE_PRIVILEGES,
-    "patient_portal_payment_requests": ORDINARY_TABLE_PRIVILEGES,
+    "patient_portal_payment_requests": frozenset({"select", "insert", "update"}),
     "patient_portal_mycarlos_approval_clinics": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_mycarlos_approval_codes": ORDINARY_TABLE_PRIVILEGES,
     "patient_portal_mycarlos_approval_requests": ORDINARY_TABLE_PRIVILEGES,

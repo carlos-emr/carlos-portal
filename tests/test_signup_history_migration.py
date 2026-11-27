@@ -247,6 +247,15 @@ def assert_preserved(engine, before):
             assert sorted(actual, key=repr) == rows
 
 
+def audit_event_types(inspector: sa.Inspector) -> frozenset[str]:
+    check = next(
+        c
+        for c in inspector.get_check_constraints("patient_portal_audit_events")
+        if c["name"] == "ck_patient_portal_audit_events_event_type"
+    )
+    return frozenset(re.findall(r"'([a-z][a-z_.]*)'", check["sqltext"]))
+
+
 def assert_schema_and_sequences(engine):
     metadata = [Base.metadata, MailboxBase.metadata, ApprovalBase.metadata]
     expected = {name: table for m in metadata for name, table in m.tables.items()}
@@ -308,12 +317,7 @@ def assert_schema_and_sequences(engine):
             (i.name, tuple(column.name for column in i.columns), bool(i.unique))
             for i in table.indexes
         }
-    check = next(
-        c
-        for c in inspector.get_check_constraints("patient_portal_audit_events")
-        if c["name"] == "ck_patient_portal_audit_events_event_type"
-    )
-    assert frozenset(re.findall(r"'([a-z][a-z_.]*)'", check["sqltext"])) == EVENTS
+    assert audit_event_types(inspector) == EVENTS
     if engine.dialect.name == "postgresql":
         with engine.connect() as connection:
             schema = connection.scalar(sa.text("SELECT current_schema()"))
@@ -395,8 +399,9 @@ def test_should_roundtrip_empty_database_through_base_and_head(lineage_engine):
 
 def test_should_preserve_unrelated_retained_data_when_empty_signup_is_rolled_back(lineage_engine):
     engine = lineage_engine
-    # Start at sign-up, not the head: from the head a later revision's own downgrade (#81's
-    # 0022) runs first, and this checks only what sign-up's downgrade keeps and refuses.
+    # Capture the preceding revision's vocabulary, then isolate the sign-up upgrade and rollback.
+    migrate(engine, CODES)
+    previous_events = audit_event_types(sa.inspect(engine))
     migrate(engine, SIGNUP)
     seed(engine, job=True, link=True, mailbox=True)
     before = snapshot(engine)
@@ -404,17 +409,7 @@ def test_should_preserve_unrelated_retained_data_when_empty_signup_is_rolled_bac
     migrate(engine, CODES, "downgrade")
     assert "patient_portal_signup_requests" not in sa.inspect(engine).get_table_names()
     assert_preserved(engine, before)
-    check = next(
-        c
-        for c in sa.inspect(engine).get_check_constraints("patient_portal_audit_events")
-        if c["name"] == "ck_patient_portal_audit_events_event_type"
-    )
-    # The sign-up event types are all gone with 0019's rollback, those 0025 added included.
-    assert frozenset(re.findall(r"'([a-z][a-z_.]*)'", check["sqltext"])) == EVENTS - {
-        "signup.request",
-        "signup.claim",
-        "signup.result",
-    }
+    assert audit_event_types(sa.inspect(engine)) == previous_events
     with engine.connect() as connection:
         assert MigrationContext.configure(connection).get_current_heads() == (CODES,)
     migrate(engine, "head")
