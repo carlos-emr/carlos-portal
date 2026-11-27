@@ -15,8 +15,15 @@
   {% include "_head_assets.jinja" %}
   <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
   <script src="{{ url_for('static', path='/portal.js') }}" defer></script>
+  <script src="{{ url_for('static', path='/idle-session.js') }}" defer></script>
 </head>
-<body>
+<body
+  data-idle-remaining-seconds="{{ idle_remaining_seconds }}"
+  data-idle-limit-seconds="{{ idle_limit_seconds }}"
+  data-idle-keepalive-url="{{ url_for('portal_session_keepalive') }}"
+  data-idle-signed-out-url="{{ url_for('index') }}?signed_out=idle"
+  data-idle-csrf-token="{{ csrf_token }}"
+>
   {# The skip link jumps past the module navigation too: to the workspace, inside main. #}
   {% from "_skip_link.jinja" import skip_link %}{{ skip_link(text, "module-content") }}
   {% include "_live_status.jinja" %}
@@ -477,5 +484,26 @@
     </div>
   </div>
   {% include "_page_footer.jinja" %}
+  {# The idle sign-out warning (#149, static/idle-session.js). Hidden until the last minute of
+     the idle limit; the script fills the countdown in. Outside .app-shell so that the page behind
+     it can be made inert and, at the limit, blanked. #}
+  <div class="modal-backdrop" id="portal-idle-warning" hidden>
+    <section
+      class="portal-modal"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="portal-idle-title"
+      aria-describedby="portal-idle-body"
+      data-idle-body-template="{{ text.idle_warning_body }}"
+    >
+      <h2 id="portal-idle-title">{{ text.idle_warning_title }}</h2>
+      <p id="portal-idle-body"></p>
+      <button class="primary-action" type="button" data-idle-stay>{{ text.idle_stay_signed_in }}</button>
+      <form method="post" action="{{ url_for('portal_logout') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="secondary-action" type="submit">{{ text.logout }}</button>
+      </form>
+    </section>
+  </div>
 </body>
 </html>

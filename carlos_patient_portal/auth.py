@@ -96,6 +96,9 @@ AUTH_TOKEN_BYTES = 32
 MFA_CODE_DIGITS = 6
 MFA_CODE_MODULUS = 10**MFA_CODE_DIGITS
 SESSION_LAST_SEEN_UPDATE_INTERVAL = timedelta(minutes=5)
+# The page's keep-alive (#149) writes the session's moment at most this often; calls inside it only
+# answer how long is left. The page itself sends at most one a minute.
+SESSION_KEEPALIVE_MIN_INTERVAL = timedelta(seconds=10)
 SESSION_REVOKED_REASON_IDLE_TIMEOUT = "idle_timeout"
 
 
@@ -211,6 +214,10 @@ class PasswordResetRequestResult:
 class AuthenticatedPortalSession:
     account: PatientPortalAccount
     portal_session: PatientPortalSession
+    # The moment the idle clock counts from, as the server holds it AFTER this request: `now`
+    # when this request wrote it, otherwise the stored value (the write is lazy, see
+    # SESSION_LAST_SEEN_UPDATE_INTERVAL). `idle_remaining_seconds` reads it.
+    last_seen_at: datetime | None = None
 
 
 def hash_auth_token(secret: str, purpose: str, token: str) -> str:
@@ -1769,7 +1776,7 @@ def authenticate_session_token(
         raise PortalSessionInvalidError()
 
     last_seen_cutoff = now - min(SESSION_LAST_SEEN_UPDATE_INTERVAL, idle_timeout / 2)
-    session.execute(
+    written = session.execute(
         update(PatientPortalSession)
         .where(
             PatientPortalSession.id == portal_session.id,
@@ -1782,7 +1789,83 @@ def authenticate_session_token(
         .values(last_seen_at=now)
         .execution_options(synchronize_session="fetch")
     )
-    return AuthenticatedPortalSession(account=account, portal_session=portal_session)
+    return AuthenticatedPortalSession(
+        account=account,
+        portal_session=portal_session,
+        last_seen_at=now if written.rowcount else last_seen_at,
+    )
+
+
+def idle_remaining_seconds(
+    authenticated_session: AuthenticatedPortalSession,
+    *,
+    idle_timeout: timedelta,
+    now: datetime | None = None,
+) -> int:
+    """Whole seconds before this session ends, whichever limit comes first.
+
+    The idle limit counts from the last moment the server saw the session; the absolute lifetime
+    (`expires_at`) is never moved by anything and also ends it. A number of seconds, not a time,
+    so that a patient's clock cannot make the page wrong. Never negative.
+    """
+    current = now or utc_now()
+    portal_session = authenticated_session.portal_session
+    last_seen_at = (
+        authenticated_session.last_seen_at
+        or portal_session.last_seen_at
+        or portal_session.created_at
+    )
+    idle_ends = _as_utc(last_seen_at) + idle_timeout
+    session_ends = _as_utc(portal_session.expires_at)
+    remaining = min(idle_ends, session_ends) - _as_utc(current)
+    return max(0, int(remaining.total_seconds()))
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+
+def keep_session_alive(
+    session: Session,
+    *,
+    session_token: str,
+    session_token_secret: str,
+    idle_timeout: timedelta,
+) -> AuthenticatedPortalSession:
+    """Restart the idle clock now, for the page's keep-alive (any activity on the page).
+
+    Authenticates first, so a dead, revoked, idle-expired or locked session gets the same refusal
+    (and the same idle revoke) as any other request. Only `last_seen_at` moves: `expires_at`, the
+    absolute lifetime, is never extended. The write is skipped when the stored moment is already
+    less than `SESSION_KEEPALIVE_MIN_INTERVAL` old, so a page that sends one per interaction costs
+    the database at most one write per interval per session.
+    """
+    authenticated = authenticate_session_token(
+        session,
+        session_token=session_token,
+        session_token_secret=session_token_secret,
+        idle_timeout=idle_timeout,
+    )
+    now = utc_now()
+    last_seen_at = authenticated.last_seen_at or authenticated.portal_session.created_at
+    if _as_utc(now) - _as_utc(last_seen_at) < SESSION_KEEPALIVE_MIN_INTERVAL:
+        return authenticated
+    written = session.execute(
+        update(PatientPortalSession)
+        .where(
+            PatientPortalSession.id == authenticated.portal_session.id,
+            PatientPortalSession.revoked_at.is_(None),
+        )
+        .values(last_seen_at=now)
+        .execution_options(synchronize_session="fetch")
+    )
+    if not written.rowcount:
+        raise PortalSessionInvalidError()
+    return AuthenticatedPortalSession(
+        account=authenticated.account,
+        portal_session=authenticated.portal_session,
+        last_seen_at=now,
+    )
 
 
 def logout_patient_session(

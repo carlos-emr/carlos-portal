@@ -298,6 +298,12 @@ TEXT: dict[str, str] = {
     "mfa_verify": "Verificar",
     "mfa_verification_failed": "No se pudo completar la verificación en dos pasos.",
     "modal_close": "Aceptar",
+    "idle_warning_title": "Su sesión está a punto de terminar",
+    "idle_warning_body": (
+        "Por su privacidad, se cerrará su sesión en {seconds} segundos si no continúa conectado."
+    ),
+    "idle_stay_signed_in": "Seguir conectado",
+    "signed_out_idle_notice": "Se cerró su sesión porque la página estuvo inactiva.",
     "module_navigation": "Módulos del portal",
     "mfa_method": "Método",
     "new_password": "Nueva contraseña",

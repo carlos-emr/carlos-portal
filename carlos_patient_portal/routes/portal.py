@@ -49,7 +49,12 @@ from carlos_patient_portal.account_settings import (
     verify_current_password,
 )
 from carlos_patient_portal.audit import record_audit_event
-from carlos_patient_portal.auth import AuthenticatedPortalSession
+from carlos_patient_portal.auth import (
+    AuthenticatedPortalSession,
+    PortalSessionInvalidError,
+    idle_remaining_seconds,
+    keep_session_alive,
+)
 from carlos_patient_portal.booking_choices import (
     CHOICE_REFUSED_NOT_AVAILABLE,
     CHOICE_REFUSED_PROMPT_CLOSED,
@@ -1173,3 +1178,53 @@ def register_portal_routes(
         )
         clear_portal_session_cookie(response, settings=settings)
         return response
+
+    @app.post("/portal/session/keepalive")
+    async def portal_session_keepalive(
+        request: Request,
+        session: Annotated[Session, function_scoped_database_dependency(get_app_database_session)],
+    ) -> Response:
+        """The signed-in page's keep-alive (#149): any activity on the page restarts the idle clock.
+
+        Same CSRF rule as the other signed-in POSTs. Answers how many seconds are left, as a
+        number (never a time), so that the page counts down on its own clock. Only the idle clock
+        moves: the session's absolute lifetime never does, and the answer is the smaller of the
+        two. A session that is gone, revoked, locked or past its idle limit gets 401 with the
+        sign-in address and a cleared cookie, as the other JSON posts do.
+        """
+        await get_portal_account_form_values(
+            request,
+            csrf_error_detail="the session could not be extended",
+        )
+        session_token = request.cookies.get(PORTAL_SESSION_COOKIE_NAME)
+        refused = JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"detail": AUTHENTICATION_REQUIRED_DETAIL},
+            headers={
+                "Location": request.url_for("index").path,
+                "Cache-Control": "no-store",
+            },
+        )
+        if session_token is None:
+            clear_portal_session_cookie(refused, settings=settings)
+            return refused
+        try:
+            authenticated = await run_in_threadpool(
+                keep_session_alive,
+                session,
+                session_token=session_token,
+                session_token_secret=runtime.token_keys.session,
+                idle_timeout=runtime.auth_policy.session_idle_timeout,
+            )
+        except (PortalSessionInvalidError, ValueError):
+            clear_portal_session_cookie(refused, settings=settings)
+            return refused
+        return JSONResponse(
+            content={
+                "remaining_seconds": idle_remaining_seconds(
+                    authenticated,
+                    idle_timeout=runtime.auth_policy.session_idle_timeout,
+                )
+            },
+            headers={"Cache-Control": "no-store"},
+        )

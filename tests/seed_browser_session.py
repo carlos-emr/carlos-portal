@@ -81,6 +81,14 @@ ACCOUNTS = {
         None,
         MFA_DELIVERY_METHOD_EMAIL,
     ),
+    # The page's idle sign-out journey (#149): the warning, Stay signed in, doing nothing, Back.
+    "warning": (
+        "fake-session-warning",
+        "fake.session.warning@example.com",
+        7206,
+        None,
+        MFA_DELIVERY_METHOD_EMAIL,
+    ),
 }
 NEW_PHONE = "+15555550142"
 

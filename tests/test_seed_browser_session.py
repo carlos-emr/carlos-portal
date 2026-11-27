@@ -52,7 +52,7 @@ def test_nonmaintenance_seed_keeps_its_session_configuration_requirements(monkey
         seed.main()
 
 
-def test_default_seed_still_creates_all_five_session_accounts(tmp_path, monkeypatch):
+def test_default_seed_still_creates_all_six_session_accounts(tmp_path, monkeypatch):
     app = migrated_development_app(
         database_url="sqlite+pysqlite:///" + str(tmp_path / "session.db"),
         sms_webhook_url="http://127.0.0.1:1/sms",
@@ -65,7 +65,14 @@ def test_default_seed_still_creates_all_five_session_accounts(tmp_path, monkeypa
     try:
         seed.main()
         payload = json.loads(fixture.read_text())
-        assert set(payload["accounts"]) == {"sms", "phone", "locale", "throttle", "idle"}
+        assert set(payload["accounts"]) == {
+            "sms",
+            "phone",
+            "locale",
+            "throttle",
+            "idle",
+            "warning",
+        }
         assert payload["newPhone"] == seed.NEW_PHONE
         assert payload["settings"]["sessionCookieName"] == seed.PORTAL_SESSION_COOKIE_NAME
         assert (
