@@ -235,6 +235,7 @@ TEXT: dict[str, str] = {
     "mfa_help_message": "如果您无法收到或使用验证码，请联系 {clinic_name}。",
     "mfa_new_code_sent_email": "新的验证码已通过电子邮件发送。",
     "mfa_new_code_sent_sms": "新的验证码已通过短信发送。",
+    "mfa_resumed_notice": "{time} UTC 发送的登录验证码仍然有效。请在下方输入。未发送新的验证码。",
     "mfa_rate_limited_other": "验证码刚刚已发送。请在 {seconds} 秒后重试。",
     "mfa_resend": "重新发送验证码",
     "mfa_sign_in_again": "请重新登录以获取新的验证码。",

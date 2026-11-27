@@ -297,6 +297,10 @@ TEXT: dict[str, str] = {
     ),
     "mfa_new_code_sent_email": "Un nouveau code a été envoyé par courriel.",
     "mfa_new_code_sent_sms": "Un nouveau code a été envoyé par SMS.",
+    "mfa_resumed_notice": (
+        "Le code de connexion envoyé à {time} UTC est toujours valide. Saisissez-le "
+        "ci-dessous. Aucun nouveau code n'a été envoyé."
+    ),
     "mfa_rate_limited_one": "Un code a été envoyé récemment. Réessayez dans {seconds} seconde.",
     "mfa_rate_limited_other": "Un code a été envoyé récemment. Réessayez dans {seconds} secondes.",
     "mfa_resend": "Renvoyer le code",
