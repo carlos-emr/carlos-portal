@@ -558,7 +558,8 @@ def test_the_internal_route_uses_the_clinic_timezone_for_the_due_date(monkeypatc
         lambda: datetime(2026, 11, 28, 5, 30, tzinfo=UTC),
     )
     retry = client.post(PATH, headers=headers(), json=request_body(due_on="2026-11-27"))
-    assert retry.status_code == 200
+    assert retry.status_code == 201
+    assert retry.json()["created"] is False
     assert retry.json()["id"] == response.json()["id"]
 
 
