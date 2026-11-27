@@ -25,7 +25,7 @@ placeholders in line with English and, once a locale is listed there as complete
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 from carlos_patient_portal.locales import en as locale_en
@@ -266,6 +266,38 @@ def format_booking_time(
         minute=local_value.minute,
     )
     return date_text, time_text
+
+
+# Languages that write a decimal comma. Money is shown as digits and the currency code, with no
+# thousands grouping (an amount here is at most 100000.00), so no symbol or grouping depends on the
+# reader's device and an amount reads the same in every language but for its decimal mark.
+_DECIMAL_COMMA_LOCALES = frozenset({"fr", "es", "pl", "pt-BR"})
+
+
+DATE_FORMATS: dict[str, str] = {
+    DEFAULT_LOCALE: "{year:04d}-{month:02d}-{day:02d}",
+    "fr": "{year:04d}-{month:02d}-{day:02d}",
+    "es": "{day:02d}/{month:02d}/{year:04d}",
+    "pl": "{day:02d}.{month:02d}.{year:04d}",
+    "pt-BR": "{day:02d}/{month:02d}/{year:04d}",
+    "zh-CN": "{year}年{month}月{day}日",
+    "zh-TW": "{year}年{month}月{day}日",
+}
+
+
+def format_portal_date(value: date, locale: str = DEFAULT_LOCALE) -> str:
+    """A calendar date (a due date has no time or zone), numbers only, as the datetime is."""
+    return DATE_FORMATS.get(locale, DATE_FORMATS[DEFAULT_LOCALE]).format(
+        year=value.year, month=value.month, day=value.day
+    )
+
+
+def format_cad(cents: int, locale: str = DEFAULT_LOCALE) -> str:
+    """An amount in Canadian dollars, from integer cents: "12.50 CAD" ("12,50 CAD" in French)."""
+    sign = "-" if cents < 0 else ""
+    whole, fraction = divmod(abs(cents), 100)
+    mark = "," if locale in _DECIMAL_COMMA_LOCALES else "."
+    return f"{sign}{whole}{mark}{fraction:02d} CAD"
 
 
 def format_portal_datetime(

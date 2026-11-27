@@ -42,6 +42,10 @@ The service can send verification codes, account notices and reset links through
 
 The portal can hold encrypted copies of passwords used to open clinic email attachments and reveal them after authorized access. This differs from the encryption used for myCarlos delivery packages. **[IDENTIFY THE EMAIL AND SMS PROVIDERS, COUNTRIES OF PROCESSING, MESSAGE CONTENT, AND HOW LONG THEY KEEP DELIVERY RECORDS.]**
 
+## Payment requests
+
+Where enabled, clinic staff can ask you to pay an invoice. The portal holds only the request: an amount due, the part of it that is tax, a fixed reason (an uninsured service, a form or note, a missed appointment, or other), a due date, a random reference that only the clinic's record system can match to an invoice, and its status (sent, read, paid, withdrawn or expired). It holds no description of the care, no invoice number and no name beyond the staff member who sent it. You can read the request under Messages together with the clinic's own instructions for paying. **The portal does not take a payment, a card number or a bank detail.** The clinic marks the request paid once it has recorded your payment, and the portal keeps that status and the times it changed. A request, its audit history and any backup copy can outlast removal from your Messages. **[CLINIC TO CONFIRM THE PAYMENT INSTRUCTIONS IT SHOWS, WHO MAY SEND REQUESTS, AND ANY SEPARATE NOTICE FOR AN EMAIL "MESSAGE WAITING" NOTICE IF ONE IS ADDED.]**
+
 ## Encrypted delivery to myCarlos
 
 Where enabled, the clinic sends a separate package encrypted for each approved device. The portal holds the sealed package for pickup and does not hold the device's private key needed to open it. The receiving app checks the package and sends a receipt after filing it.

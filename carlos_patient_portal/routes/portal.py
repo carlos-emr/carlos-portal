@@ -93,6 +93,10 @@ from carlos_patient_portal.notifications import (
     send_email_change_requested_notice,
 )
 from carlos_patient_portal.outbound_messages import sender_locale_kwargs
+from carlos_patient_portal.payment_requests import (
+    PaymentRequestNotFoundError,
+    open_payment_request,
+)
 from carlos_patient_portal.presenters import (
     normalize_email_password_dashboard_provider,
     normalize_email_password_dashboard_search,
@@ -991,6 +995,40 @@ def register_portal_routes(
             authenticated_session=authenticated_session,
             active_module="messages",
             selected_message=prompt,
+        )
+
+    @app.get("/portal/messages/payment/{payment_request_id}")
+    def portal_payment_request(
+        request: Request,
+        payment_request_id: Annotated[int, PathParam(gt=0, le=MAX_DATABASE_ID)],
+        session: Annotated[Session, function_scoped_database_dependency(get_app_database_session)],
+    ) -> Response:
+        authenticated_session = get_portal_cookie_session_or_redirect(request, session)
+        if isinstance(authenticated_session, RedirectResponse):
+            return authenticated_session
+        # Opening records the first read, as for a booking prompt (a GET is safe for the same
+        # reason: the session cookie is SameSite=Strict). The patient can read a request and
+        # nothing else: there is no pay button and no post, because the portal takes no payment.
+        try:
+            payment_request = open_payment_request(
+                session, payment_request_id, account=authenticated_session.account
+            )
+        except PaymentRequestNotFoundError:
+            return render_portal_page(
+                request,
+                session,
+                authenticated_session=authenticated_session,
+                active_module="messages",
+                message_not_found=True,
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+        session.commit()
+        return render_portal_page(
+            request,
+            session,
+            authenticated_session=authenticated_session,
+            active_module="messages",
+            selected_payment_request=payment_request,
         )
 
     def render_booking_refusal(

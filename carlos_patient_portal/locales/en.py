@@ -90,6 +90,23 @@ TEXT: dict[str, str] = {
     "booking_prompt_suggested_by_clinic": "Your clinic suggested this appointment.",
     "booking_prompt_title_annual_exam": "Book your annual exam",
     "booking_prompt_title_follow_up": "Book a follow-up appointment",
+    "payment_request_amount": "Amount due",
+    "payment_request_contact": "Please contact {clinic_name} to arrange payment.",
+    "payment_request_due": "Due {due}",
+    "payment_request_how_to_pay": "How to pay",
+    "payment_request_includes_tax": "Includes {tax} in tax",
+    "payment_request_no_online": (
+        "You cannot pay on this site. The clinic marks this request paid once it has recorded "
+        "your payment."
+    ),
+    "payment_request_status_open": "Payment requested",
+    "payment_request_status_paid": "Payment received. Thank you.",
+    "payment_request_form_or_note_title": "A payment is requested for a form or note",
+    "payment_request_missed_appointment_title": (
+        "A payment is requested for a missed appointment"
+    ),
+    "payment_request_other_title": "A payment is requested by your clinic",
+    "payment_request_uninsured_service_title": "A payment is requested for an uninsured service",
     "booking_prompt_title_lab_review": "Book an appointment to review your lab results",
     "booking_prompt_urgency_as_soon_as_possible": "Please book as soon as possible.",
     "booking_prompt_urgency_routine": "Please book at a time that suits you.",

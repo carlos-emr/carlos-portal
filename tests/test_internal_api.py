@@ -1866,6 +1866,10 @@ INTERNAL_ROUTE_PERMISSIONS = (
         "portal.booking_prompt.manage",
     ),
     ("POST", "/internal/carlos/booking-prompts/1/withdraw", STAFF, "portal.booking_prompt.manage"),
+    ("POST", "/internal/carlos/patients/1234/payment-requests", STAFF, "portal.payment.manage"),
+    ("GET", "/internal/carlos/patients/1234/payment-requests", STAFF, "portal.payment.manage"),
+    ("POST", "/internal/carlos/payment-requests/1/withdraw", STAFF, "portal.payment.manage"),
+    ("POST", "/internal/carlos/payment-requests/1/paid", STAFF, "portal.payment.manage"),
     (
         "GET",
         "/internal/carlos/booking-prompts/choices",
@@ -1917,6 +1921,8 @@ def test_internal_openapi_contract_is_stable() -> None:
         "/internal/carlos/booking-prompts/{prompt_id}/withdraw": ["post"],
         "/internal/carlos/contact-reviews": ["get"],
         "/internal/carlos/contact-reviews/{review_request_id}/decision": ["post"],
+        "/internal/carlos/payment-requests/{request_id}/paid": ["post"],
+        "/internal/carlos/payment-requests/{request_id}/withdraw": ["post"],
         "/internal/carlos/invites/{invite_id}/commit-delivery": ["post"],
         "/internal/carlos/invites/{invite_id}/resend": ["post"],
         "/internal/carlos/invites/{invite_id}/resend/prepare": ["post"],
@@ -1926,6 +1932,7 @@ def test_internal_openapi_contract_is_stable() -> None:
         "/internal/carlos/patients/{demographic_no}/invites": ["get", "post"],
         "/internal/carlos/patients/{demographic_no}/invites/prepare": ["post"],
         "/internal/carlos/patients/{demographic_no}/portal-account": ["get"],
+        "/internal/carlos/patients/{demographic_no}/payment-requests": ["get", "post"],
         "/internal/carlos/patients/{demographic_no}/portal-account/access": ["post"],
         "/internal/carlos/patients/{demographic_no}/unlock": ["post"],
         "/internal/carlos/patients/{demographic_no}/unlock-secrets": ["post"],
@@ -1944,6 +1951,7 @@ def route_template(path: str) -> str:
         .replace("/unlock-secrets/1/", "/unlock-secrets/{unlock_secret_id}/")
         .replace("/contact-reviews/1/", "/contact-reviews/{review_request_id}/")
         .replace("/booking-prompts/1/", "/booking-prompts/{prompt_id}/")
+        .replace("/payment-requests/1/", "/payment-requests/{request_id}/")
         .replace("/signup-requests/1/", "/signup-requests/{request_id}/")
     )
 

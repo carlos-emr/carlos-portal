@@ -2316,6 +2316,11 @@ def register_carlos_internal_routes(app: FastAPI, runtime: InternalRuntime) -> N
     from carlos_patient_portal.routes.signup_internal import register_internal_signup_routes
 
     register_internal_signup_routes(app, runtime, deps)
+    from carlos_patient_portal.routes.payment_requests_internal import (
+        register_internal_payment_request_routes,
+    )
+
+    register_internal_payment_request_routes(app, runtime, deps)
     if runtime.settings.mycarlos_delivery_enabled:
         register_internal_mycarlos_routes(
             app, deps, mailbox_enabled=runtime.settings.mycarlos_mailbox_enabled

@@ -125,12 +125,34 @@ class BookingPromptViewModel:
 
 
 @dataclass(frozen=True, slots=True)
+class PaymentRequestViewModel:
+    """One payment request as the patient reads it: fixed wording, an amount, a date, no detail.
+
+    ``instructions`` is the clinic's own plain text for how to pay (a setting), shown only on the
+    opened request; it is the clinic's words, escaped by the template like any other value.
+    """
+
+    id: int
+    href: str
+    title: str
+    amount: str
+    tax: str | None
+    due: str
+    status: str
+    # "paid", "open" or "withdrawn" for the template's own classes; the words are in `status`.
+    state: str
+    sent_at: str
+    is_new: bool
+    instructions: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class MessagesViewModel:
     """View state for the messages module of `dashboard.jinja`.
 
-    ``selected`` is the prompt being read, or None on the list. ``not_found`` reports a link to a
-    prompt that was withdrawn, expired, or is not the patient's. ``error`` reports a pick or
-    decline that could not be saved.
+    ``selected`` is the booking prompt being read and ``selected_payment`` the payment request, or
+    None on the list. ``not_found`` reports a link to a message that was withdrawn, expired, or is
+    not the patient's. ``error`` reports a pick or decline that could not be saved.
     """
 
     prompts: tuple[BookingPromptViewModel, ...] = ()
@@ -138,6 +160,8 @@ class MessagesViewModel:
     not_found: bool = False
     no_online_booking: str = ""
     error: str | None = None
+    payment_requests: tuple[PaymentRequestViewModel, ...] = ()
+    selected_payment: PaymentRequestViewModel | None = None
 
 
 @dataclass(frozen=True, slots=True)

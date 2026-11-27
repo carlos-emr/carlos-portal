@@ -448,8 +448,45 @@
                 {% endif %}
                 <a class="secondary-action" href="{{ url_for('portal_messages') }}">{{ text.message_back }}</a>
               </article>
-            {% elif messages.prompts %}
+            {% elif messages.selected_payment %}
+              {% set payment = messages.selected_payment %}
+              <article class="message-detail payment-request-detail" aria-labelledby="message-title">
+                <h2 id="message-title">{{ payment.title }}</h2>
+                <p class="message-meta">{{ text.message_sent_at.format(sent_at=payment.sent_at) }}</p>
+                <p class="payment-request-amount">
+                  <span class="payment-request-label">{{ text.payment_request_amount }}</span>
+                  <strong>{{ payment.amount }}</strong>
+                </p>
+                {% if payment.tax %}
+                  <p class="message-meta">{{ payment.tax }}</p>
+                {% endif %}
+                <p>{{ payment.due }}</p>
+                <p class="form-notice payment-request-status" role="status">{{ payment.status }}</p>
+                {% if payment.instructions %}
+                  <section class="payment-request-instructions" aria-labelledby="payment-instructions-title">
+                    <h3 id="payment-instructions-title">{{ text.payment_request_how_to_pay }}</h3>
+                    <p class="payment-request-instructions-text">{{ payment.instructions }}</p>
+                  </section>
+                {% endif %}
+                {% if payment.state == "open" %}
+                  <p class="message-meta">{{ text.payment_request_no_online }}</p>
+                {% endif %}
+                <a class="secondary-action" href="{{ url_for('portal_messages') }}">{{ text.message_back }}</a>
+              </article>
+            {% elif messages.prompts or messages.payment_requests %}
               <ul class="message-list">
+                {% for payment in messages.payment_requests %}
+                  <li>
+                    <a class="message-row{% if payment.is_new %} new{% endif %}" href="{{ payment.href }}">
+                      <span class="message-title">{{ payment.title }}</span>
+                      {% if payment.is_new %}
+                        <span class="message-badge">{{ text.message_new }}</span>
+                      {% endif %}
+                      <span class="message-meta">{{ payment.amount }} · {{ payment.status }}</span>
+                      <span class="message-meta">{{ text.message_sent_at.format(sent_at=payment.sent_at) }}</span>
+                    </a>
+                  </li>
+                {% endfor %}
                 {% for prompt in messages.prompts %}
                   <li>
                     <a class="message-row{% if prompt.is_new %} new{% endif %}" href="{{ prompt.href }}">

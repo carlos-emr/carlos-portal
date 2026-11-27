@@ -354,8 +354,11 @@ def test_the_audit_outcome_resumed_has_its_own_migration_and_a_refusing_downgrad
     engine, config = migrated
     script = ScriptDirectory.from_config(config)
     (head,) = script.get_heads()
-    assert head == "0027_mfa_resumed_outcome"
-    assert script.get_revision(head).down_revision == "0026_mycarlos_push_handles"
+    # 0028 (payment requests) follows 0027 on the one line; this test is about 0027 itself.
+    assert head == "0028_payment_requests"
+    revision = script.get_revision("0027_mfa_resumed_outcome")
+    assert revision is not None
+    assert revision.down_revision == "0026_mycarlos_push_handles"
     with Session(engine) as session, session.begin():
         session.add(
             PatientPortalAuditEvent(
