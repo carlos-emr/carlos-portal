@@ -30,11 +30,12 @@
   --success-border: #a8d8b8;
 }
 
-/* Dark: the device's setting. Every text colour is at least 4.5:1 on every surface it can sit on,
+/* Dark: the device's setting, unless the person chose Light in Preferences (data-theme="light",
+   set on <html> by the server). Every text colour is at least 4.5:1 on every surface it can sit on,
    and borders, the focus ring and the blue are at least 3:1 (tests/test_accessibility_basics.py
-   computes them from this file). */
+   computes them from this file). The same palette follows for a chosen Dark, below. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --carlos-blue: #4b71be;
     --carlos-blue-hover: #5b82d0;
     --brand-text: #d4e3ff;
@@ -66,11 +67,56 @@
   }
 
   /* The logo's dark parts must stay visible on the dark top bar. */
-  .brand-logo {
+  :root:not([data-theme="light"]) .brand-logo {
     padding: 2px;
     background: #ffffff;
     border-radius: 4px;
   }
+}
+
+/* Dark, when the person chose it in Preferences (data-theme="dark"): the palette above, copied
+   (a test keeps the two identical), plus the form controls and scrollbars drawn dark. Light
+   needs only the controls, since the light palette is the default. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --carlos-blue: #4b71be;
+  --carlos-blue-hover: #5b82d0;
+  --brand-text: #d4e3ff;
+  --brand-bg: #0b3a57;
+  --on-accent: #ffffff;
+  --surface: #182033;
+  --surface-subtle: #1a2237;
+  --surface-muted: #1e2840;
+  --surface-topbar: #1a2237;
+  --line: #34405c;
+  --border-soft: #3a4663;
+  --border-card: #46537a;
+  --border-control: #8190ad;
+  --muted: #b4bccb;
+  --page: #0f1626;
+  --text-strong: #f3f4f6;
+  --text: #e5e7eb;
+  --text-soft: #c8cdd8;
+  --focus-ring: #ffd166;
+  --warn-text: #ffe9a6;
+  --warn-bg: #3a2e0a;
+  --warn-border: #8a6d1a;
+  --error-text: #ffc9c9;
+  --error-bg: #3a1519;
+  --error-border: #8a3a42;
+  --success-text: #b7f0cf;
+  --success-bg: #10301e;
+  --success-border: #2f7a4f;
+}
+
+:root[data-theme="dark"] .brand-logo {
+  padding: 2px;
+  background: #ffffff;
+  border-radius: 4px;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
 }
 
 [hidden] {
@@ -502,6 +548,43 @@ h2 {
   color: var(--text-soft);
   background: var(--surface-muted);
   cursor: not-allowed;
+}
+
+/* Preferences: Appearance is three choices, and High contrast a plain checkbox row. */
+.segmented-control-three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.preference-group {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.preference-group legend {
+  margin-bottom: 6px;
+  padding: 0;
+  color: var(--text);
+  font-size: 0.8125rem;
+  font-weight: bold;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 2.75rem;
+  color: var(--text-strong);
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.checkbox-row input[type="checkbox"] {
+  flex: none;
+  width: 1.25rem;
+  height: 1.25rem;
+  margin: 0;
+  accent-color: var(--carlos-blue);
 }
 
 .mfa-resend-form .secondary-action {
@@ -1506,7 +1589,12 @@ main[tabindex="-1"]:focus,
 /* More contrast, when the person asks for it: text colours go to the strongest, borders become the
    control border colour, and the focus ring is thicker. */
 @media (prefers-contrast: more) {
-  :root {
+  /* Two selectors of specificity 0,2,0, the same as the dark palettes before it: with no choice
+     made, the device's dark block is `:root:not([data-theme="light"])`, and a plain `:root` here
+     would lose to it; `:root[data-theme]` is for a chosen Light or Dark. This block comes later,
+     so it wins every tie. */
+  :root:not([data-theme]),
+  :root[data-theme] {
     --muted: var(--text-strong);
     --text-soft: var(--text-strong);
     --text: var(--text-strong);
@@ -1524,6 +1612,29 @@ main[tabindex="-1"]:focus,
     outline: 4px solid var(--focus-ring);
     outline-offset: 2px;
   }
+}
+
+/* The same, when the person switched High contrast on in Preferences (data-contrast="more"), on any
+   device setting (a test keeps this and the media block above identical). */
+:root[data-contrast="more"] {
+  --muted: var(--text-strong);
+  --text-soft: var(--text-strong);
+  --text: var(--text-strong);
+  --line: var(--border-control);
+  --border-soft: var(--border-control);
+  --border-card: var(--border-control);
+}
+
+/* `:where()` adds no specificity, so each selector below weighs what the media block's does and a
+   control's own focus rules treat the two the same. */
+:where([data-contrast="more"]) a:focus-visible,
+:where([data-contrast="more"]) button:focus-visible,
+:where([data-contrast="more"]) input:focus-visible,
+:where([data-contrast="more"]) select:focus-visible,
+:where([data-contrast="more"]) textarea:focus-visible,
+:where([data-contrast="more"]) [tabindex]:focus-visible {
+  outline: 4px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 /* Forced colours (Windows contrast themes): the system chooses the colours, so what is left to us
