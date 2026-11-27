@@ -21,6 +21,8 @@
  *      sign-in page that says why, and Back does not bring the records back.
  *   5. Idle session expiry: a session alive halfway through the limit ends once the limit has
  *      passed with no request, and the old cookie is then dead.
+ *   7. Two-tab idle sign-out (step "signout-tabs"): a keep-alive in one tab extends the other,
+ *      and signing out leaves a hidden tab blank until its fresh sign-in page arrives.
  *
  * Separate script, own seed (tests/seed_browser_session.py) and fixture file; it never touches the
  * fixtures or steps of scripts/patient-portal-playwright-checks.js.
@@ -61,7 +63,7 @@
  *   python -m uvicorn carlos_patient_portal.main:create_app --factory --host 127.0.0.1 --port 8495 &
  *   npm run test:patient-portal-session-playwright
  *
- * PORTAL_SESSION_STEPS=locales (or any comma list of sms,phone,locales,idle,notices) runs a subset.
+ * PORTAL_SESSION_STEPS=signout-tabs (or any comma list of the step names) runs a subset.
  * maintenance is explicit-only and requires its own configured maintenance instance. Set
  * PORTAL_SESSION_STEPS=maintenance for both the seed and browser commands: the seed then writes
  * only a private locale fixture, without a database, accounts, MFA codes or SMS capture. Keep
@@ -87,8 +89,8 @@ const useDevelopmentMfaCode = process.env.PORTAL_USE_DEVELOPMENT_MFA_CODE === 't
 const smsCaptureFile = process.env.PORTAL_SMS_CAPTURE_FILE || '';
 const screenshotDir = path.resolve(process.env.PORTAL_SCREENSHOT_DIR || os.tmpdir());
 const chromePath = process.env.PORTAL_CHROME_PATH || process.env.CHROME_PATH || '';
-// PORTAL_SESSION_STEPS=sms,phone,locales,idle,signout,notices runs only those steps (default: all).
-const STEP_NAMES = ['sms', 'phone', 'locales', 'idle', 'signout', 'notices', 'maintenance'];
+// PORTAL_SESSION_STEPS runs only the named steps (default: all except maintenance).
+const STEP_NAMES = ['sms', 'phone', 'locales', 'idle', 'signout', 'signout-tabs', 'notices', 'maintenance'];
 const selectedSteps = (process.env.PORTAL_SESSION_STEPS || '').split(',').map((name) => name.trim()).filter(Boolean);
 
 const fixtures = readFixtures(fixturePath);
@@ -115,9 +117,9 @@ if (!selectedSteps.includes('maintenance')) {
   assert(accounts.sms.phone && fixtures.newPhone, 'the SMS account needs a phone number and the fixture a new one');
   // The sign-in budget is one bucket per client: every POST /auth/login of this run counts.
   // Before deliberate throttling: SMS/email 3, phone 4, non-default locales one each,
-  // idle 1, idle sign-out 1, and the stale-CSRF notice 1 (even a rejected CSRF request spends
-  // the budget).
-  const plannedSignInRequests = 3 + 4 + (locales.length - 1) + 1 + 1 + 1;
+  // idle 1, idle sign-out 1, two-tab sign-out 1, and the stale-CSRF notice 1 (even a rejected
+  // CSRF request spends the budget).
+  const plannedSignInRequests = 3 + 4 + (locales.length - 1) + 1 + 1 + 1 + 1;
   assert(settings.authRateLimitMaxRequests > plannedSignInRequests,
     `PATIENT_PORTAL_AUTH_RATE_LIMIT_MAX_REQUESTS is ${settings.authRateLimitMaxRequests}; it must exceed the `
       + `${plannedSignInRequests} sign-ins the steps before the throttle step make (the recipe uses 30)`);
@@ -1004,6 +1006,102 @@ async function checkIdleSignOut(page, context) {
     keepalives: keepalives.length, leftByItself: true, backShowsNoRecords: true }));
 }
 
+async function checkIdleAcrossTabs(browser) {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: 'en-CA' });
+  context.setDefaultTimeout(15_000);
+  watchContext(context, 'idle-tabs');
+  const limitSeconds = settings.idleTimeoutSeconds;
+  const leadSeconds = Math.floor(limitSeconds / 3);
+  const blankAfterSeconds = Math.max(5, Math.floor(limitSeconds / 2));
+  try {
+    const observer = await context.newPage();
+    const active = await context.newPage();
+    watchPage(observer, 'idle-tabs-observer');
+    watchPage(active, 'idle-tabs-active');
+    // The clock belongs to this context. Both documents use it, while the server and the
+    // other session journeys keep real time.
+    const now = Date.now();
+    await observer.clock.install({ time: now });
+    await observer.clock.pauseAt(now + 60_000);
+    await signInWithEmailCode(observer, accounts.warning);
+    await open(active, '/portal');
+    assert(atPath(active, portalPathname('/portal')), 'the other tab did not share the signed-in session');
+
+    const warning = (page) => page.getByRole('alertdialog', { name: t('idle_warning_title'), exact: true });
+    const keepalivePath = portalPathname('/portal/session/keepalive');
+    const isKeepalive = (request) => request.method() === 'POST' && new URL(request.url()).pathname === keepalivePath;
+    let observerKeepalives = 0;
+    let observerNavigations = 0;
+    observer.on('request', (request) => {
+      if (isKeepalive(request)) observerKeepalives += 1;
+    });
+    observer.on('framenavigated', (frame) => {
+      if (frame === observer.mainFrame()) observerNavigations += 1;
+    });
+
+    await observer.clock.runFor((limitSeconds - leadSeconds + 2) * 1000);
+    await warning(observer).waitFor({ state: 'visible' });
+    await warning(active).waitFor({ state: 'visible' });
+    const renewal = active.waitForResponse((response) => isKeepalive(response.request()));
+    renewal.catch(() => {});
+    // Use the newer tab for the existing CSRF form token and exercise actual pointer activity.
+    await active.mouse.move(140, 150);
+    const renewed = await renewal;
+    assert(renewed.status() === 200 && renewed.headers()['cache-control'] === 'no-store',
+      'activity in the newer tab did not get a fresh keep-alive');
+    await warning(observer).waitFor({ state: 'hidden' });
+    await warning(active).waitFor({ state: 'hidden' });
+    await observer.clock.runFor((leadSeconds + 1) * 1000);
+    assert(await observer.locator('.signed-in-user').isVisible()
+      && observerKeepalives === 0 && observerNavigations === 0,
+    'the other tab did not stay signed in past its original deadline on the shared renewal');
+
+    // Headless Chromium does not hide a tab when it loses focus. Send the browser event and
+    // advance the real client code to the point where it conceals that background page.
+    const visibility = (state) => observer.evaluate((value) => {
+      Object.defineProperty(document, 'visibilityState', { value, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }, state);
+    await visibility('hidden');
+    await observer.clock.runFor((blankAfterSeconds + 1) * 1000);
+    assert(await observer.locator('body[data-idle-blank]').count() === 1
+      && !(await observer.locator('.app-shell').isVisible()), 'the hidden tab was still showing the dashboard');
+
+    // Return to the old document during the real logout message, just after its idle handler
+    // starts leaving and before the browser can commit the navigation.
+    const signInPath = portalPathname('/');
+    const returnMarker = 'idle-tabs-returned-after-logout';
+    await observer.evaluate((marker) => {
+      sessionChannel.addEventListener('message', (message) => {
+        if (message.data !== 'ended') return;
+        Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        const stayedBlank = document.body.hasAttribute('data-idle-blank')
+          && getComputedStyle(document.querySelector('.app-shell')).display === 'none';
+        console.log(`${marker} ${stayedBlank}`);
+      });
+    }, returnMarker);
+    const returned = observer.waitForEvent('console', {
+      predicate: (message) => message.text().startsWith(returnMarker),
+      timeout: 15_000,
+    });
+    returned.catch(() => {});
+    const logout = await submit(active, warning(active).getByRole('button', { name: t('logout'), exact: true }),
+      { pathname: portalPathname('/portal/logout') });
+    assert(logout.status() === 303 && atPath(active, signInPath), 'the active tab did not sign out');
+    assert((await returned).text() === `${returnMarker} true`,
+      'showing the signed-out tab revealed the old dashboard');
+    await observer.getByRole('heading', { name: t('sign_in_heading'), exact: true }).waitFor({ timeout: 15_000 });
+    assert(atPath(observer, signInPath) && await observer.locator('.signed-in-user, .module-nav').count() === 0,
+      'the second tab did not finish on a clean sign-in page');
+    assert(!(await context.cookies()).some((cookie) => cookie.name === settings.sessionCookieName),
+      'signing out left the shared session cookie behind');
+    console.log(JSON.stringify({ check: 'idle sign-out across tabs', sharedRenewal: true, hiddenDashboardStayedBlank: true }));
+  } finally {
+    await context.close();
+  }
+}
+
 (async () => {
   mkdirSync(screenshotDir, { recursive: true, mode: 0o700 });
   const browser = await chromium.launch({
@@ -1021,6 +1119,7 @@ async function checkIdleSignOut(page, context) {
     if (runs('locales')) await checkLocales(page, context);
     if (runs('idle')) await checkIdleExpiry(page, context);
     if (runs('signout')) await checkIdleSignOut(page, context);
+    if (runs('signout-tabs')) await checkIdleAcrossTabs(browser);
     if (runs('notices')) await checkNoticePages(page);
     const unseen = expectedErrors.filter((candidate) => !candidate.seen);
     assert(unseen.length === 0,
