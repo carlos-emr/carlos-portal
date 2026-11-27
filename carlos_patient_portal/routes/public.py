@@ -31,7 +31,7 @@ from carlos_patient_portal.database import (
     check_database,
     check_database_schema_current,
 )
-from carlos_patient_portal.i18n import normalize_locale
+from carlos_patient_portal.i18n import normalize_locale, portal_text
 from carlos_patient_portal.models import utc_now
 from carlos_patient_portal.runtime import (
     PortalRuntime,
@@ -42,6 +42,7 @@ from carlos_patient_portal.self_signup import summarize_signup_backlog
 from carlos_patient_portal.web_support import (
     NOT_FOUND_DETAIL,
     is_safe_local_redirect,
+    request_locale,
     set_locale_cookie,
 )
 
@@ -58,7 +59,15 @@ def register_public_routes(
 
     @app.get("/")
     def index(request: Request) -> Response:
-        return render_index_response(request)
+        # `?signed_out=idle` is where the signed-in page sends a patient whose session ended for
+        # inactivity (#149). A fixed whitelist: the notice is chosen here by the one known reason,
+        # and nothing from the query string is ever echoed into the page.
+        notice = (
+            portal_text(request_locale(request))["signed_out_idle_notice"]
+            if request.query_params.get("signed_out") == "idle"
+            else None
+        )
+        return render_index_response(request, notice_message=notice)
 
     @app.get(
         "/locale/{locale_code}",

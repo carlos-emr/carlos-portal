@@ -54,6 +54,7 @@ from carlos_patient_portal.auth import (
     MfaChallengeDelivery,
     PortalSessionInvalidError,
     hash_auth_token,
+    idle_remaining_seconds,
     logout_patient_session,
 )
 from carlos_patient_portal.config import DEFAULT_SERVICE_NAME, Settings
@@ -972,6 +973,7 @@ def index_template_context(
     settings: Settings,
     csrf_token: str,
     error_message: str | None = None,
+    notice_message: str | None = None,
 ) -> dict[str, object]:
     locale = request_locale(request)
     text = portal_text(locale)
@@ -981,6 +983,7 @@ def index_template_context(
         "clinic_name": settings.clinic_name,
         "csrf_token": csrf_token,
         "error_message": error_message,
+        "notice_message": notice_message,
         "service_name": displayed_service_name(settings, text),
         "source_code_url": settings.source_code_url,
         "supported_locales": supported_locale_options(locale),
@@ -1221,6 +1224,13 @@ def portal_template_context(
     context["new_messages_label"] = plural_text(
         text, "messages_new_count", new_message_count, locale
     ).format(count=new_message_count)
+    # The page's idle timer (#149, static/idle-session.js): how long this session has left and its
+    # idle limit, both as seconds (never a time, so a patient's clock cannot make the page wrong).
+    idle_timeout = timedelta(seconds=settings.session_idle_timeout_seconds)
+    context["idle_limit_seconds"] = settings.session_idle_timeout_seconds
+    context["idle_remaining_seconds"] = idle_remaining_seconds(
+        authenticated_session, idle_timeout=idle_timeout
+    )
     # The Documents tile (None: the feature is off, so the tile stays the greyed "Future" one).
     # Its sentence is built here from the plural forms; only a count ever reaches the page.
     context["documents_tile"] = documents_tile

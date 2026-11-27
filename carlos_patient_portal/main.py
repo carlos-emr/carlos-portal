@@ -809,6 +809,7 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
         *,
         status_code: int = status.HTTP_200_OK,
         error_message: str | None = None,
+        notice_message: str | None = None,
     ) -> Response:
         csrf_token = create_csrf_token(runtime.token_keys.csrf)
         response = templates.TemplateResponse(
@@ -819,6 +820,7 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
                 settings=settings,
                 csrf_token=csrf_token,
                 error_message=error_message,
+                notice_message=notice_message,
             ),
             status_code=status_code,
         )

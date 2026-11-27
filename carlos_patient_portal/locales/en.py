@@ -293,6 +293,12 @@ TEXT: dict[str, str] = {
     "mfa_verify": "Verify",
     "mfa_verification_failed": "Two-step verification could not be completed.",
     "modal_close": "OK",
+    "idle_warning_title": "Your session is about to end",
+    "idle_warning_body": (
+        "For your privacy you will be signed out in {seconds} seconds unless you stay signed in."
+    ),
+    "idle_stay_signed_in": "Stay signed in",
+    "signed_out_idle_notice": "You were signed out because the page was idle.",
     "module_navigation": "Portal modules",
     "mfa_method": "Method",
     "new_password": "New password",

@@ -16,8 +16,13 @@
  *      status text), nothing overflows at phone width, and logout returns to the localized sign-in.
  *   4. The notice pages a browser gets instead of JSON: an unknown route, a form posted with a
  *      stale CSRF token, and the sign-in throttle (429 with Retry-After).
+ *   6. The page's idle sign-out (#149, step "signout"): a warning before the limit, Stay signed in
+ *      and plain activity extend, a hidden page is blanked, a page left alone leaves for a
+ *      sign-in page that says why, and Back does not bring the records back.
  *   5. Idle session expiry: a session alive halfway through the limit ends once the limit has
  *      passed with no request, and the old cookie is then dead.
+ *   7. Two-tab idle sign-out (step "signout-tabs"): a keep-alive in one tab extends the other,
+ *      and signing out leaves a hidden tab blank until its fresh sign-in page arrives.
  *
  * Separate script, own seed (tests/seed_browser_session.py) and fixture file; it never touches the
  * fixtures or steps of scripts/patient-portal-playwright-checks.js.
@@ -58,7 +63,7 @@
  *   python -m uvicorn carlos_patient_portal.main:create_app --factory --host 127.0.0.1 --port 8495 &
  *   npm run test:patient-portal-session-playwright
  *
- * PORTAL_SESSION_STEPS=locales (or any comma list of sms,phone,locales,idle,notices) runs a subset.
+ * PORTAL_SESSION_STEPS=signout-tabs (or any comma list of the step names) runs a subset.
  * maintenance is explicit-only and requires its own configured maintenance instance. Set
  * PORTAL_SESSION_STEPS=maintenance for both the seed and browser commands: the seed then writes
  * only a private locale fixture, without a database, accounts, MFA codes or SMS capture. Keep
@@ -84,8 +89,8 @@ const useDevelopmentMfaCode = process.env.PORTAL_USE_DEVELOPMENT_MFA_CODE === 't
 const smsCaptureFile = process.env.PORTAL_SMS_CAPTURE_FILE || '';
 const screenshotDir = path.resolve(process.env.PORTAL_SCREENSHOT_DIR || os.tmpdir());
 const chromePath = process.env.PORTAL_CHROME_PATH || process.env.CHROME_PATH || '';
-// PORTAL_SESSION_STEPS=sms,phone,locales,idle,notices runs only those steps (default: all).
-const STEP_NAMES = ['sms', 'phone', 'locales', 'idle', 'notices', 'maintenance'];
+// PORTAL_SESSION_STEPS runs only the named steps (default: all except maintenance).
+const STEP_NAMES = ['sms', 'phone', 'locales', 'idle', 'signout', 'signout-tabs', 'notices', 'maintenance'];
 const selectedSteps = (process.env.PORTAL_SESSION_STEPS || '').split(',').map((name) => name.trim()).filter(Boolean);
 
 const fixtures = readFixtures(fixturePath);
@@ -105,15 +110,16 @@ const runs = (name) => selectedSteps.length === 0 || selectedSteps.includes(name
 if (!selectedSteps.includes('maintenance')) {
   assert(useDevelopmentMfaCode, 'this check reads email codes from the page: set PORTAL_USE_DEVELOPMENT_MFA_CODE=true');
   assert(smsCaptureFile, 'PORTAL_SMS_CAPTURE_FILE must name the SMS capture file');
-  for (const role of ['sms', 'phone', 'locale', 'throttle', 'idle']) {
+  for (const role of ['sms', 'phone', 'locale', 'throttle', 'idle', 'warning']) {
     assert(accounts[role] && accounts[role].username && accounts[role].password && accounts[role].email,
       `${role} account fixture is incomplete in ${fixturePath}`);
   }
   assert(accounts.sms.phone && fixtures.newPhone, 'the SMS account needs a phone number and the fixture a new one');
   // The sign-in budget is one bucket per client: every POST /auth/login of this run counts.
   // Before deliberate throttling: SMS/email 3, phone 4, non-default locales one each,
-  // idle 1, and the stale-CSRF notice 1 (even a rejected CSRF request spends the budget).
-  const plannedSignInRequests = 3 + 4 + (locales.length - 1) + 1 + 1;
+  // idle 1, idle sign-out 1, two-tab sign-out 1, and the stale-CSRF notice 1 (even a rejected
+  // CSRF request spends the budget).
+  const plannedSignInRequests = 3 + 4 + (locales.length - 1) + 1 + 1 + 1 + 1;
   assert(settings.authRateLimitMaxRequests > plannedSignInRequests,
     `PATIENT_PORTAL_AUTH_RATE_LIMIT_MAX_REQUESTS is ${settings.authRateLimitMaxRequests}; it must exceed the `
       + `${plannedSignInRequests} sign-ins the steps before the throttle step make (the recipe uses 30)`);
@@ -878,6 +884,224 @@ async function checkIdleExpiry(page, context) {
     serverQuietMs: serverDate(expired) - activeServerAt, cookieCleared: true }));
 }
 
+// ---- Step 6: the page's idle sign-out (#149) ----
+// What a patient sees: a warning 20 seconds before a 60 second limit (a third of it; a longer
+// limit warns 60 seconds before), "Stay signed in" extends, plain activity extends without the
+// button, a page that is hidden is blanked, and a page left alone leaves by itself for the sign-in
+// page, which says why; Back does not bring the records back.
+async function checkIdleSignOut(page, context) {
+  const account = accounts.warning;
+  const limitSeconds = settings.idleTimeoutSeconds;
+  const leadSeconds = limitSeconds < 180 ? Math.floor(limitSeconds / 3) : 60;
+  const warning = page.getByRole('alertdialog', { name: t('idle_warning_title'), exact: true });
+  await signInWithEmailCode(page, account);
+  const keepalivePath = portalPathname('/portal/session/keepalive');
+  const keepalives = [];
+  page.on('response', (response) => {
+    if (response.request().method() === 'POST' && new URL(response.url()).pathname === keepalivePath) {
+      keepalives.push(response);
+    }
+  });
+
+  // The page is told how long is left, in seconds, and its limit.
+  const given = await page.evaluate(() => ({
+    remaining: Number(document.getElementById('portal-idle-config').dataset.idleRemainingSeconds),
+    limit: Number(document.getElementById('portal-idle-config').dataset.idleLimitSeconds),
+  }));
+  assert(given.limit === limitSeconds, `the page's idle limit is ${given.limit}, not ${limitSeconds}`);
+  assert(given.remaining > limitSeconds - 15 && given.remaining <= limitSeconds,
+    `the page was told ${given.remaining} s left of a ${limitSeconds} s limit`);
+  const loadedAt = Date.now();
+
+  // No warning early; then it opens, with the countdown, the page behind inert, focus on Stay.
+  await wait(Math.max(0, (limitSeconds - leadSeconds) * 500));
+  assert(await warning.count() === 0 || !(await warning.isVisible()), 'the warning opened too early');
+  await warning.waitFor({ state: 'visible', timeout: (limitSeconds - leadSeconds + 15) * 1000 });
+  assert(Date.now() - loadedAt > (limitSeconds - leadSeconds - 5) * 1000, 'the warning opened before its time');
+  assert(/\d+/.test(await page.locator('#portal-idle-body').innerText()), 'the warning gives no countdown');
+  assert(await page.locator('.app-shell').evaluate((shell) => shell.inert === true),
+    'the page behind the warning is not inert');
+  const stay = warning.getByRole('button', { name: t('idle_stay_signed_in'), exact: true });
+  assert(await stay.evaluate((button) => button === document.activeElement), 'focus is not on Stay signed in');
+  await page.screenshot({ path: screenshotPath('patient-portal-idle-warning'), fullPage: true });
+
+  // Stay signed in: one keep-alive, the warning closes, and the new number of seconds is the limit.
+  await stay.click();
+  await warning.waitFor({ state: 'hidden' });
+  assert(keepalives.length === 1 && keepalives[0].status() === 200, 'Stay signed in did not extend the session');
+  const answer = await keepalives[0].json();
+  assert(answer.remaining_seconds > limitSeconds - 5 && answer.remaining_seconds <= limitSeconds,
+    `the keep-alive answered ${answer.remaining_seconds} s`);
+  assert(keepalives[0].headers()['cache-control'] === 'no-store', 'the keep-alive answer may be cached');
+  assert(atPath(page, portalPathname('/portal')), 'Stay signed in left the page');
+
+  // Plain activity keeps the session past a whole limit, with no warning and no button.
+  const activeFrom = Date.now();
+  while (Date.now() - activeFrom < (limitSeconds + 10) * 1000) {
+    await page.mouse.move(100 + (Date.now() % 200), 200);
+    await wait(12000);
+    assert(await warning.count() === 0 || !(await warning.isVisible()), 'the warning opened while the patient was active');
+  }
+  assert(keepalives.length >= 3, `activity sent ${keepalives.length - 1} keep-alives`);
+  assert(keepalives.every((response) => response.status() === 200), 'a keep-alive was refused');
+  assert(atPath(page, portalPathname('/portal')), 'the page left while the patient was active');
+  assert(await page.locator('.signed-in-user').innerText() === account.username.toLowerCase(),
+    'the session did not survive a whole limit of activity');
+
+  // A hidden page is blanked, and is fetched afresh (not shown as it was) when it comes back.
+  // Headless Chromium has no real hidden state, so the page is given the events a browser sends.
+  const blankAfterSeconds = Math.min(120, Math.max(5, Math.floor(limitSeconds / 2)));
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.locator('body[data-idle-blank]').waitFor({ state: 'attached', timeout: (blankAfterSeconds + 15) * 1000 });
+  assert(await page.locator('.app-shell').evaluate((shell) => getComputedStyle(shell).display === 'none'),
+    'a hidden page was not blanked');
+  const reloaded = page.waitForEvent('framenavigated', { predicate: (frame) => frame === page.mainFrame() });
+  reloaded.catch(() => {});
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await reloaded;
+  await page.waitForLoadState('load');
+  assert(await page.locator('body[data-idle-blank]').count() === 0, 'the page came back still blank');
+  assert(atPath(page, portalPathname('/portal')), 'a page that came back left the portal');
+
+  // Left alone, it leaves by itself, for a sign-in page that says why.
+  const quietFrom = Date.now();
+  await page.waitForURL((url) => url.pathname === portalPathname('/') && url.searchParams.get('signed_out') === 'idle',
+    { timeout: (limitSeconds + 20) * 1000 });
+  assert(Date.now() - quietFrom > (limitSeconds - 15) * 1000, 'the page left before the idle limit');
+  await page.getByRole('heading', { name: t('sign_in_heading'), exact: true }).waitFor();
+  await page.getByText(t('signed_out_idle_notice'), { exact: true }).waitFor();
+  assert(await page.locator('.signed-in-user').count() === 0, 'the sign-in page shows the signed-in page');
+  await page.screenshot({ path: screenshotPath('patient-portal-idle-signed-out'), fullPage: true });
+
+  // Back does not return to the records, and the server holds the session as ended.
+  // The entry before is the answer to the sign-in code's POST, which the browser cannot show again
+  // (net::ERR_CACHE_MISS, as it must be: the page is no-store): either that error or a sign-in
+  // page, never the records.
+  await page.goBack({ waitUntil: 'commit' }).catch((error) => {
+    assert(String(error.message).includes('ERR_CACHE_MISS'), `Back failed unexpectedly: ${error.message}`);
+  });
+  assert(await page.locator('.signed-in-user').count() === 0 && await page.locator('.module-nav').count() === 0,
+    'Back brought the signed-in page back');
+  // The page is told whole seconds, rounded down, so it may leave up to a second before the server
+  // ends the session (never after): give the server that second and a little more.
+  await wait(3000);
+  await open(page, '/portal');
+  assert(atPath(page, portalPathname('/')), 'the idle session still opens the dashboard');
+
+  // The reason is a whitelist: any other value shows no notice, and nothing is echoed.
+  await open(page, '/?signed_out=%3Cb%3Eoops%3C%2Fb%3E');
+  assert(await page.getByText(t('signed_out_idle_notice'), { exact: true }).count() === 0,
+    'an unknown signed_out reason showed the notice');
+  // The language links carry the page's own address, percent-encoded, as they always did; the
+  // value is never markup (no <b> element) and never a notice.
+  assert(await page.locator('b', { hasText: 'oops' }).count() === 0
+    && await page.locator('.form-notice').count() === 0, 'an unknown signed_out reason was echoed');
+  console.log(JSON.stringify({ check: 'idle sign-out', limitSeconds, leadSeconds,
+    keepalives: keepalives.length, leftByItself: true, backShowsNoRecords: true }));
+}
+
+async function checkIdleAcrossTabs(browser) {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: 'en-CA' });
+  context.setDefaultTimeout(15_000);
+  watchContext(context, 'idle-tabs');
+  const limitSeconds = settings.idleTimeoutSeconds;
+  const leadSeconds = Math.floor(limitSeconds / 3);
+  const blankAfterSeconds = Math.max(5, Math.floor(limitSeconds / 2));
+  try {
+    const observer = await context.newPage();
+    const active = await context.newPage();
+    watchPage(observer, 'idle-tabs-observer');
+    watchPage(active, 'idle-tabs-active');
+    // The clock belongs to this context. Both documents use it, while the server and the
+    // other session journeys keep real time.
+    const now = Date.now();
+    await observer.clock.install({ time: now });
+    await observer.clock.pauseAt(now + 60_000);
+    await signInWithEmailCode(observer, accounts.warning);
+    await open(active, '/portal');
+    assert(atPath(active, portalPathname('/portal')), 'the other tab did not share the signed-in session');
+
+    const warning = (page) => page.getByRole('alertdialog', { name: t('idle_warning_title'), exact: true });
+    const keepalivePath = portalPathname('/portal/session/keepalive');
+    const isKeepalive = (request) => request.method() === 'POST' && new URL(request.url()).pathname === keepalivePath;
+    let observerKeepalives = 0;
+    let observerNavigations = 0;
+    observer.on('request', (request) => {
+      if (isKeepalive(request)) observerKeepalives += 1;
+    });
+    observer.on('framenavigated', (frame) => {
+      if (frame === observer.mainFrame()) observerNavigations += 1;
+    });
+
+    await observer.clock.runFor((limitSeconds - leadSeconds + 2) * 1000);
+    await warning(observer).waitFor({ state: 'visible' });
+    await warning(active).waitFor({ state: 'visible' });
+    const renewal = active.waitForResponse((response) => isKeepalive(response.request()));
+    renewal.catch(() => {});
+    // Use the newer tab for the existing CSRF form token and exercise actual pointer activity.
+    await active.mouse.move(140, 150);
+    const renewed = await renewal;
+    assert(renewed.status() === 200 && renewed.headers()['cache-control'] === 'no-store',
+      'activity in the newer tab did not get a fresh keep-alive');
+    await warning(observer).waitFor({ state: 'hidden' });
+    await warning(active).waitFor({ state: 'hidden' });
+    await observer.clock.runFor((leadSeconds + 1) * 1000);
+    assert(await observer.locator('.signed-in-user').isVisible()
+      && observerKeepalives === 0 && observerNavigations === 0,
+    'the other tab did not stay signed in past its original deadline on the shared renewal');
+
+    // Headless Chromium does not hide a tab when it loses focus. Send the browser event and
+    // advance the real client code to the point where it conceals that background page.
+    const visibility = (state) => observer.evaluate((value) => {
+      Object.defineProperty(document, 'visibilityState', { value, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }, state);
+    await visibility('hidden');
+    await observer.clock.runFor((blankAfterSeconds + 1) * 1000);
+    assert(await observer.locator('body[data-idle-blank]').count() === 1
+      && !(await observer.locator('.app-shell').isVisible()), 'the hidden tab was still showing the dashboard');
+
+    // Return to the old document during the real logout message, just after its idle handler
+    // starts leaving and before the browser can commit the navigation.
+    const signInPath = portalPathname('/');
+    const returnMarker = 'idle-tabs-returned-after-logout';
+    await observer.evaluate((marker) => {
+      sessionChannel.addEventListener('message', (message) => {
+        if (message.data !== 'ended') return;
+        Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        const stayedBlank = document.body.hasAttribute('data-idle-blank')
+          && getComputedStyle(document.querySelector('.app-shell')).display === 'none';
+        console.log(`${marker} ${stayedBlank}`);
+      });
+    }, returnMarker);
+    const returned = observer.waitForEvent('console', {
+      predicate: (message) => message.text().startsWith(returnMarker),
+      timeout: 15_000,
+    });
+    returned.catch(() => {});
+    const logout = await submit(active, warning(active).getByRole('button', { name: t('logout'), exact: true }),
+      { pathname: portalPathname('/portal/logout') });
+    assert(logout.status() === 303 && atPath(active, signInPath), 'the active tab did not sign out');
+    assert((await returned).text() === `${returnMarker} true`,
+      'showing the signed-out tab revealed the old dashboard');
+    await observer.getByRole('heading', { name: t('sign_in_heading'), exact: true }).waitFor({ timeout: 15_000 });
+    assert(atPath(observer, signInPath) && await observer.locator('.signed-in-user, .module-nav').count() === 0,
+      'the second tab did not finish on a clean sign-in page');
+    assert(!(await context.cookies()).some((cookie) => cookie.name === settings.sessionCookieName),
+      'signing out left the shared session cookie behind');
+    console.log(JSON.stringify({ check: 'idle sign-out across tabs', sharedRenewal: true, hiddenDashboardStayedBlank: true }));
+  } finally {
+    await context.close();
+  }
+}
+
 (async () => {
   mkdirSync(screenshotDir, { recursive: true, mode: 0o700 });
   const browser = await chromium.launch({
@@ -894,6 +1118,8 @@ async function checkIdleExpiry(page, context) {
     if (runs('phone')) await checkPhoneChange(page, context);
     if (runs('locales')) await checkLocales(page, context);
     if (runs('idle')) await checkIdleExpiry(page, context);
+    if (runs('signout')) await checkIdleSignOut(page, context);
+    if (runs('signout-tabs')) await checkIdleAcrossTabs(browser);
     if (runs('notices')) await checkNoticePages(page);
     const unseen = expectedErrors.filter((candidate) => !candidate.seen);
     assert(unseen.length === 0,

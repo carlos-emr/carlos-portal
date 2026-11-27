@@ -337,6 +337,13 @@ TEXT: dict[str, str] = {
     "mfa_verify": "Proszę zweryfikować",
     "mfa_verification_failed": "Nie udało się ukończyć weryfikacji dwuetapowej.",
     "modal_close": "OK",
+    "idle_warning_title": "Twoja sesja zaraz się zakończy",
+    "idle_warning_body": (
+        "Dla Twojej prywatności zostaniesz wylogowany za {seconds} s, "
+        "chyba że pozostaniesz zalogowany."
+    ),
+    "idle_stay_signed_in": "Pozostań zalogowany",
+    "signed_out_idle_notice": "Wylogowano Cię, ponieważ strona była nieaktywna.",
     "module_navigation": "Moduły portalu",
     "mfa_method": "Metoda",
     "new_password": "Nowe hasło",

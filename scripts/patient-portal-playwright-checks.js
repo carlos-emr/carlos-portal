@@ -1456,7 +1456,17 @@ function screenshotPath(name) {
     );
 
     // The page must change its advice without a navigation or manual refresh.
-    await page.clock.fastForward(16 * 60 * 1000);
+    // The page's own idle sign-out (#149) counts these minutes too: a patient who is reading the
+    // page keeps it alive, so the jump is made in steps with some use of the page between them
+    // (each use sends a keep-alive, and the server's answer restarts the countdown).
+    for (let step = 0; step < 4; step += 1) {
+      await page.clock.fastForward(4 * 60 * 1000);
+      const kept = page.waitForResponse(
+        (response) => response.url().includes('/portal/session/keepalive'),
+      );
+      await page.mouse.move(20 + step, 20 + step);
+      await kept;
+    }
     await page.getByText(
       'The clinic will confirm your time. If it is urgent, call the clinic.',
       { exact: true },
