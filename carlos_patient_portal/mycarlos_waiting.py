@@ -54,6 +54,7 @@ from carlos_patient_portal.device_identity import (
     _verify_signature,
     b64url,
     lock_active_device_account,
+    record_device_seen,
 )
 from carlos_patient_portal.mailbox_models import MailboxCopy
 from carlos_patient_portal.models import (
@@ -374,6 +375,12 @@ def consume_waiting_assertion(
         raise DeviceRefusal(REFUSAL_EXPIRED) from exc
     except AssertionReplayError as exc:
         raise DeviceRefusal("replay") from exc
+    # A waiting check that passed (so never a replay) is the locked app's own check-in, the one a
+    # device in tray mode makes every few minutes and a device request never does while it stays
+    # locked: show the device as seen. Best effort, a timestamp only.
+    record_device_seen(
+        session_factory, principal.device_id, now=datetime.fromtimestamp(now, tz=UTC)
+    )
 
 
 def _locked_key(session: Session, principal: WaitingPrincipal) -> PatientPortalMyCarlosWaitingKey:

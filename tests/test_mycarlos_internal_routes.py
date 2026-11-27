@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from carlos_patient_portal import internal_routes
+from carlos_patient_portal.device_identity import record_device_seen
 from carlos_patient_portal.models import (
     AUDIT_EVENT_JOB_AUTH_REFUSED,
     AUDIT_EVENT_MYCARLOS_CLINIC_KEYS_PUBLISH,
@@ -472,6 +473,27 @@ def test_staff_read_the_recipient_id_and_every_device_with_its_public_keys() -> 
     assert phone["ed25519_public_key"] == b64url(sha256(b"phone ed25519").digest())
     (row,) = audit_rows(app, AUDIT_EVENT_MYCARLOS_DEVICE_LIST)
     assert (row.actor_type, row.demographic_no, row.account_id) == ("staff", 1234, account_id)
+
+
+def test_staff_read_when_a_device_was_last_seen_and_its_vault_head_anchor() -> None:
+    app = mycarlos_app()
+    seed_patient(app, 1234, [("phone", "active")])
+    path = "/internal/carlos/patients/1234/mycarlos/devices"
+    client = TestClient(app)
+    unseen = client.get(path, headers=staff(MANAGE)).json()["devices"][0]
+    assert (unseen["last_seen_at"], unseen["vault_head_link"], unseen["vault_head_link_at"]) == (
+        None,
+        None,
+        None,
+    )
+    with app.state.session_factory() as session:
+        device_id = session.scalars(select(PatientPortalMyCarlosDevice)).one().id
+    record_device_seen(app.state.session_factory, device_id, anchor="ab" * 32)
+    seen = client.get(path, headers=staff(MANAGE)).json()["devices"][0]
+    assert seen["last_seen_at"] is not None and seen["vault_head_link_at"] is not None
+    assert seen["vault_head_link"] == "ab" * 32
+    # Only the moment and the device's own anchor: no address, agent or request detail.
+    assert set(seen) == set(unseen)
 
 
 def test_an_account_with_no_device_yet_has_no_recipient_id() -> None:
