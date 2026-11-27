@@ -553,6 +553,13 @@ def test_the_internal_route_uses_the_clinic_timezone_for_the_due_date(monkeypatc
     response = client.post(PATH, headers=headers(), json=request_body(due_on="2026-11-27"))
 
     assert response.status_code == 201
+    monkeypatch.setattr(
+        "carlos_patient_portal.payment_requests.utc_now",
+        lambda: datetime(2026, 11, 28, 5, 30, tzinfo=UTC),
+    )
+    retry = client.post(PATH, headers=headers(), json=request_body(due_on="2026-11-27"))
+    assert retry.status_code == 200
+    assert retry.json()["id"] == response.json()["id"]
 
 
 def test_the_signed_out_patient_is_redirected_not_shown_the_request() -> None:

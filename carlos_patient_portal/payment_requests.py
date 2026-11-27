@@ -251,9 +251,6 @@ def create_payment_request(
     if ttl <= timedelta(0):
         raise ValueError("ttl must be positive")
     now = now or utc_now()
-    first_day = today or as_utc(now).astimezone(ZoneInfo(timezone_name)).date()
-    if not first_day <= due_on <= first_day + timedelta(days=MAX_DUE_DAYS_AHEAD):
-        raise ValueError("due_on must be from today to a year ahead")
     normalized_clinic_id = normalize_clinic_id(clinic_id)
     normalized_operation_id = _normalize_operation_id(operation_id)
     normalized_invoice_ref = _normalize_invoice_ref(invoice_ref)
@@ -274,6 +271,9 @@ def create_payment_request(
     )
     if existing is not None:
         return _retry_result(existing, values)
+    first_day = today or as_utc(now).astimezone(ZoneInfo(timezone_name)).date()
+    if not first_day <= due_on <= first_day + timedelta(days=MAX_DUE_DAYS_AHEAD):
+        raise ValueError("due_on must be from today to a year ahead")
     # One request per invoice reference: a different operation for the same reference is a second
     # request for the same invoice, which staff withdraw and resend rather than stack.
     if (
