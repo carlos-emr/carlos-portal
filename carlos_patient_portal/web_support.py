@@ -86,6 +86,7 @@ from carlos_patient_portal.view_models import (
     EmailPasswordDashboardViewModel,
     MessagesViewModel,
     MyCarlosViewModel,
+    PhoneConfirmationViewModel,
 )
 
 PACKAGE_DIR = FilePath(__file__).resolve().parent
@@ -1099,6 +1100,7 @@ def portal_template_context(
     messages: MessagesViewModel | None = None,
     new_message_count: int = 0,
     mycarlos: MyCarlosViewModel | None = None,
+    phone_confirmation: PhoneConfirmationViewModel | None = None,
 ) -> dict[str, object]:
     account = authenticated_session.account
     locale = request_locale(request)
@@ -1140,6 +1142,8 @@ def portal_template_context(
     ).format(count=new_message_count)
     context["mycarlos_enabled"] = settings.mycarlos_delivery_enabled
     context["mycarlos"] = mycarlos
+    # The Account tab's phone confirmation block; None on the other modules.
+    context["phone_confirmation"] = phone_confirmation
     return context
 
 
