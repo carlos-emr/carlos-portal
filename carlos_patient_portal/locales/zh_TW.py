@@ -288,6 +288,8 @@ TEXT: dict[str, str] = {
     "phone_confirmation_code": "電話確認碼",
     "confirm_phone": "確認電話號碼",
     "resend_phone_confirmation": "再傳送一組確認碼",
+    "phone_confirmation_sent_to": "確認碼已以簡訊傳送至 {number}。",
+    "phone_confirmation_expired": "傳送至 {number} 的確認碼已過期。請再傳送一組確認碼。",
     "previous": "上一頁",
     "provider": "醫療人員",
     "provider_options_truncated": "僅列出部分醫療人員。請使用搜尋框縮小結果範圍。",

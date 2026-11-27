@@ -368,6 +368,10 @@ TEXT: dict[str, str] = {
     "phone_confirmation_code": "Kod potwierdzający numer telefonu",
     "confirm_phone": "Proszę potwierdzić numer telefonu",
     "resend_phone_confirmation": "Proszę wysłać kolejny kod",
+    "phone_confirmation_sent_to": "Kod potwierdzający został wysłany SMS-em na numer {number}.",
+    "phone_confirmation_expired": (
+        "Kod potwierdzający wysłany na numer {number} wygasł. Proszę wysłać kolejny kod."
+    ),
     "previous": "Poprzednia",
     "provider": "Pracownik medyczny",
     "provider_options_truncated": (

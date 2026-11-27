@@ -323,6 +323,10 @@ TEXT: dict[str, str] = {
     "phone_confirmation_code": "Phone confirmation code",
     "confirm_phone": "Confirm phone number",
     "resend_phone_confirmation": "Send another code",
+    "phone_confirmation_sent_to": "A confirmation code was sent by SMS to {number}.",
+    "phone_confirmation_expired": (
+        "The confirmation code sent to {number} has expired. Send another code."
+    ),
     "previous": "Previous",
     "provider": "Provider",
     "provider_options_truncated": (

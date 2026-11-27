@@ -283,6 +283,8 @@ TEXT: dict[str, str] = {
     "phone_confirmation_code": "电话验证码",
     "confirm_phone": "确认电话号码",
     "resend_phone_confirmation": "重新发送验证码",
+    "phone_confirmation_sent_to": "确认码已通过短信发送至 {number}。",
+    "phone_confirmation_expired": "发送至 {number} 的确认码已过期。请重新发送验证码。",
     "previous": "上一页",
     "provider": "医疗人员",
     "provider_options_truncated": "仅列出部分医疗人员。请使用搜索框缩小结果范围。",
