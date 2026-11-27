@@ -235,6 +235,12 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
   public.patient_portal_staff_assertion_uses,
   public.patient_portal_unlock_secrets
 TO :"runtime_role";
+
+-- The runtime creates, reads and updates payment requests. Withdrawal and payment retain the row.
+GRANT SELECT, INSERT, UPDATE ON TABLE
+  public.patient_portal_payment_requests
+TO :"runtime_role";
+
 GRANT USAGE, SELECT ON SEQUENCE
   public.patient_portal_accounts_id_seq,
   public.patient_portal_audit_events_id_seq,
@@ -258,6 +264,7 @@ GRANT USAGE, SELECT ON SEQUENCE
   public.patient_portal_mycarlos_waiting_keys_id_seq,
   public.patient_portal_outbound_deliveries_id_seq,
   public.patient_portal_password_reset_tokens_id_seq,
+  public.patient_portal_payment_requests_id_seq,
   public.patient_portal_sessions_id_seq,
   public.patient_portal_signup_requests_id_seq,
   public.patient_portal_unlock_secrets_id_seq

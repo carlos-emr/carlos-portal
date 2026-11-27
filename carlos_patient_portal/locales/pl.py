@@ -99,6 +99,23 @@ TEXT: dict[str, str] = {
     "booking_prompt_suggested_by_clinic": "Przychodnia proponuje tę wizytę.",
     "booking_prompt_title_annual_exam": "Proszę umówić coroczne badanie",
     "booking_prompt_title_follow_up": "Proszę umówić wizytę kontrolną",
+    "payment_request_amount": "Kwota do zapłaty",
+    "payment_request_contact": "Skontaktuj się z {clinic_name}, aby uzgodnić płatność.",
+    "payment_request_due": "Termin: {due}",
+    "payment_request_how_to_pay": "Jak zapłacić",
+    "payment_request_includes_tax": "W tym podatek: {tax}",
+    "payment_request_no_online": (
+        "Nie można zapłacić na tej stronie. Klinika oznaczy ten wniosek jako opłacony, gdy "
+        "zarejestruje Twoją płatność."
+    ),
+    "payment_request_status_open": "Prośba o płatność",
+    "payment_request_status_paid": "Płatność otrzymana. Dziękujemy.",
+    "payment_request_form_or_note_title": "Prośba o płatność za formularz lub zaświadczenie",
+    "payment_request_missed_appointment_title": "Prośba o płatność za nieodbytą wizytę",
+    "payment_request_other_title": "Twoja klinika prosi o płatność",
+    "payment_request_uninsured_service_title": (
+        "Prośba o płatność za usługę nieobjętą ubezpieczeniem"
+    ),
     "booking_prompt_title_lab_review": (
         "Proszę umówić wizytę w celu omówienia wyników badań laboratoryjnych"
     ),

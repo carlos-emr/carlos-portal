@@ -745,6 +745,14 @@ Permissions are deliberately narrow:
 - `portal.contact.review`: list and approve/reject pending patient contact changes.
 - `portal.booking_prompt.manage`: check booking eligibility, create, list, and withdraw booking
   prompts.
+- `portal.payment.manage`: create (idempotently, by operation id and invoice reference), list,
+  withdraw and mark paid the patient's payment requests. A request carries an amount due now in
+  cents with its tax portion, a category from a closed list, an opaque invoice reference, a due
+  date and a status: no description, no names, no free text. The portal takes no payment; the
+  patient reads the request under Messages, and CARLOS marks it paid. Settings:
+  `PATIENT_PORTAL_PAYMENT_REQUEST_TTL_DAYS` (default 90) and `PATIENT_PORTAL_PAYMENT_INSTRUCTIONS`
+  (the clinic's own plain-text "how to pay", at most 500 characters; without it the patient is told
+  to contact the clinic). An email "message waiting" notice is not sent yet.
 - `portal.booking_prompt.sync`: list patients' pending picks of offered times and report whether
   CARLOS booked them. Only the `booking-sync` CARLOS job holds it (see *CARLOS jobs* below), and
   the two sync endpoints take that job and nobody else. The job is refused by every other internal

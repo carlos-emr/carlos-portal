@@ -346,6 +346,13 @@ class Settings(BaseSettings):
     clinic_contact_url: str | None = Field(default=None, max_length=2048)
     # A booking prompt disappears from the patient's messages after this long.
     booking_prompt_ttl_days: int = Field(default=90, ge=1, le=366)
+    # A payment request disappears from the patient's messages after this long unpaid; a paid one
+    # stays as a record of payment.
+    payment_request_ttl_days: int = Field(default=90, ge=1, le=366)
+    # How the clinic wants to be paid (for example an Interac e-Transfer address, or "at the front
+    # desk"), shown with every payment request as plain text. The clinic's own words: no markup,
+    # escaped where shown. Unset, a request tells the patient to contact the clinic.
+    payment_instructions: str | None = Field(default=None, max_length=500)
     # Where an offered appointment time can be, as comma-separated `code=Label` pairs such as
     # "main=Main Street Office,east=East Office". CARLOS sends a code with a time; the patient sees
     # the label. Unset, CARLOS cannot send a location with an offered time.

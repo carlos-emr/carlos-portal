@@ -12,12 +12,13 @@
 # You should have received a copy of the GNU Affero General Public License along with this program.
 # If not, see <https://www.gnu.org/licenses/>.
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -52,6 +53,11 @@ AUDIT_EVENT_BOOKING_PROMPT_OFFER = "booking_prompt.offer"
 AUDIT_EVENT_BOOKING_PROMPT_READ = "booking_prompt.read"
 AUDIT_EVENT_BOOKING_PROMPT_RESULT = "booking_prompt.result"
 AUDIT_EVENT_BOOKING_PROMPT_WITHDRAW = "booking_prompt.withdraw"
+AUDIT_EVENT_PAYMENT_REQUEST_CREATE = "payment_request.create"
+AUDIT_EVENT_PAYMENT_REQUEST_LIST = "payment_request.list"
+AUDIT_EVENT_PAYMENT_REQUEST_PAID = "payment_request.paid"
+AUDIT_EVENT_PAYMENT_REQUEST_READ = "payment_request.read"
+AUDIT_EVENT_PAYMENT_REQUEST_WITHDRAW = "payment_request.withdraw"
 AUDIT_EVENT_ACCOUNT_CONTACT_UPDATE = "account.contact_update"
 AUDIT_EVENT_ACCOUNT_DISABLE = "account.disable"
 AUDIT_EVENT_ACCOUNT_EMAIL_CHANGE_CONFIRM = "account.email_change_confirm"
@@ -159,6 +165,28 @@ MAX_BOOKING_SLOT_DURATION_MINUTES = 480
 # clinical detail and can be translated. Changing either list needs a migration for its constraint.
 BOOKING_PROMPT_URGENCIES = ("routine", "soon", "as_soon_as_possible")
 BOOKING_PROMPT_APPOINTMENT_TYPES = ("follow_up", "annual_exam", "lab_review")
+# Payment requests (Phase 0 of billing through the portal): a clinic asks a patient to pay an amount
+# the clinic recorded. A closed vocabulary and integers only, never a description, a name or free
+# text: payment information about care is itself personal health information, so the portal holds
+# the least it can (an opaque reference, an amount, a category, a status, times).
+PAYMENT_REQUEST_CATEGORIES = ("uninsured_service", "form_or_note", "missed_appointment", "other")
+# How the patient is told to pay. One value now (the clinic's own instructions: an Interac
+# e-Transfer, cash at the desk); a processor's hosted page is a later value, added by a migration of
+# this constraint and never as free text.
+PAYMENT_REQUEST_METHODS = ("clinic_instructions",)
+PAYMENT_REQUEST_CURRENCY = "CAD"
+PAYMENT_REQUEST_STATUS_SENT = "sent"
+PAYMENT_REQUEST_STATUS_READ = "read"
+PAYMENT_REQUEST_STATUS_PAID = "paid"
+PAYMENT_REQUEST_STATUS_WITHDRAWN = "withdrawn"
+# Not stored: a sent or read request past its due-by expiry (see `payment_request_state`).
+PAYMENT_REQUEST_STATE_EXPIRED = "expired"
+# Cents: at least a cent, at most CA$100,000 (a request above that is a keying mistake).
+MIN_PAYMENT_AMOUNT_CENTS = 1
+MAX_PAYMENT_AMOUNT_CENTS = 10_000_000
+# The invoice reference is an opaque random id CARLOS maps to its own invoice (a UUID is 36
+# characters).
+MAX_PAYMENT_INVOICE_REF_LENGTH = 64
 CONTACT_REVIEW_STATUS_PENDING = "pending"
 CONTACT_REVIEW_STATUS_REVIEWED = "reviewed"
 CONTACT_REVIEW_DECISION_APPROVED = "approved"
@@ -1443,6 +1471,153 @@ class PatientPortalBookingPrompt(Base):
     offer_digest: Mapped[str | None] = mapped_column(String(HASH_LENGTH), nullable=True)
 
 
+class PatientPortalPaymentRequest(Base):
+    """A clinic's request that a patient pay an amount, shown to them after sign-in (Phase 0).
+
+    Built from a closed vocabulary and integers only: an opaque invoice reference CARLOS maps to
+    its own invoice, the amount due now in cents with its tax portion, a category, a due date and
+    a status. No description, no patient name, no free text, because what a payment was for would
+    tell a reader about the care. The portal takes no payment and holds no card data: the patient
+    is shown how the clinic wants to be paid, staff record the payment in CARLOS, and CARLOS tells
+    the portal when the request is paid.
+    """
+
+    __tablename__ = "patient_portal_payment_requests"
+    __table_args__ = (
+        CheckConstraint(
+            f"length(clinic_id) between 1 and {MAX_CLINIC_ID_LENGTH}",
+            name="ck_pp_payment_requests_clinic_id_length",
+        ),
+        CheckConstraint(
+            DEMOGRAPHIC_NO_POSITIVE_SQL,
+            name="ck_pp_payment_requests_demographic_no_positive",
+        ),
+        CheckConstraint(
+            f"length(operation_id) between 1 and {MAX_BOOKING_PROMPT_OPERATION_ID_LENGTH}",
+            name="ck_pp_payment_requests_operation_id_length",
+        ),
+        CheckConstraint(
+            f"length(invoice_ref) between 1 and {MAX_PAYMENT_INVOICE_REF_LENGTH}",
+            name="ck_pp_payment_requests_invoice_ref_length",
+        ),
+        CheckConstraint(
+            "category in ('uninsured_service', 'form_or_note', 'missed_appointment', 'other')",
+            name="ck_pp_payment_requests_category",
+        ),
+        CheckConstraint(
+            "payment_method in ('clinic_instructions')",
+            name="ck_pp_payment_requests_payment_method",
+        ),
+        CheckConstraint(
+            f"currency = '{PAYMENT_REQUEST_CURRENCY}'",
+            name="ck_pp_payment_requests_currency",
+        ),
+        CheckConstraint(
+            f"amount_cents between {MIN_PAYMENT_AMOUNT_CENTS} and {MAX_PAYMENT_AMOUNT_CENTS}",
+            name="ck_pp_payment_requests_amount",
+        ),
+        CheckConstraint(
+            "tax_cents >= 0 and tax_cents <= amount_cents",
+            name="ck_pp_payment_requests_tax",
+        ),
+        CheckConstraint(
+            "status in ('sent', 'read', 'paid', 'withdrawn')",
+            name="ck_pp_payment_requests_status",
+        ),
+        CheckConstraint(
+            f"length(created_by) between 1 and {MAX_BOOKING_PROMPT_ACTOR_LENGTH}",
+            name="ck_pp_payment_requests_created_by_length",
+        ),
+        CheckConstraint(
+            EXPIRY_AFTER_CREATION_SQL,
+            name="ck_pp_payment_requests_expiry_after_creation",
+        ),
+        # Read stays recorded after a withdrawal or payment, so staff can still see the patient saw
+        # it; a paid request was necessarily opened or at least recorded by CARLOS as paid.
+        CheckConstraint(
+            "status != 'read' or read_at is not null",
+            name="ck_pp_payment_requests_read_at_present",
+        ),
+        CheckConstraint(
+            "status != 'sent' or read_at is null",
+            name="ck_pp_payment_requests_sent_is_unread",
+        ),
+        CheckConstraint(
+            "(status = 'withdrawn' and withdrawn_at is not null and withdrawn_by is not null) or "
+            "(status != 'withdrawn' and withdrawn_at is null and withdrawn_by is null and "
+            "withdrawn_by_id is null)",
+            name="ck_pp_payment_requests_withdrawn_fields",
+        ),
+        CheckConstraint(
+            "(status = 'paid' and paid_at is not null) or (status != 'paid' and paid_at is null)",
+            name="ck_pp_payment_requests_paid_fields",
+        ),
+        Index(
+            "ux_pp_payment_requests_clinic_operation",
+            "clinic_id",
+            "operation_id",
+            unique=True,
+        ),
+        Index("ux_pp_payment_requests_clinic_invoice_ref", "clinic_id", "invoice_ref", unique=True),
+        Index(
+            "ix_pp_payment_requests_clinic_patient_created",
+            "clinic_id",
+            "demographic_no",
+            "created_at",
+        ),
+        Index(
+            "ix_pp_payment_requests_account_status_expires",
+            "account_id",
+            "status",
+            "expires_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    clinic_id: Mapped[str] = mapped_column(String(MAX_CLINIC_ID_LENGTH), nullable=False)
+    demographic_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    account_id: Mapped[int] = mapped_column(
+        ForeignKey(ACCOUNT_FOREIGN_KEY_TARGET, ondelete="CASCADE"),
+        nullable=False,
+    )
+    operation_id: Mapped[str] = mapped_column(
+        String(MAX_BOOKING_PROMPT_OPERATION_ID_LENGTH),
+        nullable=False,
+    )
+    invoice_ref: Mapped[str] = mapped_column(String(MAX_PAYMENT_INVOICE_REF_LENGTH), nullable=False)
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    payment_method: Mapped[str] = mapped_column(String(32), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    # The amount due NOW, in cents, and the tax portion of it (a separate integer so a receipt can
+    # show the split); never the invoice total.
+    amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    tax_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(MAX_BOOKING_PROMPT_ACTOR_LENGTH), nullable=False)
+    created_by_id: Mapped[str | None] = mapped_column(
+        String(MAX_BOOKING_PROMPT_ACTOR_LENGTH),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+    )
+    due_on: Mapped[date] = mapped_column(Date, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    withdrawn_by: Mapped[str | None] = mapped_column(
+        String(MAX_BOOKING_PROMPT_ACTOR_LENGTH),
+        nullable=True,
+    )
+    withdrawn_by_id: Mapped[str | None] = mapped_column(
+        String(MAX_BOOKING_PROMPT_ACTOR_LENGTH),
+        nullable=True,
+    )
+
+
 BOOKING_PROMPT_FOREIGN_KEY_TARGET = "patient_portal_booking_prompts.id"
 BOOKING_SLOT_COPY_ABSENT_SQL = (
     "slot_id is null and starts_at is null and duration_minutes is null and "
@@ -1757,6 +1932,8 @@ class PatientPortalAuditEvent(Base):
                 "'booking_prompt.read', 'booking_prompt.withdraw', "
                 "'booking_prompt.offer', 'booking_prompt.choice', 'booking_prompt.result', "
                 "'booking_prompt.decline', "
+                "'payment_request.create', 'payment_request.list', 'payment_request.paid', "
+                "'payment_request.read', 'payment_request.withdraw', "
                 "'unlock_secret.create', 'unlock_secret.list', 'unlock_secret.read', "
                 "'unlock_secret.publish', 'unlock_secret.revoke')"
             ),

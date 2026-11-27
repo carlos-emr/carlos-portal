@@ -76,9 +76,11 @@ from carlos_patient_portal.models import (
     AUDIT_OUTCOME_FAILURE,
     AUDIT_OUTCOME_SUCCESS,
     PatientPortalBookingPrompt,
+    PatientPortalPaymentRequest,
 )
 from carlos_patient_portal.mycarlos_apns_wiring import HttpClient, availability_dispatch_for
 from carlos_patient_portal.mycarlos_waiting import count_waiting_for_account, has_active_device
+from carlos_patient_portal.payment_requests import count_unread_requests_for_account
 from carlos_patient_portal.presenters import (
     assemble_email_password_dashboard,
     assemble_messages,
@@ -955,6 +957,7 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
         email_password_page: int = 1,
         email_password_filter_error: str | None = None,
         selected_message: PatientPortalBookingPrompt | None = None,
+        selected_payment_request: PatientPortalPaymentRequest | None = None,
         message_not_found: bool = False,
         message_error: str | None = None,
         authenticated_session: AuthenticatedPortalSession | None = None,
@@ -1008,6 +1011,8 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
                 clinic_name=settings.clinic_name,
                 booking_phone=settings.clinic_booking_phone,
                 selected_prompt=selected_message,
+                selected_payment_request=selected_payment_request,
+                payment_instructions=settings.payment_instructions,
                 not_found=message_not_found,
                 timezone_name=settings.clinic_timezone,
                 locale=request_locale(request),
@@ -1017,6 +1022,7 @@ def build_route_dependencies(runtime: PortalRuntime) -> RouteDependencies:
             )
         new_message_count = (
             count_unread_prompts_for_account(session, authenticated_session.account.id)
+            + count_unread_requests_for_account(session, authenticated_session.account.id)
             if active_module == "dashboard"
             else 0
         )

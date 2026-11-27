@@ -36,6 +36,8 @@ from carlos_patient_portal.config import DEFAULT_BOOKING_CHOICE_WAIT_MINUTES
 from carlos_patient_portal.i18n import (
     DEFAULT_LOCALE,
     format_booking_time,
+    format_cad,
+    format_portal_date,
     format_portal_datetime,
     plural_text,
     portal_text,
@@ -51,6 +53,8 @@ from carlos_patient_portal.models import (
     BOOKING_PROMPT_STATUS_SENT,
     EMAIL_CHANGE_STATUS_PENDING,
     MYCARLOS_DEVICE_STATUS_ACTIVE,
+    PAYMENT_REQUEST_STATUS_PAID,
+    PAYMENT_REQUEST_STATUS_SENT,
     UNLOCK_SECRET_STATUS_ACTIVE,
     UNLOCK_SECRET_TYPE_EMAIL,
     PatientPortalAccount,
@@ -58,10 +62,12 @@ from carlos_patient_portal.models import (
     PatientPortalBookingOfferedSlot,
     PatientPortalBookingPrompt,
     PatientPortalEmailChangeRequest,
+    PatientPortalPaymentRequest,
     PatientPortalUnlockSecret,
     utc_now,
 )
 from carlos_patient_portal.mycarlos_devices import devices_for_account
+from carlos_patient_portal.payment_requests import list_visible_requests_for_account
 from carlos_patient_portal.unlock_secrets import (
     DEFAULT_UNLOCK_SECRET_LIST_LIMIT,
     MAX_UNLOCK_SECRET_SEARCH_LENGTH,
@@ -83,6 +89,7 @@ from carlos_patient_portal.view_models import (
     MessagesViewModel,
     MyCarlosDeviceRowViewModel,
     MyCarlosViewModel,
+    PaymentRequestViewModel,
     PhoneConfirmationViewModel,
     ProviderFilterOptionViewModel,
 )
@@ -488,6 +495,51 @@ def _booking_prompt_view(
     )
 
 
+def _payment_request_view(
+    request: PatientPortalPaymentRequest,
+    *,
+    text: dict[str, str],
+    href: str,
+    clinic_name: str,
+    payment_instructions: str | None,
+    timezone_name: str,
+    locale: str,
+    opened: bool,
+) -> PaymentRequestViewModel:
+    """A payment request as the patient reads it: every sentence from the catalog.
+
+    The amount and dates are formatted from integers and a date, never from text. The clinic's own
+    instructions come only with the opened request; without any, the patient is told to contact the
+    clinic.
+    """
+    paid = request.status == PAYMENT_REQUEST_STATUS_PAID
+    return PaymentRequestViewModel(
+        id=request.id,
+        href=href,
+        title=text[f"payment_request_{request.category}_title"],
+        amount=format_cad(request.amount_cents, locale),
+        tax=(
+            text["payment_request_includes_tax"].format(tax=format_cad(request.tax_cents, locale))
+            if request.tax_cents
+            else None
+        ),
+        due=text["payment_request_due"].format(due=format_portal_date(request.due_on, locale)),
+        status=text["payment_request_status_paid" if paid else "payment_request_status_open"],
+        state="paid" if paid else "open",
+        sent_at=format_portal_datetime(request.created_at, locale, timezone_name),
+        is_new=request.status == PAYMENT_REQUEST_STATUS_SENT,
+        instructions=(
+            None
+            if not opened or paid
+            else (
+                payment_instructions
+                if payment_instructions
+                else text["payment_request_contact"].format(clinic_name=clinic_name)
+            )
+        ),
+    )
+
+
 def assemble_messages(
     session: Session,
     account: PatientPortalAccount,
@@ -496,6 +548,8 @@ def assemble_messages(
     clinic_name: str,
     booking_phone: str | None,
     selected_prompt: PatientPortalBookingPrompt | None = None,
+    selected_payment_request: PatientPortalPaymentRequest | None = None,
+    payment_instructions: str | None = None,
     not_found: bool = False,
     timezone_name: str = "UTC",
     locale: str = DEFAULT_LOCALE,
@@ -545,12 +599,35 @@ def assemble_messages(
         if selected_prompt is not None
         else None
     )
+    def payment_view(
+        request: PatientPortalPaymentRequest, *, opened: bool
+    ) -> PaymentRequestViewModel:
+        return _payment_request_view(
+            request,
+            text=text,
+            href=f"{base_path.rstrip('/')}/payment/{request.id}",
+            clinic_name=clinic_name,
+            payment_instructions=payment_instructions,
+            timezone_name=timezone_name,
+            locale=locale,
+            opened=opened,
+        )
+
     return MessagesViewModel(
         prompts=prompts,
         selected=selected,
         not_found=not_found,
         no_online_booking=text["booking_prompt_no_online_booking"],
         error=error,
+        payment_requests=tuple(
+            payment_view(request, opened=False)
+            for request in list_visible_requests_for_account(session, account.id)
+        ),
+        selected_payment=(
+            payment_view(selected_payment_request, opened=True)
+            if selected_payment_request is not None
+            else None
+        ),
     )
 
 

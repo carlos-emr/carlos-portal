@@ -476,12 +476,15 @@ def test_apns_saying_410_revokes_the_destination_and_deletes_the_token(db) -> No
 def test_the_revision_follows_the_signup_claim_on_the_one_line_to_the_head() -> None:
     script = ScriptDirectory.from_config(alembic_config_for_tests())
     (head,) = script.get_heads()
-    # Later revisions follow it (0027 added the audit outcome "resumed"): one line, no branch.
-    assert head == "0027_mfa_resumed_outcome"
+    # Later revisions follow it (0027 added the audit outcome "resumed", 0028 payment requests):
+    # one line, no branch.
+    assert head == "0028_payment_requests"
     revision = script.get_revision("0026_mycarlos_push_handles")
     assert revision is not None
     assert revision.down_revision == "0025_signup_claim"
-    assert script.get_revision(head).down_revision == "0026_mycarlos_push_handles"
+    assert script.get_revision("0027_mfa_resumed_outcome").down_revision == (
+        "0026_mycarlos_push_handles"
+    )
     assert len(head) <= 32  # alembic_version.version_num is VARCHAR(32) on PostgreSQL
 
 
