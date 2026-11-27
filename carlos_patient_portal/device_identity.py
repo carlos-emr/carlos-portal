@@ -45,7 +45,8 @@ from uuid import UUID
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from sqlalchemy import or_, select, update
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.orm import Session, sessionmaker
 
 from carlos_patient_portal.models import (
@@ -525,7 +526,9 @@ def record_device_seen(
                     )
                     .values(vault_head_link=anchor, vault_head_link_at=signed_at)
                 )
-    except OperationalError:
+    except (OperationalError, InterfaceError, PoolTimeoutError):
+        # The database is down, the connection broke, or the pool had none to give (an overloaded
+        # database). A programming error or a constraint failure is a bug and still surfaces.
         logger.warning("The device last-seen stamp was skipped: the database was not available")
 
 

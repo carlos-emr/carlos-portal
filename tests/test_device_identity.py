@@ -31,7 +31,8 @@ from uuid import NAMESPACE_URL, uuid5
 import pytest
 from alembic import command
 from sqlalchemy import create_engine, select, update
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.orm import Session, sessionmaker
 
 from carlos_patient_portal import device_identity
@@ -461,11 +462,20 @@ def test_an_anchor_signed_earlier_but_consumed_later_does_not_replace_a_newer_on
     assert as_utc(device.vault_head_link_at) == datetime.fromtimestamp(newer, tz=UTC)
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        OperationalError("UPDATE", {}, Exception("FAKE database unavailable")),
+        InterfaceError("UPDATE", {}, Exception("FAKE connection closed")),
+        PoolTimeoutError("FAKE pool had no connection to give"),
+    ],
+    ids=["operational", "interface", "pool-timeout"],
+)
 def test_a_database_error_in_the_stamp_never_fails_a_request_whose_nonce_is_spent(
-    portal, monkeypatch, caplog
+    portal, monkeypatch, caplog, error
 ) -> None:
     def down(*args: object, **kwargs: object) -> None:
-        raise OperationalError("UPDATE", {}, Exception("FAKE database unavailable"))
+        raise error
 
     monkeypatch.setattr(device_identity, "update", down)
     request = request_at("first", NOW, vault_head_link=ANCHOR_A)
