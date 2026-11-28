@@ -333,12 +333,8 @@ def test_the_outbox_settings_refuse_each_web_only_credential_outside_development
         "sms_webhook_url": "SMS_WEBHOOK_URL",
         "sms_webhook_token": "SMS_WEBHOOK_TOKEN",
     }
-    # Only what the worker needs is accepted; each web-only value added back alone is refused.
-    worker = {
-        **full,
-        **dict.fromkeys(web_only),
-        "internal_staff_assertion_public_keyring": None,
-    }
+    # Keep the public keyring needed for signed SMTP footers and remove the web-only values.
+    worker = {**full, **dict.fromkeys(web_only)}
     assert (
         OutboxSettings(**worker).secret_value("outbox_encryption_secret")
         == OUTBOX_ENCRYPTION_SECRET

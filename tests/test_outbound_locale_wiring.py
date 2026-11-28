@@ -17,6 +17,7 @@ from carlos_patient_portal.outbound_messages import (
     sender_locale_kwargs,
     stored_outbound_locale,
 )
+from tests.test_email_delivery import trusted_clinic_footer as trusted_clinic_footer
 
 
 class RecordingSmtp:

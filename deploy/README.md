@@ -36,6 +36,9 @@ operational controls that a container cannot verify.
   `carlos_patient_portal/deploy/nginx.conf`, replace its example hostname, certificate paths, and
   exact CARLOS source CIDRs, then run `nginx -t` before reloading it.
 - SMTP and SMS provider credentials and CARLOS's Ed25519 public assertion keyring.
+- The CARLOS clinic-footer provider, its derived read credential, and private durable footer
+  storage. Follow [clinic email footer setup](../docs/clinic-email-footer.md) for web, outbox and
+  preflight, including the `PORTAL_EMAIL_FOOTER_AUDIT_DIR` bind mount.
 - A deployment secret manager capable of writing root-readable files with mode `0600`.
 
 The host nginx source address inside the default Compose bridge is `172.30.80.1`. The supplied

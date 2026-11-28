@@ -21,6 +21,7 @@ export PORTAL_TEST_POSTGRES_IMAGE="postgres:16.15-bookworm@sha256:bb3e1a57e5407e
 export PORTAL_COMPOSE_FILE="$repository_root/compose.production.yaml"
 export PORTAL_COMPOSE_OVERRIDE_FILE="$repository_root/tests/compose.production-smoke.yaml"
 export PORTAL_DEPLOY_LOCK_FILE="$test_root/production-deploy.lock"
+export PORTAL_EMAIL_FOOTER_AUDIT_DIR="$test_root/email-footer-audit"
 
 compose() {
   docker compose \
@@ -31,6 +32,9 @@ compose() {
 
 cleanup() {
   compose --profile operations down --volumes --remove-orphans >/dev/null 2>&1 || true
+  if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+    sudo chown -R "$(id -u):$(id -g)" "$PORTAL_EMAIL_FOOTER_AUDIT_DIR" 2>/dev/null || true
+  fi
   rm -rf "$test_root"
 }
 trap cleanup EXIT INT TERM
@@ -58,10 +62,13 @@ chmod 0644 "$tls_directory/ca.crt" "$tls_directory/server.crt"
 chmod 0600 "$tls_directory/server.key"
 postgres_uid=$(docker run --rm --entrypoint id "$PORTAL_TEST_POSTGRES_IMAGE" -u postgres)
 postgres_gid=$(docker run --rm --entrypoint id "$PORTAL_TEST_POSTGRES_IMAGE" -g postgres)
+mkdir -m 0700 "$PORTAL_EMAIL_FOOTER_AUDIT_DIR"
 if [ "$(id -u)" -eq 0 ]; then
   chown "$postgres_uid:$postgres_gid" "$tls_directory/server.key"
+  chown 10001:10001 "$PORTAL_EMAIL_FOOTER_AUDIT_DIR"
 elif command -v sudo >/dev/null 2>&1; then
   sudo chown "$postgres_uid:$postgres_gid" "$tls_directory/server.key"
+  sudo chown 10001:10001 "$PORTAL_EMAIL_FOOTER_AUDIT_DIR"
 else
   printf '%s\n' 'root or sudo is required to prepare the PostgreSQL TLS key' >&2
   exit 1

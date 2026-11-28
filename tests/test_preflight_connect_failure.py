@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -12,6 +13,7 @@ def test_preflight_cli_classifies_driver_refusal_without_disclosing_details(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
 ) -> None:
     password = "FAKE-preflight-database-password"
     database_url = (
@@ -21,7 +23,12 @@ def test_preflight_cli_classifies_driver_refusal_without_disclosing_details(
     driver_detail = "FAKE-private-driver-diagnostic"
     refusal = psycopg.OperationalError(f"{driver_detail}: {database_url}")
     assert password in str(refusal)
-    settings = production_settings(database_url=database_url)
+    audit_directory = tmp_path / "FAKE-footer-audit"
+    audit_directory.mkdir(mode=0o700)
+    settings = production_settings(
+        database_url=database_url,
+        email_footer_audit_directory=str(audit_directory),
+    )
     monkeypatch.setattr(cli, "get_settings", lambda: settings)
     real_create_engine = preflight.create_portal_engine
     engines = []
@@ -55,6 +62,7 @@ def test_preflight_cli_classifies_driver_refusal_without_disclosing_details(
         checks = {check["name"]: check for check in payload["checks"]}
         assert {name: check["status"] for name, check in checks.items()} == {
             "environment": "pass",
+            "email_footer_audit": "pass",
             "database_backend": "pass",
             "database_connectivity": "fail",
         }

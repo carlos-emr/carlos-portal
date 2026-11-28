@@ -184,6 +184,15 @@ export PATIENT_PORTAL_DATABASE_URL="postgresql+psycopg://localhost:5432/carlos_p
 # The development Postfix capture service listens locally without TLS or authentication.
 export PATIENT_PORTAL_SMTP_HOST=127.0.0.1
 export PATIENT_PORTAL_SMTP_PORT=25
+# With SMTP set, configure the current clinic footer from CARLOS
+# (docs/clinic-email-footer.md); there is no development fake. During a footer
+# outage only sign-in/MFA codes and password resets may omit it (D138); other
+# email is refused. Every send still needs durable audit storage. Footer failures
+# log "clinic footer unavailable (reason=<reason>)".
+# export PATIENT_PORTAL_EMAIL_FOOTER_URL=https://<carlos-dev>/carlos/ws/portal/email-footer
+# export PATIENT_PORTAL_EMAIL_FOOTER_READ_TOKEN=<derived footer-read credential>
+# export PATIENT_PORTAL_INTERNAL_STAFF_ASSERTION_PUBLIC_KEYRING=<CARLOS public keyring JSON>
+# export PATIENT_PORTAL_EMAIL_FOOTER_AUDIT_DIRECTORY=<absolute private directory, mode 0700>
 # Set PATIENT_PORTAL_DEV_ADMIN_TOKEN to a 32+ character random value before using
 # the development invite API.
 # Set PATIENT_PORTAL_IDENTITY_PROOF_SECRET to a 32+ character random value when
