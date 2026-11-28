@@ -9,6 +9,7 @@ only when it is well formed, and a transport or header failure is the one generi
 """
 
 import smtplib
+from email.message import EmailMessage
 
 import pytest
 
@@ -23,7 +24,14 @@ from carlos_patient_portal.outbound_messages import (
     email_change_confirmation_email_message,
     email_change_requested_email_message,
 )
-from tests.test_email_delivery import RecordingSmtp, smtp_settings
+from tests.footer_support import fake_footer
+from tests.test_email_delivery import (
+    RecordingSmtp,
+    smtp_settings,
+)
+from tests.test_email_delivery import (
+    trusted_clinic_footer as trusted_clinic_footer,
+)
 
 SIGN_IN = "https://portal.example.test/sign-in"
 CONFIRM = "https://portal.example.test/confirm/abc"
@@ -37,11 +45,17 @@ def sender(monkeypatch: pytest.MonkeyPatch) -> SmtpPortalEmailSender:
     return SmtpPortalEmailSender(smtp_settings())
 
 
-def sent() -> RecordingSmtp:
+def sent() -> EmailMessage:
     smtp = RecordingSmtp.instance
     assert smtp is not None
     assert smtp.message is not None
-    return smtp
+    return smtp.message
+
+
+def plain_body(message: EmailMessage) -> str:
+    body = message.get_body(preferencelist=("plain",))
+    assert body is not None
+    return body.get_content()
 
 
 def test_the_booking_prompt_notice_says_a_message_waits_and_names_nothing_else(sender) -> None:
@@ -51,33 +65,34 @@ def test_the_booking_prompt_notice_says_a_message_waits_and_names_nothing_else(s
         message_id="<prompt-1@portal.example.test>",
     )
 
-    message = sent().message
+    message = sent()
     assert message["To"] == "patient@example.test"
     assert message["Message-ID"] == "<prompt-1@portal.example.test>"
     assert message["Auto-Submitted"] == "auto-generated"
-    body = message.get_content()
+    body = plain_body(message)
     assert SIGN_IN in body
     # What it says about the message is the fixed note, and the sender's name and the clinic's
     # are all it names: the details are shown only after sign-in.
     note = _text("en")["outbound_booking_prompt_note"]
     assert note in body
     assert "patient@example.test" not in body
+    assert body.rstrip().endswith("\n\n" + fake_footer().plain)
 
 
 def test_the_booking_update_notice_goes_to_the_same_address_with_its_own_subject(sender) -> None:
     sender.send_booking_prompt_notice(recipient="a@example.test", sign_in_url=SIGN_IN)
-    first_subject = sent().message["Subject"]
+    first_subject = sent()["Subject"]
     sender.send_booking_prompt_update_notice(
         recipient="patient@example.test",
         sign_in_url=SIGN_IN,
         message_id="<update-1@portal.example.test>",
     )
 
-    message = sent().message
+    message = sent()
     assert message["To"] == "patient@example.test"
     assert message["Message-ID"] == "<update-1@portal.example.test>"
     assert message["Subject"] != first_subject
-    assert SIGN_IN in message.get_content()
+    assert SIGN_IN in plain_body(message)
 
 
 def test_the_email_change_confirmation_goes_to_the_proposed_address_with_its_link(sender) -> None:
@@ -85,10 +100,10 @@ def test_the_email_change_confirmation_goes_to_the_proposed_address_with_its_lin
         recipient="new@example.test", confirmation_url=CONFIRM, expires_in_seconds=7200
     )
 
-    message = sent().message
+    message = sent()
     assert message["To"] == "new@example.test"
     assert message["Auto-Submitted"] == "auto-generated"
-    body = message.get_content()
+    body = plain_body(message)
     assert CONFIRM in body
     expected = email_change_confirmation_email_message(
         service_name=sender.service_name,
@@ -96,23 +111,23 @@ def test_the_email_change_confirmation_goes_to_the_proposed_address_with_its_lin
         confirmation_url=CONFIRM,
         expires_in_seconds=7200,
     )
-    assert (message["Subject"], body.strip()) == (expected.subject, expected.body.strip())
+    assert message["Subject"] == expected.subject
+    assert body.rstrip() == expected.body.rstrip() + "\n\n" + fake_footer().plain
     assert "2 hours" in body or "2 hour" in body
 
 
 def test_the_email_change_notice_to_the_old_address_does_not_name_the_new_one(sender) -> None:
     sender.send_email_change_requested_notice(recipient="old@example.test")
 
-    message = sent().message
+    message = sent()
+    body = plain_body(message)
     assert message["To"] == "old@example.test"
-    assert "new@example.test" not in message.get_content()
+    assert "new@example.test" not in body
     expected = email_change_requested_email_message(
         service_name=sender.service_name, clinic_name=sender.clinic_name
     )
-    assert (message["Subject"], message.get_content().strip()) == (
-        expected.subject,
-        expected.body.strip(),
-    )
+    assert message["Subject"] == expected.subject
+    assert body.rstrip() == expected.body.rstrip() + "\n\n" + fake_footer().plain
     assert message["Auto-Submitted"] == "auto-generated"
 
 
@@ -121,9 +136,9 @@ def test_the_notices_use_the_patients_locale(sender, locale) -> None:
     sender.send_booking_prompt_notice(
         recipient="patient@example.test", sign_in_url=SIGN_IN, locale=locale
     )
-    translated = sent().message["Subject"]
+    translated = sent()["Subject"]
     sender.send_booking_prompt_notice(recipient="patient@example.test", sign_in_url=SIGN_IN)
-    assert translated != sent().message["Subject"]
+    assert translated != sent()["Subject"]
 
 
 @pytest.mark.parametrize("bad", ["<a\r\nBcc: attacker@example.test>", "id\nwith\nnewlines"])
