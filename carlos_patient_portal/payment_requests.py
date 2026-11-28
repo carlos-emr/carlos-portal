@@ -39,10 +39,12 @@ from carlos_patient_portal.invites import (
     normalize_staff_actor_id,
     validate_demographic_no,
 )
+from carlos_patient_portal.job_identity import JobPrincipal
 from carlos_patient_portal.models import (
     ACCOUNT_STATUS_ACTIVE,
     AUDIT_ACTOR_TYPE_PATIENT,
     AUDIT_ACTOR_TYPE_STAFF,
+    AUDIT_ACTOR_TYPE_SYSTEM,
     AUDIT_EVENT_PAYMENT_REQUEST_CREATE,
     AUDIT_EVENT_PAYMENT_REQUEST_LIST,
     AUDIT_EVENT_PAYMENT_REQUEST_PAID,
@@ -466,6 +468,43 @@ def mark_payment_request_paid(
     normalized_actor = normalize_staff_actor(paid_by)
     normalized_actor_id = normalize_staff_actor_id(paid_by_id, normalized_actor)
     request = _locked_request(session, request_id, normalized_clinic_id)
+    return _mark_locked_request_paid(session, request, normalized_actor, normalized_actor_id)
+
+
+def report_paid_operation(
+    session: Session,
+    principal: JobPrincipal,
+    *,
+    demographic_no: int,
+    operation_id: str,
+    invoice_ref: str,
+    request_id: int | None,
+) -> PatientPortalPaymentRequest:
+    """Only settle the existing request whose clinic, patient and opaque references match."""
+    request = _request_for_operation(
+        session, clinic_id=principal.clinic_id, operation_id=operation_id
+    )
+    if (
+        request is None
+        or request.demographic_no != demographic_no
+        or request.invoice_ref != invoice_ref
+        or (request_id is not None and request.id != request_id)
+    ):
+        raise PaymentRequestNotFoundError()
+    if request.status == PAYMENT_REQUEST_STATUS_WITHDRAWN:
+        return request
+    return _mark_locked_request_paid(
+        session, request, principal.display_name, principal.actor_id, principal
+    )
+
+
+def _mark_locked_request_paid(
+    session: Session,
+    request: PatientPortalPaymentRequest,
+    actor: str,
+    actor_id: str,
+    job: JobPrincipal | None = None,
+) -> PatientPortalPaymentRequest:
     if request.status == PAYMENT_REQUEST_STATUS_PAID:
         return request
     if request.status == PAYMENT_REQUEST_STATUS_WITHDRAWN:
@@ -477,10 +516,12 @@ def mark_payment_request_paid(
         session,
         event_type=AUDIT_EVENT_PAYMENT_REQUEST_PAID,
         outcome=AUDIT_OUTCOME_SUCCESS,
-        actor_type=AUDIT_ACTOR_TYPE_STAFF,
-        actor=normalized_actor,
-        actor_id=normalized_actor_id,
-        clinic_id=normalized_clinic_id,
+        actor_type=AUDIT_ACTOR_TYPE_SYSTEM if job else AUDIT_ACTOR_TYPE_STAFF,
+        actor=actor,
+        actor_id=actor_id,
+        clinic_id=request.clinic_id,
+        assertion_key_id=job.key_id if job else None,
+        assertion_id=job.assertion_id if job else None,
         demographic_no=request.demographic_no,
         account_id=request.account_id,
         resource_type="payment_request",

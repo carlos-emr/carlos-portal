@@ -151,6 +151,7 @@ def test_registered_jobs_have_well_formed_names_display_names_and_permissions() 
         "device-approval-sync",
         "key-publish",
         "signup-poll",
+        "payment-settlement",
     }
     for name, job in SYSTEM_JOBS.items():
         assert job.name == name
@@ -169,7 +170,9 @@ def test_registered_jobs_have_well_formed_names_display_names_and_permissions() 
         "portal.mycarlos.delivery.events.read",
         "portal.mycarlos.delivery.events.ack",
     }
+    assert SYSTEM_JOBS["payment-settlement"].permissions == {"portal.payment.report_paid"}
     assert JOB_ONLY_PERMISSIONS == {
+        "portal.payment.report_paid",
         SYNC,
         SIGNUP,
         "portal.mycarlos.clinic_keys.publish",
@@ -186,30 +189,24 @@ def test_registered_jobs_have_well_formed_names_display_names_and_permissions() 
     }
 
 
-def test_only_the_two_signup_routes_are_open_to_the_signup_job() -> None:
+def test_signup_and_payment_jobs_are_limited_to_their_designated_routes() -> None:
     app = internal_app()
-    jobs = {
-        getattr(dependency.call, internal_routes.CALLER_POLICY_ATTRIBUTE).job
-        for route in app.routes
-        if getattr(route, "path", "").startswith("/internal/carlos/")
-        for dependency in route.dependant.dependencies
-        if hasattr(dependency.call, internal_routes.CALLER_POLICY_ATTRIBUTE)
-    }
+    paths_by_job: dict[str | None, set[str]] = {}
+    for route in app.routes:
+        if not getattr(route, "path", "").startswith("/internal/carlos/"):
+            continue
+        for dependency in route.dependant.dependencies:
+            policy = getattr(dependency.call, internal_routes.CALLER_POLICY_ATTRIBUTE, None)
+            if policy is not None:
+                paths_by_job.setdefault(policy.job, set()).add(route.path)
 
-    assert jobs == {None, "booking-sync", "signup-poll"}
-    signup_paths = {
-        route.path
-        for route in app.routes
-        if getattr(route, "path", "").startswith("/internal/carlos/")
-        for dependency in route.dependant.dependencies
-        if getattr(
-            getattr(dependency.call, internal_routes.CALLER_POLICY_ATTRIBUTE, None), "job", None
-        )
-        == "signup-poll"
-    }
-    assert signup_paths == {
+    assert set(paths_by_job) == {None, "booking-sync", "signup-poll", "payment-settlement"}
+    assert paths_by_job["signup-poll"] == {
         "/internal/carlos/signup-requests/claim",
         "/internal/carlos/signup-requests/{request_id}/result",
+    }
+    assert paths_by_job["payment-settlement"] == {
+        "/internal/carlos/patients/{demographic_no}/payment-settlements",
     }
 
 

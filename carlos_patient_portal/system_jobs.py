@@ -31,6 +31,7 @@ from types import MappingProxyType
 JOB_NAME_PATTERN = re.compile(r"[a-z0-9-]{1,32}")
 
 JOB_BOOKING_SYNC = "booking-sync"
+JOB_PAYMENT_SETTLEMENT = "payment-settlement"
 JOB_SIGNUP_POLL = "signup-poll"
 JOB_KEY_PUBLISH = "key-publish"
 JOB_DELIVERY_SYNC = "delivery-sync"
@@ -38,6 +39,7 @@ JOB_DEVICE_APPROVAL_SYNC = "device-approval-sync"
 
 # Spelled out rather than imported from internal_routes, which imports this module.
 PERMISSION_BOOKING_PROMPT_SYNC = "portal.booking_prompt.sync"
+PERMISSION_REPORT_PAID = "portal.payment.report_paid"
 PERMISSION_SIGNUP_MANAGE = "portal.signup.manage"
 PERMISSION_INVITE_MANAGE = "portal.invite.manage"
 PERMISSION_CLINIC_KEYS_PUBLISH = "portal.mycarlos.clinic_keys.publish"
@@ -80,6 +82,11 @@ class SystemJob:
 
 SYSTEM_JOBS: Mapping[str, SystemJob] = MappingProxyType(
     {
+        JOB_PAYMENT_SETTLEMENT: SystemJob(
+            name=JOB_PAYMENT_SETTLEMENT,
+            display_name="Clinic payment settlement",
+            permissions=frozenset({PERMISSION_REPORT_PAID}),
+        ),
         JOB_BOOKING_SYNC: SystemJob(
             name=JOB_BOOKING_SYNC,
             display_name="Clinic booking",
@@ -125,6 +132,7 @@ SYSTEM_JOBS: Mapping[str, SystemJob] = MappingProxyType(
 JOB_ONLY_PERMISSIONS = APPROVAL_PERMISSIONS | frozenset(
     {
         PERMISSION_BOOKING_PROMPT_SYNC,
+        PERMISSION_REPORT_PAID,
         PERMISSION_SIGNUP_MANAGE,
         PERMISSION_CLINIC_KEYS_PUBLISH,
         PERMISSION_DELIVERY_UPLOAD,
