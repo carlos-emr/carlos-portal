@@ -298,8 +298,8 @@ async function assertLargeWorkspaceFits(page, surface) {
         documentWidth: document.documentElement.scrollWidth,
         navWidth: nav.clientWidth,
         navScrollWidth: nav.scrollWidth,
-        documentPasswordsFits: linkBox && linkBox.left >= navBox.left - 1
-          && linkBox.right <= navBox.right + 1,
+        navBounds: { left: navBox.left, right: navBox.right },
+        linkBounds: linkBox && { left: linkBox.left, right: linkBox.right },
         clipped,
         outside,
       };
@@ -309,7 +309,11 @@ async function assertLargeWorkspaceFits(page, surface) {
       `${surface} at 320px with 200% text scrolls sideways (${layout.documentWidth}px)`);
     assert(layout.navScrollWidth <= layout.navWidth + 1,
       `${surface} navigation at 320px with 200% text scrolls sideways (${layout.navScrollWidth}px)`);
-    assert(layout.documentPasswordsFits, `${surface} clips the document-passwords navigation link`);
+    assert(layout.linkBounds, `${surface} is missing the document-passwords navigation link`);
+    assert(
+      layout.linkBounds.left >= layout.navBounds.left - 1 && layout.linkBounds.right <= layout.navBounds.right + 1,
+      `${surface} clips the document-passwords navigation link (${layout.linkBounds.left}–${layout.linkBounds.right}px)`,
+    );
     assert(layout.clipped.length === 0, `${surface} theme choices clip ${layout.clipped.join(', ')}`);
     assert(layout.outside.length === 0, `${surface} controls exceed the viewport: ${layout.outside.join(', ')}`);
   });
