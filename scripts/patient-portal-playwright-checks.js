@@ -179,6 +179,146 @@ async function assertAccessiblePage(page, surface) {
   await assertNoSeriousAxeIssues(page, surface);
 }
 
+async function checkAccessiblePreferences(page) {
+  const focused = (control) => control.evaluate((element) => element === document.activeElement);
+  const preferences = page.locator('.module-nav').getByRole('link', { name: 'Preferences', exact: true });
+  for (let tab = 0; tab < 20 && !(await focused(preferences)); tab += 1) {
+    await page.keyboard.press('Tab');
+  }
+  assert(await focused(preferences), 'Preferences was not reachable by Tab from the dashboard');
+  await Promise.all([
+    page.waitForURL((url) => url.pathname === portalPathname('/portal/preferences')),
+    page.keyboard.press('Enter'),
+  ]);
+  await page.getByRole('heading', { name: 'Preferences', exact: true }).waitFor();
+
+  await page.keyboard.press('Tab');
+  const skip = page.getByRole('link', { name: 'Skip to main content', exact: true });
+  assert(await focused(skip), 'Preferences did not start with the skip link');
+  await page.keyboard.press('Enter');
+  assert(await focused(page.locator('#module-content')), 'the skip link did not focus the Preferences workspace');
+
+  const scheme = page.getByRole('group', { name: 'Colour scheme', exact: true });
+  const system = scheme.getByRole('radio', { name: 'System', exact: true });
+  await page.keyboard.press('Tab');
+  assert(await focused(system) && await system.isChecked(), 'Tab did not reach the selected System radio');
+  await page.keyboard.press('ArrowRight');
+  const light = scheme.getByRole('radio', { name: 'Light', exact: true });
+  assert(await focused(light) && await light.isChecked(), 'the arrow key did not select Light');
+
+  const contrast = page.getByRole('checkbox', { name: 'High contrast', exact: true });
+  await page.keyboard.press('Tab');
+  assert(await focused(contrast) && !(await contrast.isChecked()), 'Tab did not reach High contrast');
+  await page.keyboard.press('Space');
+  assert(await contrast.isChecked(), 'Space did not select High contrast');
+  await page.keyboard.press('Tab');
+  assert(await focused(page.getByRole('button', { name: 'Save preferences', exact: true })),
+    'Tab did not reach Save preferences after High contrast');
+
+  // Leaving these choices unsaved keeps the next journey on the seeded appearance.
+  await assertAccessiblePage(page, 'Preferences page');
+  await assertLargeWorkspaceFits(page, 'Preferences');
+
+  // French gives the same navigation and theme controls longer labels.
+  await page.locator('.language-switch a[lang="fr"]').click();
+  await page.locator('html[lang="fr"]').waitFor();
+  assert(await page.locator('.module-nav').getByRole('link', {
+    name: 'Mots de passe des documents', exact: true,
+  }).count() === 1, 'French Preferences lacks the long document-passwords link');
+  assert(await page.getByRole('radio', { name: 'Système', exact: true }).count() === 1,
+    'French Preferences lacks the System theme control');
+  await assertLargeWorkspaceFits(page, 'French Preferences');
+  await page.locator('.language-switch a[lang="en"]').click();
+  await page.locator('html[lang="en"]').waitFor();
+}
+
+async function withDoubledDefaultText(page, check) {
+  const viewport = page.viewportSize();
+  const defaultTextSize = await page.locator('html').evaluate((root) => parseFloat(getComputedStyle(root).fontSize));
+  const doubledSize = defaultTextSize * 2;
+  const session = await page.context().newCDPSession(page);
+  try {
+    await page.setViewportSize({ width: 320, height: viewport.height });
+    await session.send('Page.setFontSizes', { fontSizes: { standard: doubledSize } });
+    await check(doubledSize);
+  } finally {
+    await session.send('Page.setFontSizes', { fontSizes: { standard: defaultTextSize } });
+    await session.detach();
+    await page.setViewportSize(viewport);
+  }
+}
+
+async function assertLargeDateOfBirthFits(page, surface) {
+  await withDoubledDefaultText(page, async (doubledSize) => {
+    const layout = await page.locator('.date-of-birth-parts').evaluate((parts) => {
+      const row = parts.getBoundingClientRect();
+      const controls = [...parts.querySelectorAll('input, select')];
+      const clipped = controls.filter((control) => {
+        const box = control.getBoundingClientRect();
+        return box.width <= 0 || box.left < Math.max(0, row.left) - 1
+          || box.right > Math.min(window.innerWidth, row.right) + 1;
+      }).map((control) => control.name);
+      return {
+        count: controls.length,
+        clipped,
+        textSize: parseFloat(getComputedStyle(document.documentElement).fontSize),
+        viewportWidth: window.innerWidth,
+        documentWidth: document.documentElement.scrollWidth,
+      };
+    });
+    assert(layout.textSize === doubledSize && layout.count === 3,
+      `${surface} did not render all three date controls at 200% text`);
+    assert(layout.clipped.length === 0,
+      `${surface} at 320px with 200% text clips ${layout.clipped.join(', ')}`);
+    assert(layout.documentWidth <= layout.viewportWidth + 1,
+      `${surface} at 320px with 200% text scrolls sideways (${layout.documentWidth}px)`);
+  });
+}
+
+async function assertLargeWorkspaceFits(page, surface) {
+  await withDoubledDefaultText(page, async (doubledSize) => {
+    const layout = await page.evaluate(() => {
+      const nav = document.querySelector('.module-nav');
+      const documentPasswords = nav.querySelector('a[href$="/portal/email-passwords"]');
+      const navBox = nav.getBoundingClientRect();
+      const linkBox = documentPasswords?.getBoundingClientRect();
+      const clipped = [...document.querySelectorAll('.segmented-control-three .segmented-option')]
+        .filter((label) => label.scrollWidth > label.clientWidth + 1)
+        .map((label) => label.textContent.trim());
+      const outside = [...document.querySelectorAll(
+        '#module-content input:not([type="hidden"]), #module-content select, #module-content button',
+      )].filter((control) => {
+        if (!control.getClientRects().length) return false;
+        const box = control.getBoundingClientRect();
+        return box.left < -1 || box.right > window.innerWidth + 1;
+      }).map((control) => control.name || control.textContent.trim());
+      return {
+        textSize: parseFloat(getComputedStyle(document.documentElement).fontSize),
+        viewportWidth: window.innerWidth,
+        documentWidth: document.documentElement.scrollWidth,
+        navWidth: nav.clientWidth,
+        navScrollWidth: nav.scrollWidth,
+        navBounds: { left: navBox.left, right: navBox.right },
+        linkBounds: linkBox && { left: linkBox.left, right: linkBox.right },
+        clipped,
+        outside,
+      };
+    });
+    assert(layout.textSize === doubledSize, `${surface} did not render at 200% default text`);
+    assert(layout.documentWidth <= layout.viewportWidth + 1,
+      `${surface} at 320px with 200% text scrolls sideways (${layout.documentWidth}px)`);
+    assert(layout.navScrollWidth <= layout.navWidth + 1,
+      `${surface} navigation at 320px with 200% text scrolls sideways (${layout.navScrollWidth}px)`);
+    assert(layout.linkBounds, `${surface} is missing the document-passwords navigation link`);
+    assert(
+      layout.linkBounds.left >= layout.navBounds.left - 1 && layout.linkBounds.right <= layout.navBounds.right + 1,
+      `${surface} clips the document-passwords navigation link (${layout.linkBounds.left}–${layout.linkBounds.right}px)`,
+    );
+    assert(layout.clipped.length === 0, `${surface} theme choices clip ${layout.clipped.join(', ')}`);
+    assert(layout.outside.length === 0, `${surface} controls exceed the viewport: ${layout.outside.join(', ')}`);
+  });
+}
+
 // Stands in for the CARLOS polling job: reports a result for the patient's pending pick on the
 // seeded offer. The browser run has no CARLOS and no internal API token, so the seed script calls
 // the same service function the internal choice-result endpoint uses.
@@ -510,6 +650,7 @@ function screenshotPath(name) {
       await signUpLink.click();
       await page.getByRole('heading', { name: 'Request a portal account' }).waitFor();
       await assertAccessiblePage(page, 'self sign-up page');
+      await assertLargeDateOfBirthFits(page, 'self sign-up page');
       const signUpMobileLayout = await page.evaluate(() => ({
         viewportWidth: window.innerWidth,
         documentWidth: document.documentElement.scrollWidth,
@@ -612,6 +753,7 @@ function screenshotPath(name) {
         && await page.locator('select[name="date_of_birth_month"] option[value]:not([value=""])').count() === 12,
       'the Day, Month (12 named months) and Year boxes are not each labelled'
     );
+    await assertLargeDateOfBirthFits(page, 'activation page');
     await page.setViewportSize({ width: 390, height: 844 });
     const activationMobileLayout = await page.evaluate(() => ({
       viewportWidth: window.innerWidth,
@@ -1285,10 +1427,13 @@ function screenshotPath(name) {
     );
 
     await page.setViewportSize({ width: 390, height: 844 });
+    await assertLargeWorkspaceFits(page, 'Dashboard');
+    await checkAccessiblePreferences(page);
     await page.locator('.module-nav').getByRole('link', { name: 'Account', exact: true }).click();
     await page.waitForURL((url) => url.pathname === portalPathname('/portal/account'));
     await page.getByRole('heading', { name: 'Account' }).waitFor();
     await assertAccessiblePage(page, 'account page');
+    await assertLargeWorkspaceFits(page, 'Account');
     assert(
       await page.locator('input[name="new_password_confirmation"][required]').count() === 1,
       'account password confirmation is missing'
