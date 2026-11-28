@@ -151,6 +151,7 @@ def test_registered_jobs_have_well_formed_names_display_names_and_permissions() 
         "device-approval-sync",
         "key-publish",
         "signup-poll",
+        "payment-settlement",
     }
     for name, job in SYSTEM_JOBS.items():
         assert job.name == name
@@ -169,7 +170,9 @@ def test_registered_jobs_have_well_formed_names_display_names_and_permissions() 
         "portal.mycarlos.delivery.events.read",
         "portal.mycarlos.delivery.events.ack",
     }
+    assert SYSTEM_JOBS["payment-settlement"].permissions == {"portal.payment.report_paid"}
     assert JOB_ONLY_PERMISSIONS == {
+        "portal.payment.report_paid",
         SYNC,
         SIGNUP,
         "portal.mycarlos.clinic_keys.publish",

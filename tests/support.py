@@ -41,6 +41,7 @@ from carlos_patient_portal.sms_delivery import PortalSmsDeliveryError, PortalSms
 from carlos_patient_portal.staff_identity import staff_request_hash
 from carlos_patient_portal.system_jobs import (
     JOB_BOOKING_SYNC,
+    JOB_PAYMENT_SETTLEMENT,
     JOB_SIGNUP_POLL,
     PERMISSION_BOOKING_PROMPT_SYNC,
 )
@@ -99,10 +100,12 @@ def _raw_public_key(private_key: Ed25519PrivateKey) -> str:
 # One fixed key per job, each different from the staff test key (bytes 1-32) and from the
 # rotation key test_internal_api.py derives from bytes 33-64.
 TEST_JOB_ASSERTION_PRIVATE_KEYS = {
+    JOB_PAYMENT_SETTLEMENT: Ed25519PrivateKey.from_private_bytes(bytes(range(193, 225))),
     JOB_BOOKING_SYNC: Ed25519PrivateKey.from_private_bytes(bytes(range(65, 97))),
     JOB_SIGNUP_POLL: Ed25519PrivateKey.from_private_bytes(bytes(range(97, 129))),
 }
 TEST_JOB_ASSERTION_KEY_IDS = {
+    JOB_PAYMENT_SETTLEMENT: "payment-settlement-test-2026",
     JOB_BOOKING_SYNC: "booking-sync-test-2026",
     JOB_SIGNUP_POLL: "signup-poll-test-2026",
 }

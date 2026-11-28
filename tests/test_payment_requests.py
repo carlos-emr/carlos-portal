@@ -18,8 +18,10 @@ The portal takes no payment. A request carries an amount due now, its tax portio
 opaque invoice reference and a due date; the patient reads it in Messages and CARLOS marks it paid.
 """
 
+import json
 import re
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from alembic import command
@@ -49,9 +51,11 @@ from carlos_patient_portal.payment_requests import create_payment_request
 from tests.support import (
     INTERNAL_API_TOKEN,
     OUTBOX_ENCRYPTION_SECRET,
+    TEST_JOB_ASSERTION_PUBLIC_KEYRING,
     activate_seeded_patient_account,
     alembic_config_for_tests,
     browser_sign_in_seeded_patient,
+    carlos_job_headers,
     carlos_staff_headers,
     migrated_development_app,
 )
@@ -315,6 +319,78 @@ def test_a_withdrawn_request_cannot_be_marked_paid_and_paying_twice_is_a_no_op()
 
     assert refused.status_code == 409
     assert refused.json() == {"detail": "payment request is in a state this cannot apply to"}
+
+
+def test_signed_settlement_contract_retries_and_refusals() -> None:
+    contract = json.loads(
+        (Path(__file__).parent / "fixtures/payment-settlement-contract.json").read_text()
+    )
+    app = payment_app(internal_job_assertion_public_keyring=TEST_JOB_ASSERTION_PUBLIC_KEYRING)
+    client = TestClient(app)
+    activate_seeded_patient_account(app, client)
+    path = contract["path"]
+    references = contract["request"]
+    job = contract["job"]
+    permission = contract["permission"]
+
+    def post(client, payload, *, target=path, identity=job, right=permission):
+        body = json.dumps(payload, separators=(",", ":")).encode()
+        signed = carlos_job_headers(
+            identity, right, method="POST", path=target, body=body, clinic_id="clinic-a"
+        )
+        return client.post(
+            target, content=body, headers={**signed, "Content-Type": "application/json"}
+        )
+
+    assert post(client, references).status_code == 404
+    assert stored_requests(app) == []
+    created = client.post(PATH, headers=headers(), json=request_body(**references))
+    assert created.status_code == 201
+    assert created.json()["id"] == contract["receipt"]["request_id"]
+    assert client.post(path, headers=headers(), json=references).status_code == 403
+    assert (
+        post(
+            client, references, identity="booking-sync", right="portal.booking_prompt.sync"
+        ).status_code
+        == 404
+    )
+    assert post(client, references, right="portal.payment.manage").status_code == 403
+    assert post(client, references, target=path.replace("1234", "1235")).status_code == 404
+    for altered in (
+        {"invoice_ref": "FAKE-other"},
+        {"operation_id": "FAKE-other"},
+        {"request_id": 2},
+    ):
+        assert post(client, {**references, **altered}).status_code == 404
+    assert post(client, request_body(), target=PATH).status_code == 404
+    assert (
+        post(client, {}, target="/internal/carlos/payment-requests/1/withdraw").status_code == 404
+    )
+    assert stored_requests(app)[0].status == "sent"
+
+    first = post(client, references)
+    assert first.status_code == 200
+    assert first.json() == contract["receipt"]
+    # A fresh caller with no HTTP session repeats a report whose reply CARLOS lost.
+    retry = post(TestClient(app), {**references, "request_id": created.json()["id"]})
+    assert retry.status_code == 200
+    assert retry.json() == first.json()
+    (audit,) = audit_events(app, AUDIT_EVENT_PAYMENT_REQUEST_PAID)
+    assert audit.actor_type == "system"
+    assert audit.actor_id == "job:payment-settlement"
+    assert audit.assertion_key_id == "payment-settlement-test-2026"
+    assert audit.assertion_id
+
+    next_refs = {"operation_id": "FAKE-second", "invoice_ref": "FAKE-second"}
+    second = client.post(PATH, headers=headers(), json=request_body(**next_refs)).json()["id"]
+    assert (
+        client.post(
+            f"/internal/carlos/payment-requests/{second}/withdraw", headers=headers()
+        ).status_code
+        == 200
+    )
+    assert post(client, next_refs).json()["state"] == "withdrawn"
+    assert len(audit_events(app, AUDIT_EVENT_PAYMENT_REQUEST_PAID)) == 1
 
 
 def test_marking_paid_twice_is_a_no_op() -> None:

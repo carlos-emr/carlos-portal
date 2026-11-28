@@ -14,8 +14,8 @@
 
 """The internal API CARLOS uses for payment requests (billing through the portal, Phase 0).
 
-CARLOS calls the portal; the portal never calls CARLOS. Every route takes a staff assertion
-carrying `portal.payment.manage`, and nobody else. A request holds only an opaque invoice
+CARLOS calls the portal. Staff routes require `portal.payment.manage`. Only the signed settlement
+job may call the hourly reporting route. A request holds an opaque invoice
 reference, the amount due now in cents with its tax portion, a category from a closed vocabulary,
 how the patient is told to pay, a due date and a status: no description, no patient name, no free
 text. The refusals' `detail` texts are part of the contract and carry no request detail.
@@ -42,6 +42,7 @@ from carlos_patient_portal.internal_routes import (
     InternalRuntime,
     StaffPrincipal,
 )
+from carlos_patient_portal.job_identity import JobPrincipal
 from carlos_patient_portal.models import (
     MAX_BOOKING_PROMPT_OPERATION_ID_LENGTH,
     MAX_PAYMENT_AMOUNT_CENTS,
@@ -59,11 +60,13 @@ from carlos_patient_portal.payment_requests import (
     list_payment_requests,
     mark_payment_request_paid,
     payment_request_state,
+    report_paid_operation,
     withdraw_payment_request,
 )
 from carlos_patient_portal.runtime import MAX_DATABASE_ID
+from carlos_patient_portal.system_jobs import JOB_PAYMENT_SETTLEMENT, PERMISSION_REPORT_PAID
 
-# The staff assertion permission for every route here, like `portal.booking_prompt.manage`.
+# The staff assertion permission for staff routes here, like `portal.booking_prompt.manage`.
 PERMISSION_PAYMENT_REQUEST_MANAGE = "portal.payment.manage"
 
 # `detail` texts CARLOS tells outcomes apart by. None carries a request's content.
@@ -78,7 +81,7 @@ PAYMENT_REQUEST_PAST_DUE_DETAIL = "payment operation absent after its due date"
 PaymentRequestStateName = Literal["sent", "read", "paid", "withdrawn", "expired"]
 
 
-class InternalPaymentRequestRequest(BaseModel):
+class PaymentOperationReferences(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     operation_id: str = Field(
@@ -93,6 +96,19 @@ class InternalPaymentRequestRequest(BaseModel):
         max_length=MAX_PAYMENT_INVOICE_REF_LENGTH,
         pattern=r"^[A-Za-z0-9_-]+$",
     )
+
+
+class InternalSettlementReport(PaymentOperationReferences):
+    request_id: int | None = Field(default=None, strict=True, gt=0, le=MAX_DATABASE_ID)
+
+
+class InternalSettlementReceipt(PaymentOperationReferences):
+    request_id: int
+    demographic_no: int
+    state: Literal["paid", "withdrawn"]
+
+
+class InternalPaymentRequestRequest(PaymentOperationReferences):
     category: Literal["uninsured_service", "form_or_note", "missed_appointment", "other"]
     # How the patient is told to pay. A closed vocabulary: a processor's hosted page would be a
     # later value.
@@ -158,7 +174,7 @@ def register_internal_payment_request_routes(
     runtime: InternalRuntime,
     deps: InternalRouteDependencies,
 ) -> None:
-    """Create, list, withdraw and mark paid; all under `portal.payment.manage`."""
+    """Register the staff routes and the job-only settlement report."""
 
     @app.post(
         "/internal/carlos/patients/{demographic_no}/payment-requests",
@@ -291,3 +307,36 @@ def register_internal_payment_request_routes(
                 status_code=409, detail=PAYMENT_REQUEST_STATE_CONFLICT_DETAIL
             ) from exc
         return payment_request_payload(request)
+
+    @app.post(
+        "/internal/carlos/patients/{demographic_no}/payment-settlements",
+        response_model=InternalSettlementReceipt,
+        responses=COMMON_INTERNAL_RESPONSES,
+    )
+    def internal_report_paid_operation(
+        demographic_no: Annotated[int, Path(gt=0, le=MAX_DEMOGRAPHIC_NO)],
+        payload: InternalSettlementReport,
+        principal: Annotated[
+            JobPrincipal,
+            Depends(deps.job_principal_requiring(JOB_PAYMENT_SETTLEMENT, PERMISSION_REPORT_PAID)),
+        ],
+        session: Annotated[Session, deps.session_dependency],
+    ) -> dict[str, object]:
+        try:
+            request = report_paid_operation(
+                session,
+                principal,
+                demographic_no=demographic_no,
+                operation_id=payload.operation_id,
+                invoice_ref=payload.invoice_ref,
+                request_id=payload.request_id,
+            )
+        except PaymentRequestNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=PAYMENT_REQUEST_NOT_FOUND_DETAIL) from exc
+        return {
+            "request_id": request.id,
+            "demographic_no": request.demographic_no,
+            "operation_id": request.operation_id,
+            "invoice_ref": request.invoice_ref,
+            "state": request.status,
+        }

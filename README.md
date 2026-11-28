@@ -772,6 +772,7 @@ one another permission, is a reviewed code change:
 
 | Job | Shown as | May hold | Routes |
 | --- | --- | --- | --- |
+| `payment-settlement` | Clinic payment settlement | `portal.payment.report_paid` | reports a previously recorded payment for an existing request |
 | `booking-sync` | Clinic booking | `portal.booking_prompt.sync` | the two booking sync endpoints |
 | `signup-poll` | Patient self sign-up | `portal.signup.manage`, `portal.invite.manage` | the two sign-up request endpoints (claim and result); the invite routes still take staff only |
 | `key-publish` | Clinic signing keys | `portal.mycarlos.clinic_keys.publish` | `PUT /internal/carlos/mycarlos/clinic-keys`, only while Send to myCarlos is on |

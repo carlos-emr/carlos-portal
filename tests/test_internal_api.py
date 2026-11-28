@@ -1871,6 +1871,12 @@ INTERNAL_ROUTE_PERMISSIONS = (
     ("POST", "/internal/carlos/payment-requests/1/withdraw", STAFF, "portal.payment.manage"),
     ("POST", "/internal/carlos/payment-requests/1/paid", STAFF, "portal.payment.manage"),
     (
+        "POST",
+        "/internal/carlos/patients/1234/payment-settlements",
+        "job:payment-settlement",
+        "portal.payment.report_paid",
+    ),
+    (
         "GET",
         "/internal/carlos/booking-prompts/choices",
         BOOKING_SYNC_JOB,
@@ -1933,6 +1939,7 @@ def test_internal_openapi_contract_is_stable() -> None:
         "/internal/carlos/patients/{demographic_no}/invites/prepare": ["post"],
         "/internal/carlos/patients/{demographic_no}/portal-account": ["get"],
         "/internal/carlos/patients/{demographic_no}/payment-requests": ["get", "post"],
+        "/internal/carlos/patients/{demographic_no}/payment-settlements": ["post"],
         "/internal/carlos/patients/{demographic_no}/portal-account/access": ["post"],
         "/internal/carlos/patients/{demographic_no}/unlock": ["post"],
         "/internal/carlos/patients/{demographic_no}/unlock-secrets": ["post"],
