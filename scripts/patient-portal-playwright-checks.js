@@ -217,15 +217,39 @@ async function checkAccessiblePreferences(page) {
 
   // Leaving these choices unsaved keeps the next journey on the seeded appearance.
   await assertAccessiblePage(page, 'Preferences page');
+  await assertLargeWorkspaceFits(page, 'Preferences');
+
+  // French gives the same navigation and theme controls longer labels.
+  await page.locator('.language-switch a[lang="fr"]').click();
+  await page.locator('html[lang="fr"]').waitFor();
+  assert(await page.locator('.module-nav').getByRole('link', {
+    name: 'Mots de passe des documents', exact: true,
+  }).count() === 1, 'French Preferences lacks the long document-passwords link');
+  assert(await page.getByRole('radio', { name: 'Système', exact: true }).count() === 1,
+    'French Preferences lacks the System theme control');
+  await assertLargeWorkspaceFits(page, 'French Preferences');
+  await page.locator('.language-switch a[lang="en"]').click();
+  await page.locator('html[lang="en"]').waitFor();
 }
 
-async function assertLargeDateOfBirthFits(page, surface) {
+async function withDoubledDefaultText(page, check) {
   const viewport = page.viewportSize();
   const defaultTextSize = await page.locator('html').evaluate((root) => parseFloat(getComputedStyle(root).fontSize));
+  const doubledSize = defaultTextSize * 2;
   const session = await page.context().newCDPSession(page);
   try {
     await page.setViewportSize({ width: 320, height: viewport.height });
-    await session.send('Page.setFontSizes', { fontSizes: { standard: defaultTextSize * 2 } });
+    await session.send('Page.setFontSizes', { fontSizes: { standard: doubledSize } });
+    await check(doubledSize);
+  } finally {
+    await session.send('Page.setFontSizes', { fontSizes: { standard: defaultTextSize } });
+    await session.detach();
+    await page.setViewportSize(viewport);
+  }
+}
+
+async function assertLargeDateOfBirthFits(page, surface) {
+  await withDoubledDefaultText(page, async (doubledSize) => {
     const layout = await page.locator('.date-of-birth-parts').evaluate((parts) => {
       const row = parts.getBoundingClientRect();
       const controls = [...parts.querySelectorAll('input, select')];
@@ -242,17 +266,53 @@ async function assertLargeDateOfBirthFits(page, surface) {
         documentWidth: document.documentElement.scrollWidth,
       };
     });
-    assert(layout.textSize === defaultTextSize * 2 && layout.count === 3,
+    assert(layout.textSize === doubledSize && layout.count === 3,
       `${surface} did not render all three date controls at 200% text`);
     assert(layout.clipped.length === 0,
       `${surface} at 320px with 200% text clips ${layout.clipped.join(', ')}`);
     assert(layout.documentWidth <= layout.viewportWidth + 1,
       `${surface} at 320px with 200% text scrolls sideways (${layout.documentWidth}px)`);
-  } finally {
-    await session.send('Page.setFontSizes', { fontSizes: { standard: defaultTextSize } });
-    await session.detach();
-    await page.setViewportSize(viewport);
-  }
+  });
+}
+
+async function assertLargeWorkspaceFits(page, surface) {
+  await withDoubledDefaultText(page, async (doubledSize) => {
+    const layout = await page.evaluate(() => {
+      const nav = document.querySelector('.module-nav');
+      const documentPasswords = nav.querySelector('a[href$="/portal/email-passwords"]');
+      const navBox = nav.getBoundingClientRect();
+      const linkBox = documentPasswords?.getBoundingClientRect();
+      const clipped = [...document.querySelectorAll('.segmented-control-three .segmented-option')]
+        .filter((label) => label.scrollWidth > label.clientWidth + 1)
+        .map((label) => label.textContent.trim());
+      const outside = [...document.querySelectorAll(
+        '#module-content input:not([type="hidden"]), #module-content select, #module-content button',
+      )].filter((control) => {
+        if (!control.getClientRects().length) return false;
+        const box = control.getBoundingClientRect();
+        return box.left < -1 || box.right > window.innerWidth + 1;
+      }).map((control) => control.name || control.textContent.trim());
+      return {
+        textSize: parseFloat(getComputedStyle(document.documentElement).fontSize),
+        viewportWidth: window.innerWidth,
+        documentWidth: document.documentElement.scrollWidth,
+        navWidth: nav.clientWidth,
+        navScrollWidth: nav.scrollWidth,
+        documentPasswordsFits: linkBox && linkBox.left >= navBox.left - 1
+          && linkBox.right <= navBox.right + 1,
+        clipped,
+        outside,
+      };
+    });
+    assert(layout.textSize === doubledSize, `${surface} did not render at 200% default text`);
+    assert(layout.documentWidth <= layout.viewportWidth + 1,
+      `${surface} at 320px with 200% text scrolls sideways (${layout.documentWidth}px)`);
+    assert(layout.navScrollWidth <= layout.navWidth + 1,
+      `${surface} navigation at 320px with 200% text scrolls sideways (${layout.navScrollWidth}px)`);
+    assert(layout.documentPasswordsFits, `${surface} clips the document-passwords navigation link`);
+    assert(layout.clipped.length === 0, `${surface} theme choices clip ${layout.clipped.join(', ')}`);
+    assert(layout.outside.length === 0, `${surface} controls exceed the viewport: ${layout.outside.join(', ')}`);
+  });
 }
 
 // Stands in for the CARLOS polling job: reports a result for the patient's pending pick on the
@@ -1363,11 +1423,13 @@ function screenshotPath(name) {
     );
 
     await page.setViewportSize({ width: 390, height: 844 });
+    await assertLargeWorkspaceFits(page, 'Dashboard');
     await checkAccessiblePreferences(page);
     await page.locator('.module-nav').getByRole('link', { name: 'Account', exact: true }).click();
     await page.waitForURL((url) => url.pathname === portalPathname('/portal/account'));
     await page.getByRole('heading', { name: 'Account' }).waitFor();
     await assertAccessiblePage(page, 'account page');
+    await assertLargeWorkspaceFits(page, 'Account');
     assert(
       await page.locator('input[name="new_password_confirmation"][required]').count() === 1,
       'account password confirmation is missing'

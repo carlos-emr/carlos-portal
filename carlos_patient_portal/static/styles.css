@@ -350,11 +350,13 @@ h2 {
   gap: 12px;
 }
 
-.auth-panel .form-stack {
+.auth-panel .form-stack,
+.settings-form {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.auth-panel .form-stack :is(input, select) {
+.auth-panel .form-stack :is(input, select),
+.settings-form :is(input, select) {
   min-width: 0;
 }
 
@@ -951,6 +953,7 @@ a.module-tile:focus-visible {
 
 .settings-sections {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   max-width: 720px;
   margin-top: 18px;
@@ -958,6 +961,7 @@ a.module-tile:focus-visible {
 
 .settings-section {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
   padding-top: 14px;
   border-top: 1px solid var(--line);
@@ -1409,6 +1413,30 @@ a.module-tile:focus-visible {
 
   .pagination-bar {
     justify-content: space-between;
+  }
+}
+
+/* At narrow widths relative to the reader's default text, let whole labels reflow. */
+@media (max-width: 18em) {
+  .module-nav {
+    align-items: stretch;
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+
+  .module-link {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .segmented-control-three {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .segmented-control-three .segmented-option + .segmented-option {
+    border-left: 0;
+    border-top: 1px solid var(--border-control);
   }
 }
 
